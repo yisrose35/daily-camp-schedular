@@ -31414,12 +31414,25 @@
                 var _lwgT = function (v) { if (v == null) return null; if (typeof v === 'number') return v; try { return parseTimeToMinutes(v); } catch (_e) { return null; } };
                 // Per-grade layer windows + a grade-agnostic ('_all') bucket applied to every grade.
                 var _winByGrade = {}, _winAll = [];
+                // ★ FN-55 SAFETY: grades whose FILL-producing layers (sport / special /
+                //   elective) are OPEN — a count but NO explicit time band — can be placed
+                //   anywhere in the division day, so they do NOT define a narrow window and
+                //   their fills must never be blanked. Track them; their coverage becomes the
+                //   full day below. Without this, a grade where the user set counts but no
+                //   time bands gets an empty/partial union and the gate clears the WHOLE day
+                //   (or every slot outside an unrelated anchor window) — the documented
+                //   "counts set, no time bands → fully clear day" trap.
+                var _openFill = {}, _openFillAll = false;
+                var _isFillType = function (t) { t = String(t || '').toLowerCase(); return t === 'sport' || t === 'sports' || t === 'special' || t === 'elective' || t === 'activity'; };
                 layers.forEach(function (l) {
                     if (!l) return;
                     var s = _lwgT(l.startMin != null ? l.startMin : l.startTime);
                     var e = _lwgT(l.endMin != null ? l.endMin : l.endTime);
-                    if (s == null || e == null || e <= s) return;        // a layer with no usable window can't define coverage
                     var g = String(l.grade || l.division || '_all');
+                    if (s == null || e == null || e <= s) {              // a layer with no usable window can't define coverage
+                        if (_isFillType(l.type)) { if (g === '_all') _openFillAll = true; else _openFill[g] = true; }
+                        return;
+                    }
                     if (g === '_all') { _winAll.push([s, e]); return; }
                     (_winByGrade[g] = _winByGrade[g] || []).push([s, e]);
                 });
@@ -31434,11 +31447,17 @@
                     }
                     return out;
                 };
-                var _mergedFor = {};
+                var _FULLDAY = [[0, 24 * 60]];
+                var _mergedFor = {}, _fellBack = {};
                 var _coverageFor = function (g) {
                     if (_mergedFor[g]) return _mergedFor[g];
+                    // Open fill-layer (sport/special/elective with no time band) → no time
+                    //   restriction for this grade: cover the whole day so nothing is blanked.
+                    if (_openFillAll || _openFill[g]) { _fellBack[g] = 1; return (_mergedFor[g] = _FULLDAY); }
                     var ivs = (_winByGrade[g] || []).concat(_winAll);
-                    return (_mergedFor[g] = _merge(ivs));
+                    var merged = _merge(ivs);
+                    if (!merged.length) { _fellBack[g] = 1; merged = _FULLDAY; }  // no usable windows at all → never clear the day
+                    return (_mergedFor[g] = merged);
                 };
                 // Covered fraction of [s,e] against the grade's merged windows.
                 var _coveredFrac = function (mg, s, e) {
@@ -31490,6 +31509,8 @@
                 if (_blanked) log('  ⛔ [FN-55 LAYER-WINDOW GATE] blanked ' + _blanked + ' activit(y/ies) outside their grade\'s layer windows → Free [' +
                     Object.keys(_gradesCleared).map(function (g) { return g + ':' + _gradesCleared[g]; }).join(', ') + '] — only layer-covered time is scheduled');
                 else log('  ✅ [FN-55 LAYER-WINDOW GATE] all activities fall within their grade\'s layer windows');
+                var _fbKeys = Object.keys(_fellBack);
+                if (_fbKeys.length) log('  ℹ️ [FN-55 LAYER-WINDOW GATE] ' + _fbKeys.length + ' grade(s) have open (window-less) fill layers → full-day coverage, no blanking: [' + _fbKeys.join(', ') + ']');
             })();
         } catch (_eLWG) { try { warn('[FN-55 LAYER-WINDOW GATE] ' + (_eLWG && _eLWG.message)); } catch (_e4) {} }
 
@@ -31675,6 +31696,239 @@
                 if (_lfeUnmet) log('  🔎 [STEP 6.98 LAYER-FLOOR ENFORCE] ' + _lfeUnmet + ' floor(s) still unmet after enforcement — see [STEP 6.98 UNMET] lines above for the per-bunk reason (drives the next fix: slot-merge vs config).');
             }
         } catch (_e698) { try { warn('[STEP 6.98 LAYER-FLOOR ENFORCE] ' + (_e698 && _e698.message)); } catch (_e) {} }
+
+        // ★ STEP 6.98b — SPORT + BARE-SPECIAL FLOOR ENFORCER (companion to 6.98).
+        //   6.98 tops up demanded SPECIAL-SUBCATEGORY floors; this pass closes the two
+        //   remaining floor families the 6.99 audit measures but nothing enforced:
+        //     • SPORT layers (=N / >=N): the bunk must end with ≥N real sport blocks.
+        //       Reclaims Free / generic "Sports" fillers (NEVER a real sport, special,
+        //       wall, league, custom, trip, or pinned) and places a real sport on an
+        //       EMPTY, same-grade field that passes the hard config gate
+        //       (_validateWritePlacement) — mirroring STEP 4.97b's proven guarantee-fill.
+        //       Empty-field-only sidesteps the maxPlayers-when-sharing class of bug;
+        //       a single bunk on its own field can't breach a combined cap.
+        //     • BARE-SPECIAL layers (type 'special' with a qty but NO subQuantities grid,
+        //       e.g. "special >= 4"): the bunk must end with ≥N specials of ANY
+        //       subcategory. Reclaims a droppable slot (and, when no sport floor competes,
+        //       a real sport per the user's "drop a sport for a required layer" rule) and
+        //       places any available, room-free special at its configured duration (split
+        //       when _perBunkSlots is index-aligned, else exact-fit).
+        //   Genuinely-impossible floors (no free field, no available activity, every slot
+        //   a wall/league/special) are left for the 6.99 audit to report. SWIM / CUSTOM
+        //   floors stay AUDIT-ONLY (re-placing them needs their change-period / pinned-
+        //   window context). Safe-by-construction: per placement clone→mutate→restore-on-
+        //   error; single-cell slots only. Kill: globalSettings.app1.layerFloorEnforce='off'.
+        try {
+            var _lfsOff = false;
+            try { var _lfsF = globalSettings && globalSettings.app1 && globalSettings.app1.layerFloorEnforce; if (_lfsF === 'off' || _lfsF === false) _lfsOff = true; } catch (_e) {}
+            var _lfsLBG = (typeof layersByGrade !== 'undefined' && layersByGrade) || (typeof window !== 'undefined' && window._layersByGrade) || {};
+            if (!_lfsOff && _lfsLBG && Object.keys(_lfsLBG).length) {
+                var _lfsNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _lfsCanon = function (v) { var s = _lfsNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _lfsLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                // mirror the planner / 6.99-audit qty/op → floor parse exactly
+                var _lfsFloor = function (qRawV, oRawV) {
+                    var qRaw = String(qRawV != null ? qRawV : ''), oRaw = String(oRawV != null ? oRawV : '');
+                    var combined = (qRaw + oRaw).trim();
+                    var m = combined.match(/^(\d*)\s*(>=|<=|≥|≤|>|<|=)\s*(\d*)$/);
+                    var qty, op;
+                    if (m) { qty = parseInt(m[1] || m[3] || '1', 10) || 1; op = (m[2] === '≥' || m[2] === '>') ? '>=' : (m[2] === '≤' || m[2] === '<') ? '<=' : m[2]; }
+                    else { qty = parseInt(qRaw, 10) || 1; op = '>='; }
+                    return (op === '<=') ? 0 : qty;
+                };
+                // specials meta (subcategory / location / capacity), durable source
+                var _lfsSub = {}, _lfsLoc = {}, _lfsCap = {};
+                try {
+                    var _lfsA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_lfsA1 && _lfsA1.specialActivities) || []).forEach(function (s) { if (!s || !s.name) return; var n = _lfsNorm(s.name); _lfsSub[n] = _lfsCanon(s.subcategory); _lfsLoc[n] = s.location || s.name; var sw = s.sharableWith || {}; _lfsCap[n] = parseInt(sw.capacity) || 1; });
+                } catch (_e) {}
+                // per-grade floors: SPORT (=N/>=N) and BARE-SPECIAL total (type special, no subQuantities grid)
+                var _lfsSportFloor = {}, _lfsTotalSpecFloor = {};
+                Object.keys(_lfsLBG).forEach(function (grade) {
+                    (_lfsLBG[grade] || []).forEach(function (cl) {
+                        if (!cl) return;
+                        var t = _lfsNorm(cl.type);
+                        if (t === 'sport' || t === 'sports') {
+                            var f = _lfsFloor(cl.qty != null ? cl.qty : cl.quantity, cl.op != null ? cl.op : cl.operator);
+                            if (f > 0) _lfsSportFloor[grade] = (_lfsSportFloor[grade] || 0) + f;
+                        } else if (t === 'special' && (!cl.subQuantities || typeof cl.subQuantities !== 'object' || !Object.keys(cl.subQuantities).length)) {
+                            var f2 = _lfsFloor(cl.qty != null ? cl.qty : cl.quantity, cl.op != null ? cl.op : cl.operator);
+                            if (f2 > 0) _lfsTotalSpecFloor[grade] = (_lfsTotalSpecFloor[grade] || 0) + f2;
+                        }
+                    });
+                });
+                if (Object.keys(_lfsSportFloor).length || Object.keys(_lfsTotalSpecFloor).length) {
+                    var _lfsSA = window.scheduleAssignments || {};
+                    var _LFS_WALL = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+                    // ---- field data for sport placement (mirror STEP 4.97b's durable source) ----
+                    var _lfsApp1F = (function () { try { return (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {}); } catch (_e) { return {}; } })();
+                    var _lfsAllF = ((_lfsApp1F && _lfsApp1F.fields) || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                    var _lfsBG = {}; Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _lfsBG[String(b)] = d; }); });
+                    var _lfsFCap = {}; ((_lfsApp1F && _lfsApp1F.fields) || []).forEach(function (f) { if (f && f.name) { var sw = f.sharableWith || {}; if (sw.capacity != null) _lfsFCap[f.name] = sw.capacity; } });
+                    var _lfsCapOf = function (fn) { if (_lfsFCap[fn] != null) return _lfsFCap[fn]; try { var g = window.getFieldCapacity && window.getFieldCapacity(fn); if (g != null) return g; } catch (_e) {} return 1; };
+                    var _lfsDT = window.divisionTimes || {};
+                    // NOTE: continuation cells ARE counted (perf-extend writes a spanned sport's
+                    //   later periods as continuation:true carrying `field` but no _startMin/_endMin
+                    //   — fall back to the slot's divisionTimes bounds ds[j]). Skipping them (as the
+                    //   STEP 4.97b _occ does) makes a field look EMPTY in a period covered only by
+                    //   another bunk's continuation → the empty-field sport placement below would
+                    //   double-book it, and nothing repairs field conflicts after this pass.
+                    var _lfsOcc = function (fn, s, e, exclB) { var c = 0, dv = {}; var ks = Object.keys(_lfsSA); for (var ki = 0; ki < ks.length; ki++) { var b = ks[ki]; if (String(b) === String(exclB)) continue; var ar = _lfsSA[b]; if (!Array.isArray(ar)) continue; var ds = _lfsDT[_lfsBG[b]] || []; for (var j = 0; j < ar.length; j++) { var en = ar[j]; if (!en || _lfsNorm(en.field) !== _lfsNorm(fn)) continue; var es = en._startMin != null ? en._startMin : (ds[j] && ds[j].startMin), ee = en._endMin != null ? en._endMin : (ds[j] && ds[j].endMin); if (es != null && ee != null && es < e && ee > s) { c++; dv[_lfsBG[b]] = true; } } } return { count: c, divs: Object.keys(dv) }; };
+                    var _lfsRH = (function () { try { var h = window.loadRotationHistory && window.loadRotationHistory(); return (h && h.bunks) || {}; } catch (_e) { return {}; } })();
+                    var _lfsRotTs = function (b, a) { try { var m = _lfsRH[b]; var t = m && m[a]; return (t == null) ? 0 : t; } catch (_e) { return 0; } };
+                    var _lfsRoomFull = function (loc, cap, s, e, exclB) { var rl = _lfsNorm(loc); if (!rl) return false; var n = 0; var ks = Object.keys(_lfsSA); for (var ki = 0; ki < ks.length; ki++) { var b = ks[ki]; if (String(b) === String(exclB)) continue; var ar = _lfsSA[b]; if (!Array.isArray(ar)) continue; for (var j = 0; j < ar.length; j++) { var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue; var xn = _lfsNorm(x._assignedSpecial || x._activity || x.event); var xr = _lfsNorm(_lfsLoc[xn] || x.field); if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; } } } return false; };
+                    // reclaimable single-cell slots: Free (rank 3) / generic "Sports" filler (rank 2) /
+                    //   real sport (rank 1, only when allowDropSport). Never a special/wall/league/custom/pinned.
+                    var _lfsReclaim = function (arr, allowDropSport) {
+                        var out = [];
+                        for (var i = 0; i < arr.length; i++) {
+                            var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                            if (arr[i + 1] && arr[i + 1].continuation === true) continue;   // single-cell only (safe)
+                            if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c._isChinuch || c.type === 'custom' || c._customActivity || c._pinned || c._fixed) continue;
+                            if (c._assignedSpecial || c.type === 'special') continue;        // never drop a special
+                            if (c._source === 'layer-window-gate') continue;                  // FN-55 blanked this as OUT-OF-WINDOW → don't refill it
+                            var act = _lfsNorm(c._activity || c.event || c.sport);
+                            if (_LFS_WALL.test(act)) continue;
+                            var isFree = (!act || act === 'free');
+                            var isFiller = (act === 'sports' || act === 'sport 2' || act === 'sport') && !c.sport;
+                            var isSport = !!c.sport && !isFree;
+                            if (isSport && !allowDropSport) continue;
+                            if (!isFree && !isFiller && !isSport) continue;
+                            out.push({ i: i, s: c._startMin, e: c._endMin, W: c._endMin - c._startMin, rank: isFree ? 3 : (isFiller ? 2 : 1) });
+                        }
+                        out.sort(function (a, b) { return b.rank - a.rank; });
+                        return out;
+                    };
+                    // pick a real sport (EMPTY same-grade field + valid activity) for [s,e]
+                    var _lfsPickSport = function (grade, bunk, s, e, doneSet) {
+                        var bestNew = null, bestNewTs = Infinity, bestRep = null, bestRepTs = Infinity;
+                        for (var fi = 0; fi < _lfsAllF.length; fi++) {
+                            var F = _lfsAllF[fi];
+                            var o = _lfsOcc(F.name, s, e, bunk);
+                            if (o.count !== 0) continue;   // empty fields only → no maxPlayers-when-sharing risk
+                            for (var ai = 0; ai < F.activities.length; ai++) {
+                                var A = F.activities[ai];
+                                try { if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue; } catch (_e) { continue; }
+                                var ts = _lfsRotTs(bunk, A);
+                                if (!doneSet[_lfsNorm(A)]) { if (ts < bestNewTs) { bestNew = { field: F.name, act: A }; bestNewTs = ts; } }
+                                else { if (ts < bestRepTs) { bestRep = { field: F.name, act: A }; bestRepTs = ts; } }
+                            }
+                        }
+                        return bestNew || bestRep;
+                    };
+                    // pick any available special (subcategory-agnostic) that fits [slotStart, slotStart+d]
+                    var _lfsPickSpecial = function (grade, bunk, slotStart, slotW, today, pbsAligned) {
+                        for (var si = 0; si < todaysSpecials.length; si++) {
+                            var sp = todaysSpecials[si]; if (!sp || !sp.name) continue; var cn = _lfsNorm(sp.name);
+                            if (today[cn]) continue;
+                            var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                            if (!durs.length) { var d1 = 0; try { d1 = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0; } catch (_e) {} if (d1 > 0) durs = [d1]; }
+                            var d = 0; for (var dj = 0; dj < durs.length; dj++) { if (durs[dj] > 0 && durs[dj] <= slotW && durs[dj] > d) d = durs[dj]; }
+                            if (d <= 0) continue;
+                            if (!pbsAligned && d !== slotW) continue;   // split needs an aligned grid
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, grade, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                            try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, grade))) continue; } catch (_e) {}
+                            try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, grade, slotStart, slotStart + d)) continue; } catch (_e) { continue; }
+                            var loc = _lfsLoc[cn] || sp.location || sp.name;
+                            if (_lfsRoomFull(loc, _lfsCap[cn] || 1, slotStart, slotStart + d, bunk)) continue;
+                            return { name: sp.name, loc: loc, nm: cn, d: d };
+                        }
+                        return null;
+                    };
+                    var _lfsSportPlaced = 0, _lfsSpecPlaced = 0, _lfsBunks = {};
+                    allGrades.forEach(function (grade) {
+                        var sportFloor = _lfsSportFloor[grade] || 0;
+                        var totalSpecFloor = _lfsTotalSpecFloor[grade] || 0;
+                        if (sportFloor <= 0 && totalSpecFloor <= 0) return;
+                        var bunks = getBunksForGrade(grade, divisions) || [];
+                        var pbsAll = (window._perBunkSlots && window._perBunkSlots[grade]) || (window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots) || null;
+                        bunks.forEach(function (bunk) {
+                            var arr = _lfsSA[bunk]; if (!Array.isArray(arr) || !arr.length) return;
+                            var pbs = pbsAll && pbsAll[String(bunk)];
+                            var pbsAligned = Array.isArray(pbs) && pbs.length === arr.length;
+                            var today = {}, sportCnt = 0, specCnt = 0;
+                            arr.forEach(function (c) {
+                                if (!c || c.continuation) return;
+                                if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c._isChinuch) return;
+                                var nm = _lfsNorm(c._assignedSpecial || c._activity || c.event || c.sport);
+                                if (!nm || nm === 'free') return;
+                                today[nm] = 1;
+                                // Count EXACTLY as the STEP 6.99 audit does (name-first, then flag):
+                                //   a configured special written as a plain slot by a gap-filler /
+                                //   recapture loses the _assignedSpecial / type flag, so flag-only
+                                //   counting would undercount specials (→ over-enforce, needlessly
+                                //   dropping a sport) and miscount that block as a sport.
+                                if (_lfsSub[nm] != null || c._assignedSpecial || c.type === 'special') specCnt++;
+                                else if (c.sport && c.type !== 'custom') sportCnt++;
+                            });
+                            // ---- BARE-SPECIAL total floor: place ANY available special ----
+                            if (totalSpecFloor > 0 && specCnt < totalSpecFloor) {
+                                var _allowDropSport = (sportFloor <= 0);   // don't rob a sport floor to pay a special floor
+                                var gT = 0;
+                                while (specCnt < totalSpecFloor && gT++ < 8) {
+                                    var cands = _lfsReclaim(arr, _allowDropSport);
+                                    var did = false;
+                                    for (var ci = 0; ci < cands.length && !did; ci++) {
+                                        var cd = cands[ci];
+                                        var pick = _lfsPickSpecial(grade, bunk, cd.s, cd.W, today, pbsAligned);
+                                        if (!pick) continue;
+                                        var _bak = arr[cd.i], _bakP = (pbsAligned && pbs[cd.i]) ? pbs[cd.i] : null;
+                                        try {
+                                            var specialCell = { field: pick.loc, sport: null, _activity: pick.name, event: pick.name, type: 'special', _assignedSpecial: pick.name, _specialLocation: pick.loc, _isSpecialLocation: true, _autoSpecial: true, _autoMode: true, _startMin: cd.s, _endMin: cd.s + pick.d, _source: 'fn-floor-enforce-bare', continuation: false };
+                                            if (pick.d === cd.W) {
+                                                arr[cd.i] = specialCell;
+                                                if (pbsAligned && pbs[cd.i]) { pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                            } else {
+                                                arr[cd.i] = specialCell;
+                                                var freeCell = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _startMin: cd.s + pick.d, _endMin: cd.e, _source: 'fn-floor-enforce-bare-rem', continuation: false };
+                                                var freePbs = { startMin: cd.s + pick.d, endMin: cd.e, startTime: _lfsLabel(cd.s + pick.d), endTime: _lfsLabel(cd.e), event: 'Free', type: 'slot', _bunk: bunk };
+                                                if (pbs && pbs[cd.i]) { pbs[cd.i].endMin = cd.s + pick.d; pbs[cd.i].endTime = _lfsLabel(cd.s + pick.d); pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                                arr.splice(cd.i + 1, 0, freeCell);
+                                                if (pbs) { pbs.splice(cd.i + 1, 0, freePbs); for (var pz = 0; pz < pbs.length; pz++) { if (pbs[pz]) pbs[pz].slotIndex = pz; } }
+                                            }
+                                            try { if (typeof claimField === 'function') claimField(pick.loc, cd.s, cd.s + pick.d, bunk, grade, pick.name); } catch (_e) {}
+                                            today[pick.nm] = 1; specCnt++; _lfsSpecPlaced++; _lfsBunks[bunk] = 1; did = true;
+                                        } catch (_eApply) {
+                                            try { arr[cd.i] = _bak; if (pbsAligned && _bakP) pbs[cd.i] = _bakP; } catch (_e) {}
+                                        }
+                                    }
+                                    if (!did) break;
+                                }
+                            }
+                            // ---- SPORT floor: place a real sport on an empty same-grade field ----
+                            if (sportFloor > 0 && sportCnt < sportFloor) {
+                                var gS = 0;
+                                while (sportCnt < sportFloor && gS++ < 8) {
+                                    var sCands = _lfsReclaim(arr, false);   // sport floor never drops a real sport
+                                    var sDid = false;
+                                    for (var si2 = 0; si2 < sCands.length && !sDid; si2++) {
+                                        var scd = sCands[si2];
+                                        var spick = _lfsPickSport(grade, bunk, scd.s, scd.e, today);
+                                        if (!spick) continue;
+                                        var _bak2 = arr[scd.i], _bakP2 = (pbsAligned && pbs[scd.i]) ? pbs[scd.i] : null;
+                                        try {
+                                            arr[scd.i] = { field: spick.field, sport: spick.act, _activity: spick.act, event: spick.act, _autoMode: true, _autoSolved: true, _startMin: scd.s, _endMin: scd.e, _source: 'fn-floor-enforce-sport', continuation: false };
+                                            if (pbsAligned && pbs[scd.i]) { pbs[scd.i].event = spick.act; pbs[scd.i].type = 'slot'; }
+                                            try { if (typeof claimField === 'function') claimField(spick.field, scd.s, scd.e, bunk, grade, spick.act); } catch (_e) {}
+                                            today[_lfsNorm(spick.act)] = 1; sportCnt++; _lfsSportPlaced++; _lfsBunks[bunk] = 1; sDid = true;
+                                        } catch (_eApply2) {
+                                            try { arr[scd.i] = _bak2; if (pbsAligned && _bakP2) pbs[scd.i] = _bakP2; } catch (_e) {}
+                                        }
+                                    }
+                                    if (!sDid) break;
+                                }
+                            }
+                        });
+                    });
+                    if (_lfsSportPlaced || _lfsSpecPlaced) {
+                        log('  🩹 [STEP 6.98b SPORT/BARE-SPECIAL FLOOR] placed ' + _lfsSportPlaced + ' sport(s) + ' + _lfsSpecPlaced + ' bare-special(s) across ' + Object.keys(_lfsBunks).length + ' bunk(s) to meet sport / bare-special floors. [kill: globalSettings.app1.layerFloorEnforce=\'off\']');
+                        try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                    } else {
+                        log('  ✅ [STEP 6.98b SPORT/BARE-SPECIAL FLOOR] nothing to enforce (or no reclaimable slot / free field).');
+                    }
+                }
+            }
+        } catch (_e698b) { try { warn('[STEP 6.98b SPORT/BARE-SPECIAL FLOOR] ' + (_e698b && _e698b.message)); } catch (_e) {} }
 
         // ★ STEP 6.99 — LAYER-FLOOR AUDIT (log-only, never mutates). GOAL: every bunk
         //   gets EVERY layer at its configured count (=2 → 2; >=N → ≥N; <= has no floor).
