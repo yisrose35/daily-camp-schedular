@@ -124,6 +124,53 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.ok(shiur[0].startMin >= 650 && shiur[0].endMin <= 690, 'shiur stayed in its window (P1)');
     });
 
+    it('GATE: a sport-spacing rule replaces a 2nd adjacent sport with a special (still wall-to-wall)', () => {
+        // sport-vs-sport <40min gap = blocked (mirrors rules.js isCandidateAllowed)
+        const sportGate = (block, template) => {
+            if (block.type !== 'sport') return true;
+            for (const w of template) {
+                if (w.type !== 'sport') continue;
+                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
+                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
+                if (gapBefore >= 0 && gapBefore < 40) return false;
+                if (gapAfter >= 0 && gapAfter < 40) return false;
+            }
+            return true;
+        };
+        const base = {
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(690, 730, 'P2')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 0, cap: Infinity }
+            ],
+            packer: PeriodPacker
+        };
+        // baseline (no gate): both adjacent periods tile with sport
+        const noGate = Layout.planBunkLayout(base);
+        assert.strictEqual(tilesOf(noGate).filter(t => t.kind === 'sport').length, 2, 'baseline: two back-to-back sports');
+        // gated: the 2nd sport is spacing-blocked → window fills with a special instead
+        const gated = Layout.planBunkLayout(Object.assign({}, base, { gate: sportGate }));
+        assert.strictEqual(gated.stats.residualMin, 0, 'still wall-to-wall');
+        assert.strictEqual(tilesOf(gated).filter(t => t.kind === 'sport').length, 1, 'only one sport survives the gate');
+        assert.strictEqual(tilesOf(gated).filter(t => t.subcat === 'food').length, 1, 'spacing-blocked window filled by a special');
+    });
+
+    it('GATE + cap: a special used as filler never exceeds its subcategory cap', () => {
+        const blockAllSport = (block) => block.type !== 'sport'; // sport always blocked
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(690, 730, 'P2')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: 1 }
+            ],
+            gate: blockAllSport, packer: PeriodPacker
+        });
+        assert.strictEqual(tilesOf(res).filter(t => t.subcat === 'food').length, 1, 'food placed exactly its cap (1)');
+        assert.ok(res.stats.residualMin >= 40, 'capped special cannot over-fill the 2nd window — left for legacy fill');
+    });
+
     it('no-candidates window is reported, not crashed', () => {
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G', periods: [P(855, 895, 'P6')], pinned: [],

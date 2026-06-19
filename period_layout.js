@@ -30,7 +30,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '0.1.0';
+    var VERSION = '0.2.0';
 
     function _getPacker(opts) {
         if (opts && opts.packer) return opts.packer;
@@ -101,6 +101,12 @@
         var minSeg = opts.minSegmentMin || 10;
         var topN = opts.topN || 8;
         var maxSegments = opts.maxSegments || 4;
+        // Optional LAYOUT gate: gate(block,template)->bool. Lets the caller veto a
+        // generic tile that breaks a SPACING rule (e.g. "no sport within 40min of a
+        // sport") — checked against already-placed tiles. NOT a content gate (it
+        // never decides WHICH activity); a sport blocked here is replaced by a
+        // special so the period still tiles wall-to-wall. Omitted => no gating.
+        var gate = (typeof ctx.gate === 'function') ? ctx.gate : null;
 
         var periods = (ctx.periods || []).filter(function (p) {
             return p && !p.isBreak && _num(p.startMin) != null && _num(p.endMin) != null && p.endMin > p.startMin;
@@ -108,12 +114,20 @@
         var pinned = (ctx.pinned || []).filter(function (b) { return b && _num(b.startMin) != null && _num(b.endMin) != null; });
         var floating = ctx.floating || [];
 
-        // remaining quota per demand key (specials = their floor; sport = Infinity)
-        var remaining = {};
+        // Two quotas per demand key:
+        //   remaining = FLOOR (qty) — drives the floor bonus + unmetSpecialFloors;
+        //               consumed once the floor is met. (sport => Infinity)
+        //   capRem    = CAP — the MAX times the kind may appear; drives candidate
+        //               eligibility. Specials may exceed their floor up to the cap
+        //               (so a sport-spacing-blocked window can still tile with an
+        //               extra special). Uncapped => Infinity.
+        var remaining = {}, capRem = {};
         floating.forEach(function (d) {
             var k = _demandKey(d);
-            var q = (d.qty == null) ? Infinity : d.qty;
-            remaining[k] = (remaining[k] == null) ? q : Math.max(remaining[k], q);
+            var floor = (d.qty == null) ? Infinity : d.qty;
+            var cap = (d.cap == null) ? Infinity : d.cap;
+            remaining[k] = (remaining[k] == null) ? floor : Math.max(remaining[k], floor);
+            capRem[k] = (capRem[k] == null) ? cap : Math.max(capRem[k], cap);
         });
 
         var tiles = pinned.map(function (b) {
@@ -142,6 +156,47 @@
             return total;
         }
 
+        // Lay a packing's segments at absolute times from `start` (no commit).
+        function _laySegs(segs, start) {
+            var c = start, out = [];
+            for (var i = 0; i < segs.length; i++) {
+                out.push({ kind: segs[i].kind, subcat: segs[i].subcat || null, name: segs[i].name, _key: segs[i]._key,
+                           startMin: c, endMin: c + segs[i].durationMin, durationMin: segs[i].durationMin });
+                c += segs[i].durationMin;
+            }
+            return out;
+        }
+        // Map a layout tile/segment ({kind,name,...}) to a rules-engine block
+        // ({type,event,...}) — the gate + rules.js blockMatchesDescriptor read
+        // .type/.event, so the template entries MUST expose them.
+        function _toBlock(x) {
+            var b = { type: x.kind, event: x.name, startMin: x.startMin, endMin: x.endMin };
+            if (x.kind === 'special') { b._assignedSpecial = x.name; b._specialLocation = x.name; }
+            return b;
+        }
+        // Every laid segment must pass the gate against the already-placed `tiles`
+        // PLUS the other segments in this same window (so two tiles in one window
+        // are spacing-checked against each other too).
+        function _gatePass(laid) {
+            if (!gate) return true;
+            for (var i = 0; i < laid.length; i++) {
+                var block = _toBlock(laid[i]);
+                var template = tiles.concat(laid.slice(0, i)).concat(laid.slice(i + 1)).map(_toBlock);
+                var ok = true;
+                try { ok = gate(block, template); } catch (e) { ok = true; }
+                if (!ok) return false;
+            }
+            return true;
+        }
+        // First packing (best-scored first) whose laid segments all pass the gate.
+        function _pickGated(packings, start) {
+            for (var p = 0; p < packings.length; p++) {
+                var laid = _laySegs(packings[p].segments, start);
+                if (_gatePass(laid)) return laid;
+            }
+            return null;
+        }
+
         for (var pi = 0; pi < periods.length; pi++) {
             var period = periods[pi];
             stats.periodsConsidered++;
@@ -160,7 +215,7 @@
                 for (var fi = 0; fi < floating.length; fi++) {
                     var d = floating[fi];
                     var key = _demandKey(d);
-                    if (!(remaining[key] > 0)) continue;
+                    if (!(capRem[key] > 0)) continue;
                     var win = d.window;
                     if (win && (win[0] > w.start || win[1] < w.end)) continue; // demand window must cover the sub-window
                     var durs = (d.durations && d.durations.length) ? d.durations : _durRange(d.dMin, d.dMax, gran);
@@ -182,17 +237,36 @@
                 } catch (e) { rec.reason = 'pack-error:' + (e && e.message); planWindows.push(rec); stats.residualMin += len; continue; }
                 if (!packings.length) { rec.reason = 'no-exact-tiling'; planWindows.push(rec); stats.residualMin += len; continue; }
 
-                // LAYOUT has no content gates → take the best packing outright.
-                var chosen = packings[0].segments;
-                var cursor = w.start;
-                for (var ci = 0; ci < chosen.length; ci++) {
-                    var seg = chosen[ci];
+                // Pick the best packing that passes the spacing gate. If none pass —
+                // a filler (sport) is spacing-blocked here — SWAP it for a still-NEEDED
+                // demand rather than dropping it: retry with ONLY specials, scored so an
+                // unmet layer floor wins first (floorBonus), so the window fills with
+                // something the bunk still owes (the human "put a needed special between
+                // two sports" move). The blocked sport is NOT lost — sport is unlimited
+                // filler, so it simply lands in the next rule-compliant window.
+                // No gate => packings[0] outright (unchanged legacy behavior).
+                var laid = _pickGated(packings, w.start);
+                if (!laid && gate) {
+                    var spCands = [];
+                    for (var sci = 0; sci < cands.length; sci++) { if (cands[sci].kind === 'special') spCands.push(cands[sci]); }
+                    var spPack = [];
+                    if (spCands.length) {
+                        try { spPack = packer.pack({ periodLengthMin: len, candidates: spCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { spPack = []; }
+                    }
+                    laid = _pickGated(spPack, w.start);
+                }
+                if (!laid) { rec.reason = packings.length ? 'all-packings-gated' : 'no-exact-tiling'; planWindows.push(rec); stats.residualMin += len; continue; }
+
+                for (var ci = 0; ci < laid.length; ci++) {
+                    var seg = laid[ci];
                     var t = { kind: seg.kind, subcat: seg.subcat || null, name: seg.name,
-                              startMin: cursor, endMin: cursor + seg.durationMin, durationMin: seg.durationMin,
+                              startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin,
                               generic: true, pinned: false };
                     tiles.push(t); rec.tiles.push(t);
-                    if (seg.kind === 'special' && remaining[seg._key] > 0) remaining[seg._key]--;
-                    cursor += seg.durationMin;
+                    if (seg.kind === 'special') {
+                        if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
+                        if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
+                    }
                     stats.tilesPlaced++;
                 }
                 rec.tiled = true; rec.residualMin = 0;
@@ -219,7 +293,7 @@
             if (!b) continue;
             var res = planBunkLayout({
                 bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
-                floating: b.floating, opts: opts, packer: o.packer
+                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate
             });
             layoutByBunk[bunk] = res;
             totals.bunks++;

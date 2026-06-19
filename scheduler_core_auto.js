@@ -17413,6 +17413,15 @@
                         return b.event || b._assignedSpecial || _glTitle(t || 'Activity');
                     };
 
+                    // Rule gate: reuse the camp's configured cooldown/spacing rules
+                    // (window.SchedulingRules) so generic tiles honor them — e.g. a
+                    // "no Sport within 40min of a Sport" rule spaces the generic Sport
+                    // tiles (a sport blocked here is replaced by a special). Reads the
+                    // user's real rules, so it self-adjusts to whatever they configured.
+                    var _glGate = (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function')
+                        ? function (block, template) { try { return window.SchedulingRules.isCandidateAllowed(block, template, { mode: 'auto' }); } catch (_e) { return true; } }
+                        : null;
+
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
                     var _glOrder = [], _glPerBunk = {};
                     allGrades.forEach(function (grade) {
@@ -17434,9 +17443,9 @@
 
                             var floating = [];
                             // special-subcategory floors → ONE generic tile per subcat (food/theme/shiur/uncategorized/…)
-                            var subDur = {}, subFloor = {};
+                            var subDur = {}, subFloor = {}, subCap = {};
                             var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
-                            Object.keys(caps).forEach(function (k) { var key = _glCanon(k); var c = caps[k]; subFloor[key] = (c === Infinity || c == null) ? 1 : c; });
+                            Object.keys(caps).forEach(function (k) { var key = _glCanon(k); var c = caps[k]; subFloor[key] = (c === Infinity || c == null) ? 1 : c; subCap[key] = (c === Infinity || c == null) ? Infinity : c; });
                             ((sl && sl.specials && sl.specials.priorityList) || []).forEach(function (sx) {
                                 var key = _glCanon(sx.subcategory);
                                 if (subFloor[key] == null) subFloor[key] = 1;
@@ -17450,7 +17459,7 @@
                             Object.keys(subFloor).forEach(function (key) {
                                 var durs = Object.keys(subDur[key] || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
                                 if (!durs.length) durs = [10, 20, 30, 40];
-                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], score: 0 });
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], cap: (subCap[key] == null ? Infinity : subCap[key]), score: 0 });
                             });
                             // sport filler (unlimited) — fills whatever the special floors leave open.
                             var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
@@ -17466,7 +17475,7 @@
                     });
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
 
                     // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
                     //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real
