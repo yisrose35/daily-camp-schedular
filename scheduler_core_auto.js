@@ -31554,7 +31554,18 @@
                         var pbs = pbsAll && pbsAll[String(bunk)];
                         var pbsAligned = Array.isArray(pbs) && pbs.length === arr.length;
                         var cnt = {}, today = {};
-                        arr.forEach(function (c) { if (!c || c.continuation) return; var nm = _lfeNorm(c._assignedSpecial || c._activity || c.event); if (!nm || nm === 'free') return; today[nm] = 1; if (c._assignedSpecial || c.type === 'special') { var sc = (_lfeSub[nm] != null) ? _lfeSub[nm] : _lfeCanon(c.subcategory); cnt[sc] = (cnt[sc] || 0) + 1; } });
+                        arr.forEach(function (c) {
+                            if (!c || c.continuation) return;
+                            var nm = _lfeNorm(c._assignedSpecial || c._activity || c.event); if (!nm || nm === 'free') return;
+                            today[nm] = 1;
+                            // Count by NAME first: a configured special placed by a gap-filler /
+                            //   recapture can land as a plain slot (no _assignedSpecial / type!='special');
+                            //   gating the count on the flag undercounts it (the 5a503222 lesson) and
+                            //   made the enforcer chase floors a bunk already satisfies.
+                            var _isSp = (_lfeSub[nm] != null);
+                            if (_isSp) { cnt[_lfeSub[nm]] = (cnt[_lfeSub[nm]] || 0) + 1; }
+                            else if (c._assignedSpecial || c.type === 'special') { var sc = _lfeCanon(c.subcategory); cnt[sc] = (cnt[sc] || 0) + 1; }
+                        });
                         Object.keys(floors).forEach(function (sk) {
                             var floor = floors[sk], guard = 0;
                             while ((cnt[sk] || 0) < floor && guard++ < 8) {
@@ -31712,7 +31723,13 @@
                             // named "Cleanup"/"Main Activity"/"Davening", so name-match is the
                             // only reliable way — type-bucketing + a wall regex falsely zeroed them.
                             d.byName[nm] = (d.byName[nm] || 0) + 1;
-                            if (s._assignedSpecial || s.type === 'special') { var sc = (_lfaSubOf[nm] != null) ? _lfaSubOf[nm] : _lfaCanon(s.subcategory); d.sub[sc] = (d.sub[sc] || 0) + 1; }
+                            // Subcat count by NAME first: a configured special written as a plain
+                            //   slot (gap-filler / recapture drops the _assignedSpecial / type flag)
+                            //   must still count toward its subcategory floor — the same name-vs-flag
+                            //   miscount fixed in FN-56 (5a503222). Flag-only gating falsely zeroed
+                            //   e.g. a "?:Theme Activity" block that is on the bunk's schedule.
+                            if (_lfaSubOf[nm] != null) { d.sub[_lfaSubOf[nm]] = (d.sub[_lfaSubOf[nm]] || 0) + 1; }
+                            else if (s._assignedSpecial || s.type === 'special') { var sc = _lfaCanon(s.subcategory); d.sub[sc] = (d.sub[sc] || 0) + 1; }
                             else if (s.sport && s.type !== 'custom') { d.sport++; }   // generic/real sport (not a custom anchor)
                         });
                         deliv[b] = d;
