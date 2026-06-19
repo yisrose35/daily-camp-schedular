@@ -29306,6 +29306,88 @@
         } catch (_e6862c) { try { warn('[STEP 6.862c WORKSHOP-REBALANCE] skipped (error: ' + (_e6862c && _e6862c.message) + ')'); } catch (_e) {} }
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.862d — GAP-ABSORB: close an uncovered mid-day gap by extending the
+        // ───────────────────────────────────────────────────────────────────
+        //   GENERIC FILLER (Sports / Sport 2) sitting right next to it. The 20-min
+        //   holes are uncovered TIME (no cell): the only thing that fits is a 20-min
+        //   filler, and the fill passes won't place an adjacent duplicate or stretch a
+        //   neighbor, so the hole survives. A generic field filler has NO configured
+        //   duration (unlike a special — see the reverted sliverStretchSpecial render
+        //   artifacts), so widening its own block to cover the adjacent gap is safe and
+        //   leaves NO new tile / no duplicate. We only touch SINGLE-CELL fillers (the
+        //   20-min Sports/Sport 2 are always single-cell) so there is no multi-period
+        //   slot reshaping; we update the cell AND its aligned _perBunkSlots slot in
+        //   place (time-based renderer → tile simply grows). Field-gated by
+        //   isFieldAvailable on the extended span. Kill switch app1.gapAbsorb='off'.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _gaOff = false;
+            try { var _gaF = (globalSettings && globalSettings.app1 && globalSettings.app1.gapAbsorb); if (_gaF === 'off' || _gaF === false) _gaOff = true; } catch (_e) {}
+            if (!_gaOff) {
+                var _gaNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _gaFillerRe = /^(sports|sport 2)$/i;
+                var _gaGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _gaGradeOf[String(b)] = g; }); });
+                var _gaLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                var _gaProtected = function (c) { return !!(c._pinned || c._isChinuch || c._league || c._isTrip || c._trip || c._isRotationEvent || c._staggerReserved || c.type === 'custom'); };
+                var _gaFilled = 0, _gaBunks = 0;
+                Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                    var slots = window.scheduleAssignments[bunk]; if (!Array.isArray(slots)) return;
+                    var g = _gaGradeOf[String(bunk)]; if (!g) return;
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(bunk)])
+                            || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(bunk)]);
+                    if (!Array.isArray(pbs) || pbs.length !== slots.length) return;
+                    // head blocks (non-continuation, timed) sorted by start, with single-cell flag
+                    var heads = [];
+                    for (var i = 0; i < slots.length; i++) {
+                        var c = slots[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                        var tail = i; while (tail + 1 < slots.length && slots[tail + 1] && slots[tail + 1].continuation === true) tail++;
+                        heads.push({ i: i, single: (tail === i), s: c._startMin, e: slots[tail]._endMin, cell: c });
+                    }
+                    heads.sort(function (a, b) { return a.s - b.s; });
+                    var did = false;
+                    for (var h = 1; h < heads.length; h++) {
+                        var prev = heads[h - 1], cur = heads[h];
+                        var gap = cur.s - prev.e; if (gap <= 0) continue;
+                        var prevNm = _gaNorm(prev.cell._assignedSpecial || prev.cell._activity || prev.cell.event);
+                        var curNm = _gaNorm(cur.cell._assignedSpecial || cur.cell._activity || cur.cell.event);
+                        var prevFiller = prev.single && _gaFillerRe.test(prevNm) && !_gaProtected(prev.cell);
+                        var curFiller = cur.single && _gaFillerRe.test(curNm) && !_gaProtected(cur.cell);
+                        // Prefer extending the BEFORE filler forward (no start-time shift).
+                        if (prevFiller) {
+                            var loc = prev.cell.field || 'Sports';
+                            var ok = true; try { if (typeof isFieldAvailable === 'function') ok = isFieldAvailable(loc, prev.e, cur.s, bunk, g, prev.cell._activity || prev.cell.event); } catch (_e) {}
+                            if (ok) {
+                                prev.cell._endMin = cur.s;
+                                var ps = pbs[prev.i]; if (ps) { ps.endMin = cur.s; ps.endTime = _gaLabel(cur.s); }
+                                try { if (typeof claimField === 'function') claimField(loc, prev.e, cur.s, bunk, g, prev.cell._activity || prev.cell.event); } catch (_e) {}
+                                prev.e = cur.s; _gaFilled++; did = true; continue;
+                            }
+                        }
+                        // Else pull the AFTER filler back to meet the previous block.
+                        if (curFiller) {
+                            var loc2 = cur.cell.field || 'Sports';
+                            var ok2 = true; try { if (typeof isFieldAvailable === 'function') ok2 = isFieldAvailable(loc2, prev.e, cur.s, bunk, g, cur.cell._activity || cur.cell.event); } catch (_e) {}
+                            if (ok2) {
+                                cur.cell._startMin = prev.e;
+                                var cs = pbs[cur.i]; if (cs) { cs.startMin = prev.e; cs.startTime = _gaLabel(prev.e); }
+                                try { if (typeof claimField === 'function') claimField(loc2, prev.e, cur.s, bunk, g, cur.cell._activity || cur.cell.event); } catch (_e) {}
+                                cur.s = prev.e; _gaFilled++; did = true; continue;
+                            }
+                        }
+                    }
+                    if (did) _gaBunks++;
+                });
+                if (_gaFilled > 0) {
+                    log('[STEP 6.862d GAP-ABSORB] ✅ extended an adjacent filler over ' + _gaFilled + ' uncovered gap(s) across ' + _gaBunks + ' bunk(s). [kill switch: globalSettings.app1.gapAbsorb=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('[STEP 6.862d GAP-ABSORB] no filler-adjacent uncovered gaps to absorb');
+                }
+            }
+        } catch (_e6862d) { try { warn('[STEP 6.862d GAP-ABSORB] skipped (error: ' + (_e6862d && _e6862d.message) + ')'); } catch (_e) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
         //   activity)                       [KILL SWITCH + per-bunk rollback]
         // ───────────────────────────────────────────────────────────────────
