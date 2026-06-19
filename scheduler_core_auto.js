@@ -31544,7 +31544,7 @@
                         for (var j = 0; j < ar.length; j++) { var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue; var xn = _lfeNorm(x._assignedSpecial || x._activity || x.event); var xr = _lfeNorm(_lfeLoc[xn] || x.field); if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; } } }
                     return false;
                 };
-                var _lfePlaced = 0, _lfeBunks = {};
+                var _lfePlaced = 0, _lfeBunks = {}, _lfeUnmet = 0;
                 allGrades.forEach(function (grade) {
                     var floors = _lfeFloors[grade]; if (!floors || !Object.keys(floors).length) return;
                     var bunks = getBunksForGrade(grade, divisions) || [];
@@ -31614,6 +31614,44 @@
                                 }
                                 if (!did) break;   // no feasible placement → leave shortfall for the audit
                             }
+                            // DIAGNOSTIC (pure logging, no mutation): still short → classify WHY so the
+                            //   next regen reveals the exact lever (build slot-merge vs config change).
+                            if ((cnt[sk] || 0) < floor) {
+                                var _dropW = [];
+                                for (var _di = 0; _di < arr.length; _di++) {
+                                    var _dc = arr[_di]; if (!_dc || _dc.continuation || _dc._startMin == null || _dc._endMin == null) continue;
+                                    if (arr[_di + 1] && arr[_di + 1].continuation === true) continue;
+                                    if (_dc._league || _dc._leagueGame || _dc._isTrip || _dc._isRotationEvent || _dc._isChinuch || _dc.type === 'custom' || _dc._customActivity || _dc._pinned || _dc._fixed) continue;
+                                    if (_dc._assignedSpecial || _dc.type === 'special') continue;
+                                    var _da = _lfeNorm(_dc._activity || _dc.event || _dc.sport);
+                                    if (_LFE_WALL.test(_da)) continue;
+                                    var _dFree = (!_da || _da === 'free'), _dFill = (_da === 'sports' || _da === 'sport 2' || _da === 'sport'), _dSport = !!_dc.sport && !_dFree && !_dFill;
+                                    if (!_dFree && !_dFill && !_dSport) continue;
+                                    _dropW.push(_dc._endMin - _dc._startMin);
+                                }
+                                var _widest = _dropW.length ? Math.max.apply(null, _dropW) : 0;
+                                var _candNames = [], _minDur = Infinity, _availCount = 0;
+                                for (var _ci2 = 0; _ci2 < todaysSpecials.length; _ci2++) {
+                                    var _sp2 = todaysSpecials[_ci2]; if (!_sp2 || !_sp2.name) continue; var _cn2 = _lfeNorm(_sp2.name);
+                                    if (((_lfeSub[_cn2] != null) ? _lfeSub[_cn2] : 'uncategorized') !== sk) continue;
+                                    if (today[_cn2]) continue;
+                                    var _avail = true; try { if (typeof isSpecialAvailableForBunk === 'function') _avail = !!isSpecialAvailableForBunk(_sp2.name, grade, bunk, globalSettings); } catch (_e) { _avail = false; }
+                                    if (!_avail) continue;
+                                    _availCount++;
+                                    var _dd = []; try { _dd = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(_sp2.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                                    if (!_dd.length) { var _dd1 = 0; try { _dd1 = getSpecialDuration(_sp2.name, activityProperties, globalSettings) || 0; } catch (_e) {} if (_dd1 > 0) _dd = [_dd1]; }
+                                    var _mn = Infinity; for (var _dj2 = 0; _dj2 < _dd.length; _dj2++) { if (_dd[_dj2] > 0 && _dd[_dj2] < _mn) _mn = _dd[_dj2]; }
+                                    if (_mn < _minDur) _minDur = _mn;
+                                    _candNames.push(_sp2.name + '(' + (isFinite(_mn) ? _mn + 'm' : '?') + ')');
+                                }
+                                var _reason;
+                                if (!_dropW.length) _reason = 'NO-RECLAIMABLE-SLOT (no Free/filler/sport left to drop)';
+                                else if (!_availCount) _reason = 'NO-AVAILABLE-SPECIAL (all ' + sk + ' specials used today or access-blocked for this bunk)';
+                                else if (isFinite(_minDur) && _widest < _minDur) _reason = 'SLOT-TOO-NARROW (widest droppable ' + _widest + 'm < shortest ' + sk + ' special ' + _minDur + 'm → needs slot-merge)';
+                                else _reason = 'BLOCKED-BY-CAP/COOLDOWN (slots & specials exist; canUseSpecialAtTime/room-cap rejected all candidate times)';
+                                log('  🔎 [STEP 6.98 UNMET] ' + bunk + ' (' + grade + ') ' + sk + ': need ' + floor + ' got ' + (cnt[sk] || 0) + ' — ' + _reason + (_candNames.length ? ' | specials: ' + _candNames.slice(0, 4).join(', ') : '') + (_dropW.length ? ' | dropSlots: ' + _dropW.slice(0, 6).join('/') + 'm' : ''));
+                                _lfeUnmet++;
+                            }
                         });
                     });
                 });
@@ -31623,6 +31661,7 @@
                 } else {
                     log('  ✅ [STEP 6.98 LAYER-FLOOR ENFORCE] nothing to enforce (or no reclaimable slot).');
                 }
+                if (_lfeUnmet) log('  🔎 [STEP 6.98 LAYER-FLOOR ENFORCE] ' + _lfeUnmet + ' floor(s) still unmet after enforcement — see [STEP 6.98 UNMET] lines above for the per-bunk reason (drives the next fix: slot-merge vs config).');
             }
         } catch (_e698) { try { warn('[STEP 6.98 LAYER-FLOOR ENFORCE] ' + (_e698 && _e698.message)); } catch (_e) {} }
 
