@@ -766,6 +766,18 @@ function getAllSubcategories() {
     loadSubcategoryRegistry().forEach(push);
     (specialActivities || []).forEach(a => push(a?.subcategory));
     (rainyDayActivities || []).forEach(a => push(a?.subcategory));
+    // ★ Robustness (2026-06-18): the module-local `specialActivities` can be stale
+    //   or empty when another page's editor (e.g. the auto layer subcategory grid in
+    //   master_schedule_builder) reads this. That silently collapsed the per-layer
+    //   grid to ONLY "Uncategorized", so tagged buckets (Food/Shiur/Theme) never
+    //   appeared and a layer could not demand them — leaving those subcategories
+    //   unschedulable. Also union the AUTHORITATIVE live config so every subcategory
+    //   that exists on a real special is always offerable. Pure superset → safe.
+    try {
+        const _gs = (typeof window !== 'undefined' && window.globalSettings) ? window.globalSettings : null;
+        const _live = (_gs && _gs.app1 && Array.isArray(_gs.app1.specialActivities)) ? _gs.app1.specialActivities : [];
+        _live.forEach(a => push(a && a.subcategory));
+    } catch (_e) {}
     return out.sort((a, b) => a.localeCompare(b));
 }
 window.getSpecialSubcategories = getAllSubcategories;
