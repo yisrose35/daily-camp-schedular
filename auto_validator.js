@@ -272,8 +272,13 @@
             if (!_rawSharing && !_anyPerActivity) return;
             const sharing = _rawSharing || { type: 'not_sharable', capacity: 1, divisions: [] };
 
-            // Skip special locations — they handle their own cross-div rules
-            if (sharing._isSpecial) return;
+            // Specials ARE enforced here, exactly like fields: a special's sharableWith
+            // governs cross-grade co-occupancy under the user's 3 options — not_sharable
+            // (never shared, any grade), same_division (one grade at a time), cross_division
+            // (any grade up to cap). Previously specials were skipped (`_isSpecial`), which
+            // let a not_sharable special be shared ACROSS grades with 0 reported errors.
+            // Unconfigured custom-layer anchors stay skipped by the `!_rawSharing` guard
+            // above, and same-grade over-capacity is still caught by CHECK B (capacity).
 
             // Only check fields where cross-div matters, EXCEPT keep iterating
             // when any usage carries a per-activity resolved sharing rule (a
