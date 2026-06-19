@@ -31493,6 +31493,99 @@
             })();
         } catch (_eLWG) { try { warn('[FN-55 LAYER-WINDOW GATE] ' + (_eLWG && _eLWG.message)); } catch (_e4) {} }
 
+        // ★ STEP 6.99 — LAYER-FLOOR AUDIT (log-only, never mutates). GOAL: every bunk
+        //   gets EVERY layer at its configured count (=2 → 2; >=N → ≥N; <= has no floor).
+        //   Reports each (bunk, layer) below its floor so a fixable shortfall is told
+        //   apart from a capacity-impossible one. Parsing mirrors the planner's own
+        //   qty/op logic (lines ~5031-5064 + subQuantities ~5081-5103) so floors match
+        //   exactly. Kill: globalSettings.app1.layerFloorAudit='off'.
+        try {
+            var _lfaOff = false;
+            try { var _lfaF = globalSettings && globalSettings.app1 && globalSettings.app1.layerFloorAudit; if (_lfaF === 'off' || _lfaF === false) _lfaOff = true; } catch (_e) {}
+            var _lfaLBG = (typeof layersByGrade !== 'undefined' && layersByGrade) || (typeof window !== 'undefined' && window._layersByGrade) || {};
+            if (!_lfaOff && _lfaLBG && Object.keys(_lfaLBG).length) {
+                var _lfaNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _lfaCanon = function (v) { var s = _lfaNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _lfaSubOf = {};
+                try {
+                    var _lfaA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_lfaA1 && _lfaA1.specialActivities) || []).forEach(function (s) { if (s && s.name) _lfaSubOf[_lfaNorm(s.name)] = _lfaCanon(s.subcategory); });
+                } catch (_e) {}
+                var _lfaWall = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|davening|league game|specialty league|chinuch|trip)$/i;
+                // mirror planner qty/op parse → floor
+                var _lfaFloor = function (qRawV, oRawV) {
+                    var qRaw = String(qRawV != null ? qRawV : ''), oRaw = String(oRawV != null ? oRawV : '');
+                    var combined = (qRaw + oRaw).trim();
+                    var m = combined.match(/^(\d*)\s*(>=|<=|≥|≤|>|<|=)\s*(\d*)$/);
+                    var qty, op;
+                    if (m) { qty = parseInt(m[1] || m[3] || '1', 10) || 1; op = (m[2] === '≥' || m[2] === '>') ? '>=' : (m[2] === '≤' || m[2] === '<') ? '<=' : m[2]; }
+                    else { qty = parseInt(qRaw, 10) || 1; op = '>='; }
+                    return (op === '<=') ? 0 : qty;
+                };
+                var _lfaShort = [], _lfaChecked = 0, _lfaBunksShort = {};
+                allGrades.forEach(function (grade) {
+                    var bunks = getBunksForGrade(grade, divisions) || [];
+                    var layers = _lfaLBG[grade] || [];
+                    if (!layers.length || !bunks.length) return;
+                    var deliv = {};
+                    bunks.forEach(function (b) {
+                        var d = { custom: {}, sub: {}, sport: 0, swim: 0 };
+                        var arr = (window.scheduleAssignments && window.scheduleAssignments[b]) || [];
+                        arr.forEach(function (s) {
+                            if (!s || s.continuation) return;
+                            if (s._league || s._leagueGame || s._isTrip || s._isRotationEvent || s._isChinuch) return;
+                            var nm = _lfaNorm(s._activity || s.event || s.sport);
+                            if (!nm || nm === 'free') return;
+                            if (s.type === 'custom' || s._customActivity) { d.custom[nm] = (d.custom[nm] || 0) + 1; return; }
+                            if (s._assignedSpecial || s.type === 'special') { var sc = (_lfaSubOf[nm] != null) ? _lfaSubOf[nm] : _lfaCanon(s.subcategory); d.sub[sc] = (d.sub[sc] || 0) + 1; return; }
+                            if (nm === 'swim') { d.swim++; return; }
+                            if (_lfaWall.test(nm)) return;
+                            d.sport++;
+                        });
+                        deliv[b] = d;
+                    });
+                    layers.forEach(function (cl) {
+                        if (!cl) return;
+                        var t = _lfaNorm(cl.type);
+                        if (t === 'lunch' || t === 'change' || t === 'league' || t === 'specialty_league') return;
+                        var lb = bunks;
+                        if (t === 'custom' && cl.customBunks && cl.customBunks.length) lb = bunks.filter(function (b) { return cl.customBunks.indexOf(String(b)) >= 0; });
+                        // special layer with per-subcategory grid → one floor per subcat
+                        if (t === 'special' && cl.subQuantities && typeof cl.subQuantities === 'object') {
+                            var subOps = (cl.subOps && typeof cl.subOps === 'object') ? cl.subOps : {};
+                            Object.keys(cl.subQuantities).forEach(function (subName) {
+                                var sq = parseInt(cl.subQuantities[subName], 10) || 0; if (sq <= 0) return;
+                                var soKey = Object.keys(subOps).find(function (k) { return k.toLowerCase() === String(subName).toLowerCase(); });
+                                var req = _lfaFloor(sq, soKey ? subOps[soKey] : '='); if (req <= 0) return;
+                                var sc = _lfaCanon(subName);
+                                lb.forEach(function (b) { _lfaChecked++; var got = (deliv[b] && deliv[b].sub[sc]) || 0; if (got < req) { _lfaShort.push({ g: grade, b: b, lbl: 'special/' + subName, req: req, got: got }); _lfaBunksShort[b] = 1; } });
+                            });
+                            return;
+                        }
+                        var req2 = _lfaFloor(cl.qty != null ? cl.qty : cl.quantity, cl.op != null ? cl.op : cl.operator);
+                        if (req2 <= 0) return;
+                        lb.forEach(function (b) {
+                            _lfaChecked++;
+                            var got = 0;
+                            if (t === 'custom') got = (deliv[b] && deliv[b].custom[_lfaNorm(cl.customActivity || cl.event || cl.name)]) || 0;
+                            else if (t === 'sport' || t === 'sports') got = (deliv[b] && deliv[b].sport) || 0;
+                            else if (t === 'swim') got = (deliv[b] && deliv[b].swim) || 0;
+                            else if (t === 'special') { var tot = 0; if (deliv[b]) Object.keys(deliv[b].sub).forEach(function (k) { tot += deliv[b].sub[k]; }); got = tot; }
+                            else return;
+                            if (got < req2) { _lfaShort.push({ g: grade, b: b, lbl: t + '/' + _lfaNorm(cl.customActivity || cl.event || cl.name || t), req: req2, got: got }); _lfaBunksShort[b] = 1; }
+                        });
+                    });
+                });
+                if (_lfaShort.length) {
+                    log('  ⚠️ [LAYER-FLOOR AUDIT] ' + _lfaShort.length + ' layer-floor shortfall(s) across ' + Object.keys(_lfaBunksShort).length + ' bunk(s) — a bunk should get every layer at its set qty:');
+                    _lfaShort.slice(0, 25).forEach(function (x) { log('    [LAYER-FLOOR] ' + x.b + ' (' + x.g + ') ' + x.lbl + ': got ' + x.got + ' / need ' + x.req); });
+                    if (_lfaShort.length > 25) log('    [LAYER-FLOOR] … and ' + (_lfaShort.length - 25) + ' more');
+                } else {
+                    log('  ✅ [LAYER-FLOOR AUDIT] every bunk got every layer at its configured floor (' + _lfaChecked + ' checks).');
+                }
+            }
+        } catch (_elfa) { try { warn('[LAYER-FLOOR AUDIT] ' + (_elfa && _elfa.message)); } catch (_e) {} }
+
         // ★ FINAL duration-invariant re-run — the post-gate FQ-REOPT / FN-19/21 /
         //   FN-54 / FN-55 above can move or swap a configured-duration sport into a
         //   wrong-length slot (e.g. a 40-min sport dropped into the 30-min swim+change
