@@ -17861,6 +17861,45 @@
                                 }
                                 return false;
                             };
+                            // ── SPREAD SHADOW (measure-only): per-category concurrent demand vs supply ──
+                            // The user's "perfect day" = spread grades across categories per band so each
+                            // category's concurrent demand stays ≤ its supply (shareable swim/sport absorb the
+                            // overflow). Before changing any placement, MEASURE where grades collide so the
+                            // diagnosis is visible and the spread can be sized. Pure log, zero mutation.
+                            // Silence with window.__spreadShadow=false.
+                            try {
+                                if (window.__spreadShadow !== false && window.GLBandPlan && typeof window.GLBandPlan.measure === 'function') {
+                                    // SUPPLY per special subcat = concurrent SEATS = distinct activities folded by
+                                    // sharing (not_sharable→1 seat each, shareable→its cap). Same source/canon as
+                                    // _glSpecShare so the number matches what fill actually enforces.
+                                    var _spSupply = {};
+                                    try {
+                                        ((globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || []).forEach(function (s) {
+                                            if (!s || !s.name) return;
+                                            var _sk = 'special:' + _glCanon(s.subcategory);
+                                            var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
+                                            var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
+                                            _spSupply[_sk] = (_spSupply[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                                        });
+                                    } catch (_e) {}
+                                    var _spBunks = [];
+                                    _glOrder.forEach(function (b) { var r = _glOut.layoutByBunk[b]; if (r && r.tiles) _spBunks.push({ tiles: r.tiles }); });
+                                    var _spRes = window.GLBandPlan.measure({ bunks: _spBunks, supply: _spSupply, canon: _glCanon });
+                                    var _spFmt = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
+                                    var _peakStr = Object.keys(_spRes.cats).sort().map(function (k) { var c = _spRes.cats[k]; return k + ' ' + c.peak + (c.supply == null ? '/∞' : '/' + c.supply); }).join(', ');
+                                    log('[GENERIC-SPREAD shadow] category peak-concurrency / supply: ' + _peakStr);
+                                    if (_spRes.overCats.length) {
+                                        _spRes.overCats.forEach(function (k) {
+                                            var c = _spRes.cats[k];
+                                            var wins = c.overWindows.slice(0, 4).map(function (w) { return _spFmt(w.s) + '-' + _spFmt(w.e) + ' (' + w.demand + '>' + c.supply + ')'; }).join(', ');
+                                            log('[GENERIC-SPREAD shadow]   OVER ' + k + ': peak ' + c.peak + ' > supply ' + c.supply + ' — collides at ' + wins + (c.overWindows.length > 4 ? ' …' : ''));
+                                        });
+                                        log('[GENERIC-SPREAD shadow] spreadable overflow ≈ ' + _spRes.totalOverMin + ' tile-min across ' + _spRes.overCats.length + ' subcat(s); a per-band spread serializes the scarce ones across time + lets swim/sport absorb the rest.');
+                                    } else {
+                                        log('[GENERIC-SPREAD shadow] no special subcat exceeds its supply — cross-grade collisions are NOT the bottleneck this run.');
+                                    }
+                                }
+                            } catch (_spShErr) { try { warn('[GENERIC-SPREAD shadow] error: ' + (_spShErr && _spShErr.message)); } catch (_e) {} }
                             _glOrder.forEach(function (bunk) {
                                 var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
                                 var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
