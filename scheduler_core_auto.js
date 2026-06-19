@@ -17388,7 +17388,10 @@
             if (totalIters < 1) {
                 try {
                     var _potMode = '';
-                    try { var _gsPot = window.globalSettings || {}; _potMode = (_gsPot.app1 && _gsPot.app1.usePeriodTiling) || ''; } catch (_e) {}
+                    // Read the in-scope globalSettings (getGlobalSettings() at :1087) — there is
+                    // NO window.globalSettings. window.__usePeriodTiling is a console override for
+                    // quick shadow runs without persisting to cloud config.
+                    try { _potMode = (typeof window !== 'undefined' && window.__usePeriodTiling) || (globalSettings && globalSettings.app1 && globalSettings.app1.usePeriodTiling) || ''; } catch (_e) {}
                     if ((_potMode === 'shadow' || _potMode === 'apply') && window.PeriodOrchestrator && window.PeriodPacker && typeof shoppingLists !== 'undefined') {
                         var _potCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
                         var _potBreak = /break|transition|passing|change/i;
