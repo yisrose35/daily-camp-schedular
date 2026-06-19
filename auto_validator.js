@@ -576,6 +576,13 @@
             slots.forEach((entry, idx) => {
                 if (!entry || entry.continuation) return;
                 if (entry._league || entry._autoSpecial) return;
+                // Generic-layout tiles are CATEGORIES (Sport / Special: Uncategorized /
+                // …), not concrete activities. The model is "categories repeat, activities
+                // don't" — two "Sport" tiles in a day is NOT a repetition; only two of the
+                // same specific activity (Basketball) would be, and that uniqueness is
+                // enforced when fill assigns the concrete activity. Skip them so the
+                // generic preview doesn't report false same-day-repeat errors.
+                if (entry._generic) return;
                 if (!entry.field || entry.field === 'Free') return;
 
                 const act = (entry._activity || entry.sport || entry.field || '').toLowerCase().trim();

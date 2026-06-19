@@ -17413,14 +17413,22 @@
                         return b.event || b._assignedSpecial || _glTitle(t || 'Activity');
                     };
 
-                    // Rule gate: reuse the camp's configured cooldown/spacing rules
-                    // (window.SchedulingRules) so generic tiles honor them — e.g. a
-                    // "no Sport within 40min of a Sport" rule spaces the generic Sport
-                    // tiles (a sport blocked here is replaced by a special). Reads the
-                    // user's real rules, so it self-adjusts to whatever they configured.
-                    var _glGate = (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function')
-                        ? function (block, template) { try { return window.SchedulingRules.isCandidateAllowed(block, template, { mode: 'auto' }); } catch (_e) { return true; } }
-                        : null;
+                    // NO content gate in generic-layout mode. The tiles laid here are
+                    // CATEGORIES (Sport / Special: Food / Special: Uncategorized / …), not
+                    // concrete activities — and the camp's model is "CATEGORIES REPEAT,
+                    // ACTIVITIES DON'T": a single day may hold many Sport tiles and many
+                    // Special: Uncategorized tiles; only the specific activity (Basketball,
+                    // this exact special) must be unique within the day. Activity-level
+                    // rules — same-day-repeat, cooldown, frequency, rotation spacing —
+                    // therefore belong to the FILL step that assigns the concrete activity,
+                    // NOT to this layout step. Running SchedulingRules.isCandidateAllowed on
+                    // generic category tiles mis-reads two identical "Sport" / "Special:
+                    // Uncategorized" labels as a forbidden repeat and gates the whole window
+                    // blank ("all-packings-gated" → the live "+ Add" empty slots). Physical
+                    // facility limits (pool concurrency, shared-field capacity/pairs) ARE
+                    // real even for a category and stay enforced — via _glResourceGate
+                    // below — but the content gate is intentionally null here.
+                    var _glGate = null;
 
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
                     var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0;
