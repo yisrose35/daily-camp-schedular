@@ -17720,7 +17720,7 @@
                     // so the duration↔activity mismatch is visible rather than silently wrong.
                     // NOT yet: cross-bunk facility sharing/capacity, or re-flowing a tile whose exact
                     // length no free activity matches (steps 3-4). Fail-soft + kill: window.__fillSpecials=false.
-                    var _glFill = { tiles: 0, filled: 0, miss: 0, capSkips: 0, missDetail: [] };
+                    var _glFill = { tiles: 0, filled: 0, miss: 0, capSkips: 0, missDetail: [], causes: {} };
                     var _doFillSpecials = (typeof window === 'undefined') ? true : (window.__fillSpecials !== false);
                     if (_doFillSpecials) {
                         try {
@@ -17805,23 +17805,41 @@
                                 // seed "used" with any concrete (already-named) special on this bunk's tiles
                                 var used = {};
                                 res.tiles.forEach(function (t) { if (t && !t.generic && t.name) used[String(t.name).toLowerCase()] = 1; });
-                                var sTiles = res.tiles.filter(function (t) { return t && t.generic && t.kind === 'special'; }).sort(function (a, b) { return a.startMin - b.startMin; });
+                                var sTiles = res.tiles.filter(function (t) { return t && t.generic && t.kind === 'special'; });
+                                // MOST-CONSTRAINED-FIRST: count how many pool activities could EVER fill each
+                                // tile (same subcat + a configured duration covering the tile length, before
+                                // used/capacity) = its "constrainedness", and fill the tightest tiles first so
+                                // a tile with only one possible activity isn't starved by a flexible tile
+                                // grabbing it. This is the ONLY thing bent — rotation ORDER. Every real rule
+                                // (cohort/maxUsage/cooldown already thinned `pool`; access/day/capacity/uniqueness
+                                // below) stays strict.
+                                sTiles.forEach(function (t) {
+                                    var _sub = _glCanon(t.subcat), _dur = t.durationMin, _n = 0;
+                                    for (var _ci = 0; _ci < pool.length; _ci++) {
+                                        var _c = pool[_ci]; if (!_c || !_c.name || _glCanon(_c.subcategory) !== _sub) continue;
+                                        var _d = _glSpecialDurs(_c.name);
+                                        if (!_d.length || _d.indexOf(_dur) >= 0) _n++;
+                                    }
+                                    t._nCand = _n;
+                                });
+                                sTiles.sort(function (a, b) { return (a._nCand - b._nCand) || (a.startMin - b.startMin); });
                                 sTiles.forEach(function (t) {
                                     _glFill.tiles++;
                                     var sub = _glCanon(t.subcat);
                                     var dur = t.durationMin;
-                                    var pick = null;
+                                    var pick = null, anySub = false, anyDur = false, anyFree = false;
                                     for (var i = 0; i < pool.length; i++) {
                                         var c = pool[i];
                                         if (!c || !c.name) continue;
-                                        if (used[String(c.name).toLowerCase()]) continue;
                                         if (_glCanon(c.subcategory) !== sub) continue;
+                                        anySub = true;
                                         var durs = _glSpecialDurs(c.name);
                                         var fits = durs.length ? (durs.indexOf(dur) >= 0) : true; // no configured durs ⇒ flex ⇒ fits
                                         if (!fits) continue;
-                                        // Step 4: skip if assigning this special would exceed its shared
-                                        // capacity at an overlapping time (per-grade, or global for
-                                        // not_sharable) → fall to the next rotation-best (= variety).
+                                        anyDur = true;
+                                        if (used[String(c.name).toLowerCase()]) continue;        // no same-day repeat (strict)
+                                        anyFree = true;
+                                        // capacity / sharing per the special's own config — a HARD rule, kept strict.
                                         if (!_glCapFits(c, grade, t.startMin, t.endMin)) { _glFill.capSkips++; continue; }
                                         pick = c; break;
                                     }
@@ -17833,7 +17851,17 @@
                                         _glFill.filled++;
                                     } else {
                                         _glFill.miss++;
-                                        if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min');
+                                        // WHY it couldn't fill (so config-vs-engine is clear):
+                                        //   no-activity-in-subcat → no special tagged this subcat exists for the bunk
+                                        //   no-activity-at-Nmin    → DURATION TRAP: a special exists but none at this length
+                                        //   pool-exhausted         → every duration-matching special is already used/thinned today
+                                        //   capacity-full          → all candidates blocked by their sharing cap at this time
+                                        var cause = !anySub ? 'no-activity-in-subcat'
+                                                  : !anyDur ? ('no-activity-at-' + dur + 'min')
+                                                  : !anyFree ? 'pool-exhausted'
+                                                  : 'capacity-full';
+                                        _glFill.causes[cause] = (_glFill.causes[cause] || 0) + 1;
+                                        if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min [' + cause + ']');
                                     }
                                 });
                             });
@@ -17943,9 +17971,10 @@
                     // activity vs. were left generic (no duration-matching activity free in rotation).
                     try {
                         if (_doFillSpecials) {
+                            var _glCauseStr = Object.keys(_glFill.causes).map(function (k) { return k + '×' + _glFill.causes[k]; }).join(', ');
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
-                                + (_glFill.miss ? (' — ' + _glFill.miss + ' left generic (no duration-matching activity free in rotation): ' + _glFill.missDetail.slice(0, 12).join(' | ') + (_glFill.miss > 12 ? ' …' : '')) : ''));
+                                + (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : ''));
                         }
                     } catch (_glFillLogErr) {}
 
