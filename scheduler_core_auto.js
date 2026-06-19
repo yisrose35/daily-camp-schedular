@@ -17528,7 +17528,25 @@
                             // the filler can cover a LARGE gap as ONE block (free-form camps have no bell
                             // periods, so maxLen defaults to 60 and a 140-min gap would fragment).
                             var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
-                            floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: hasSport ? 1 : 0 });
+                            if (hasSport) {
+                                // SPORT is a REQUIRED layer, not a leftover filler. It was pushed with qty
+                                // omitted (⇒ floor ∞ ⇒ never "owed" ⇒ only placed in time the specials left
+                                // behind). Once a special subcat has no explicit cap its cap defaults to
+                                // availability (e.g. Regular cap=12), so specials fill the WHOLE day and ZERO
+                                // sports come out — even though every grade has a sport layer. Give sport its
+                                // configured per-bunk FLOOR (sl.sports.required) so PeriodLayout guarantees
+                                // that many sport tiles (a finite-qty sport earns the structural floor bonus,
+                                // placed before optional over-floor specials); omit cap (⇒ ∞) so any extra
+                                // sports still fill leftover time. Over-floor sports carry the filler penalty,
+                                // so the day is: the required sports + special floors + specials filling the
+                                // rest — not a sport flood.
+                                var _spReq = Math.max(0, Math.round(Number(sl.sports.required) || 0));
+                                var _spDem = { kind: 'sport', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: 1 };
+                                if (_spReq > 0) _spDem.qty = _spReq;   // FLOOR (guaranteed); cap omitted ⇒ ∞ (also the leftover filler)
+                                floating.push(_spDem);
+                            } else {
+                                floating.push({ kind: 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: 0 });
+                            }
 
                             // ── RE-FLOAT DEFERRED FIXED-DURATION / MOVEABLE-WINDOW LAYERS ──
                             // A layer whose configured WINDOW is wider than its DURATION "floats"
