@@ -17797,16 +17797,6 @@
                                 var sh = _glShareOf(cand);
                                 (_glUsage[sh.key] = _glUsage[sh.key] || []).push({ grade: grade, s: s, e: e });
                             };
-                            // Drop ONE usage entry for cand at exactly [s,e] (used when a tile is relocated in
-                            // time by the stagger restructure — remove its old slot before recording the new).
-                            var _glRemoveUse = function (cand, grade, s, e) {
-                                var sh = _glShareOf(cand);
-                                var list = _glUsage[sh.key]; if (!list) return;
-                                for (var i = 0; i < list.length; i++) {
-                                    var u = list[i];
-                                    if (u.grade === grade && u.s === s && u.e === e) { list.splice(i, 1); return; }
-                                }
-                            };
                             // DIAGNOSTIC (upper bound): for a capacity-full miss, could the tile EVER be
                             // placed somewhere in its layer window — i.e. does any unused subcat activity
                             // have a capacity-OK slot anywhere in [window]? If NO → the resource is
@@ -17903,96 +17893,6 @@
                                     }
                                 });
                             });
-                            // ───────────────────────────────────────────────────────────────
-                            // RESTRUCTURE (stagger): recover capacity-MOVABLE misses by shuffling
-                            // the day. A movable miss = its subcat is full at the tile's CURRENT time
-                            // but free elsewhere in the window (the grade's bunks clustered their
-                            // special tiles on one band and collided on the same activities). Within
-                            // ONE bunk, swap the missed special tile with an EQUAL-DURATION special
-                            // tile so the miss lands on a free-capacity time and the partner's activity
-                            // relocates to the miss's old slot. Equal duration keeps the day wall-to-
-                            // wall; both tiles must stay inside their layer windows; the swap is taken
-                            // ONLY when it does not reduce fills (miss fills AND partner stays filled).
-                            // This is the human "slide pieces around within their range" move — only
-                            // TIME position changes; every sharing/uniqueness/duration rule stays strict.
-                            try {
-                                if (window.__staggerFill !== false) {
-                                    // a recovery always clears a capacity-movable miss (the swap only
-                                    // succeeds where a free-capacity slot exists), so keep the cause tally honest.
-                                    var _glStagWin = function () {
-                                        _glStagWin();
-                                        _glFill.causes['capacity-movable'] = Math.max(0, (_glFill.causes['capacity-movable'] || 0) - 1);
-                                    };
-                                    _glOrder.forEach(function (bunk) {
-                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
-                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
-                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
-                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
-                                        var used = {};
-                                        res.tiles.forEach(function (t) { if (t && t.kind === 'special' && t._concrete) used[String(t._concrete).toLowerCase()] = 1; });
-                                        // best free activity of `sub` at [s,e] not already on this bunk (cap-aware)
-                                        var pickAt = function (sub, dur, s, e, exclude) {
-                                            for (var i = 0; i < pool.length; i++) {
-                                                var c = pool[i]; if (!c || !c.name) continue;
-                                                if (_glCanon(c.subcategory) !== sub) continue;
-                                                var durs = _glSpecialDurs(c.name);
-                                                if (durs.length && durs.indexOf(dur) < 0) continue;
-                                                var key = String(c.name).toLowerCase();
-                                                if (used[key] || (exclude && key === exclude)) continue;
-                                                if (!_glCapFits(c, grade, s, e)) continue;
-                                                return c;
-                                            }
-                                            return null;
-                                        };
-                                        var inWin = function (t, s, e) { var w = t._ref && t._ref.window; return !w || (s >= w[0] && e <= w[1]); };
-                                        var specTiles = res.tiles.filter(function (t) { return t && t.kind === 'special'; });
-                                        specTiles.forEach(function (miss) {
-                                            if (!miss || miss._concrete || !miss.generic) return;     // only unfilled special tiles
-                                            var subM = _glCanon(miss.subcat), d = miss.durationMin;
-                                            var sM = miss.startMin, eM = miss.endMin;
-                                            for (var j = 0; j < specTiles.length; j++) {
-                                                var t2 = specTiles[j];
-                                                if (t2 === miss || !t2 || t2.durationMin !== d) continue;
-                                                var s2 = t2.startMin, e2 = t2.endMin;
-                                                if (!inWin(miss, s2, e2) || !inWin(t2, sM, eM)) continue;   // both stay in their windows
-                                                var a1 = pickAt(subM, d, s2, e2, null);                     // miss → partner's (free) time
-                                                if (!a1) continue;
-                                                var a1key = String(a1.name).toLowerCase();
-                                                if (t2._concrete) {
-                                                    // filled partner: its activity must still fit at the miss's old time
-                                                    var a2cand = { name: t2._concrete, location: t2._fillLoc || null };
-                                                    _glRemoveUse(a2cand, grade, s2, e2);                   // free partner's slot for a clean fit test
-                                                    var a2name = t2._concrete, a2loc = t2._fillLoc || null, a2use = a2cand, a2repl = false;
-                                                    if (!_glCapFits(a2cand, grade, sM, eM)) {
-                                                        var alt = pickAt(_glCanon(t2.subcat), d, sM, eM, a1key);
-                                                        if (!alt) { _glRecordUse(a2cand, grade, s2, e2); continue; }   // restore, try next partner
-                                                        a2use = alt; a2name = alt.name; a2loc = alt.location || null; a2repl = true;
-                                                    }
-                                                    // COMMIT swap
-                                                    if (a2repl) delete used[String(t2._concrete).toLowerCase()];
-                                                    miss.startMin = s2; miss.endMin = e2; t2.startMin = sM; t2.endMin = eM;
-                                                    miss._concrete = a1.name; miss._fillLoc = a1.location || null; used[a1key] = 1;
-                                                    t2._concrete = a2name; t2._fillLoc = a2loc; if (a2repl) used[String(a2name).toLowerCase()] = 1;
-                                                    _glRecordUse(a1, grade, s2, e2);
-                                                    _glRecordUse(a2use, grade, sM, eM);
-                                                    _glStagWin();
-                                                    return;
-                                                } else {
-                                                    // generic partner (also a miss): move the miss onto the free slot; the
-                                                    // partner shifts to the old slot and we try to fill it there too (bonus).
-                                                    miss.startMin = s2; miss.endMin = e2; t2.startMin = sM; t2.endMin = eM;
-                                                    miss._concrete = a1.name; miss._fillLoc = a1.location || null; used[a1key] = 1;
-                                                    _glRecordUse(a1, grade, s2, e2);
-                                                    _glStagWin();
-                                                    var a2g = pickAt(_glCanon(t2.subcat), d, sM, eM, a1key);
-                                                    if (a2g) { t2._concrete = a2g.name; t2._fillLoc = a2g.location || null; used[String(a2g.name).toLowerCase()] = 1; _glRecordUse(a2g, grade, sM, eM); _glStagWin(); }
-                                                    return;
-                                                }
-                                            }
-                                        });
-                                    });
-                                }
-                            } catch (_glStagErr) { try { warn('[GENERIC-STAGGER] error — left as-is: ' + (_glStagErr && _glStagErr.message)); } catch (_e) {} }
                         } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
                     }
 
@@ -18102,7 +18002,6 @@
                             var _glCauseStr = Object.keys(_glFill.causes).map(function (k) { return k + '×' + _glFill.causes[k]; }).join(', ');
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
-                                + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
                                 + (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : ''));
                         }
                     } catch (_glFillLogErr) {}
