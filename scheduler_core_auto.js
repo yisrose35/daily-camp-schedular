@@ -31240,6 +31240,129 @@
         } catch (_eSB) { try { warn('[FN-54 SPECIAL BACKSTOP] ' + (_eSB && _eSB.message)); } catch (_e3) {} }
 
         // ─────────────────────────────────────────────────────────────────────
+        // FN-56 SUBCATEGORY-CAP — final guarantee: no bunk exceeds its layer's per-
+        //   subcategory cap. The GlobalPlanner (Phase A) + Phase 4.9 honor the per-
+        //   subcategory grid (layer.subQuantities, e.g. "Food = 1"), but the downstream
+        //   gap-fill passes (6.84b REQ-DAILY, 6.862 GAP-CONSOLIDATE, 6.863/6.865, 4.97b,
+        //   FN-19/21 refill) place specials WITHOUT a subcategory check — so a "Food=1"
+        //   layer could finish with 3 Food (live: Minors ב got Ice cream + Neranitas +
+        //   Razzles). This sweep reads the per-bunk caps the planner stashed
+        //   (window._subcatCapsByBunk), counts each bunk's specials per subcategory, and
+        //   where a subcategory exceeds its cap keeps the EARLIEST `cap` (the planner's
+        //   intended placements) and removes the extras — best-effort REPLACING the freed
+        //   slot in place with a demanded-but-unmet subcategory special that fits the slot
+        //   EXACTLY (configured duration == slot width → never over-duration), is
+        //   available, room-free (per physical room), not-already-today, and time-rule ok;
+        //   else Free. Never touches leagues/trips/custom anchors. No-op when no
+        //   subcategory layers exist. Kill: globalSettings.app1.subcategoryCapSweep='off'.
+        // ─────────────────────────────────────────────────────────────────────
+        try {
+            var _scOff = false;
+            try { var _scF = (globalSettings && globalSettings.app1 && globalSettings.app1.subcategoryCapSweep); if (_scF === 'off' || _scF === false) _scOff = true; } catch (_e) {}
+            var _scCaps = (typeof window !== 'undefined' && window._subcatCapsByBunk) || null;
+            if (!_scOff && _scCaps && Object.keys(_scCaps).length) {
+                var _scNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _scCanon = function (v) { var s = _scNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _scSub = {}, _scLoc = {}, _scCap = {};
+                try {
+                    var _scA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_scA1 && _scA1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return; var n = _scNorm(s.name);
+                        _scSub[n] = _scCanon(s.subcategory); _scLoc[n] = s.location || s.name;
+                        var sw = s.sharableWith || {}; _scCap[n] = parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 1);
+                    });
+                } catch (_e) {}
+                var _scSA = window.scheduleAssignments || {};
+                var _scB2G = {}; allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _scB2G[String(b)] = g; }); });
+                // capacity-aware room occupancy at [s,e) excluding a bunk
+                var _scRoomFull = function (loc, cap, s, e, exclBunk) {
+                    var rl = _scNorm(loc); if (!rl) return false; var n = 0;
+                    var keys = Object.keys(_scSA);
+                    for (var ki = 0; ki < keys.length; ki++) {
+                        var b = keys[ki]; if (String(b) === String(exclBunk)) continue;
+                        var ar = _scSA[b]; if (!Array.isArray(ar)) continue;
+                        for (var j = 0; j < ar.length; j++) {
+                            var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue;
+                            var xnm = _scNorm(x._assignedSpecial || x._activity || x.event);
+                            var xr = _scNorm(_scLoc[xnm] || x.field);
+                            if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; }
+                        }
+                    }
+                    return false;
+                };
+                var _scDemoted = 0, _scReplaced = 0;
+                Object.keys(_scSA).forEach(function (bunk) {
+                    var cfg = _scCaps[bunk]; if (!cfg || !cfg.enforced || !cfg.caps) return;
+                    var arr = _scSA[bunk]; if (!Array.isArray(arr)) return;
+                    var g = _scB2G[String(bunk)];
+                    var sp = [];
+                    for (var i = 0; i < arr.length; i++) {
+                        var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                        if (!(c._assignedSpecial || c.type === 'special')) continue;
+                        if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c.type === 'custom' || c._customActivity || c._pinned) continue;
+                        var nm = _scNorm(c._assignedSpecial || c._activity || c.event); if (!nm) continue;
+                        var sk = (_scSub[nm] != null) ? _scSub[nm] : _scCanon(c.subcategory);
+                        sp.push({ idx: i, nm: nm, sk: sk, s: c._startMin, e: c._endMin });
+                    }
+                    if (!sp.length) return;
+                    var caps = cfg.caps;
+                    var count = {}; sp.forEach(function (x) { count[x.sk] = (count[x.sk] || 0) + 1; });
+                    var underTargets = Object.keys(caps).filter(function (k) { var cp = caps[k]; return isFinite(cp) ? ((count[k] || 0) < cp) : false; });
+                    Object.keys(count).forEach(function (sk) {
+                        var cap = caps[sk];
+                        if (cap == null || !isFinite(cap)) return;     // floor-only (>=) or undemanded → never demote
+                        if (count[sk] <= cap) return;
+                        var occ = sp.filter(function (x) { return x.sk === sk; }).sort(function (a, b) { return a.s - b.s; });
+                        for (var k = cap; k < occ.length; k++) {
+                            var o = occ[k]; var width = o.e - o.s; var placed = null;
+                            for (var ti = 0; ti < underTargets.length && !placed; ti++) {
+                                var tsk = underTargets[ti]; if (tsk === sk) continue;
+                                for (var si = 0; si < todaysSpecials.length; si++) {
+                                    var cand = todaysSpecials[si]; if (!cand || !cand.name) continue;
+                                    var cnm = _scNorm(cand.name);
+                                    if (((_scSub[cnm] != null) ? _scSub[cnm] : 'uncategorized') !== tsk) continue;
+                                    if (sp.some(function (x) { return x.nm === cnm; })) continue;            // not already today
+                                    var cdur = 0; try { cdur = getSpecialDuration(cand.name, activityProperties, globalSettings) || 0; } catch (_e) {}
+                                    if (cdur !== width) continue;                                            // EXACT fit only → never over-duration
+                                    try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(cand.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                                    try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, cand.name, activityProperties, g))) continue; } catch (_e) {}
+                                    try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(cand.name, g, o.s, o.e)) continue; } catch (_e) { continue; }
+                                    var cloc = _scLoc[cnm] || cand.location || cand.name;
+                                    if (_scRoomFull(cloc, _scCap[cnm] || 1, o.s, o.e, bunk)) continue;       // per-room capacity
+                                    placed = { name: cand.name, loc: cloc, sk: tsk }; break;
+                                }
+                            }
+                            if (placed) {
+                                arr[o.idx] = { field: placed.loc, sport: null, _activity: placed.name, event: placed.name, type: 'special', _assignedSpecial: placed.name, _specialLocation: placed.loc, _isSpecialLocation: true, _autoSpecial: true, _autoMode: true, _startMin: o.s, _endMin: o.e, _source: 'fn56-subcat-rebalance', continuation: false };
+                                try { if (typeof claimField === 'function') claimField(placed.loc, o.s, o.e, bunk, g, placed.name); } catch (_e) {}
+                                count[placed.sk] = (count[placed.sk] || 0) + 1;
+                                if (isFinite(caps[placed.sk]) && count[placed.sk] >= caps[placed.sk]) underTargets = underTargets.filter(function (x) { return x !== placed.sk; });
+                                _scReplaced++;
+                            } else {
+                                arr[o.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _source: 'fn56-subcat-cap', _startMin: o.s, _endMin: o.e, continuation: false };
+                                _scDemoted++;
+                            }
+                            for (var tt = o.idx + 1; tt < arr.length; tt++) {
+                                if (arr[tt] && arr[tt].continuation) {
+                                    arr[tt] = placed
+                                        ? { field: placed.loc, _activity: placed.name, event: placed.name, type: 'special', _assignedSpecial: placed.name, _specialLocation: placed.loc, continuation: true, _startMin: arr[tt]._startMin, _endMin: arr[tt]._endMin, _autoMode: true }
+                                        : { field: 'Free', _activity: 'Free', _autoMode: true, continuation: false, _startMin: arr[tt]._startMin, _endMin: arr[tt]._endMin };
+                                } else break;
+                            }
+                            count[sk]--;
+                        }
+                    });
+                });
+                if (_scDemoted || _scReplaced) {
+                    log('  ⛔ [FN-56 SUBCATEGORY-CAP] ' + _scReplaced + ' rebalanced to a missing subcategory, ' + _scDemoted + ' demoted → Free (enforced per-layer subcategory caps). [kill switch: globalSettings.app1.subcategoryCapSweep=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('  ✅ [FN-56 SUBCATEGORY-CAP] no subcategory-cap violations');
+                }
+            }
+        } catch (_e56) { try { warn('[FN-56 SUBCATEGORY-CAP] ' + (_e56 && _e56.message)); } catch (_e) {} }
+
+        // ─────────────────────────────────────────────────────────────────────
         // FN-55 LAYER-WINDOW GATE — final authority on WHEN a grade may be scheduled.
         //   Owner rule: "for grades that have no layers, or times that have no
         //   layers, nothing should be scheduled for that time." The solver builds a
