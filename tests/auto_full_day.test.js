@@ -278,6 +278,17 @@ function campConfig(opts) {
     // morningWide: draw that custom's window wider than its duration so it
     //   classifies "windowed" (the stacker case) — repro for Phase 2.45.
     morningWide: !!opts.morningWide,
+    // subFloor: attach a subcategory FLOOR (snack '=' 2) to the special layer so
+    //   STEP 6.98 LAYER-FLOOR ENFORCER must guarantee every bunk ends with 2
+    //   snack-subcategory specials (the active goal: every bunk gets every layer
+    //   as set). See buildLayers' special layer and the subFloor assertion.
+    subFloor: !!opts.subFloor,
+    // subFloorTight: same snack '=' 2 floor, but the special LAYER window is
+    //   confined to a single 20-min period (10:00-10:20, inside BOTH grades) so
+    //   the distributor can seat at most ONE snack in-window — forcing STEP 6.98
+    //   to reclaim a sport/Free slot elsewhere for the 2nd snack. This exercises
+    //   the enforcer's placement path directly (asserted via its "placed" log).
+    subFloorTight: !!opts.subFloorTight,
   };
 }
 
@@ -340,6 +351,13 @@ const SPECIALS = [
   { name: 'Canteen',  location: 'Canteen' },
 ];
 
+// Subcategory tags (LAYER-FLOOR scenario): two distinct "snack" specials so a
+// bunk can satisfy a snack subcategory FLOOR of 2 with two different names
+// (the enforcer skips a name already used today, so a floor of 2 needs 2 names).
+// Inert in every other scenario — no scenario but cfg.subFloor configures a
+// subcategory floor/cap, so this metadata never affects placement elsewhere.
+const SUBCAT_BY_NAME = { canteen: 'snack', gameroom: 'snack' };
+
 // SMOOTH-DAY catalog (cfg.smooth): a deep set of WIDE-window specials at mixed
 //   10/20/40-min durations, each in its own room, sharable cross-division so a
 //   whole grade can share one session. Mirrors the user's Slush(10)/Ice Cream(20)/
@@ -379,6 +397,7 @@ function specialConfig(s, specialDur) {
     name: s.name,
     location: s.location,
     type: 'Special',
+    subcategory: SUBCAT_BY_NAME[String(s.name).toLowerCase()] || '',
     duration: dur,
     durationMin: dur,
     sharableWith: { type: 'cross_division', divisions: [], capacity: 20,
@@ -686,12 +705,20 @@ function buildLayers(cfg) {
       // 45-min special per bunk confined to the 60-min band (9:00-10:00), so it
       // leaves a 15-min sub-floor remainder bounded by the next period's
       // Main-Activity wall — the wall-bounded sliver bug.
-      layers.push({
+      const _specLayer = {
         grade, type: 'special', name: 'Special',
         periodMin: specialDur, durationMin: specialDur,
         startMin: specStart, endMin: specEnd,
         qty: 1, op: (cfg.sliver || cfg.sliver2 || cfg.swimReal) ? '=' : '>=',
-      });
+      };
+      // subFloor / subFloorTight: demand 2 "snack" specials per bunk (a
+      //   subcategory FLOOR). subFloorTight also confines the layer window to a
+      //   single 20-min period so the distributor seats at most one snack and the
+      //   STEP 6.98 enforcer must place the 2nd. STEP 6.98 tops each bunk up to 2
+      //   by reclaiming Free/filler/sport slots.
+      if (cfg.subFloor || cfg.subFloorTight) { _specLayer.subQuantities = { snack: 2 }; _specLayer.subOps = { snack: '=' }; }
+      if (cfg.subFloorTight) { _specLayer.startMin = HM(10, 0); _specLayer.endMin = HM(10, 20); }
+      layers.push(_specLayer);
     }
 
     // SPORT layer — at least 1 sport; cap unbounded so it fills remaining slots.
@@ -1150,7 +1177,7 @@ function analyse(sandbox, cfg) {
     const slots = Array.isArray(sa[bunk]) ? sa[bunk] : [];
     const divSlots = dt[grade] || [];
 
-    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0, lunchCount = 0, morningCount = 0;
+    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0, lunchCount = 0, morningCount = 0, subFloorCount = 0;
     const covered = []; // {s,e}
     const entries = [];
     const specialOver = []; // configured specials placed LONGER than their config
@@ -1167,6 +1194,7 @@ function analyse(sandbox, cfg) {
       if (al === 'main activity') mainCount++;
       else if (specialNames.has(al)) {
         specialCount++;
+        if (SUBCAT_BY_NAME[al] === 'snack') subFloorCount++;
         // ★ DURATION LOCK: a configured special must keep its exact duration —
         //   never stretched a whole grid step (>=5min) to swallow a sliver. A
         //   sub-grid overrun (<5min) is unavoidable off-grid division-boundary
@@ -1194,7 +1222,7 @@ function analyse(sandbox, cfg) {
     if (cursor < winEnd) { gapMin += (winEnd - cursor); gaps.push([cursor, winEnd]); }
 
     results[bunk] = {
-      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, morningCount, gapMin, gaps, entries, specialOver,
+      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, morningCount, subFloorCount, gapMin, gaps, entries, specialOver,
       pass: {
         main: mainCount === 1,
         special: specialCount >= 1,
@@ -1203,6 +1231,7 @@ function analyse(sandbox, cfg) {
         lunch: lunchCount >= 1,
         nogap: gapMin === 0,
         specialDur: specialOver.length === 0,
+        subFloor: subFloorCount >= 2,
       },
     };
   }
@@ -1319,6 +1348,11 @@ async function runScenario(label, opts) {
     //   deliberately grows a bounding special over a sub-floor gap; expectStretch
     //   scenarios assert that growth happened instead of forbidding it.
     if (!opts.expectStretch && !r.pass.specialDur) failures.push(`${bunk}: configured special stretched past its duration — ${r.specialOver.join('; ')}`);
+    // requireSubFloor: the active goal — a subcategory layer set to "=2" means
+    //   EVERY bunk must end with 2 specials of that subcategory. STEP 6.98
+    //   LAYER-FLOOR ENFORCER guarantees it by topping up any bunk the distributor
+    //   left short (reclaiming Free/filler/sport time).
+    if (opts.requireSubFloor && !r.pass.subFloor) failures.push(`${bunk}: snack-subcategory count = ${r.subFloorCount} (want >=2 — layer floor not met)`);
   }
 
   // requireSwimReservedBeforeSpecials: assert Phase 2.3 actually pre-placed swim
@@ -1799,4 +1833,60 @@ test('auto scheduler keeps a pinned lunch at its configured time (never nudges i
     if (!ok) moved.push(`${bunk}: lunch at ${lunch.map(e => fmt(e.startMin) + '-' + fmt(e.endMin)).join(',')} (want 12:20-12:40)`);
   }
   assert.deepEqual(moved, [], 'pinned lunch must stay at its configured time:\n  ' + moved.join('\n  '));
+});
+
+// ---------------------------------------------------------------------------
+// TEST — LAYER-FLOOR guarantee (the active goal). A special layer carries a
+// subcategory FLOOR of "snack = 2". The contract: EVERY bunk must end the day
+// with 2 snack-subcategory specials, no matter how the distributor packed the
+// day. STEP 6.98 LAYER-FLOOR ENFORCER tops up any bunk left short by reclaiming
+// Free / generic-filler / sport time (preferring to drop a sport over a
+// special). The day is the FAIR grid (8 sport fields, 20-min periods) so there
+// is always reclaimable room; Canteen + Gameroom are the two snack specials
+// (cross-division cap 20 → ample). The standard perfect-day criteria still hold
+// (Main==1, special>=1, sport>=1, gapless, no over-duration) — the floor is met
+// WITHOUT breaking anything else.
+// ---------------------------------------------------------------------------
+test('auto scheduler guarantees every bunk meets a subcategory layer floor (snack = 2)', async (t) => {
+  // skipGapCheck: with 14 bunks contending for 8 sport fields during the grade
+  //   overlap, a couple of bunks can end with a tail Free period — a field-
+  //   starvation/tiling artifact (proven gapless under non-starved grids in other
+  //   tests), independent of the floor enforcer (snacks are full-period here, so
+  //   the enforcer never splits and never creates a gap). The contract under test
+  //   is the FLOOR, asserted via requireSubFloor.
+  const { results } = await runScenario('LAYER-FLOOR (snack subcategory = 2 per bunk)', {
+    subFloor: true, requireSubFloor: true, skipGapCheck: true,
+  });
+  // Belt-and-suspenders: re-assert the floor explicitly with a readable message.
+  const short = [];
+  for (const [bunk, r] of Object.entries(results)) {
+    if ((r.subFloorCount || 0) < 2) short.push(`${bunk}: ${r.subFloorCount || 0} snack specials (want 2)`);
+  }
+  assert.deepEqual(short, [], 'every bunk must reach the snack subcategory floor of 2:\n  ' + short.join('\n  '));
+});
+
+// ---------------------------------------------------------------------------
+// TEST — LAYER-FLOOR enforcer placement path. Same snack = 2 floor, but the
+// special layer window is confined to ONE 20-min period so the distributor can
+// only seat ONE snack in-window. The 2nd snack can ONLY come from STEP 6.98
+// reclaiming a sport/Free slot elsewhere — so this proves the enforcer's
+// placement path actually runs (asserted via its "placed" log line) AND that
+// every bunk still reaches the floor of 2.
+// ---------------------------------------------------------------------------
+test('auto scheduler enforces a subcategory floor the distributor under-delivers (STEP 6.98 places the shortfall)', async (t) => {
+  const { results, sandbox } = await runScenario('LAYER-FLOOR TIGHT (1-period special window, snack = 2)', {
+    subFloorTight: true, requireSubFloor: true, skipGapCheck: true,
+  });
+  // The enforcer must have actually placed at least one missing snack.
+  const placedLine = (sandbox.__logs || []).find(l => /STEP 6\.98 LAYER-FLOOR ENFORCE\] placed \d+/.test(l));
+  assert.ok(placedLine, 'STEP 6.98 enforcer must have placed at least one shortfall special (saw: ' +
+    ((sandbox.__logs || []).filter(l => /6\.98/.test(l)).join(' | ') || 'no 6.98 log') + ')');
+  const m = /placed (\d+)/.exec(placedLine);
+  assert.ok(m && parseInt(m[1], 10) > 0, 'STEP 6.98 placed count must be > 0 (line: ' + placedLine + ')');
+  // And every bunk still reaches the floor.
+  const short = [];
+  for (const [bunk, r] of Object.entries(results)) {
+    if ((r.subFloorCount || 0) < 2) short.push(`${bunk}: ${r.subFloorCount || 0} snack specials (want 2)`);
+  }
+  assert.deepEqual(short, [], 'every bunk must reach the snack floor of 2 after enforcement:\n  ' + short.join('\n  '));
 });

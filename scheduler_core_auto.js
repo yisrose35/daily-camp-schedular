@@ -31493,6 +31493,139 @@
             })();
         } catch (_eLWG) { try { warn('[FN-55 LAYER-WINDOW GATE] ' + (_eLWG && _eLWG.message)); } catch (_e4) {} }
 
+        // ★ STEP 6.98 — LAYER-FLOOR ENFORCER (special-subcategory floors). GOAL: every
+        //   bunk reaches each demanded subcategory floor (=N → N, >=N → ≥N). For each
+        //   bunk below a floor, reclaim a droppable slot — Free, then a generic
+        //   "Sports"/"Sport 2" filler, then a real SPORT (the user's "drop a sport, not a
+        //   special, to fit a required layer" preference) — and place an available,
+        //   room-free special of the missing subcategory at its CONFIGURED duration (never
+        //   over). Shorter special than the slot → split (special + Free remainder),
+        //   keeping scheduleAssignments and _perBunkSlots index-aligned; split only runs
+        //   when an aligned _perBunkSlots grid exists (else exact-fit only).
+        //   Safe-by-construction: per placement clone→mutate→restore-on-error; ceilings
+        //   (FN-54 room cap, FN-56 subcat cap) respected by placing only up to floor and
+        //   checking room capacity (the post-return repair gate is the final validity
+        //   backstop); single-cell slots only. Floors read from the
+        //   SAME layer grid the audit uses. Kill: globalSettings.app1.layerFloorEnforce='off'.
+        try {
+            var _lfeOff = false;
+            try { var _lfeF = globalSettings && globalSettings.app1 && globalSettings.app1.layerFloorEnforce; if (_lfeF === 'off' || _lfeF === false) _lfeOff = true; } catch (_e) {}
+            var _lfeLBG = (typeof layersByGrade !== 'undefined' && layersByGrade) || (typeof window !== 'undefined' && window._layersByGrade) || {};
+            if (!_lfeOff && _lfeLBG && Object.keys(_lfeLBG).length) {
+                var _lfeNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _lfeCanon = function (v) { var s = _lfeNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _lfeLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                var _lfeSub = {}, _lfeLoc = {}, _lfeCap = {};
+                try {
+                    var _lfeA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_lfeA1 && _lfeA1.specialActivities) || []).forEach(function (s) { if (!s || !s.name) return; var n = _lfeNorm(s.name); _lfeSub[n] = _lfeCanon(s.subcategory); _lfeLoc[n] = s.location || s.name; var sw = s.sharableWith || {}; _lfeCap[n] = parseInt(sw.capacity) || 1; });
+                } catch (_e) {}
+                var _lfeFloors = {};
+                Object.keys(_lfeLBG).forEach(function (grade) {
+                    (_lfeLBG[grade] || []).forEach(function (cl) {
+                        if (!cl || _lfeNorm(cl.type) !== 'special' || !cl.subQuantities || typeof cl.subQuantities !== 'object') return;
+                        var subOps = (cl.subOps && typeof cl.subOps === 'object') ? cl.subOps : {};
+                        Object.keys(cl.subQuantities).forEach(function (subName) {
+                            var q = parseInt(cl.subQuantities[subName], 10) || 0; if (q <= 0) return;
+                            var soKey = Object.keys(subOps).find(function (k) { return k.toLowerCase() === String(subName).toLowerCase(); });
+                            var so = _lfeNorm(soKey ? subOps[soKey] : '=');
+                            var floor = (so === '<' || so === '≤' || so === '<=') ? 0 : q; if (floor <= 0) return;
+                            var sc = _lfeCanon(subName);
+                            _lfeFloors[grade] = _lfeFloors[grade] || {};
+                            _lfeFloors[grade][sc] = Math.max(_lfeFloors[grade][sc] || 0, floor);
+                        });
+                    });
+                });
+                var _lfeSA = window.scheduleAssignments || {};
+                var _LFE_WALL = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+                var _lfeRoomFull = function (loc, cap, s, e, exclB) {
+                    var rl = _lfeNorm(loc); if (!rl) return false; var n = 0; var ks = Object.keys(_lfeSA);
+                    for (var ki = 0; ki < ks.length; ki++) { var b = ks[ki]; if (String(b) === String(exclB)) continue; var ar = _lfeSA[b]; if (!Array.isArray(ar)) continue;
+                        for (var j = 0; j < ar.length; j++) { var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue; var xn = _lfeNorm(x._assignedSpecial || x._activity || x.event); var xr = _lfeNorm(_lfeLoc[xn] || x.field); if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; } } }
+                    return false;
+                };
+                var _lfePlaced = 0, _lfeBunks = {};
+                allGrades.forEach(function (grade) {
+                    var floors = _lfeFloors[grade]; if (!floors || !Object.keys(floors).length) return;
+                    var bunks = getBunksForGrade(grade, divisions) || [];
+                    var pbsAll = (window._perBunkSlots && window._perBunkSlots[grade]) || (window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots) || null;
+                    bunks.forEach(function (bunk) {
+                        var arr = _lfeSA[bunk]; if (!Array.isArray(arr) || !arr.length) return;
+                        var pbs = pbsAll && pbsAll[String(bunk)];
+                        var pbsAligned = Array.isArray(pbs) && pbs.length === arr.length;
+                        var cnt = {}, today = {};
+                        arr.forEach(function (c) { if (!c || c.continuation) return; var nm = _lfeNorm(c._assignedSpecial || c._activity || c.event); if (!nm || nm === 'free') return; today[nm] = 1; if (c._assignedSpecial || c.type === 'special') { var sc = (_lfeSub[nm] != null) ? _lfeSub[nm] : _lfeCanon(c.subcategory); cnt[sc] = (cnt[sc] || 0) + 1; } });
+                        Object.keys(floors).forEach(function (sk) {
+                            var floor = floors[sk], guard = 0;
+                            while ((cnt[sk] || 0) < floor && guard++ < 8) {
+                                var cands = [];
+                                for (var i = 0; i < arr.length; i++) {
+                                    var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                                    if (arr[i + 1] && arr[i + 1].continuation === true) continue;   // single-cell only (safe)
+                                    if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c._isChinuch || c.type === 'custom' || c._customActivity || c._pinned || c._fixed) continue;
+                                    if (c._assignedSpecial || c.type === 'special') continue;        // never drop a special
+                                    var act = _lfeNorm(c._activity || c.event || c.sport);
+                                    if (_LFE_WALL.test(act)) continue;
+                                    var isFree = (!act || act === 'free'), isFiller = (act === 'sports' || act === 'sport 2' || act === 'sport'), isSport = !!c.sport && !isFree && !isFiller;
+                                    if (!isFree && !isFiller && !isSport) continue;
+                                    cands.push({ i: i, s: c._startMin, e: c._endMin, W: c._endMin - c._startMin, rank: isFree ? 3 : (isFiller ? 2 : 1) });
+                                }
+                                cands.sort(function (a, b) { return b.rank - a.rank; });
+                                var did = false;
+                                for (var ci = 0; ci < cands.length && !did; ci++) {
+                                    var cd = cands[ci], pick = null;
+                                    for (var si = 0; si < todaysSpecials.length; si++) {
+                                        var sp = todaysSpecials[si]; if (!sp || !sp.name) continue; var cn = _lfeNorm(sp.name);
+                                        if (((_lfeSub[cn] != null) ? _lfeSub[cn] : 'uncategorized') !== sk) continue;
+                                        if (today[cn]) continue;
+                                        var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                                        if (!durs.length) { var d1 = 0; try { d1 = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0; } catch (_e) {} if (d1 > 0) durs = [d1]; }
+                                        var d = 0; for (var dj = 0; dj < durs.length; dj++) { if (durs[dj] > 0 && durs[dj] <= cd.W && durs[dj] > d) d = durs[dj]; }
+                                        if (d <= 0) continue;
+                                        if (!pbsAligned && d !== cd.W) continue;   // split needs an aligned slot grid
+                                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, grade, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, grade))) continue; } catch (_e) {}
+                                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, grade, cd.s, cd.s + d)) continue; } catch (_e) { continue; }
+                                        var loc = _lfeLoc[cn] || sp.location || sp.name;
+                                        if (_lfeRoomFull(loc, _lfeCap[cn] || 1, cd.s, cd.s + d, bunk)) continue;
+                                        pick = { name: sp.name, loc: loc, nm: cn, d: d }; break;
+                                    }
+                                    if (!pick) continue;
+                                    var _bakSlot = arr[cd.i], _bakPbs = (pbsAligned && pbs[cd.i]) ? pbs[cd.i] : null;
+                                    try {
+                                        var specialCell = { field: pick.loc, sport: null, _activity: pick.name, event: pick.name, type: 'special', _assignedSpecial: pick.name, _specialLocation: pick.loc, _isSpecialLocation: true, _autoSpecial: true, _autoMode: true, _startMin: cd.s, _endMin: cd.s + pick.d, _source: 'fn-floor-enforce', continuation: false };
+                                        if (pick.d === cd.W) {
+                                            arr[cd.i] = specialCell;
+                                            if (pbsAligned && pbs[cd.i]) { pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                        } else {
+                                            arr[cd.i] = specialCell;
+                                            var freeCell = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _startMin: cd.s + pick.d, _endMin: cd.e, _source: 'fn-floor-enforce-rem', continuation: false };
+                                            var freePbs = { startMin: cd.s + pick.d, endMin: cd.e, startTime: _lfeLabel(cd.s + pick.d), endTime: _lfeLabel(cd.e), event: 'Free', type: 'slot', _bunk: bunk };
+                                            if (pbs[cd.i]) { pbs[cd.i].endMin = cd.s + pick.d; pbs[cd.i].endTime = _lfeLabel(cd.s + pick.d); pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                            arr.splice(cd.i + 1, 0, freeCell);
+                                            pbs.splice(cd.i + 1, 0, freePbs);
+                                            for (var pz = 0; pz < pbs.length; pz++) { if (pbs[pz]) pbs[pz].slotIndex = pz; }
+                                        }
+                                        try { if (typeof claimField === 'function') claimField(pick.loc, cd.s, cd.s + pick.d, bunk, grade, pick.name); } catch (_e) {}
+                                        today[pick.nm] = 1; cnt[sk] = (cnt[sk] || 0) + 1; _lfePlaced++; _lfeBunks[bunk] = 1; did = true;
+                                    } catch (_eApply) {
+                                        try { arr[cd.i] = _bakSlot; if (pbsAligned && _bakPbs) pbs[cd.i] = _bakPbs; } catch (_e) {}
+                                    }
+                                }
+                                if (!did) break;   // no feasible placement → leave shortfall for the audit
+                            }
+                        });
+                    });
+                });
+                if (_lfePlaced) {
+                    log('  🩹 [STEP 6.98 LAYER-FLOOR ENFORCE] placed ' + _lfePlaced + ' missing floor special(s) across ' + Object.keys(_lfeBunks).length + ' bunk(s) by reclaiming Free/filler/sport slots. [kill: globalSettings.app1.layerFloorEnforce=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('  ✅ [STEP 6.98 LAYER-FLOOR ENFORCE] nothing to enforce (or no reclaimable slot).');
+                }
+            }
+        } catch (_e698) { try { warn('[STEP 6.98 LAYER-FLOOR ENFORCE] ' + (_e698 && _e698.message)); } catch (_e) {} }
+
         // ★ STEP 6.99 — LAYER-FLOOR AUDIT (log-only, never mutates). GOAL: every bunk
         //   gets EVERY layer at its configured count (=2 → 2; >=N → ≥N; <= has no floor).
         //   Reports each (bunk, layer) below its floor so a fixable shortfall is told
