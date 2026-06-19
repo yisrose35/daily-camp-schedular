@@ -17930,7 +17930,7 @@
                                         var pool = (sl && sl.specials && sl.specials.priorityList) || [];
                                         _stagBunks.push({ grade: grade, tiles: res.tiles, pool: pool });
                                     });
-                                    window.GLStagger.restructure({
+                                    var _stagCtx = {
                                         bunks: _stagBunks,
                                         canon: _glCanon,
                                         specialDurs: _glSpecialDurs,
@@ -17942,7 +17942,13 @@
                                             _glFill.staggered = (_glFill.staggered || 0) + 1;
                                             _glFill.causes['capacity-recoverable'] = Math.max(0, (_glFill.causes['capacity-recoverable'] || 0) - 1);
                                         }
-                                    });
+                                    };
+                                    // ITERATE to a fixed point: each swap frees capacity that can unlock the
+                                    // next miss. Bounded (≤6 passes); stop as soon as a pass recovers nothing.
+                                    for (var _stagPass = 0; _stagPass < 6; _stagPass++) {
+                                        var _stagRes = window.GLStagger.restructure(_stagCtx);
+                                        if (!_stagRes || !_stagRes.recovered) break;
+                                    }
                                 }
                             } catch (_glStagErr) { try { warn('[GENERIC-STAGGER] error — left as-is: ' + (_glStagErr && _glStagErr.message)); } catch (_e) {} }
                         } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
