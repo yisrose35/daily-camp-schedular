@@ -777,4 +777,43 @@ describe('PeriodLayout — Soloists day closes under the real sport-spacing rule
         assert.ok(last, 'the last window (3:05-3:45) that used to be all-packings-gated is now filled');
         assert.ok((res.gaps || []).length === 0, 'no open gaps reported');
     });
+
+    it('INVERSE-ELASTIC: with every subcat cap=1, the greedy front-loads specials and a sport blocks the last window — a special is SHIFTED in and the sport SHIFTED out', () => {
+        // The exact live Neranina/Friday config: each subcategory is configured "=1" so
+        // there are only FOUR special tiles for the day. The greedy main pass spends them
+        // in the early windows and leaves a sport in period 6 (855-895); the last window
+        // (905-945) then has no special left AND can't take a sport (it would sit 10 min
+        // from the period-6 sport, < the 40-min spacing rule) → it used to blank ("+ Add").
+        // The inverse-elastic pass must pull a special INTO the last window and drop a
+        // sport where that special was (a window a sport welcomes).
+        const res = Layout.planBunkLayout({
+            bunk: 'Soloists ב', grade: 'Soloists',
+            periods: [P(650, 690), P(700, 730), P(735, 775), P(780, 810), P(810, 850), P(855, 895), P(905, 945)],
+            pinned: [
+                { kind: 'swim', name: 'Swim', startMin: 650, endMin: 690 },
+                { kind: 'lunch', name: 'Lunch', startMin: 780, endMin: 810 },
+                { kind: 'wall', name: 'Main Activity', startMin: 810, endMin: 850 },
+                { kind: 'cleanup', name: 'Cleanup', startMin: 895, endMin: 905 }
+            ],
+            floating: [
+                { kind: 'special', subcat: 'uncategorized', durations: [30, 40], window: [650, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'special', subcat: 'shiur', durations: [20], window: [650, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'special', subcat: 'food', durations: [10, 20], window: [650, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'special', subcat: 'theme', durations: [10, 20], window: [650, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945], score: 1 }
+            ],
+            gate: sportSpacing, packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'cap-1 day is still wall-to-wall — the blocked last window got filled');
+        assert.ok((res.gaps || []).length === 0, 'no open gaps reported');
+        // the last window must hold a SPECIAL (pulled in), never blank and never a sport
+        const lastTiles = res.tiles.filter(t => t.generic && t.startMin >= 905 && t.endMin <= 945);
+        assert.ok(lastTiles.length > 0, 'last window filled');
+        assert.ok(lastTiles.every(t => t.kind === 'special'), 'last window is all-special (a sport is illegal there)');
+        // sport-spacing is never violated by the shift
+        const sports = res.tiles.filter(t => t.generic && t.kind === 'sport').sort((a, b) => a.startMin - b.startMin);
+        for (let i = 1; i < sports.length; i++) {
+            assert.ok(sports[i].startMin - sports[i - 1].endMin >= 40, 'sports stay >=40 min apart after the shift');
+        }
+    });
 });

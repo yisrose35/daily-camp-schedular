@@ -35,7 +35,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '0.2.0';
+    var VERSION = '0.2.1';
 
     function _getPacker(opts) {
         if (opts && opts.packer) return opts.packer;
@@ -570,6 +570,112 @@
                         W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
                         stats.windowsTiled++; stats.tilesPlaced++; stats.residualMin -= L;
                         done = true;
+                    }
+                }
+            }
+        }
+
+        // ── INVERSE-ELASTIC / SPECIAL-PULL (gate-only) ─────────────────────────────
+        // The MIRROR of ELASTIC FILL above. ELASTIC slides a SPORT into an empty window;
+        // but a window can be empty PRECISELY BECAUSE a sport is illegal there — it would
+        // sit too close to another sport (the spacing gate) — and every cap-limited
+        // special is already placed in EARLIER windows (the greedy main pass spent them
+        // first), so only a sport is left, the gate rejects it, and the slot blanks
+        // ("+ Add"). The user's fix, verbatim: "we need shifts in the tiles" — SHIFT a
+        // special INTO the blocked window and drop a SPORT where that special used to be
+        // (a window that DOES welcome a sport). We free one (then two) already-placed
+        // SPECIAL tile(s) by swapping each for a gate-legal sport in its OWN slot (same
+        // span ⇒ no new gap), returning its cap to the pool, then RE-PACK the blocked
+        // window with specials only. Every move is gate-checked and the freed special is
+        // re-consumed by the re-pack (net-zero caps/floors), so it generalizes: any
+        // window a sport-spacing rule would blank gets a special pulled in from a window
+        // where a sport is welcome. Bounded: single donors, then pairs.
+        if (gate) {
+            var _ieSport = null;
+            for (var _isd = 0; _isd < floating.length; _isd++) { if (floating[_isd].kind === 'sport') { _ieSport = floating[_isd]; break; } }
+            if (_ieSport) {
+                var _ieSportDurs = _demandDurs(_ieSport);
+                var _ieResid = [];
+                for (var _ipi = 0; _ipi < periodPlans.length; _ipi++) {
+                    var _ipw = periodPlans[_ipi].windows;
+                    for (var _iwj = 0; _iwj < _ipw.length; _iwj++) { var _irr = _ipw[_iwj]; if (!_irr.tiled && _irr.len >= minSeg && _irr.len % gran === 0) _ieResid.push(_irr); }
+                }
+                // A replacement sport at [s,e] must be gate-legal vs the base tiles (donors
+                // removed) PLUS the OTHER replacement sports in this same combo.
+                var _ieSportFits = function (sportTile, otherSports, baseNoDonors) {
+                    var sb = { type: 'sport', event: sportTile.name, startMin: sportTile.startMin, endMin: sportTile.endMin };
+                    var tmpl = [];
+                    for (var q = 0; q < baseNoDonors.length; q++) tmpl.push(_toBlock(baseNoDonors[q]));
+                    for (var q2 = 0; q2 < otherSports.length; q2++) if (otherSports[q2] !== sportTile) tmpl.push(_toBlock(otherSports[q2]));
+                    var ok = true; try { ok = gate(sb, tmpl); } catch (e) { ok = true; }
+                    return ok;
+                };
+                for (var _iri = 0; _iri < _ieResid.length; _iri++) {
+                    var _WW = _ieResid[_iri];
+                    if (_WW.tiled) continue;
+                    // placed special tiles that could donate: generic, not pinned/shared, a
+                    // sport legally fits their exact slot (sport demand window + duration list).
+                    var _ieDonors = [];
+                    for (var _idt = 0; _idt < tiles.length; _idt++) {
+                        var _dt = tiles[_idt];
+                        if (!_dt.generic || _dt.pinned || _dt.kind !== 'special') continue;
+                        if (_dt._ref && _dt._ref.share) continue;
+                        var _sw = _ieSport.window;
+                        if (_sw && (_sw[0] > _dt.startMin || _sw[1] < _dt.endMin)) continue;
+                        if (_ieSportDurs.indexOf(_dt.durationMin) < 0) continue; // sport can't be that exact length
+                        _ieDonors.push(_dt);
+                    }
+                    var _ieCombos = [];
+                    for (var _ia = 0; _ia < _ieDonors.length; _ia++) _ieCombos.push([_ieDonors[_ia]]);
+                    for (var _ja = 0; _ja < _ieDonors.length; _ja++) for (var _jb = _ja + 1; _jb < _ieDonors.length; _jb++) _ieCombos.push([_ieDonors[_ja], _ieDonors[_jb]]);
+                    var _ieFixed = false;
+                    for (var _ici = 0; _ici < _ieCombos.length && !_ieFixed; _ici++) {
+                        var _combo = _ieCombos[_ici];
+                        var _baseND = [];
+                        for (var _ibi = 0; _ibi < tiles.length; _ibi++) if (_combo.indexOf(tiles[_ibi]) < 0) _baseND.push(tiles[_ibi]);
+                        // the sport replacements that would sit in each donor's slot
+                        var _sportRepl = [];
+                        for (var _idi = 0; _idi < _combo.length; _idi++) {
+                            _sportRepl.push({ kind: 'sport', subcat: null, name: _label(_ieSport), _key: 'sport', _ref: _ieSport,
+                                              startMin: _combo[_idi].startMin, endMin: _combo[_idi].endMin, durationMin: _combo[_idi].durationMin, generic: true, pinned: false });
+                        }
+                        var _allOk = true;
+                        for (var _idj = 0; _idj < _sportRepl.length; _idj++) { if (!_ieSportFits(_sportRepl[_idj], _sportRepl, _baseND)) { _allOk = false; break; } }
+                        if (!_allOk) continue;
+                        // trial caps with the donor(s) freed
+                        var _capView = {}, _remView = {};
+                        Object.keys(capRem).forEach(function (k) { _capView[k] = capRem[k]; });
+                        Object.keys(remaining).forEach(function (k) { _remView[k] = remaining[k]; });
+                        for (var _idk = 0; _idk < _combo.length; _idk++) {
+                            var _dk = _combo[_idk]._key;
+                            if (_capView[_dk] !== Infinity) _capView[_dk] = (_capView[_dk] || 0) + 1;
+                            if (_remView[_dk] !== Infinity) _remView[_dk] = (_remView[_dk] || 0) + 1;
+                        }
+                        // re-pack the blocked window with SPECIALS ONLY (no sport/activity),
+                        // gated against base + the new replacement sports.
+                        var _laidW = _packWindow(_WW.start, _WW.end, _baseND.concat(_sportRepl), _capView, _remView, ['sport', 'activity']);
+                        if (!_laidW) continue;
+                        // _laidW must consume EXACTLY the freed donor keys — else a donor would be
+                        // removed but not replaced in the window, leaving a phantom owed floor.
+                        var _used = {}, _need = {}, _allKeys = {}, _match = true;
+                        for (var _u = 0; _u < _laidW.length; _u++) { _used[_laidW[_u]._key] = (_used[_laidW[_u]._key] || 0) + 1; _allKeys[_laidW[_u]._key] = 1; }
+                        for (var _n = 0; _n < _combo.length; _n++) { _need[_combo[_n]._key] = (_need[_combo[_n]._key] || 0) + 1; _allKeys[_combo[_n]._key] = 1; }
+                        Object.keys(_allKeys).forEach(function (k) { if ((_used[k] || 0) !== (_need[k] || 0)) _match = false; });
+                        if (!_match) continue;
+                        // COMMIT: remove donors (restore their caps/floors), drop a sport in each
+                        // donor's slot, then lay the pulled-in specials across the blocked window.
+                        for (var _cdi = 0; _cdi < _combo.length; _cdi++) {
+                            var _D = _combo[_cdi];
+                            var _idx = tiles.indexOf(_D); if (_idx >= 0) tiles.splice(_idx, 1);
+                            if (capRem[_D._key] != null && capRem[_D._key] !== Infinity) capRem[_D._key]++;
+                            if (remaining[_D._key] != null && remaining[_D._key] !== Infinity) remaining[_D._key]++;
+                            stats.tilesPlaced--;
+                        }
+                        for (var _sri = 0; _sri < _sportRepl.length; _sri++) { tiles.push(_sportRepl[_sri]); stats.tilesPlaced++; }
+                        _applyLaid(_laidW, null);
+                        _WW.tiled = true; _WW.residualMin = 0; _WW.reason = 'inverse-elastic';
+                        stats.windowsTiled++; stats.residualMin -= _WW.len;
+                        _ieFixed = true;
                     }
                 }
             }
