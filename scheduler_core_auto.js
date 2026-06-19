@@ -30228,37 +30228,16 @@
                             _sabAbsorbed++; _sabBySwim++; continue;
                         }
                     }
-                    // (4) Neither sport, special, nor swim could take it, but a
-                    //     bounding SOFT TRANSITION wall (Cleanup) sits against the
-                    //     sliver. Cleanup is the day's flexible tail — growing it a
-                    //     few minutes is invisible. CHANGE / pre-change / post-change
-                    //     are deliberately EXCLUDED here: the user sets those to a
-                    //     fixed length (e.g. 10 min), and inflating a 10-min change to
-                    //     20 to swallow a leftover is wrong (the live "20-min change"
-                    //     report). A change-adjacent sliver is instead left as its own
-                    //     small gap — the change keeps its configured length.
-                    //     (Inter-period gaps are already excluded at the loop top via
-                    //     coveredByContiguousPeriods, so this never bridges a real
-                    //     transition/lunch dead zone.)
-                    var _SAB_SOFT = /^cleanup$/i;
-                    if (Lh && _SAB_SOFT.test(_sabNorm(Lh._activity || Lh.event))) {
-                        Lh._endMin = gapE;
-                        for (var ksl = L.tail + 1; ksl <= R.head - 1; ksl++) {
-                            slots[ksl] = { field: Lh.field, _activity: Lh._activity || Lh.event, type: Lh.type,
-                                continuation: true, _startMin: slots[ksl] ? slots[ksl]._startMin : gapS, _endMin: slots[ksl] ? slots[ksl]._endMin : gapE,
-                                _autoMode: true, _sliverAbsorbed: true };
-                        }
-                        _sabAbsorbed++; _sabBySoft++; continue;
-                    }
-                    if (Rh && _SAB_SOFT.test(_sabNorm(Rh._activity || Rh.event))) {
-                        Rh._startMin = gapS;
-                        for (var ksr = L.tail + 1; ksr <= R.head - 1; ksr++) {
-                            slots[ksr] = { field: Rh.field, _activity: Rh._activity || Rh.event, type: Rh.type,
-                                continuation: true, _startMin: slots[ksr] ? slots[ksr]._startMin : gapS, _endMin: slots[ksr] ? slots[ksr]._endMin : gapE,
-                                _autoMode: true, _sliverAbsorbed: true };
-                        }
-                        _sabAbsorbed++; _sabBySoft++; continue;
-                    }
+                    // (4) A bounding SOFT TRANSITION wall (Cleanup) sits against the
+                    //     sliver. We DELIBERATELY DO NOT stretch it. Cleanup has a
+                    //     configured length (e.g. 10 min); inflating it to swallow a
+                    //     leftover is an over-duration violation — the user's live
+                    //     "Cleanup 2:55-3:25 = 30min" report on Minors ב — and the same
+                    //     reason CHANGE / pre-change / post-change are excluded. A
+                    //     cleanup-adjacent sliver is left as its own small Free gap; the
+                    //     wall keeps its configured length. No-over-duration is a HARD
+                    //     rule and is preferred over closing the gap. (_sabBySoft stays 0;
+                    //     the formerly-stretched cleanup is the bug this removal fixes.)
 
                     // No stretchable bounding block → leave Free (true impossibility).
                 }
