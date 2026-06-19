@@ -31298,11 +31298,19 @@
                     var sp = [];
                     for (var i = 0; i < arr.length; i++) {
                         var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
-                        if (!(c._assignedSpecial || c.type === 'special')) continue;
                         if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c.type === 'custom' || c._customActivity || c._pinned) continue;
                         var nm = _scNorm(c._assignedSpecial || c._activity || c.event); if (!nm) continue;
+                        // Count any block whose NAME is a configured special — not only ones flagged
+                        // _assignedSpecial. The cheap food/theme fillers (Ice cream, Popcorn, Slush, D.P.)
+                        // that the gap-fill passes (6.862 GAP-CONSOLIDATE, POST-GAP, 4.97b) drop into
+                        // slivers are written as SLOT-type WITHOUT _assignedSpecial, so they used to slip
+                        // past this cap (live: Soloists א got Popcorn [special] + Ice cream [filler] = 2
+                        // Food under a Food=1 layer). Tag whether each is a planner-placed special (_scReal)
+                        // so the demotion below can keep the real one and free the filler.
+                        var _scReal = !!(c._assignedSpecial || c.type === 'special');
+                        if (!_scReal && _scSub[nm] == null) continue;   // sport / Free / wall — not a known special
                         var sk = (_scSub[nm] != null) ? _scSub[nm] : _scCanon(c.subcategory);
-                        sp.push({ idx: i, nm: nm, sk: sk, s: c._startMin, e: c._endMin });
+                        sp.push({ idx: i, nm: nm, sk: sk, s: c._startMin, e: c._endMin, real: _scReal });
                     }
                     if (!sp.length) return;
                     var caps = cfg.caps;
@@ -31312,7 +31320,11 @@
                         var cap = caps[sk];
                         if (cap == null || !isFinite(cap)) return;     // floor-only (>=) or undemanded → never demote
                         if (count[sk] <= cap) return;
-                        var occ = sp.filter(function (x) { return x.sk === sk; }).sort(function (a, b) { return a.s - b.s; });
+                        var occ = sp.filter(function (x) { return x.sk === sk; }).sort(function (a, b) {
+                            var ra = a.real ? 1 : 0, rb = b.real ? 1 : 0;
+                            if (ra !== rb) return rb - ra;   // keep planner-placed specials; free gap-fillers first
+                            return a.s - b.s;                // then keep the earliest
+                        });
                         for (var k = cap; k < occ.length; k++) {
                             var o = occ[k]; var width = o.e - o.s; var placed = null;
                             for (var ti = 0; ti < underTargets.length && !placed; ti++) {
