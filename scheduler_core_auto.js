@@ -29250,6 +29250,7 @@
 
                 // ---- greedy: each needy bunk (0 workshops) gets ONE donated session
                 var _wbDonations = 0, _wbErr = 0, _usedSess = {};
+                var _wbDiag = { rejCap: 0, rejAccess: 0, rejTime: 0, rejLimit: 0, rejGive: 0, pairsTried: 0 };   // DIAG: per-gate reject counts
                 var _needy = Object.keys(_wbCount).filter(function (b) { return _wbCount[b] === 0 && _wbGradeOf[String(b)]; });
                 _needy.sort();
                 _needy.forEach(function (Z) {
@@ -29262,12 +29263,13 @@
                         if (String(sess.bunk) === String(Z)) continue;
                         if ((_wbCount[sess.bunk] || 0) < 2) continue;                  // donor must keep >=1
                         if (zHas[sess.nmL]) continue;                                  // no duplicate workshop for Z
+                        _wbDiag.pairsTried++;
                         var room = sess.room, cap = _wbCapOf(sess.nmL);
-                        if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) continue;   // clean swap only (no over-cap)
-                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) continue; } catch (_e) { continue; }
-                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sess.name, gZ, sess.s, sess.e)) continue; } catch (_e) {}
-                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) continue; } catch (_e) {}
-                        if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) continue;      // atomic recipient first
+                        if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) { _wbDiag.rejCap++; continue; }   // clean swap only (no over-cap)
+                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) { _wbDiag.rejAccess++; continue; } } catch (_e) { _wbDiag.rejAccess++; continue; }
+                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sess.name, gZ, sess.s, sess.e)) { _wbDiag.rejTime++; continue; } } catch (_e) {}
+                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) { _wbDiag.rejLimit++; continue; } } catch (_e) {}
+                        if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) { _wbDiag.rejGive++; continue; }      // atomic recipient first
                         if (!_wbTakeFrom(sess.bunk, sess)) { _wbErr++; }                     // then relabel donor
                         try { if (typeof claimField === 'function') claimField(room, sess.s, sess.e, Z, gZ, sess.name); } catch (_e) {}
                         _usedSess[sk] = 1;
@@ -29277,6 +29279,7 @@
                         break;   // one workshop per needy bunk this pass
                     }
                 });
+                try { log('[6.862c-DIAG] workshops=' + Object.keys(_wbCfg).filter(_wbIsWorkshop).length + ' sessions=' + _wbSessions.length + ' needy=' + _needy.length + ' pairsTried=' + _wbDiag.pairsTried + ' rejCap=' + _wbDiag.rejCap + ' rejAccess=' + _wbDiag.rejAccess + ' rejTime=' + _wbDiag.rejTime + ' rejLimit=' + _wbDiag.rejLimit + ' rejGive=' + _wbDiag.rejGive + ' donations=' + _wbDonations); } catch (_e) {}
                 if (_wbDonations > 0) {
                     log('[STEP 6.862c WORKSHOP-REBALANCE] ✅ donated ' + _wbDonations + ' workshop slot(s) from over-served to under-served bunk(s)' + (_wbErr ? ' (' + _wbErr + ' donor-relabel warning)' : '') + '. [kill switch: globalSettings.app1.workshopRebalance=\'off\']');
                     try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
