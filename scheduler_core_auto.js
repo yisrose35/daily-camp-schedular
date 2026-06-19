@@ -17797,6 +17797,16 @@
                                 var sh = _glShareOf(cand);
                                 (_glUsage[sh.key] = _glUsage[sh.key] || []).push({ grade: grade, s: s, e: e });
                             };
+                            // Drop ONE usage entry for cand at exactly [s,e] (used by the stagger restructure
+                            // when a tile is relocated in time — remove its old slot before recording the new).
+                            var _glRemoveUse = function (cand, grade, s, e) {
+                                var sh = _glShareOf(cand);
+                                var list = _glUsage[sh.key]; if (!list) return;
+                                for (var i = 0; i < list.length; i++) {
+                                    var u = list[i];
+                                    if (u.grade === grade && u.s === s && u.e === e) { list.splice(i, 1); return; }
+                                }
+                            };
                             // DIAGNOSTIC (true ceiling): for a capacity-full miss, could a WITHIN-BUNK
                             // re-time actually recover it? A re-time can only move the tile onto one of the
                             // bunk's OWN non-wall slots (a sport or special tile — walls like swim/lunch can't
@@ -17904,6 +17914,37 @@
                                     }
                                 });
                             });
+                            // ── RESTRUCTURE (stagger): recover capacity misses by within-bunk swaps ──
+                            // Shuffle equal-duration tiles so an empty special lands on a free-capacity time
+                            // (a generic SPORT just moves; a filled SPECIAL keeps/re-picks its activity).
+                            // Only TIME changes — wall-to-wall + sharing/uniqueness/duration stay strict.
+                            // Isolated + unit-tested in gl_stagger.js (the v1 inline attempt threw a stack
+                            // overflow; this calls the tested module). Toggle: window.__staggerFill=false.
+                            try {
+                                if (window.__staggerFill !== false && window.GLStagger && typeof window.GLStagger.restructure === 'function') {
+                                    var _stagBunks = [];
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        _stagBunks.push({ grade: grade, tiles: res.tiles, pool: pool });
+                                    });
+                                    window.GLStagger.restructure({
+                                        bunks: _stagBunks,
+                                        canon: _glCanon,
+                                        specialDurs: _glSpecialDurs,
+                                        capFits: _glCapFits,
+                                        recordUse: _glRecordUse,
+                                        removeUse: _glRemoveUse,
+                                        onRecover: function () {
+                                            _glFill.filled++; _glFill.miss--;
+                                            _glFill.staggered = (_glFill.staggered || 0) + 1;
+                                            _glFill.causes['capacity-recoverable'] = Math.max(0, (_glFill.causes['capacity-recoverable'] || 0) - 1);
+                                        }
+                                    });
+                                }
+                            } catch (_glStagErr) { try { warn('[GENERIC-STAGGER] error — left as-is: ' + (_glStagErr && _glStagErr.message)); } catch (_e) {} }
                         } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
                     }
 
@@ -18013,6 +18054,7 @@
                             var _glCauseStr = Object.keys(_glFill.causes).map(function (k) { return k + '×' + _glFill.causes[k]; }).join(', ');
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
+                                + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
                                 + (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : ''));
                         }
                     } catch (_glFillLogErr) {}
