@@ -17378,6 +17378,82 @@
                 }
             }
 
+            // ── PHASE 2.45: PeriodOrchestrator SHADOW (period-tiling projection) ──
+            //   Behind globalSettings.app1.usePeriodTiling ('shadow'|'apply'). Computes,
+            //   per bunk per non-break period, how the FREE REMAINDER around the pinned
+            //   walls WOULD tile wall-to-wall using window.PeriodPacker (the finished
+            //   exact subset-sum primitive) + window.PeriodOrchestrator, then logs the
+            //   projected fully-tiled %. NO MUTATION — this is the Phase-A measurement
+            //   that gates flipping to 'apply'. Iteration 0 only. Fully fail-safe.
+            if (totalIters < 1) {
+                try {
+                    var _potMode = '';
+                    try { var _gsPot = window.globalSettings || {}; _potMode = (_gsPot.app1 && _gsPot.app1.usePeriodTiling) || ''; } catch (_e) {}
+                    if ((_potMode === 'shadow' || _potMode === 'apply') && window.PeriodOrchestrator && window.PeriodPacker && typeof shoppingLists !== 'undefined') {
+                        var _potCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                        var _potBreak = /break|transition|passing|change/i;
+                        // projection-only reservation maps (so the shadow is honest cross-bunk WITHOUT touching real ledgers)
+                        var _potFieldRes = {}, _potSpecRes = {};
+                        var _potClashField = function (f, s, e) { var a = _potFieldRes[f] || []; for (var i = 0; i < a.length; i++) if (s < a[i].e && e > a[i].s) return true; return false; };
+                        var _potSpecCount = function (n, s, e) { var a = _potSpecRes[n] || []; var c = 0; for (var i = 0; i < a.length; i++) if (s < a[i].e && e > a[i].s) c++; return c; };
+                        var _potSpecCap = function (n) { try { var cfg = (typeof getSpecialActivityByName === 'function') ? getSpecialActivityByName(n) : null; var sw = (cfg && cfg.sharableWith) || {}; return parseInt(sw.capacity) || (sw.type === 'all' ? 999 : 1); } catch (_e) { return 1; } };
+                        var _potPerBunk = {}, _potOrder = [];
+                        allGrades.forEach(function (grade) {
+                            var periods = (window.campPeriods && window.campPeriods[grade]) || [];
+                            getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                                var sl = shoppingLists[bunk]; if (!sl) return;
+                                var occupied = (bunkTimelines[bunk] || []).filter(function (b) { return b && b.startMin != null && b.endMin != null; }).map(function (b) { return { startMin: b.startMin, endMin: b.endMin }; });
+                                var sports = ((sl.sports && sl.sports.priorityList) || []).map(function (sp) {
+                                    var durs = []; try { durs = (typeof getSportDurations === 'function') ? (getSportDurations(sp.name, globalSettings) || []) : []; } catch (_e) {}
+                                    if (!Array.isArray(durs)) durs = [];
+                                    return { name: sp.name, durations: durs, dMin: sp.dMin, dMax: sp.dMax, dIdeal: sp.dIdeal, fields: sp.fields || [], baseScore: -(sp.rotationScore || 0) };
+                                });
+                                var specials = ((sl.specials && sl.specials.priorityList) || []).map(function (sx) {
+                                    var durs = []; try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(sx.name, activityProperties, globalSettings) : null; durs = (gd && gd.durations) || gd; if (!Array.isArray(durs)) durs = []; } catch (_e) {}
+                                    var loc = sx.location || sx.name; try { var c = (typeof getSpecialActivityByName === 'function') ? getSpecialActivityByName(sx.name) : null; if (c && c.location) loc = c.location; } catch (_e) {}
+                                    return { name: sx.name, durations: durs, dMin: sx.dMin, dMax: sx.dMax, subcategoryKey: _potCanon(sx.subcategory), location: loc, baseScore: -(sx.rotationScore || 0) };
+                                });
+                                var floors = {}; var caps = (sl.specials && sl.specials.subcategoryCap) || {}; Object.keys(caps).forEach(function (k) { var c = caps[k]; floors[k] = (c === Infinity || c == null) ? 1 : c; });
+                                _potPerBunk[bunk] = {
+                                    grade: grade,
+                                    periods: periods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _potBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; }),
+                                    occupied: occupied, sports: sports, specials: specials, floors: floors,
+                                    alreadyOnDay: (bunkTimelines[bunk] || []).map(function (b) { return b._assignedSpecial || b.event; }).filter(Boolean)
+                                };
+                                _potOrder.push(bunk);
+                            });
+                        });
+                        var _potMakeGates = function (bunk, grade) {
+                            return {
+                                validateSport: function (name, fields, s, e) {
+                                    for (var i = 0; i < (fields || []).length; i++) {
+                                        var f = fields[i]; var ok = true;
+                                        try { ok = (typeof isFieldAvailable !== 'function') || isFieldAvailable(f, s, e, bunk, grade, name); } catch (_e) { ok = true; }
+                                        if (ok && !_potClashField(f, s, e)) return f;
+                                    }
+                                    return null;
+                                },
+                                validateSpecial: function (name, location, s, e) {
+                                    var ok = true; try { ok = (typeof canAssignSpecialToGrade !== 'function') || canAssignSpecialToGrade(name, grade, s, e); } catch (_e) { ok = true; }
+                                    if (!ok) return false;
+                                    return _potSpecCount(name, s, e) < _potSpecCap(name);
+                                },
+                                onReserve: function (seg) {
+                                    if (seg.kind === 'sport' && seg.field) { (_potFieldRes[seg.field] = _potFieldRes[seg.field] || []).push({ s: seg.startMin, e: seg.endMin }); }
+                                    else if (seg.kind === 'special') { (_potSpecRes[seg.name] = _potSpecRes[seg.name] || []).push({ s: seg.startMin, e: seg.endMin }); }
+                                }
+                            };
+                        };
+                        var _potOut = window.PeriodOrchestrator.planAllBunks({ order: _potOrder, perBunk: _potPerBunk, makeGates: _potMakeGates, packer: window.PeriodPacker, opts: { granularityMin: 5, minSegmentMin: 10, topN: 6, maxSegments: 4 } });
+                        var _ps = _potOut.stats;
+                        var _tilePct = _ps.windowsConsidered ? Math.round(100 * _ps.windowsTiled / _ps.windowsConsidered) : 0;
+                        log('═══ [PeriodOrchestrator SHADOW] period-tiling projection (no mutation) ═══');
+                        log('  [PeriodOrchestrator SHADOW] ' + _ps.bunks + ' bunks · ' + _ps.windowsConsidered + ' free sub-windows → ' + _ps.windowsTiled + ' would tile wall-to-wall (' + _tilePct + '%) · ' + _ps.bunksFullyTiled + ' bunks fully tiled · ~' + _ps.residualMin + ' residual min left for legacy fill · ' + _ps.segmentsPlaced + ' segments placed');
+                        log('  [PeriodOrchestrator SHADOW] (Phase A: projection only. Flip globalSettings.app1.usePeriodTiling=\'apply\' to commit once this looks right.)');
+                    }
+                } catch (_potErr) { try { warn('[PeriodOrchestrator SHADOW] ' + (_potErr && _potErr.message)); } catch (_e) {} }
+            }
+
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,
