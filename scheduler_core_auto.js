@@ -28728,6 +28728,24 @@
                 var _rkGradeOf = {};
                 allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _rkGradeOf[String(b)] = g; }); });
                 var _rkSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
+                // ── subcategory-cap awareness: never fill an opening with a special whose
+                //   subcategory is already at the bunk's layer cap (e.g. Food=1). Without this
+                //   the picker grabs the LONGEST not-used-today special — often a 2nd
+                //   "uncategorized" workshop — which the FN-56 ceiling then demotes back to
+                //   Free, wasting the opening AND starving the under-cap subcats (live: Minors
+                //   א got a 2nd uncategorized here, lost it at FN-56, ended with 0 Food while a
+                //   short Food would have fit and survived). canon: ''/regular/uncategorized →
+                //   'uncategorized'. No-op when no subcategory layers (map/caps empty).
+                var _rkSubOf = {};
+                try {
+                    var _rkA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_rkA1 && _rkA1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return; var _n = _rkNorm(s.name);
+                        var _sc = String(s.subcategory == null ? '' : s.subcategory).toLowerCase().trim();
+                        _rkSubOf[_n] = (!_sc || _sc === 'regular' || _sc === 'uncategorized') ? 'uncategorized' : _sc;
+                    });
+                } catch (_e) {}
+                var _rkCapsByBunk = (typeof window !== 'undefined' && window._subcatCapsByBunk) || null;
                 var _rkCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
                 var _rkLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
 
@@ -28808,6 +28826,11 @@
                     var todaySet = new Set();
                     blocks.forEach(function (b) { if (b.nm && b.nm !== 'free') todaySet.add(b.nm); });
 
+                    // per-bunk subcategory caps + running count (for the cap-aware picker)
+                    var _rkCaps = (_rkCapsByBunk && _rkCapsByBunk[bunk] && _rkCapsByBunk[bunk].enforced) ? _rkCapsByBunk[bunk].caps : null;
+                    var _rkSubCount = {};
+                    if (_rkCaps) blocks.forEach(function (b) { if (!b || b.nm === 'free') return; var _sc = _rkSubOf[b.nm]; if (_sc != null) _rkSubCount[_sc] = (_rkSubCount[_sc] || 0) + 1; });
+
                     // longest eligible special that fits [startMin, startMin+dur], dur<=cap
                     var _rkPick = function (startMin, cap) {
                         if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return null;
@@ -28815,6 +28838,7 @@
                         for (var si = 0; si < todaysSpecials.length; si++) {
                             var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
                             var nmL = _rkNorm(sp.name); if (todaySet.has(nmL)) continue;
+                            if (_rkCaps) { var _spc = _rkSubOf[nmL]; if (_spc != null) { var _spCap = _rkCaps[_spc]; if (_spCap != null && isFinite(_spCap) && (_rkSubCount[_spc] || 0) >= _spCap) continue; } }   // subcat already at cap → would be demoted by FN-56
                             var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
                             if (!durs.length) { var d1 = _rkSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
                             for (var dj = 0; dj < durs.length; dj++) {
@@ -28858,6 +28882,7 @@
                         packed.forEach(function (p) { if (p.ns !== p.M.s) { slidePlan.push({ head: p.M.head, tail: p.M.tail, delta: p.ns - p.M.s }); _rkMovU++; } });
                         fillPlan.push({ start: gapStart, end: gapStart + pick.dur, name: pick.name, loc: pick.loc });
                         todaySet.add(_rkNorm(pick.name));
+                        if (_rkCaps) { var _pkSc = _rkSubOf[_rkNorm(pick.name)]; if (_pkSc != null) _rkSubCount[_pkSc] = (_rkSubCount[_pkSc] || 0) + 1; }
                     });
 
                     if (!fillPlan.length) return;   // a slide that opens nothing fillable buys nothing → skip churn
