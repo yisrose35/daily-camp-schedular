@@ -105,6 +105,69 @@ test('never introduces a same-day repeat on a bunk', () => {
     assert.ok(!miss._concrete);
 });
 
+function abTile(o) { return { kind: o.k, subcat: o.sub || null, name: o.n || null, durationMin: o.d, startMin: o.s, endMin: o.e, generic: o.g === false ? false : true, _concrete: o.c || undefined }; }
+
+test('absorb: empty special → Sport; filled special + walls untouched', () => {
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 0, e: 40 }),                 // empty → sport
+        abTile({ k: 'special', sub: 'Food', d: 20, s: 40, e: 60, c: 'Ice cream' }),   // filled → keep
+        abTile({ k: 'swim', d: 30, s: 60, e: 90, g: false }),                          // wall → keep
+    ];
+    var bunks = [{ tiles: tiles }];
+    var r = GLStagger.absorbUnfilledToSport({ bunks: bunks });
+    assert.strictEqual(r.converted, 1);
+    var t0 = tiles.find(t => t.startMin === 0);
+    assert.strictEqual(t0.kind, 'sport'); assert.strictEqual(t0.name, 'Sport'); assert.ok(!t0.subcat);
+    assert.ok(tiles.some(t => t._concrete === 'Ice cream' && t.kind === 'special')); // filled special intact
+    assert.ok(tiles.some(t => t.kind === 'swim'));                                    // wall intact
+});
+
+test('absorb+merge: two contiguous 20-min empty specials → one 40-min Sport', () => {
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 0, e: 20 }),
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 20, e: 40 }),
+    ];
+    var bunks = [{ tiles: tiles }];
+    GLStagger.absorbUnfilledToSport({ bunks: bunks, maxMergeMin: 40 });
+    assert.strictEqual(tiles.length, 1);
+    assert.strictEqual(tiles[0].kind, 'sport'); assert.strictEqual(tiles[0].startMin, 0); assert.strictEqual(tiles[0].endMin, 40);
+});
+
+test('absorb+merge: caps at maxMergeMin (80-min run → 40+40)', () => {
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 0, e: 40 }),
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 40, e: 80 }),
+    ];
+    var bunks = [{ tiles: tiles }];
+    GLStagger.absorbUnfilledToSport({ bunks: bunks, maxMergeMin: 40 });
+    assert.strictEqual(tiles.length, 2);
+    assert.deepStrictEqual(tiles.map(t => [t.startMin, t.endMin]), [[0, 40], [40, 80]]);
+    assert.ok(tiles.every(t => t.kind === 'sport'));
+});
+
+test('absorb+merge: a filled special between two empties breaks the run (no cross-merge)', () => {
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 0, e: 20 }),                   // → sport 20
+        abTile({ k: 'special', sub: 'Food', d: 20, s: 20, e: 40, c: 'Ice cream' }),     // filled, keep
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 40, e: 60 }),                   // → sport 20
+    ];
+    var bunks = [{ tiles: tiles }];
+    GLStagger.absorbUnfilledToSport({ bunks: bunks, maxMergeMin: 40 });
+    var occ = tiles.slice().sort((a, b) => a.startMin - b.startMin).map(t => t.kind + ':' + t.startMin + '-' + t.endMin);
+    assert.deepStrictEqual(occ, ['sport:0-20', 'special:20-40', 'sport:40-60']);       // no merge across the filled special
+});
+
+test('absorb+merge: a break (non-contiguous gap) is not merged across', () => {
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 0, e: 20 }),
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 25, e: 45 }),   // 5-min break at 20-25
+    ];
+    var bunks = [{ tiles: tiles }];
+    GLStagger.absorbUnfilledToSport({ bunks: bunks, maxMergeMin: 40 });
+    assert.strictEqual(tiles.length, 2);                                  // not contiguous → stays two Sports
+    assert.ok(tiles.every(t => t.kind === 'sport'));
+});
+
 test('stress: 40 bunks × 8 tiles — terminates, invariants hold (no stack/cap/overlap/repeat issues)', () => {
     const bunks = [];
     const durs = {};

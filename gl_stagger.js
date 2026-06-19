@@ -162,7 +162,59 @@
         return { recovered: recovered, attempts: attempts, bunks: bunks.length };
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow };
+    function _isGenericSport(t) { return t && t.kind === 'sport' && t.generic !== false && !t._concrete; }
+
+    // absorbUnfilledToSport(ctx) — finalize the day per the rule "if you can't fill a
+    // special, use a sport." After fill + stagger, any special tile STILL empty cannot be
+    // filled (cap-1 / duration-trap / pool-exhausted). Convert each remaining empty generic
+    // special into a generic SPORT (a category that always 'fills'), then MERGE contiguous
+    // generic-sport tiles in a bunk into ≤ maxMergeMin blocks (default 40) so the leftover
+    // reads as a few real Sport periods, not many tiny empty special slivers. Filled
+    // specials and walls are left untouched and break the merge runs; a 5-min break (gap
+    // between tiles) also breaks a run. Times/coverage preserved (wall-to-wall) — only the
+    // empty specials change identity and adjacent sports coalesce.
+    //   ctx: { bunks:[{tiles}], sportLabel='Sport', maxMergeMin=40 }
+    function absorbUnfilledToSport(ctx) {
+        var bunks = (ctx && ctx.bunks) || [];
+        var label = (ctx && ctx.sportLabel) || 'Sport';
+        var maxMerge = (ctx && ctx.maxMergeMin) || 40;
+        var converted = 0, removedByMerge = 0;
+        for (var bi = 0; bi < bunks.length; bi++) {
+            var tiles = (bunks[bi] && bunks[bi].tiles) || [];
+            // 1) empty generic special → generic sport
+            for (var i = 0; i < tiles.length; i++) {
+                var t = tiles[i];
+                if (t && t.kind === 'special' && t.generic !== false && !t._concrete) {
+                    t.kind = 'sport'; t.subcat = null; t.name = label; t._fillLoc = null; t._ref = t._ref || null;
+                    converted++;
+                }
+            }
+            // 2) merge contiguous generic-sport runs into ≤maxMerge blocks
+            var sorted = tiles.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+            var out = [];
+            var k = 0;
+            while (k < sorted.length) {
+                if (!_isGenericSport(sorted[k])) { out.push(sorted[k]); k++; continue; }
+                var runStart = sorted[k].startMin, runEnd = sorted[k].endMin, n = 1, j = k + 1;
+                while (j < sorted.length && _isGenericSport(sorted[j]) && sorted[j].startMin === runEnd) { runEnd = sorted[j].endMin; n++; j++; }
+                if (n === 1) { out.push(sorted[k]); k = j; continue; }
+                var made = 0;
+                for (var cur = runStart; cur < runEnd; ) {
+                    var blkEnd = Math.min(cur + maxMerge, runEnd);
+                    out.push({ kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: blkEnd - cur, _ref: null });
+                    cur = blkEnd; made++;
+                }
+                removedByMerge += (n - made);
+                k = j;
+            }
+            // rebuild in place (keep the array reference the caller holds)
+            tiles.length = 0;
+            Array.prototype.push.apply(tiles, out);
+        }
+        return { converted: converted, removedByMerge: removedByMerge };
+    }
+
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;
