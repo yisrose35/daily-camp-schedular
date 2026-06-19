@@ -142,25 +142,35 @@
             return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining, error: 'no-packer' };
         }
 
-        function floorBonus(seg) {
-            if (seg.kind !== 'special') return 0;
-            return (remaining[seg._key] > 0) ? 1000 : 0;
+        // Allowed durations for a demand (discrete list, or a granular range).
+        function _demandDurs(d) {
+            return (d.durations && d.durations.length)
+                ? d.durations.slice().filter(function (x) { return _num(x) != null; })
+                : _durRange(d.dMin, d.dMax, gran);
         }
-        function scoreFn(packing) {
-            var total = 0;
-            for (var i = 0; i < packing.segments.length; i++) {
-                var s = packing.segments[i];
-                total += (s.score || 0) + floorBonus(s);
-            }
-            total -= 0.01 * packing.segments.length; // prefer fewer/larger tiles (human-like)
-            return total;
+        // Floor bonus drives the packer toward layers the bunk still OWES. Reads a
+        // quota VIEW (the live `remaining`, or a snapshot during a trial re-pack).
+        function floorBonus(seg, remView) {
+            if (seg.kind !== 'special') return 0;
+            return (remView[seg._key] > 0) ? 1000 : 0;
+        }
+        function _mkScoreFn(remView) {
+            return function (packing) {
+                var total = 0;
+                for (var i = 0; i < packing.segments.length; i++) {
+                    var s = packing.segments[i];
+                    total += (s.score || 0) + floorBonus(s, remView);
+                }
+                total -= 0.01 * packing.segments.length; // prefer fewer/larger tiles (human-like)
+                return total;
+            };
         }
 
         // Lay a packing's segments at absolute times from `start` (no commit).
         function _laySegs(segs, start) {
             var c = start, out = [];
             for (var i = 0; i < segs.length; i++) {
-                out.push({ kind: segs[i].kind, subcat: segs[i].subcat || null, name: segs[i].name, _key: segs[i]._key,
+                out.push({ kind: segs[i].kind, subcat: segs[i].subcat || null, name: segs[i].name, _key: segs[i]._key, _ref: segs[i]._ref,
                            startMin: c, endMin: c + segs[i].durationMin, durationMin: segs[i].durationMin });
                 c += segs[i].durationMin;
             }
@@ -174,14 +184,15 @@
             if (x.kind === 'special') { b._assignedSpecial = x.name; b._specialLocation = x.name; }
             return b;
         }
-        // Every laid segment must pass the gate against the already-placed `tiles`
-        // PLUS the other segments in this same window (so two tiles in one window
-        // are spacing-checked against each other too).
-        function _gatePass(laid) {
+        // Every laid segment must pass the gate against the `base` tiles PLUS the
+        // other segments in this same window (so two tiles in one window are spacing-
+        // checked against each other too). `base` defaults to the live `tiles`.
+        function _gatePass(laid, base) {
             if (!gate) return true;
+            var baseBlocks = (base || tiles).map(_toBlock);
             for (var i = 0; i < laid.length; i++) {
                 var block = _toBlock(laid[i]);
-                var template = tiles.concat(laid.slice(0, i)).concat(laid.slice(i + 1)).map(_toBlock);
+                var template = baseBlocks.concat(laid.slice(0, i).map(_toBlock)).concat(laid.slice(i + 1).map(_toBlock));
                 var ok = true;
                 try { ok = gate(block, template); } catch (e) { ok = true; }
                 if (!ok) return false;
@@ -189,12 +200,74 @@
             return true;
         }
         // First packing (best-scored first) whose laid segments all pass the gate.
-        function _pickGated(packings, start) {
+        function _pickGated(packings, start, base) {
             for (var p = 0; p < packings.length; p++) {
                 var laid = _laySegs(packings[p].segments, start);
-                if (_gatePass(laid)) return laid;
+                if (_gatePass(laid, base)) return laid;
             }
             return null;
+        }
+
+        // Build candidates for [wStart,wEnd] from `floating` (respecting the quota
+        // VIEWS, demand windows, and an optional kind exclusion), pack it exactly,
+        // and return the best gate-passing laid tiles (gated against `base`), or null.
+        // PURE — never mutates the live quotas; the caller commits on success. This is
+        // the single tiling primitive used by both the main pass and the elastic pass.
+        function _packWindow(wStart, wEnd, base, capView, remView, excludeKinds, outMeta) {
+            var len = wEnd - wStart;
+            if (len <= 0 || len % gran !== 0) { if (outMeta) outMeta.reason = 'window-not-granular'; return null; }
+            var cands = [];
+            for (var fi = 0; fi < floating.length; fi++) {
+                var d = floating[fi];
+                if (excludeKinds && excludeKinds.indexOf(d.kind) >= 0) continue;
+                var key = _demandKey(d);
+                if (!(capView[key] > 0)) continue;
+                var win = d.window;
+                if (win && (win[0] > wStart || win[1] < wEnd)) continue; // demand window must cover the sub-window
+                var durs = _demandDurs(d);
+                var seen = {};
+                for (var di = 0; di < durs.length; di++) {
+                    var dur = durs[di];
+                    if (_num(dur) == null || dur < minSeg || dur > len || dur % gran !== 0 || seen[dur]) continue;
+                    seen[dur] = 1;
+                    cands.push({ activity: key, durationMin: dur, kind: d.kind, subcat: d.subcat || null,
+                                 name: _label(d), score: (typeof d.score === 'number' ? d.score : (d.kind === 'sport' ? 1 : 0)),
+                                 _key: key, _ref: d });
+                }
+            }
+            if (!cands.length) { if (outMeta) outMeta.reason = 'no-candidates'; return null; }
+            var scoreFn = _mkScoreFn(remView);
+            var packings = [];
+            try { packings = packer.pack({ periodLengthMin: len, candidates: cands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; }
+            catch (e) { if (outMeta) outMeta.reason = 'pack-error:' + (e && e.message); return null; }
+            if (!packings.length) { if (outMeta) outMeta.reason = 'no-exact-tiling'; return null; }
+            // Best gate-passing packing. If none pass — a filler (sport) is spacing-
+            // blocked here — retry with ONLY specials (floor-scored) so the window fills
+            // with something the bunk still OWES rather than dropping it. (When the
+            // caller already excluded the filler, cands are specials-only — no retry.)
+            var laid = _pickGated(packings, wStart, base);
+            if (!laid && gate && !excludeKinds) {
+                var spCands = cands.filter(function (c) { return c.kind === 'special'; });
+                var spPack = [];
+                if (spCands.length) { try { spPack = packer.pack({ periodLengthMin: len, candidates: spCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { spPack = []; } }
+                laid = _pickGated(spPack, wStart, base);
+            }
+            if (!laid && outMeta) outMeta.reason = 'all-packings-gated';
+            return laid || null;
+        }
+        // Commit laid tiles into the live `tiles` + quotas; bump stats. (`rec` optional.)
+        function _applyLaid(laid, rec) {
+            for (var ci = 0; ci < laid.length; ci++) {
+                var seg = laid[ci];
+                var t = { kind: seg.kind, subcat: seg.subcat || null, name: seg.name, _key: seg._key, _ref: seg._ref,
+                          startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin, generic: true, pinned: false };
+                tiles.push(t); if (rec) rec.tiles.push(t);
+                if (seg.kind === 'special') {
+                    if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
+                    if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
+                }
+                stats.tilesPlaced++;
+            }
         }
 
         for (var pi = 0; pi < periods.length; pi++) {
@@ -208,72 +281,89 @@
                 stats.windowsConsidered++;
                 var rec = { start: w.start, end: w.end, len: len, tiled: false, tiles: [], residualMin: len, reason: null };
                 if (len % gran !== 0) { rec.reason = 'window-not-granular'; planWindows.push(rec); stats.residualMin += len; continue; }
-
-                // candidates: each floating demand whose window covers this sub-window
-                // and still has quota, expanded by each allowed duration that fits.
-                var cands = [];
-                for (var fi = 0; fi < floating.length; fi++) {
-                    var d = floating[fi];
-                    var key = _demandKey(d);
-                    if (!(capRem[key] > 0)) continue;
-                    var win = d.window;
-                    if (win && (win[0] > w.start || win[1] < w.end)) continue; // demand window must cover the sub-window
-                    var durs = (d.durations && d.durations.length) ? d.durations : _durRange(d.dMin, d.dMax, gran);
-                    var seen = {};
-                    for (var di = 0; di < durs.length; di++) {
-                        var dur = durs[di];
-                        if (_num(dur) == null || dur < minSeg || dur > len || dur % gran !== 0 || seen[dur]) continue;
-                        seen[dur] = 1;
-                        cands.push({ activity: key, durationMin: dur, kind: d.kind, subcat: d.subcat || null,
-                                     name: _label(d), score: (typeof d.score === 'number' ? d.score : (d.kind === 'sport' ? 1 : 0)),
-                                     _key: key, _ref: d });
-                    }
-                }
-                if (!cands.length) { rec.reason = 'no-candidates'; planWindows.push(rec); stats.residualMin += len; continue; }
-
-                var packings = [];
-                try {
-                    packings = packer.pack({ periodLengthMin: len, candidates: cands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || [];
-                } catch (e) { rec.reason = 'pack-error:' + (e && e.message); planWindows.push(rec); stats.residualMin += len; continue; }
-                if (!packings.length) { rec.reason = 'no-exact-tiling'; planWindows.push(rec); stats.residualMin += len; continue; }
-
-                // Pick the best packing that passes the spacing gate. If none pass —
-                // a filler (sport) is spacing-blocked here — SWAP it for a still-NEEDED
-                // demand rather than dropping it: retry with ONLY specials, scored so an
-                // unmet layer floor wins first (floorBonus), so the window fills with
-                // something the bunk still owes (the human "put a needed special between
-                // two sports" move). The blocked sport is NOT lost — sport is unlimited
-                // filler, so it simply lands in the next rule-compliant window.
-                // No gate => packings[0] outright (unchanged legacy behavior).
-                var laid = _pickGated(packings, w.start);
-                if (!laid && gate) {
-                    var spCands = [];
-                    for (var sci = 0; sci < cands.length; sci++) { if (cands[sci].kind === 'special') spCands.push(cands[sci]); }
-                    var spPack = [];
-                    if (spCands.length) {
-                        try { spPack = packer.pack({ periodLengthMin: len, candidates: spCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { spPack = []; }
-                    }
-                    laid = _pickGated(spPack, w.start);
-                }
-                if (!laid) { rec.reason = packings.length ? 'all-packings-gated' : 'no-exact-tiling'; planWindows.push(rec); stats.residualMin += len; continue; }
-
-                for (var ci = 0; ci < laid.length; ci++) {
-                    var seg = laid[ci];
-                    var t = { kind: seg.kind, subcat: seg.subcat || null, name: seg.name,
-                              startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin,
-                              generic: true, pinned: false };
-                    tiles.push(t); rec.tiles.push(t);
-                    if (seg.kind === 'special') {
-                        if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
-                        if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
-                    }
-                    stats.tilesPlaced++;
-                }
+                var _meta = {};
+                var laid = _packWindow(w.start, w.end, tiles, capRem, remaining, null, _meta);
+                if (!laid) { rec.reason = _meta.reason || 'no-fill'; planWindows.push(rec); stats.residualMin += len; continue; }
+                _applyLaid(laid, rec);
                 rec.tiled = true; rec.residualMin = 0;
                 stats.windowsTiled++;
                 planWindows.push(rec);
             }
             periodPlans.push({ period: period, windows: planWindows });
+        }
+
+        // ── ELASTIC FILL (gate-only, duration-aware) ─────────────────────────
+        // A window the packer left empty is NOT abandoned. Because every generic
+        // tile is DURATION-ELASTIC (its layer permits any duration in a range),
+        // we RELOCATE an elastic filler — a Sport — INTO the empty window at
+        // exactly the window length, then RE-PACK the slot it vacated with the
+        // still-available (possibly stretched) specials. Net: the sport slides to
+        // where the rule allows it (e.g. after Cleanup, clear of the other sport),
+        // and the freed slot is back-filled with specials grown to fit — the human
+        // "move the sport over, stretch the specials into its place" move. EVERY
+        // placement is gate-checked (sport↔sport spacing, special↔special spacing,
+        // no-sport-after-lunch, …) and NO quota/cap is ever exceeded, so it
+        // generalizes across the board to any rule and any kind. Default (no gate):
+        // off. Bounded: a couple of sweeps over the residual windows.
+        if (gate) {
+            for (var _ePass = 0; _ePass < 2; _ePass++) {
+                var _resid = [];
+                for (var ppi = 0; ppi < periodPlans.length; ppi++) {
+                    var pw = periodPlans[ppi].windows;
+                    for (var pwi = 0; pwi < pw.length; pwi++) { var rr = pw[pwi]; if (!rr.tiled && rr.len >= minSeg && rr.len % gran === 0) _resid.push(rr); }
+                }
+                if (!_resid.length) break;
+                var _progressed = false;
+                for (var ridx = 0; ridx < _resid.length; ridx++) {
+                    var W2 = _resid[ridx], L = W2.len, filled = false;
+                    // movable elastic filler tiles (generic, not pinned), Sport first.
+                    var movers = [];
+                    for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt._ref) movers.push(tt); }
+                    movers.sort(function (a, b) {
+                        var af = (a.kind === 'sport' || a.kind === 'activity') ? 0 : 1;
+                        var bf = (b.kind === 'sport' || b.kind === 'activity') ? 0 : 1;
+                        return (af - bf) || (a.startMin - b.startMin);
+                    });
+                    for (var mvi = 0; mvi < movers.length && !filled; mvi++) {
+                        var T = movers[mvi];
+                        if (T.startMin === W2.start && T.durationMin === L) continue; // already exactly there
+                        if (_demandDurs(T._ref).indexOf(L) < 0) continue;             // T can't be exactly L
+                        var baseNoT = [];
+                        for (var bi = 0; bi < tiles.length; bi++) if (tiles[bi] !== T) baseNoT.push(tiles[bi]);
+                        // T relocated to W (length L) must be gate-legal.
+                        var Tnew = { kind: T.kind, subcat: T.subcat, name: T.name, startMin: W2.start, endMin: W2.start + L };
+                        if (!_gatePass([Tnew], baseNoT)) continue;
+                        // Re-pack T's vacated slot [Rs,Re] with specials only (the sport is
+                        // leaving). Quota view = live quotas WITHOUT freeing T (it still
+                        // consumes its slot, just at W now) → caps can never be exceeded.
+                        var Rs = T.startMin, Re = T.endMin;
+                        var capView = {}, remView = {};
+                        Object.keys(capRem).forEach(function (k) { capView[k] = capRem[k]; });
+                        Object.keys(remaining).forEach(function (k) { remView[k] = remaining[k]; });
+                        var laidR = _packWindow(Rs, Re, baseNoT.concat([Tnew]), capView, remView, ['sport', 'activity']);
+                        if (!laidR) continue;
+                        // COMMIT: pull T out, drop it at W (length L), re-pack its old slot.
+                        var idxT = tiles.indexOf(T); if (idxT >= 0) tiles.splice(idxT, 1);
+                        if (T.kind === 'special') {
+                            if (remaining[T._key] !== Infinity) remaining[T._key] = (remaining[T._key] || 0) + 1;
+                            if (capRem[T._key] !== Infinity) capRem[T._key] = (capRem[T._key] || 0) + 1;
+                        }
+                        stats.tilesPlaced--;
+                        var Tt = { kind: T.kind, subcat: T.subcat || null, name: T.name, _key: T._key, _ref: T._ref,
+                                   startMin: W2.start, endMin: W2.start + L, durationMin: L, generic: true, pinned: false };
+                        tiles.push(Tt); stats.tilesPlaced++;
+                        if (T.kind === 'special') {
+                            if (remaining[T._key] > 0 && remaining[T._key] !== Infinity) remaining[T._key]--;
+                            if (capRem[T._key] > 0 && capRem[T._key] !== Infinity) capRem[T._key]--;
+                        }
+                        _applyLaid(laidR, null);
+                        W2.tiled = true; W2.residualMin = 0; W2.reason = 'elastic-fill';
+                        stats.windowsTiled++; stats.residualMin -= L;
+                        filled = true; _progressed = true;
+                    }
+                }
+                if (!_progressed) break;
+            }
         }
 
         // ── SWAP REPAIR (gate-only, general) ──────────────────────────────────

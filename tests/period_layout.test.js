@@ -255,6 +255,45 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         }
     });
 
+    it('ELASTIC: relocates a sport into a gated empty window and back-fills its slot with a stretched special', () => {
+        // Duration-aware repair (the user's move): a layer slot can be any duration in
+        // its range. P1 = food20 + sport20 (sport at the END, 670-690). P2 is sport-
+        // blocked everywhere (≤30min from P1's sport) and a lone 20-min food can't tile
+        // the 40-min window → P2 empty. Elastic-fill slides the Sport into P2 (stretched
+        // to the full 40) and re-packs the 20-min slot it vacated with a 2nd food —
+        // staying within food's cap of 2. No sport is dropped; nothing exceeds its cap.
+        const sportGate = (block, template) => {
+            if (block.type !== 'sport') return true;
+            for (const w of template) {
+                if (w.type !== 'sport') continue;
+                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
+                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
+                if (gapBefore >= 0 && gapBefore < 40) return false;
+                if (gapAfter >= 0 && gapAfter < 40) return false;
+            }
+            return true;
+        };
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(700, 740, 'P2')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'food', durations: [20], window: [650, 945], qty: 1, cap: 2 },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+            ],
+            gate: sportGate, packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'elastic-fill made it fully wall-to-wall');
+        const sports = tilesOf(res).filter(t => t.kind === 'sport');
+        assert.strictEqual(sports.length, 1, 'the one sport is relocated, not dropped');
+        assert.strictEqual(sports[0].durationMin, 40, 'the sport stretched to fill the whole window');
+        assert.deepStrictEqual([sports[0].startMin, sports[0].endMin], [700, 740], 'sport slid into the (formerly empty) P2');
+        const foods = tilesOf(res).filter(t => t.subcat === 'food');
+        assert.strictEqual(foods.length, 2, 'back-filled with a 2nd food — exactly its cap, never exceeded');
+        assert.ok(foods.every(f => f.durationMin === 20), 'each food respects its 20-min duration');
+        const p2 = res.periodPlans.find(pp => pp.period.startMin === 700).windows[0];
+        assert.strictEqual(p2.reason, 'elastic-fill', 'P2 was repaired by the elastic pass');
+    });
+
     it('GATE + cap: a special used as filler never exceeds its subcategory cap', () => {
         const blockAllSport = (block) => block.type !== 'sport'; // sport always blocked
         const res = Layout.planBunkLayout({
