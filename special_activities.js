@@ -774,9 +774,19 @@ function getAllSubcategories() {
     //   unschedulable. Also union the AUTHORITATIVE live config so every subcategory
     //   that exists on a real special is always offerable. Pure superset → safe.
     try {
+        // The in-memory window.globalSettings.app1 is HOLLOW on the builder/flow page
+        // (and mid/post-gen) — the authoritative copy is the durable saved config that
+        // loadGlobalSettings() reads from localStorage. Prefer live if populated, else
+        // fall back to durable, so the bucket list is never empty when specials exist.
+        let _liveSpecials = [];
         const _gs = (typeof window !== 'undefined' && window.globalSettings) ? window.globalSettings : null;
-        const _live = (_gs && _gs.app1 && Array.isArray(_gs.app1.specialActivities)) ? _gs.app1.specialActivities : [];
-        _live.forEach(a => push(a && a.subcategory));
+        if (_gs && _gs.app1 && Array.isArray(_gs.app1.specialActivities) && _gs.app1.specialActivities.length) {
+            _liveSpecials = _gs.app1.specialActivities;
+        } else if (typeof window !== 'undefined' && typeof window.loadGlobalSettings === 'function') {
+            const _L = window.loadGlobalSettings();
+            if (_L && _L.app1 && Array.isArray(_L.app1.specialActivities)) _liveSpecials = _L.app1.specialActivities;
+        }
+        _liveSpecials.forEach(a => push(a && a.subcategory));
     } catch (_e) {}
     return out.sort((a, b) => a.localeCompare(b));
 }
