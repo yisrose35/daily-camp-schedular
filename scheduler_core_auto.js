@@ -17543,8 +17543,24 @@
                         });
                     });
 
-                    // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+                    // Cross-grade SHARING gate: a generic tile of a shared kind must respect
+                    // the facility's cross-division capacity + allowedPairs. Only kinds with a
+                    // concrete shared facility at layout time are checkable — swim→pool (via the
+                    // engine's own poolSwimPairFreeAt, which counts bunks vs pool capacity and
+                    // honors allowedPairs against the LIVE pinned swims). Sport/Special generic
+                    // tiles have no concrete field yet → unrestricted here (enforced at fill).
+                    var _glResourceGate = function (kind, grade, bunk, sMin, eMin) {
+                        try {
+                            if (String(kind || '').toLowerCase() === 'swim' && typeof poolSwimPairFreeAt === 'function') {
+                                return poolSwimPairFreeAt(grade, sMin, eMin, bunk);
+                            }
+                        } catch (_e) {}
+                        return true;
+                    };
+
+                    // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
+                    //    cross-bunk resourceGate, which enforces shared-facility limits).
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
 
                     // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
                     //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real

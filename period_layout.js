@@ -107,6 +107,14 @@
         // never decides WHICH activity); a sport blocked here is replaced by a
         // special so the period still tiles wall-to-wall. Omitted => no gating.
         var gate = (typeof ctx.gate === 'function') ? ctx.gate : null;
+        // Optional CROSS-BUNK RESOURCE gate: resourceGate(kind, grade, bunk, startMin, endMin)
+        // -> bool. Unlike `gate` (per-bunk rule spacing), this enforces SHARED-resource
+        // limits ACROSS grades — e.g. swim→pool capacity (counts bunks) + allowedPairs.
+        // The caller wires it to the engine's real facility-sharing check. A generic tile
+        // whose kind has no concrete shared facility (sport/special placeholders) returns
+        // true. Omitted => no cross-bunk gating.
+        var resourceGate = (typeof ctx.resourceGate === 'function') ? ctx.resourceGate : null;
+        var _ctxGrade = ctx.grade, _ctxBunk = ctx.bunk;
 
         var periods = (ctx.periods || []).filter(function (p) {
             return p && !p.isBreak && _num(p.startMin) != null && _num(p.endMin) != null && p.endMin > p.startMin;
@@ -195,14 +203,21 @@
         // other segments in this same window (so two tiles in one window are spacing-
         // checked against each other too). `base` defaults to the live `tiles`.
         function _gatePass(laid, base) {
-            if (!gate) return true;
-            var baseBlocks = (base || tiles).map(_toBlock);
+            if (!gate && !resourceGate) return true;
+            var baseBlocks = gate ? (base || tiles).map(_toBlock) : null;
             for (var i = 0; i < laid.length; i++) {
-                var block = _toBlock(laid[i]);
-                var template = baseBlocks.concat(laid.slice(0, i).map(_toBlock)).concat(laid.slice(i + 1).map(_toBlock));
-                var ok = true;
-                try { ok = gate(block, template); } catch (e) { ok = true; }
-                if (!ok) return false;
+                if (gate) {
+                    var block = _toBlock(laid[i]);
+                    var template = baseBlocks.concat(laid.slice(0, i).map(_toBlock)).concat(laid.slice(i + 1).map(_toBlock));
+                    var ok = true;
+                    try { ok = gate(block, template); } catch (e) { ok = true; }
+                    if (!ok) return false;
+                }
+                if (resourceGate) {
+                    var rok = true;
+                    try { rok = resourceGate(laid[i].kind, _ctxGrade, _ctxBunk, laid[i].startMin, laid[i].endMin); } catch (e) { rok = true; }
+                    if (!rok) return false;
+                }
             }
             return true;
         }
@@ -478,7 +493,7 @@
             if (!b) continue;
             var res = planBunkLayout({
                 bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
-                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate
+                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate
             });
             layoutByBunk[bunk] = res;
             totals.bunks++;

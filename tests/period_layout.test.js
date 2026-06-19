@@ -377,6 +377,38 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.strictEqual(res.remaining['elective'], 0, 'elective floor consumed');
     });
 
+    it('RESOURCE GATE: a cross-bunk shared-resource limit blocks a shared kind (swim) from placing', () => {
+        // The resourceGate models pool capacity across grades: here it denies swim
+        // (pool full). Swim must NOT place; the window still fills with sport, and the
+        // swim floor is honestly left unmet rather than oversubscribing the pool.
+        const denySwim = (kind) => kind !== 'swim';
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1')], pinned: [],
+            floating: [
+                { kind: 'swim', name: 'Swim', durations: [40], window: [650, 690], qty: 1, cap: 1 },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+            ],
+            resourceGate: denySwim, packer: PeriodPacker
+        });
+        assert.strictEqual(tilesOf(res).filter(t => t.kind === 'swim').length, 0, 'swim blocked by the resource (pool) gate');
+        assert.strictEqual(res.stats.residualMin, 0, 'window still filled (by sport) — no gap left');
+        assert.strictEqual(res.remaining['swim'], 1, 'swim floor left unmet rather than oversubscribing the pool');
+    });
+
+    it('RESOURCE GATE: swim places when the cross-bunk resource gate allows it', () => {
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1')], pinned: [],
+            floating: [
+                { kind: 'swim', name: 'Swim', durations: [40], window: [650, 690], qty: 1, cap: 1 },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+            ],
+            resourceGate: () => true, packer: PeriodPacker
+        });
+        assert.strictEqual(tilesOf(res).filter(t => t.kind === 'swim').length, 1, 'swim places when the pool has room');
+    });
+
     it('no-candidates window is reported, not crashed', () => {
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G', periods: [P(855, 895, 'P6')], pinned: [],
