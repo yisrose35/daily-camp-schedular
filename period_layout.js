@@ -23,8 +23,13 @@
 // module never decides pinned-ness — it just tiles the free remainder.
 //
 // PURE by construction: reads only its inputs, returns a plan, mutates nothing.
-// Layout is per-bunk INDEPENDENT (generic tiles don't compete for resources —
-// only the later FILL step does), so there is no cross-bunk reservation here.
+// Layout is per-bunk INDEPENDENT for the GENERIC fillers (a "sport"/"special"
+// placeholder has no facility yet, so it competes for nothing — that is the later
+// FILL step's job). The ONE exception is a tile tied to a real shared layer with a
+// concrete facility (e.g. a re-floated Swim or "Main Activity" at an Auditorium):
+// the caller may inject `resourceGate` + `resourceCommit` to keep that facility
+// within its cross-grade capacity + allowedPairs AT PLACEMENT TIME, threaded across
+// bunks. Both are optional; without them the module is fully per-bunk independent.
 // node --test-able exactly like period_packer.js / period_orchestrator.js.
 // =============================================================================
 (function () {
@@ -114,6 +119,16 @@
         // whose kind has no concrete shared facility (sport/special placeholders) returns
         // true. Omitted => no cross-bunk gating.
         var resourceGate = (typeof ctx.resourceGate === 'function') ? ctx.resourceGate : null;
+        // Optional COMMIT hook: resourceCommit(kind, grade, bunk, startMin, endMin, ref).
+        // Called once per committed tile that carries a `_ref.share` descriptor, so the
+        // caller can record a cross-bunk RESERVATION (e.g. "Auditorium busy for Majors
+        // 10:00–10:40"). resourceGate then reads those reservations to keep a shared
+        // layer within its facility's capacity + allowedPairs across grades — even for
+        // a facility NO grade has pinned yet (the "11 Exclusive Main Activities all at
+        // once" case that a live-bunkTimelines scan alone would miss). Reservations stay
+        // accurate because shared-`_ref.share` tiles are never relocated by the elastic /
+        // swap passes below (they are anchors; only the unlimited fillers flow around them).
+        var resourceCommit = (typeof ctx.resourceCommit === 'function') ? ctx.resourceCommit : null;
         var _ctxGrade = ctx.grade, _ctxBunk = ctx.bunk;
 
         var periods = (ctx.periods || []).filter(function (p) {
@@ -221,7 +236,7 @@
                 }
                 if (resourceGate) {
                     var rok = true;
-                    try { rok = resourceGate(laid[i].kind, _ctxGrade, _ctxBunk, laid[i].startMin, laid[i].endMin); } catch (e) { rok = true; }
+                    try { rok = resourceGate(laid[i].kind, _ctxGrade, _ctxBunk, laid[i].startMin, laid[i].endMin, laid[i]._ref); } catch (e) { rok = true; }
                     if (!rok) return false;
                 }
             }
@@ -294,6 +309,12 @@
                 // structural required layers like swim); the unlimited filler is Infinity.
                 if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
                 if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
+                // record a cross-bunk reservation for a shared layer (Auditorium etc.) so
+                // the next bunk's resourceGate sees it. Only shared-`_ref.share` tiles —
+                // these are never relocated below, so the reservation never goes stale.
+                if (resourceCommit && seg._ref && seg._ref.share) {
+                    try { resourceCommit(seg.kind, _ctxGrade, _ctxBunk, seg.startMin, seg.endMin, seg._ref); } catch (e) {}
+                }
                 stats.tilesPlaced++;
             }
         }
@@ -346,7 +367,9 @@
                     var W2 = _resid[ridx], L = W2.len, filled = false;
                     // movable elastic filler tiles (generic, not pinned), Sport first.
                     var movers = [];
-                    for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt._ref) movers.push(tt); }
+                    // shared layers (a `_ref.share` facility reservation) are anchors: never
+                    // relocate them — that would desync the cross-bunk reservation. Fillers only.
+                    for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt._ref && !(tt._ref && tt._ref.share)) movers.push(tt); }
                     movers.sort(function (a, b) {
                         var af = (a.kind === 'sport' || a.kind === 'activity') ? 0 : 1;
                         var bf = (b.kind === 'sport' || b.kind === 'activity') ? 0 : 1;
@@ -424,6 +447,9 @@
                 var kCands = [];
                 for (var fk = 0; fk < floating.length; fk++) {
                     var fd = floating[fk]; var kk = _demandKey(fd);
+                    // a shared layer (facility reservation) is never placed by the swap pass —
+                    // it would bypass the resourceGate + reservation; only the main pass places it.
+                    if (fd.share) continue;
                     // sport/activity = the unlimited filler → always an eligible replacement.
                     if (fd.kind === 'sport' || fd.kind === 'activity') { kCands.push({ kind: fd.kind, name: _label(fd), subcat: null, key: kk, win: fd.window }); continue; }
                     // special OR structural (swim/…) → only if a configured duration == L AND cap remains.
@@ -433,7 +459,7 @@
                 if (!kCands.length) continue;
                 // movable tiles (generic, not pinned, not already relocated), by time
                 var mov = [];
-                for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && !_isMoved(tt)) mov.push(tt); }
+                for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && !_isMoved(tt) && !(tt._ref && tt._ref.share)) mov.push(tt); }
                 mov.sort(function (a, b) { return a.startMin - b.startMin; });
 
                 var done = false;
@@ -499,7 +525,7 @@
             if (!b) continue;
             var res = planBunkLayout({
                 bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
-                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate
+                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit
             });
             layoutByBunk[bunk] = res;
             totals.bunks++;

@@ -459,3 +459,109 @@ describe('PeriodLayout.planAllBunksLayout', () => {
         assert.strictEqual(out.stats.unmetSpecialFloors, 1, '40-min food cannot fit a 20-min window → unmet');
     });
 });
+
+// ── LAYER SHARING watched AT PLACEMENT (the engine's _glFacilityFreeAt mirror) ──
+// A re-floated layer that lives at a concrete facility (a "Main Activity" in an
+// Auditorium, an elective in a room, …) carries a `_ref.share` descriptor with the
+// facility's cross-grade capacity + allowedPairs. The caller threads resourceGate +
+// resourceCommit so the LAYOUT keeps that facility within its limits as each tile is
+// laid — across bunks — even for a facility no grade has PINNED yet (so a live
+// bunkTimelines scan alone would see nothing). This enforcer is a faithful copy of
+// the engine's _glFacilityFreeAt / _glResourceCommit semantics.
+function makeShareEnforcer() {
+    const resv = {};                                       // facKey -> [{grade, bunk, s, e}]
+    const key = f => String(f == null ? '' : f).toLowerCase().trim();
+    const pairAllowed = (g, others, pairs) => {
+        for (const eg of others) { if (String(eg) === String(g)) continue; if (pairs[[String(g), String(eg)].sort().join('|')] !== true) return false; }
+        return true;
+    };
+    const gate = (kind, grade, bunk, s, e, ref) => {
+        if (!ref || !ref.share || !ref.share.facility) return true;
+        const sh = ref.share, k = key(sh.facility);
+        const type = String(sh.shareType || 'not_sharable').toLowerCase();
+        const cap = type === 'not_sharable' ? 1 : (parseInt(sh.capacity) > 0 ? parseInt(sh.capacity) : 2);
+        const seen = {}; let cnt = 0; const og = {};
+        (resv[k] || []).forEach(r => {
+            if (String(r.bunk) === String(bunk) || seen[r.bunk]) return;
+            if (r.s < e && r.e > s) { seen[r.bunk] = 1; cnt++; if (r.grade && r.grade !== grade) og[r.grade] = true; }
+        });
+        if (cnt + 1 > cap) return false;                   // capacity counts THIS bunk too
+        const ogk = Object.keys(og);
+        if (!ogk.length) return true;
+        if (type === 'all') return true;
+        if (type === 'not_sharable' || type === 'same_division') return false;
+        if (type === 'custom') { const ad = sh.allowedDivisions || []; return ogk.concat([grade]).every(g => ad.indexOf(g) !== -1); }
+        return pairAllowed(grade, ogk, sh.allowedPairs || {});   // cross_division
+    };
+    const commit = (kind, grade, bunk, s, e, ref) => {
+        if (!ref || !ref.share || !ref.share.facility) return;
+        const k = key(ref.share.facility);
+        (resv[k] || (resv[k] = [])).push({ grade, bunk, s, e });
+    };
+    return { gate, commit, resv };
+}
+const mainCount = (out, bunk) => out.layoutByBunk[bunk].tiles.filter(t => t.kind === 'main' && t.generic).length;
+
+describe('PeriodLayout — LAYER SHARING watched at placement', () => {
+    const sharedBunk = (grade, share) => ({
+        grade, periods: [P(650, 690, 'P1')], pinned: [],
+        floating: [
+            { kind: 'main', name: 'Main Activity', durations: [40], window: [650, 690], qty: 1, cap: 1, score: 0, share },
+            { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+        ]
+    });
+
+    it('not_sharable (cap 1): only ONE bunk gets the shared facility at a time; the other fills with sport', () => {
+        const { gate, commit, resv } = makeShareEnforcer();
+        const share = { facility: 'Auditorium', shareType: 'not_sharable', capacity: 1, allowedPairs: {} };
+        const out = Layout.planAllBunksLayout({
+            order: ['B1', 'B2'],
+            perBunk: { B1: sharedBunk('G1', share), B2: sharedBunk('G2', share) },
+            resourceGate: gate, resourceCommit: commit, packer: PeriodPacker
+        });
+        assert.strictEqual(mainCount(out, 'B1'), 1, 'first bunk gets the exclusive layer');
+        assert.strictEqual(mainCount(out, 'B2'), 0, 'second bunk is sharing-blocked at the SAME time, not double-booked');
+        assert.strictEqual(out.layoutByBunk.B2.stats.residualMin, 0, 'second bunk window still tiled wall-to-wall (sport)');
+        assert.strictEqual(out.stats.unmetFloors, 1, 'the blocked layer floor is honestly left unmet, not oversubscribed');
+        assert.strictEqual((resv['auditorium'] || []).length, 1, 'exactly one placement reserved on the facility');
+    });
+
+    it('cross_division (cap 2): two bunks share, the THIRD is blocked over capacity', () => {
+        const { gate, commit } = makeShareEnforcer();
+        const share = { facility: 'Auditorium', shareType: 'cross_division', capacity: 2, allowedPairs: { 'G1|G2': true, 'G1|G3': true, 'G2|G3': true } };
+        const out = Layout.planAllBunksLayout({
+            order: ['B1', 'B2', 'B3'],
+            perBunk: { B1: sharedBunk('G1', share), B2: sharedBunk('G2', share), B3: sharedBunk('G3', share) },
+            resourceGate: gate, resourceCommit: commit, packer: PeriodPacker
+        });
+        const total = mainCount(out, 'B1') + mainCount(out, 'B2') + mainCount(out, 'B3');
+        assert.strictEqual(total, 2, 'capacity 2 honored — exactly two bunks share the facility concurrently');
+        assert.strictEqual(out.stats.unmetFloors, 1, 'the over-capacity third is deferred, not double-booked');
+    });
+
+    it('cross_division with allowedPairs: a disallowed grade pair is blocked even with capacity to spare', () => {
+        const { gate, commit } = makeShareEnforcer();
+        // capacity is generous (99) but NO grade pair is whitelisted → the second grade
+        // cannot join the first at this facility, so the sharing gate must block it.
+        const share = { facility: 'Auditorium', shareType: 'cross_division', capacity: 99, allowedPairs: {} };
+        const out = Layout.planAllBunksLayout({
+            order: ['B1', 'B2'],
+            perBunk: { B1: sharedBunk('G1', share), B2: sharedBunk('G2', share) },
+            resourceGate: gate, resourceCommit: commit, packer: PeriodPacker
+        });
+        assert.strictEqual(mainCount(out, 'B1'), 1, 'first grade takes the facility');
+        assert.strictEqual(mainCount(out, 'B2'), 0, 'second grade blocked by allowedPairs, not capacity');
+    });
+
+    it('same grade may share the facility regardless of cap-1 type (not a cross-division share)', () => {
+        const { gate, commit } = makeShareEnforcer();
+        // Two bunks of the SAME grade, cap 2 same_division → both may use the room together.
+        const share = { facility: 'Auditorium', shareType: 'same_division', capacity: 2, allowedPairs: {} };
+        const out = Layout.planAllBunksLayout({
+            order: ['B1', 'B2'],
+            perBunk: { B1: sharedBunk('G1', share), B2: sharedBunk('G1', share) },
+            resourceGate: gate, resourceCommit: commit, packer: PeriodPacker
+        });
+        assert.strictEqual(mainCount(out, 'B1') + mainCount(out, 'B2'), 2, 'same-grade bunks share within capacity');
+    });
+});

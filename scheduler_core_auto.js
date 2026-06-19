@@ -17514,6 +17514,25 @@
                                     if (!(_qty > 0)) _qty = 1;
                                     var _dem = { kind: lk, subcat: null, name: _glWallLabel(L), window: [_ws, _we], qty: _qty, cap: _qty, score: 0 };
                                     if (_dMin === _dMax) _dem.durations = [_dMin]; else { _dem.dMin = _dMin; _dem.dMax = _dMax; }
+                                    // ── LAYER SHARING (watched AT PLACEMENT) ──────────────────
+                                    // Resolve this layer's facility + sharing config (capacity +
+                                    // allowedPairs, from the layer override → per-activity → field
+                                    // chain) and attach it as `share`. PeriodLayout's resourceGate
+                                    // then keeps the facility within capacity / allowedPairs across
+                                    // grades as the tile is laid (not as a post-pass). Swim is the
+                                    // one exception — its pool concurrency is the engine's own
+                                    // poolSwimPairFreeAt (resolves the Swim activity's config) — so
+                                    // leave swim's `share` unset and let _glResourceGate route it.
+                                    if (lk !== 'swim') {
+                                        try {
+                                            var _facName = L.customField || L.field || null;
+                                            if (_facName && typeof getCustomActivitySharingInfo === 'function') {
+                                                var _actName = L.activity || L.event || L.name || _glWallLabel(L);
+                                                var _si = getCustomActivitySharingInfo(_actName, _facName, L.customSharing, globalSettings);
+                                                if (_si) _dem.share = { facility: _facName, shareType: _si.shareType, capacity: _si.capacity, allowedPairs: _si.allowedPairs || {}, allowedDivisions: _si.allowedDivisions || [] };
+                                            }
+                                        } catch (_glShErr) {}
+                                    }
                                     floating.push(_dem);
                                     if (lk === 'swim') _glInjectedSwim++; else _glInjectedLayer++;
                                 });
@@ -17546,24 +17565,86 @@
                         });
                     });
 
-                    // Cross-grade SHARING gate: a generic tile of a shared kind must respect
-                    // the facility's cross-division capacity + allowedPairs. Only kinds with a
-                    // concrete shared facility at layout time are checkable — swim→pool (via the
-                    // engine's own poolSwimPairFreeAt, which counts bunks vs pool capacity and
-                    // honors allowedPairs against the LIVE pinned swims). Sport/Special generic
-                    // tiles have no concrete field yet → unrestricted here (enforced at fill).
-                    var _glResourceGate = function (kind, grade, bunk, sMin, eMin) {
+                    // ── Cross-grade SHARING gate (watched AT PLACEMENT) ──────────────
+                    // A generic tile tied to a real shared layer must respect that
+                    // facility's cross-division capacity + allowedPairs. Two checkable
+                    // cases at layout time:
+                    //   • swim → pool: the engine's own poolSwimPairFreeAt (resolves the
+                    //     Swim activity's config, counts bunks vs pool capacity + pairs
+                    //     against the LIVE pinned swims).
+                    //   • any other shared layer (re-floated Main Activity / custom at a
+                    //     specific facility): _glFacilityFreeAt below, using the layer's
+                    //     resolved `share` descriptor, against BOTH the live pinned walls
+                    //     of that facility AND an in-run reservation of the generic tiles
+                    //     this same layout has already placed for other bunks (so e.g. an
+                    //     "Exclusive" cap-1 Main Activity that NO grade has pinned yet still
+                    //     can't be laid on top of itself across bunks).
+                    // Sport/Special placeholder tiles have no concrete field yet → not
+                    // checkable here (their sharing is enforced when fill assigns a field).
+                    var _glFacKey = function (f) { return String(f == null ? '' : f).toLowerCase().trim(); };
+                    var _glResv = {};   // facilityKey -> [{ grade, bunk, s, e }]  (this-run reservations)
+                    var _glFacilityFreeAt = function (facility, grade, sMin, eMin, ignoreBunk, share) {
+                        try {
+                            if (!facility || !share) return true;
+                            var key = _glFacKey(facility);
+                            var type = String(share.shareType || 'not_sharable').toLowerCase();
+                            var cap = (type === 'not_sharable') ? 1 : (parseInt(share.capacity) > 0 ? parseInt(share.capacity) : 2);
+                            var pairs = share.allowedPairs || {};
+                            var seen = {}, bunkCount = 0, otherGrades = {};
+                            // (a) live pinned walls in bunkTimelines occupying this facility
+                            var _bt = bunkTimelines || {};
+                            Object.keys(_bt).forEach(function (bk) {
+                                if (String(bk) === String(ignoreBunk)) return;
+                                var tl = _bt[bk] || [];
+                                for (var i = 0; i < tl.length; i++) {
+                                    var b = tl[i];
+                                    if (!b || b.continuation || b.startMin == null || b.endMin == null) continue;
+                                    var bf = b.field || b.customField || b._specialLocation || (b.layer && (b.layer.customField || b.layer.field)) || null;
+                                    if (_glFacKey(bf) !== key) continue;
+                                    if (b.startMin < eMin && b.endMin > sMin) {
+                                        if (!seen[String(bk)]) { seen[String(bk)] = 1; bunkCount++; var g = _gradeOfBunkForPool(bk); if (g && g !== grade) otherGrades[g] = true; }
+                                        break;
+                                    }
+                                }
+                            });
+                            // (b) this-run reservations of generic tiles already laid for other bunks
+                            var rv = _glResv[key] || [];
+                            for (var j = 0; j < rv.length; j++) {
+                                var e = rv[j];
+                                if (String(e.bunk) === String(ignoreBunk) || seen[String(e.bunk)]) continue;
+                                if (e.s < eMin && e.e > sMin) { seen[String(e.bunk)] = 1; bunkCount++; if (e.grade && e.grade !== grade) otherGrades[e.grade] = true; }
+                            }
+                            if (bunkCount + 1 > cap) return false;             // capacity counts THIS bunk too
+                            var og = Object.keys(otherGrades);
+                            if (og.length === 0) return true;                  // only same-grade (or empty) → fine
+                            if (type === 'all') return true;                   // capacity-only (already checked)
+                            if (type === 'not_sharable' || type === 'same_division') return false;
+                            if (type === 'custom') { var ad = share.allowedDivisions || []; return og.concat([grade]).every(function (g) { return ad.indexOf(g) !== -1; }); }
+                            return isCrossDivAllowed(grade, og, pairs);        // cross_division
+                        } catch (_e) { return true; }                          // never hard-block on error
+                    };
+                    var _glResourceGate = function (kind, grade, bunk, sMin, eMin, ref) {
                         try {
                             if (String(kind || '').toLowerCase() === 'swim' && typeof poolSwimPairFreeAt === 'function') {
                                 return poolSwimPairFreeAt(grade, sMin, eMin, bunk);
                             }
+                            if (ref && ref.share && ref.share.facility) {
+                                return _glFacilityFreeAt(ref.share.facility, grade, sMin, eMin, bunk, ref.share);
+                            }
                         } catch (_e) {}
                         return true;
+                    };
+                    var _glResourceCommit = function (kind, grade, bunk, sMin, eMin, ref) {
+                        try {
+                            if (!ref || !ref.share || !ref.share.facility) return;
+                            var key = _glFacKey(ref.share.facility);
+                            (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
+                        } catch (_e) {}
                     };
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
 
                     // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
                     //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real
@@ -17647,8 +17728,13 @@
                         }
                     } catch (_glDiagErr) {}
 
+                    // SHARING-WATCH summary: how many shared-layer placements were reserved
+                    // (facility → cross-grade capacity/pairs honored at placement time).
+                    var _glShareFacs = 0, _glShareResv = 0;
+                    try { Object.keys(_glResv).forEach(function (k) { _glShareFacs++; _glShareResv += (_glResv[k] || []).length; }); } catch (_e) {}
+
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-                    log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated');
+                    log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
                     return true; // ← early return: skip ALL activity-assignment phases
                 }
