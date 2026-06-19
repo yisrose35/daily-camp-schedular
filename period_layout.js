@@ -202,19 +202,20 @@
                         var used = granted[s._key] || 0;
                         if (used < remView[s._key]) granted[s._key] = used + 1; else fb = 0;
                     }
-                    total += (s.score || 0) + fb;
-                    // Prefer FEWER, LARGER tiles ("less activities the better"): reward
-                    // duration² so a single 40 beats 20+20, a special is taken at its longest
-                    // permitted length. Weight is far below a special floor (1000), so it only
-                    // breaks ties AMONG equal-floor tilings — never starves a required floor.
-                    // EXCEPTION: the abstract "activity" placeholder (sports-free camps with
-                    // no sport layer) must NOT earn this reward — otherwise one giant
-                    // placeholder outscores several REAL specials and the day fills with
-                    // "Activity" instead of the camp's actual specials (the live Leebi
-                    // complaint). Penalize its minutes so real specials always win when they
-                    // can tile the window; "activity" then survives only as the true last
-                    // resort (a remainder no available special duration can cover).
-                    if (s.kind === 'activity') total -= 0.01 * s.durationMin;
+                    total += fb;
+                    // REAL layer content (special / structural) vs the generic FILLERS
+                    // (sport + activity placeholders). The size reward (duration², "prefer
+                    // FEWER, LARGER tiles") applies ONLY to real content — a special is taken
+                    // at its longest permitted length and a few large specials beat many tiny
+                    // ones. The fillers get NO size reward and a per-minute PENALTY, so they
+                    // are a LAST RESORT: the packer fills with real specials and only drops in
+                    // a sport/activity filler for time no special can cover. Without this, a
+                    // big filler's duration² reward let it swallow a window the user wanted
+                    // filled with specials (live: a 70-min "Sport" / a giant "Activity" block).
+                    // The flat per-tile content score was also removed — it rewarded QUANTITY,
+                    // so many tiny specials beat fewer large ones (live: "food×5" fragmenting
+                    // + starving other floors).
+                    if (s.kind === 'sport' || s.kind === 'activity') total -= 0.01 * s.durationMin;
                     else total += 0.002 * s.durationMin * s.durationMin;
                 }
                 total -= 0.01 * packing.segments.length; // mild extra nudge toward fewer tiles

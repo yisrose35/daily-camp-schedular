@@ -120,6 +120,13 @@
             step: granularityMin,
             validDurations
         });
+        // FEWEST-TILES-FIRST: enumerate short compositions before long ones so the
+        // bounded `maxPackings` assignment budget is spent on few-tile packings (the
+        // ones a "prefer fewer, larger tiles" scorer wants) instead of being exhausted
+        // by the combinatorial blow-up of many-tiny-segment compositions (e.g. [10×9])
+        // — which previously starved good packings of enumeration and let a fragmented
+        // tiling win by default. Length-ascending; ties keep their original order.
+        compositions.sort((a, b) => a.length - b.length);
 
         const packings = [];
         for (const comp of compositions) {

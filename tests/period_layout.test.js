@@ -64,23 +64,26 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.deepStrictEqual(subs, ['food', 'theme'], 'both specials placed — layout never gates on capacity');
     });
 
-    it('meets a special floor exactly ONCE, then fills later periods with sport filler', () => {
+    it('a capped special fills up to its cap, then the sport filler covers the rest', () => {
+        // food cap 1 → after the one food, the second period has no special left, so the
+        // sport FILLER legitimately covers it. (Specials are preferred over the sport
+        // filler; sport is the last resort for time no special can fill.)
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G',
             periods: [P(855, 895, 'P6'), P(905, 945, 'P7')], pinned: [],
             floating: [
-                { kind: 'special', subcat: 'food', durations: [10, 20], window: [650, 945], qty: 1 },
+                { kind: 'special', subcat: 'food', durations: [10, 20], window: [650, 945], qty: 1, cap: 1 },
                 { kind: 'sport', durations: [30, 40], window: [650, 945] }
             ],
             packer: PeriodPacker
         });
         assert.strictEqual(res.stats.residualMin, 0, 'both periods wall-to-wall');
         const foods = tilesOf(res).filter(t => t.subcat === 'food');
-        assert.strictEqual(foods.length, 1, 'food floor met exactly once, not twice');
+        assert.strictEqual(foods.length, 1, 'food placed exactly its cap (1)');
         assert.strictEqual(res.remaining['special:food'], 0, 'food quota consumed');
-        // the period without food is all sport
+        // the period with no special left is filled by the sport filler
         const p7sports = res.tiles.filter(t => t.generic && t.startMin >= 905 && t.kind === 'sport');
-        assert.ok(p7sports.length >= 1, 'second period filled by sport filler');
+        assert.ok(p7sports.length >= 1, 'second period (no special left) filled by the sport filler');
     });
 
     it('tiles AROUND a pinned wall and never overlaps it', () => {
@@ -124,36 +127,23 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.ok(shiur[0].startMin >= 650 && shiur[0].endMin <= 690, 'shiur stayed in its window (P1)');
     });
 
-    it('GATE: a sport-spacing rule replaces a 2nd adjacent sport with a special (still wall-to-wall)', () => {
-        // sport-vs-sport <40min gap = blocked (mirrors rules.js isCandidateAllowed)
-        const sportGate = (block, template) => {
-            if (block.type !== 'sport') return true;
-            for (const w of template) {
-                if (w.type !== 'sport') continue;
-                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
-                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
-                if (gapBefore >= 0 && gapBefore < 40) return false;
-                if (gapAfter >= 0 && gapAfter < 40) return false;
-            }
-            return true;
-        };
-        const base = {
+    it('specials are PREFERRED over the sport filler (the day fills with specials, not sports)', () => {
+        // The generic-layout "fill with specials" rule: where a real special and the sport
+        // FILLER both fit, the special wins. The sport filler is a last resort for time no
+        // special can cover. (Replaces the old sport-co-equal behavior, where a sport and a
+        // special competed evenly — the user's repeated ask is "fill with specials".)
+        const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G',
             periods: [P(650, 690, 'P1'), P(690, 730, 'P2')], pinned: [],
             floating: [
                 { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
-                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 0, cap: Infinity }
+                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: 2, score: 1 }
             ],
             packer: PeriodPacker
-        };
-        // baseline (no gate): both adjacent periods tile with sport
-        const noGate = Layout.planBunkLayout(base);
-        assert.strictEqual(tilesOf(noGate).filter(t => t.kind === 'sport').length, 2, 'baseline: two back-to-back sports');
-        // gated: the 2nd sport is spacing-blocked → window fills with a special instead
-        const gated = Layout.planBunkLayout(Object.assign({}, base, { gate: sportGate }));
-        assert.strictEqual(gated.stats.residualMin, 0, 'still wall-to-wall');
-        assert.strictEqual(tilesOf(gated).filter(t => t.kind === 'sport').length, 1, 'only one sport survives the gate');
-        assert.strictEqual(tilesOf(gated).filter(t => t.subcat === 'food').length, 1, 'spacing-blocked window filled by a special');
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'wall-to-wall');
+        assert.strictEqual(tilesOf(res).filter(t => t.subcat === 'food').length, 2, 'both windows filled with specials (preferred over the sport filler)');
+        assert.strictEqual(tilesOf(res).filter(t => t.kind === 'sport').length, 0, 'no sport filler used while a special can fill');
     });
 
     it('GATE + SWAP: a window the gate emptied is repaired by moving a placed special in and relocating the sport to a legal slot', () => {
@@ -255,43 +245,24 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         }
     });
 
-    it('ELASTIC: relocates a sport into a gated empty window and back-fills its slot with a stretched special', () => {
-        // Duration-aware repair (the user's move): a layer slot can be any duration in
-        // its range. P1 = food20 + sport20 (sport at the END, 670-690). P2 is sport-
-        // blocked everywhere (≤30min from P1's sport) and a lone 20-min food can't tile
-        // the 40-min window → P2 empty. Elastic-fill slides the Sport into P2 (stretched
-        // to the full 40) and re-packs the 20-min slot it vacated with a 2nd food —
-        // staying within food's cap of 2. No sport is dropped; nothing exceeds its cap.
-        const sportGate = (block, template) => {
-            if (block.type !== 'sport') return true;
-            for (const w of template) {
-                if (w.type !== 'sport') continue;
-                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
-                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
-                if (gapBefore >= 0 && gapBefore < 40) return false;
-                if (gapAfter >= 0 && gapAfter < 40) return false;
-            }
-            return true;
-        };
+    it('fills the special capacity first, then the remaining window with the sport filler — wall-to-wall', () => {
+        // food cap 2 → P1 fills with TWO food specials (categories repeat, specials
+        // preferred); P2 (food exhausted) fills with the sport filler. Specials first,
+        // sport last, day fully wall-to-wall, never over the cap.
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G',
             periods: [P(650, 690, 'P1'), P(700, 740, 'P2')], pinned: [],
             floating: [
-                { kind: 'special', subcat: 'food', durations: [20], window: [650, 945], qty: 1, cap: 2 },
+                { kind: 'special', subcat: 'food', durations: [20], window: [650, 945], qty: 1, cap: 2, score: 1 },
                 { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
             ],
-            gate: sportGate, packer: PeriodPacker
+            packer: PeriodPacker
         });
-        assert.strictEqual(res.stats.residualMin, 0, 'elastic-fill made it fully wall-to-wall');
-        const sports = tilesOf(res).filter(t => t.kind === 'sport');
-        assert.strictEqual(sports.length, 1, 'the one sport is relocated, not dropped');
-        assert.strictEqual(sports[0].durationMin, 40, 'the sport stretched to fill the whole window');
-        assert.deepStrictEqual([sports[0].startMin, sports[0].endMin], [700, 740], 'sport slid into the (formerly empty) P2');
+        assert.strictEqual(res.stats.residualMin, 0, 'fully wall-to-wall');
         const foods = tilesOf(res).filter(t => t.subcat === 'food');
-        assert.strictEqual(foods.length, 2, 'back-filled with a 2nd food — exactly its cap, never exceeded');
+        assert.strictEqual(foods.length, 2, 'both food specials placed (exactly cap 2), preferred over the sport filler');
         assert.ok(foods.every(f => f.durationMin === 20), 'each food respects its 20-min duration');
-        const p2 = res.periodPlans.find(pp => pp.period.startMin === 700).windows[0];
-        assert.strictEqual(p2.reason, 'elastic-fill', 'P2 was repaired by the elastic pass');
+        assert.strictEqual(tilesOf(res).filter(t => t.kind === 'sport').length, 1, 'the food-exhausted window fills with the sport filler');
     });
 
     it('GATE + cap: a special used as filler never exceeds its subcategory cap', () => {
@@ -716,6 +687,30 @@ describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles
         assert.strictEqual(specials.length, 2, 'capped at the 2 distinct available activities');
         assert.strictEqual(res.stats.residualMin, 80, 'the remaining 80 min is an honest gap, not an over-cap repeat');
         assert.ok(res.gaps.some(g => g.len === 80), 'the open gap is reported for the diagnostic');
+    });
+
+    it('a large floor-heavy window fills with MULTIPLE specials, not a giant sport filler (Majors case)', () => {
+        // The live Majors case: shiur/food/theme floors + abundant uncategorized in a
+        // 110-min window. It must fill with REAL specials (incl. a repeated uncategorized)
+        // and a sport must NOT swallow the remainder ("that sport shouldn't be there"),
+        // and the 20-min shiur must keep its full size (not be squished). Guards the
+        // scoring (fillers get no size reward) + packer (fewest-tiles-first enumeration).
+        const res = Layout.planBunkLayout({
+            bunk: 'M', grade: 'Majors',
+            periods: [P(0, 110, 'P')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'shiur', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'special', subcat: 'food', durations: [10, 20], window: [0, 945], qty: 1, cap: 6, score: 1 },
+                { kind: 'special', subcat: 'theme', durations: [10, 20], window: [0, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'special', subcat: 'uncategorized', durations: [20, 40], window: [0, 945], qty: 1, cap: 11, score: 1 },
+                { kind: 'sport', dMin: 10, dMax: 110, window: [0, 945], score: 1 }
+            ],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'wall-to-wall');
+        assert.strictEqual(tilesOf(res).filter(t => t.kind === 'sport').length, 0, 'no sport swallowed the window — specials fill it');
+        const shiur = tilesOf(res).find(t => t.subcat === 'shiur');
+        assert.ok(shiur && shiur.durationMin === 20, 'the 20-min shiur kept its full size, not squished');
     });
 
     it('FLOOR-FIRST: a still-owed narrow-window floor is placed, never starved by the greedy filler', () => {
