@@ -685,6 +685,42 @@
             }
             if (!_gcProgress) break;
         }
+
+        // ── ABSORB "activity" PLACEHOLDER SLIVERS INTO AN ADJACENT SPECIAL ──────────
+        // Sports-free camps have no sport filler, so a window whose length the specials'
+        // FIXED durations can't tile exactly (e.g. a 30-min gap when the only specials are
+        // 20- and 40-min) gets a small "activity" placeholder for the remainder. The human
+        // fix the user described is "expand a special to cover it" — do exactly that: grow a
+        // touching generic SPECIAL tile over the activity sliver and drop the placeholder,
+        // so the day reads as real specials, never "Activity". Generic special tiles carry
+        // no fixed render duration (fill assigns the concrete activity), so a slightly
+        // longer special slot is fine. Only merges into a special whose demand window still
+        // covers the extended span and whose grown tile passes the gate; an activity with no
+        // adjacent special is left as-is (genuinely nothing to grow).
+        for (var _ai = tiles.length - 1; _ai >= 0; _ai--) {
+            var _act = tiles[_ai];
+            if (!_act || !_act.generic || _act.kind !== 'activity') continue;
+            var _bestSp = null;
+            for (var _si = 0; _si < tiles.length; _si++) {
+                var _sp = tiles[_si];
+                if (_sp === _act || !_sp.generic || _sp.kind !== 'special') continue;
+                if (_sp.endMin !== _act.startMin && _sp.startMin !== _act.endMin) continue; // must touch
+                var _ns = Math.min(_sp.startMin, _act.startMin), _ne = Math.max(_sp.endMin, _act.endMin);
+                var _sw = _sp._ref && _sp._ref.window;
+                if (_sw && (_sw[0] > _ns || _sw[1] < _ne)) continue;                         // would leave its window
+                var _oth = []; for (var _oi = 0; _oi < tiles.length; _oi++) if (tiles[_oi] !== _sp && tiles[_oi] !== _act) _oth.push(tiles[_oi]);
+                if (!_gatePass([{ kind: 'special', subcat: _sp.subcat, name: _sp.name, _ref: _sp._ref, startMin: _ns, endMin: _ne }], _oth)) continue;
+                if (!_bestSp || _sp.durationMin > _bestSp.durationMin) _bestSp = _sp;           // grow the largest neighbor
+            }
+            if (_bestSp) {
+                _bestSp.startMin = Math.min(_bestSp.startMin, _act.startMin);
+                _bestSp.endMin = Math.max(_bestSp.endMin, _act.endMin);
+                _bestSp.durationMin = _bestSp.endMin - _bestSp.startMin;
+                tiles.splice(_ai, 1);
+                _gcGrew++;
+            }
+        }
+
         stats.gapCloseTilesPlaced = _gcTiles;
         stats.gapCloseGrew = _gcGrew;
 

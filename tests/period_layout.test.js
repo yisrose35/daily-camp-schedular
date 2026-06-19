@@ -681,6 +681,28 @@ describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles
         assert.strictEqual(activity.length, 0, 'the abstract "activity" placeholder is NOT used when real specials can fill');
     });
 
+    it('absorbs an "activity" sliver into an adjacent special (expand-the-special), leaving zero placeholders', () => {
+        // 30-min window, specials only 20-min (cap 2) → the exact tiler can only do
+        // [special20 + activity10] (no 30-min special exists). The absorb pass grows the
+        // touching special over the 10-min "activity" sliver and drops it, so the window
+        // is ONE 30-min "Special: Uncategorized" (fill assigns a real activity that simply
+        // runs the extra minutes) — the live "5th grade still got activity" case.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 30, 'P')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'regular', durations: [20], window: [0, 945], qty: 1, cap: 2, score: 1 },
+                { kind: 'activity', dMin: 10, dMax: 30, window: [0, 945], score: 0 }
+            ],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'window fills wall-to-wall');
+        assert.strictEqual(tilesOf(res).filter(t => t.kind === 'activity').length, 0, 'no "activity" placeholder remains');
+        const specials = tilesOf(res).filter(t => t.kind === 'special');
+        assert.strictEqual(specials.length, 1, 'a single special covers the whole window');
+        assert.strictEqual(specials[0].endMin - specials[0].startMin, 30, 'the special was expanded to swallow the 10-min sliver');
+    });
+
     it('never exceeds a subcat cap (distinct availability) — honest gap rather than a phantom repeat', () => {
         // 160-min window, a single 40-min subcat capped at 2 (only 2 distinct activities).
         // GAP-CLOSE places exactly 2, then leaves the rest an honest gap (no over-placement).
