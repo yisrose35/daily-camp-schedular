@@ -17720,7 +17720,7 @@
                     // so the duration↔activity mismatch is visible rather than silently wrong.
                     // NOT yet: cross-bunk facility sharing/capacity, or re-flowing a tile whose exact
                     // length no free activity matches (steps 3-4). Fail-soft + kill: window.__fillSpecials=false.
-                    var _glFill = { tiles: 0, filled: 0, miss: 0, missDetail: [] };
+                    var _glFill = { tiles: 0, filled: 0, miss: 0, capSkips: 0, missDetail: [] };
                     var _doFillSpecials = (typeof window === 'undefined') ? true : (window.__fillSpecials !== false);
                     if (_doFillSpecials) {
                         try {
@@ -17733,6 +17733,62 @@
                                 arr = arr.map(Number).filter(function (x) { return x > 0; });
                                 _glDurCache[name] = arr;
                                 return arr;
+                            };
+                            // ── STEP 4: CROSS-BUNK CAPACITY ────────────────────────────────────
+                            // Resolve each special's SHARING the same way auto_validator.
+                            // buildFieldSharingMap does — from the special's own `sharableWith`
+                            // (NOT getSpecialCapacity, which is a PLAYER count) — so the fill
+                            // prevents EXACTLY what the validator flags. Resource key =
+                            // (location || name). not_sharable ⇒ cap 1 enforced GLOBALLY (any grade);
+                            // every other type ⇒ per-grade cap (the validator's CHECK B groups by
+                            // grade). As specials are assigned bunk-by-bunk, a candidate that would
+                            // exceed its capacity at an overlapping time is skipped and the next
+                            // rotation-best is taken instead — which is ALSO what spreads a grade
+                            // across different specials (the variety win).
+                            var _glSpecShare = {};
+                            try {
+                                var _specSrc = (globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || [];
+                                _specSrc.forEach(function (s) {
+                                    if (!s || !s.name) return;
+                                    var sw = s.sharableWith || {};
+                                    var type = sw.type || 'not_sharable';
+                                    var divs = Array.isArray(sw.divisions) ? sw.divisions : [];
+                                    if (type === 'custom' && divs.length === 0) type = 'same_division';
+                                    if (type === 'all') type = 'same_division';
+                                    var cap = parseInt(sw.capacity) || (type === 'not_sharable' ? 1 : 2);
+                                    _glSpecShare[String(s.name).toLowerCase().trim()] = { key: String(s.location || s.name).toLowerCase().trim(), type: type, cap: cap };
+                                });
+                            } catch (_glShErr) {}
+                            var _glUsage = {};   // resourceKey -> [{ grade, s, e }] assigned across ALL bunks this run
+                            var _glShareOf = function (cand) {
+                                var sh = _glSpecShare[String(cand.name).toLowerCase().trim()];
+                                return sh || { key: String(cand.location || cand.name).toLowerCase().trim(), type: 'not_sharable', cap: 1 };
+                            };
+                            // Peak overlap of a set of clipped intervals (used to size concurrency).
+                            var _glMaxCover = function (ivals) {
+                                var ev = [];
+                                ivals.forEach(function (iv) { ev.push([iv[0], 1]); ev.push([iv[1], -1]); });
+                                ev.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; }); // end(-1) before start(+1) at a tie (touching ≠ overlap)
+                                var cur = 0, mx = 0;
+                                ev.forEach(function (x) { cur += x[1]; if (cur > mx) mx = cur; });
+                                return mx;
+                            };
+                            // True iff assigning `cand` to `grade` over [s,e] keeps the resource within cap.
+                            var _glCapFits = function (cand, grade, s, e) {
+                                var sh = _glShareOf(cand);
+                                var list = _glUsage[sh.key] || [];
+                                var counted = [];
+                                for (var i = 0; i < list.length; i++) {
+                                    var u = list[i];
+                                    if (!(u.s < e && u.e > s)) continue;                          // must overlap the new tile
+                                    if (sh.type === 'same_division' && u.grade !== grade) continue; // per-grade cap; not_sharable/cross_division count all
+                                    counted.push([Math.max(u.s, s), Math.min(u.e, e)]);            // clip to the new tile's span
+                                }
+                                return (1 + _glMaxCover(counted)) <= sh.cap;
+                            };
+                            var _glRecordUse = function (cand, grade, s, e) {
+                                var sh = _glShareOf(cand);
+                                (_glUsage[sh.key] = _glUsage[sh.key] || []).push({ grade: grade, s: s, e: e });
                             };
                             _glOrder.forEach(function (bunk) {
                                 var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
@@ -17756,12 +17812,17 @@
                                         var durs = _glSpecialDurs(c.name);
                                         var fits = durs.length ? (durs.indexOf(dur) >= 0) : true; // no configured durs ⇒ flex ⇒ fits
                                         if (!fits) continue;
+                                        // Step 4: skip if assigning this special would exceed its shared
+                                        // capacity at an overlapping time (per-grade, or global for
+                                        // not_sharable) → fall to the next rotation-best (= variety).
+                                        if (!_glCapFits(c, grade, t.startMin, t.endMin)) { _glFill.capSkips++; continue; }
                                         pick = c; break;
                                     }
                                     if (pick) {
                                         t._concrete = pick.name;
                                         t._fillLoc = pick.location || null;
                                         used[String(pick.name).toLowerCase()] = 1;
+                                        _glRecordUse(pick, grade, t.startMin, t.endMin);
                                         _glFill.filled++;
                                     } else {
                                         _glFill.miss++;
@@ -17876,6 +17937,7 @@
                     try {
                         if (_doFillSpecials) {
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
+                                + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
                                 + (_glFill.miss ? (' — ' + _glFill.miss + ' left generic (no duration-matching activity free in rotation): ' + _glFill.missDetail.slice(0, 12).join(' | ') + (_glFill.miss > 12 ? ' …' : '')) : ''));
                         }
                     } catch (_glFillLogErr) {}
