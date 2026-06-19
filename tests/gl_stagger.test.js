@@ -115,7 +115,7 @@ test('absorb: empty special → Sport; filled special + walls untouched', () => 
     ];
     var bunks = [{ tiles: tiles }];
     var r = GLStagger.absorbUnfilledToSport({ bunks: bunks });
-    assert.strictEqual(r.converted, 1);
+    assert.strictEqual(r.toSport, 1);
     var t0 = tiles.find(t => t.startMin === 0);
     assert.strictEqual(t0.kind, 'sport'); assert.strictEqual(t0.name, 'Sport'); assert.ok(!t0.subcat);
     assert.ok(tiles.some(t => t._concrete === 'Ice cream' && t.kind === 'special')); // filled special intact
@@ -166,6 +166,44 @@ test('absorb+merge: a break (non-contiguous gap) is not merged across', () => {
     GLStagger.absorbUnfilledToSport({ bunks: bunks, maxMergeMin: 40 });
     assert.strictEqual(tiles.length, 2);                                  // not contiguous → stays two Sports
     assert.ok(tiles.every(t => t.kind === 'sport'));
+});
+
+test('absorb respects sport spacing: gate blocks Sport within 40min of a Sport → leftover stays Special', () => {
+    // a 120-min open run; rule = no Sport within 40 min of another Sport.
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 0, e: 40 }),
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 40, e: 80 }),
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 80, e: 120 }),
+    ];
+    var bunks = [{ tiles: tiles }];
+    // gate: reject a candidate sport if any template sport falls within 40 min of it
+    var gate = function (block, template) {
+        if (block.type !== 'sport') return true;
+        return !template.some(function (t) {
+            return t.type === 'sport' && t.startMin < block.endMin + 40 && t.endMin > block.startMin - 40;
+        });
+    };
+    var r = GLStagger.absorbUnfilledToSport({ bunks: bunks, gate: gate, maxMergeMin: 40 });
+    var occ = tiles.slice().sort((a, b) => a.startMin - b.startMin).map(t => t.kind + ':' + t.startMin + '-' + t.endMin);
+    // [0,40] sport ok; [40,80] sport would sit 0 min from the first → blocked → special; [80,120] is 40 min clear → sport
+    assert.deepStrictEqual(occ, ['sport:0-40', 'special:40-80', 'sport:80-120']);
+    assert.strictEqual(r.toSport, 2);
+    assert.strictEqual(r.blockedBySpacing, 1);
+    // every pair of placed Sports is ≥40 min apart (start-to-start ≥80 here) — the rule held
+    var sports = tiles.filter(t => t.kind === 'sport').sort((a, b) => a.startMin - b.startMin);
+    for (var i = 1; i < sports.length; i++) assert.ok(sports[i].startMin - sports[i - 1].endMin >= 0);
+});
+
+test('absorb is layer-safe: a FILLED special floor is never converted to Sport', () => {
+    // even when sport spacing would happily allow a sport here, a filled special stays put
+    var tiles = [
+        abTile({ k: 'special', sub: 'Food', d: 20, s: 0, e: 20, c: 'Pizza' }),   // filled floor → must survive
+        abTile({ k: 'special', sub: 'Regular', d: 40, s: 20, e: 60 }),            // empty → may become sport
+    ];
+    var bunks = [{ tiles: tiles }];
+    var r = GLStagger.absorbUnfilledToSport({ bunks: bunks, gate: function () { return true; }, maxMergeMin: 40 });
+    assert.ok(tiles.some(t => t._concrete === 'Pizza' && t.kind === 'special'), 'filled floor preserved');
+    assert.strictEqual(r.toSport, 1);   // only the empty special converted
 });
 
 test('stress: 40 bunks × 8 tiles — terminates, invariants hold (no stack/cap/overlap/repeat issues)', () => {

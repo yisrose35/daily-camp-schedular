@@ -162,56 +162,73 @@
         return { recovered: recovered, attempts: attempts, bunks: bunks.length };
     }
 
-    function _isGenericSport(t) { return t && t.kind === 'sport' && t.generic !== false && !t._concrete; }
+    // an OPEN tile = a generic, not-yet-filled special/sport/activity (re-tileable leftover).
+    // Everything else — walls (swim/lunch/change/anchor/cleanup) and FILLED specials — is
+    // FIXED: a layer the day must keep, and a boundary that breaks an open run.
+    function _isOpen(t) { return t && (t.kind === 'special' || t.kind === 'sport' || t.kind === 'activity') && t.generic !== false && !t._concrete; }
+    // map a tile to the rules-engine block shape the gate reads (matches period_layout._toBlock)
+    function _toBlk(t) {
+        var b = { type: t.kind, event: t.name || null, startMin: t.startMin, endMin: t.endMin };
+        if (t.kind === 'special') { b._assignedSpecial = t.name; b._specialLocation = t.name; }
+        return b;
+    }
 
     // absorbUnfilledToSport(ctx) — finalize the day per the rule "if you can't fill a
-    // special, use a sport." After fill + stagger, any special tile STILL empty cannot be
-    // filled (cap-1 / duration-trap / pool-exhausted). Convert each remaining empty generic
-    // special into a generic SPORT (a category that always 'fills'), then MERGE contiguous
-    // generic-sport tiles in a bunk into ≤ maxMergeMin blocks (default 40) so the leftover
-    // reads as a few real Sport periods, not many tiny empty special slivers. Filled
-    // specials and walls are left untouched and break the merge runs; a 5-min break (gap
-    // between tiles) also breaks a run. Times/coverage preserved (wall-to-wall) — only the
-    // empty specials change identity and adjacent sports coalesce.
-    //   ctx: { bunks:[{tiles}], sportLabel='Sport', maxMergeMin=40 }
+    // special, use a sport — in big tiles, and respecting the rules." After fill + stagger,
+    // the still-OPEN stretches (empty specials + the layout's generic sport filler) are
+    // re-tiled into ≤ maxMergeMin (default 40) blocks; each block becomes a SPORT when the
+    // camp's spacing gate allows one there (e.g. honoring "no Sport within 40 min of a
+    // Sport / of lunch"), otherwise a generic Special. FILLED specials and walls are left
+    // untouched (the layers the day must keep) and break the runs; a break (non-contiguous
+    // gap) also breaks a run. Coverage preserved (wall-to-wall within each run). The gate is
+    // checked against the bunk's fixed tiles + the sports already placed in this pass, so
+    // the resulting Sports obey the same spacing the layout did.
+    //   ctx: { bunks:[{tiles}], gate(block,template)->bool (optional), sportLabel='Sport',
+    //          specialLabel='Special: Uncategorized', maxMergeMin=40 }
     function absorbUnfilledToSport(ctx) {
         var bunks = (ctx && ctx.bunks) || [];
+        var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
         var label = (ctx && ctx.sportLabel) || 'Sport';
+        var spLabel = (ctx && ctx.specialLabel) || 'Special: Uncategorized';
         var maxMerge = (ctx && ctx.maxMergeMin) || 40;
-        var converted = 0, removedByMerge = 0;
+        var toSport = 0, toSpecial = 0, blockedBySpacing = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
             var tiles = (bunks[bi] && bunks[bi].tiles) || [];
-            // 1) empty generic special → generic sport
-            for (var i = 0; i < tiles.length; i++) {
-                var t = tiles[i];
-                if (t && t.kind === 'special' && t.generic !== false && !t._concrete) {
-                    t.kind = 'sport'; t.subcat = null; t.name = label; t._fillLoc = null; t._ref = t._ref || null;
-                    converted++;
-                }
-            }
-            // 2) merge contiguous generic-sport runs into ≤maxMerge blocks
             var sorted = tiles.slice().sort(function (a, b) { return a.startMin - b.startMin; });
             var out = [];
+            var tmpl = [];   // gate template: fixed tiles + decided blocks (grows as we place)
+            for (var f = 0; f < sorted.length; f++) { if (!_isOpen(sorted[f])) tmpl.push(_toBlk(sorted[f])); }
             var k = 0;
             while (k < sorted.length) {
-                if (!_isGenericSport(sorted[k])) { out.push(sorted[k]); k++; continue; }
-                var runStart = sorted[k].startMin, runEnd = sorted[k].endMin, n = 1, j = k + 1;
-                while (j < sorted.length && _isGenericSport(sorted[j]) && sorted[j].startMin === runEnd) { runEnd = sorted[j].endMin; n++; j++; }
-                if (n === 1) { out.push(sorted[k]); k = j; continue; }
-                var made = 0;
+                if (!_isOpen(sorted[k])) { out.push(sorted[k]); k++; continue; }
+                // maximal contiguous open run
+                var runStart = sorted[k].startMin, runEnd = sorted[k].endMin, j = k + 1;
+                while (j < sorted.length && _isOpen(sorted[j]) && sorted[j].startMin === runEnd) { runEnd = sorted[j].endMin; j++; }
+                // re-tile [runStart,runEnd] into ≤maxMerge blocks, sport-where-gate-allows
                 for (var cur = runStart; cur < runEnd; ) {
                     var blkEnd = Math.min(cur + maxMerge, runEnd);
-                    out.push({ kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: blkEnd - cur, _ref: null });
-                    cur = blkEnd; made++;
+                    var sportBlk = { type: 'sport', event: label, startMin: cur, endMin: blkEnd };
+                    var allow = true;
+                    if (gate) { try { allow = gate(sportBlk, tmpl); } catch (_e) { allow = true; } }
+                    var tile;
+                    if (allow) {
+                        tile = { kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: blkEnd - cur, _ref: null };
+                        toSport++;
+                    } else {
+                        tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: blkEnd - cur, _ref: null };
+                        toSpecial++; blockedBySpacing++;
+                    }
+                    out.push(tile);
+                    tmpl.push(_toBlk(tile));   // later blocks are spacing-checked against this one
+                    cur = blkEnd;
                 }
-                removedByMerge += (n - made);
                 k = j;
             }
-            // rebuild in place (keep the array reference the caller holds)
+            out.sort(function (a, b) { return a.startMin - b.startMin; });
             tiles.length = 0;
             Array.prototype.push.apply(tiles, out);
         }
-        return { converted: converted, removedByMerge: removedByMerge };
+        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };

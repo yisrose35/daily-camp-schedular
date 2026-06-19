@@ -17970,17 +17970,19 @@
                                 }
                             } catch (_glStagErr) { try { warn('[GENERIC-STAGGER] error — left as-is: ' + (_glStagErr && _glStagErr.message)); } catch (_e) {} }
                             // ── ABSORB: "if you can't fill a special, use a sport" ─────────────
-                            // Every special tile STILL empty after fill+stagger can't be filled (cap-1 /
-                            // duration-trap / pool-exhausted). Convert each to a generic Sport (always 'fills')
-                            // and merge contiguous Sports into ≤40-min blocks, so the day = the specials we
-                            // COULD fill + real Sport periods, with NO empty special slivers and no tiny
-                            // fragments. Toggle: window.__absorbSport=false.
+                            // The still-OPEN stretches (empty specials + the layout's generic sport filler)
+                            // are re-tiled into ≤40-min blocks; each block becomes a Sport WHERE THE CAMP'S
+                            // SPACING GATE ALLOWS ONE (e.g. honoring "no Sport within 40 min of a Sport"),
+                            // otherwise a generic Special — so the merges never violate the rules. FILLED
+                            // specials and walls are left untouched (the layers the day must keep) and break
+                            // the runs. The gate is the SAME `_glGate` the layout used, so absorb's Sports
+                            // obey the same spacing. Toggle: window.__absorbSport=false.
                             try {
                                 if (window.__absorbSport !== false && window.GLStagger && typeof window.GLStagger.absorbUnfilledToSport === 'function') {
                                     var _absBunks = [];
                                     _glOrder.forEach(function (bunk) { var res = _glOut.layoutByBunk[bunk]; if (res && res.tiles) _absBunks.push({ tiles: res.tiles }); });
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, sportLabel: 'Sport', maxMergeMin: 40 });
-                                    if (_absRes) { _glFill.absorbed = _absRes.converted || 0; }   // keep _glFill.miss as the count for the cause report below
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40 });
+                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; }   // keep _glFill.miss as the count for the cause report below
                                 }
                             } catch (_glAbsErr) { try { warn('[GENERIC-ABSORB] error — left as-is: ' + (_glAbsErr && _glAbsErr.message)); } catch (_e) {} }
                         } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
@@ -18093,7 +18095,9 @@
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
-                                + (_glFill.absorbed ? (' — ' + _glFill.absorbed + " couldn't-fill special(s) → Sport. why: " + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | '))
+                                + (_glFill.absorbed ? (' — open time → ' + _glFill.absorbed + ' Sport block(s)'
+                                       + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept Special (sport-spacing rule blocked a Sport there)') : '')
+                                       + '. couldn\'t-fill causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | '))
                                    : (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : '')));
                         }
                     } catch (_glFillLogErr) {}
