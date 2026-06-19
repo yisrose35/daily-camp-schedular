@@ -29147,7 +29147,7 @@
                         if (!s || !s.name) return;
                         var sw = s.sharableWith || {}; var per = _wbNorm(s.exactFrequencyPeriod); var fv = parseInt(s.exactFrequency) || 0;
                         var wf = (per.indexOf('week') >= 0) ? fv : (per.indexOf('day') >= 0 ? fv * 7 : 0);
-                        _wbCfg[_wbNorm(s.name)] = { loc: s.location || null, cap: (parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2)), type: sw.type || 'not_sharable', wf: wf };
+                        _wbCfg[_wbNorm(s.name)] = { loc: s.location || null, cap: (parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2)), type: sw.type || 'not_sharable', wf: wf, pairs: sw.allowedPairs || {} };
                     });
                 } catch (_e) {}
                 // workshop = a room-special (dedicated room, loc != name) with a ~daily exact-
@@ -29196,6 +29196,29 @@
                         });
                     });
                     return n;
+                };
+
+                // ---- swap-aware sharing check: after the donor leaves and Z joins, is Z's
+                //   grade allowed to share the room with whoever ELSE is there? (canUseSpecialAtTime
+                //   can't be used — it reads the runtime ledger which still counts the donor, so it
+                //   double-rejects a net-neutral swap. This checks the live schedule instead.)
+                var _wbShareOk = function (gZ, nmL, roomL, s, e, exclBunk) {
+                    var cf = _wbCfg[nmL] || {}; var type = cf.type || 'not_sharable'; var pairs = cf.pairs || {};
+                    var rl = _wbNorm(roomL); var otherGrades = [];
+                    Object.keys(_wbSA).forEach(function (b) {
+                        if (String(b) === String(exclBunk)) return;   // donor is leaving
+                        (_wbSA[b] || []).forEach(function (x) {
+                            if (!x || x.continuation || x._startMin == null || x._endMin == null) return;
+                            var xnm = _wbNorm(x._assignedSpecial || x._activity || x.event);
+                            var xr = _wbNorm(_wbRoomOf(xnm) || x.field);
+                            if (xr === rl && x._startMin < e && x._endMin > s) { var bg = _wbGradeOf[String(b)]; if (bg) otherGrades.push(bg); }
+                        });
+                    });
+                    if (!otherGrades.length) return true;                 // empty room → always fine
+                    if (type === 'not_sharable') return false;            // can't share with anyone
+                    if (type === 'same_division') return otherGrades.every(function (g) { return g === gZ; });
+                    if (type === 'cross_division') { try { return (typeof isCrossDivAllowed === 'function') ? !!isCrossDivAllowed(gZ, otherGrades, pairs) : true; } catch (_e) { return true; } }
+                    return true;
                 };
 
                 // ---- recipient: give bunk Z the workshop (name@room) at [fS,fE], reclaiming
@@ -29281,7 +29304,8 @@
                             var room = sess.room, cap = _wbCapOf(sess.nmL);
                             if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) { _wbDiag.rejCap++; continue; }   // net-neutral swap stays within cap
                             try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) { _wbDiag.rejAccess++; continue; } } catch (_e) { _wbDiag.rejAccess++; continue; }
-                            try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sess.name, gZ, sess.s, sess.e)) { _wbDiag.rejTime++; continue; } } catch (_e) {}
+                            if (!_wbShareOk(gZ, sess.nmL, room, sess.s, sess.e, sess.bunk)) { _wbDiag.rejTime++; continue; }   // swap-aware sharing/pairs (not the stale ledger)
+                            try { if (typeof instructorConflictAt === 'function' && instructorConflictAt(sess.name, sess.s, sess.e, Z)) { _wbDiag.rejTime++; continue; } } catch (_e) {}
                             try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) { _wbDiag.rejLimit++; continue; } } catch (_e) {}
                             if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) { _wbDiag.rejGive++; continue; }      // atomic recipient first
                             if (!_wbTakeFrom(sess.bunk, sess)) { _wbErr++; }                     // then relabel donor
