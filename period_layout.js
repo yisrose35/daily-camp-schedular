@@ -175,8 +175,14 @@
                 for (var i = 0; i < packing.segments.length; i++) {
                     var s = packing.segments[i];
                     total += (s.score || 0) + floorBonus(s, remView);
+                    // Prefer FEWER, LARGER tiles ("less activities the better"): reward
+                    // duration² so a single 40 beats 20+20, a special is taken at its longest
+                    // permitted length, and the filler covers a big gap as ONE block instead
+                    // of fragmenting. Weight is far below a special floor (1000), so it only
+                    // breaks ties AMONG equal-floor tilings — never starves a required floor.
+                    total += 0.002 * s.durationMin * s.durationMin;
                 }
-                total -= 0.01 * packing.segments.length; // prefer fewer/larger tiles (human-like)
+                total -= 0.01 * packing.segments.length; // mild extra nudge toward fewer tiles
                 return total;
             };
         }

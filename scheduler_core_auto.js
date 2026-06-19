@@ -17463,7 +17463,10 @@
                             });
                             // sport filler (unlimited) — fills whatever the special floors leave open.
                             var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
-                            floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, 60), window: [gStart, gEnd], score: 1 });
+                            // dMax spans the grade day so the filler can cover a LARGE gap as ONE
+                            // block (free-form camps have no bell periods, so maxLen defaults to 60
+                            // and a 140-min gap would otherwise be untileable / fragmented).
+                            floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: 1 });
 
                             // ── RE-FLOAT DEFERRED FIXED-DURATION / MOVEABLE-WINDOW LAYERS ──
                             // A layer whose configured WINDOW is wider than its DURATION "floats"
@@ -17622,6 +17625,27 @@
                         }
                         log('[GENERIC-LAYOUT] saved ' + _glOrder.length + ' bunks for ' + _glDate);
                     } catch (_glSaveErr) { warn('[GENERIC-LAYOUT] save: ' + (_glSaveErr && _glSaveErr.message)); }
+
+                    // DIAGNOSTIC: list windows the layout could NOT close, with the bunk + the
+                    // reason the packer/repairs gave (no-candidates / no-exact-tiling / all-packings-
+                    // gated / window-not-granular). Tells us WHY e.g. Soloists can't close the day,
+                    // instead of inferring it. Capped so a pathological run can't flood the console.
+                    try {
+                        var _glUntiled = [];
+                        _glOrder.forEach(function (bunk) {
+                            var res = _glOut.layoutByBunk[bunk]; if (!res || !res.periodPlans) return;
+                            res.periodPlans.forEach(function (pp) {
+                                (pp.windows || []).forEach(function (w) {
+                                    if (!w.tiled && w.len >= 5) _glUntiled.push(bunk + ' ' + minutesToTimeLabel(w.start) + '-' + minutesToTimeLabel(w.end) + ' (' + w.len + 'min): ' + (w.reason || '?'));
+                                });
+                            });
+                        });
+                        if (_glUntiled.length) {
+                            log('[GENERIC-LAYOUT] ⚠ ' + _glUntiled.length + ' window(s) left empty (could not close):');
+                            _glUntiled.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });
+                            if (_glUntiled.length > 25) log('[GENERIC-LAYOUT]     …and ' + (_glUntiled.length - 25) + ' more');
+                        }
+                    } catch (_glDiagErr) {}
 
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated');
