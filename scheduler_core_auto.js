@@ -17708,6 +17708,70 @@
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
                     var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
 
+                    // 2.5) FILL — assign a CONCRETE special activity to each generic special tile.
+                    // STEP 1 (specials, per-bunk): for each generic "Special: <subcat>" tile, pick the
+                    // ROTATION-BEST concrete special from this bunk's priorityList that (a) is the same
+                    // subcategory, (b) lists the tile's EXACT laid duration among its allowed durations,
+                    // and (c) isn't already used by this bunk today (categories repeat, ACTIVITIES DON'T).
+                    // The priorityList is already access- + rotation- + constraint-filtered (maxUsage /
+                    // cohort / multiPart / cooldown / exact·min-frequency), so the "how often / who can"
+                    // rules come for free — this step only chooses WHICH concrete activity lands in each
+                    // already-placed tile. A tile with no legal fill stays GENERIC (TBD) and is reported,
+                    // so the duration↔activity mismatch is visible rather than silently wrong.
+                    // NOT yet: cross-bunk facility sharing/capacity, or re-flowing a tile whose exact
+                    // length no free activity matches (steps 3-4). Fail-soft + kill: window.__fillSpecials=false.
+                    var _glFill = { tiles: 0, filled: 0, miss: 0, missDetail: [] };
+                    var _doFillSpecials = (typeof window === 'undefined') ? true : (window.__fillSpecials !== false);
+                    if (_doFillSpecials) {
+                        try {
+                            var _glDurCache = {};
+                            var _glSpecialDurs = function (name) {
+                                if (_glDurCache[name]) return _glDurCache[name];
+                                var arr = [];
+                                try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(name, window.activityProperties, globalSettings) : null; arr = (gd && gd.durations) || gd || []; } catch (_e) {}
+                                if (!Array.isArray(arr)) arr = [];
+                                arr = arr.map(Number).filter(function (x) { return x > 0; });
+                                _glDurCache[name] = arr;
+                                return arr;
+                            };
+                            _glOrder.forEach(function (bunk) {
+                                var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                var pool = (sl && sl.specials && sl.specials.priorityList) || [];   // rotation-sorted, constraint-filtered
+                                // seed "used" with any concrete (already-named) special on this bunk's tiles
+                                var used = {};
+                                res.tiles.forEach(function (t) { if (t && !t.generic && t.name) used[String(t.name).toLowerCase()] = 1; });
+                                var sTiles = res.tiles.filter(function (t) { return t && t.generic && t.kind === 'special'; }).sort(function (a, b) { return a.startMin - b.startMin; });
+                                sTiles.forEach(function (t) {
+                                    _glFill.tiles++;
+                                    var sub = _glCanon(t.subcat);
+                                    var dur = t.durationMin;
+                                    var pick = null;
+                                    for (var i = 0; i < pool.length; i++) {
+                                        var c = pool[i];
+                                        if (!c || !c.name) continue;
+                                        if (used[String(c.name).toLowerCase()]) continue;
+                                        if (_glCanon(c.subcategory) !== sub) continue;
+                                        var durs = _glSpecialDurs(c.name);
+                                        var fits = durs.length ? (durs.indexOf(dur) >= 0) : true; // no configured durs ⇒ flex ⇒ fits
+                                        if (!fits) continue;
+                                        pick = c; break;
+                                    }
+                                    if (pick) {
+                                        t._concrete = pick.name;
+                                        t._fillLoc = pick.location || null;
+                                        used[String(pick.name).toLowerCase()] = 1;
+                                        _glFill.filled++;
+                                    } else {
+                                        _glFill.miss++;
+                                        if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min');
+                                    }
+                                });
+                            });
+                        } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
+                    }
+
                     // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
                     //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real
                     //    `autoSkeleton` const isn't declared until ~:19732 (TDZ if touched here).
@@ -17719,7 +17783,12 @@
                         var res = _glOut.layoutByBunk[bunk];
                         if (!res) return;
                         res.tiles.forEach(function (t) {
-                            _genSkeleton.push({ division: grade, _bunk: bunk, startMin: t.startMin, endMin: t.endMin, startTime: minutesToTimeLabel(t.startMin), endTime: minutesToTimeLabel(t.endMin), type: t.kind, event: t.name, _generic: !!t.generic });
+                            // a FILLED special tile carries a concrete activity (_concrete) → emit that as
+                            // the event and mark it NON-generic so same-day-repeat validation applies to it
+                            // (no two Basketballs); an unfilled tile keeps its generic "Special: <subcat>"
+                            // label. _subcat + _specialLocation are carried for the fill / sharing steps.
+                            var _ev = t._concrete || t.name;
+                            _genSkeleton.push({ division: grade, _bunk: bunk, startMin: t.startMin, endMin: t.endMin, startTime: minutesToTimeLabel(t.startMin), endTime: minutesToTimeLabel(t.endMin), type: t.kind, event: _ev, _generic: t._concrete ? false : !!t.generic, _subcat: t.subcat || null, _specialLocation: t._fillLoc || null });
                         });
                     });
 
@@ -17730,7 +17799,7 @@
                         getBunksForGrade(grade, divisions).forEach(function (bunk) {
                             pbs[String(bunk)] = _genSkeleton.filter(function (b) { return b.division === grade && String(b._bunk) === String(bunk); })
                                 .sort(function (a, b) { return a.startMin - b.startMin; })
-                                .map(function (b, i) { return { startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true, _generic: !!b._generic }; });
+                                .map(function (b, i) { return { startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true, _generic: !!b._generic, _subcat: b._subcat || null, _specialLocation: b._specialLocation || null }; });
                         });
                         window.divisionTimes[grade]._perBunkSlots = pbs;
                     });
@@ -17744,7 +17813,10 @@
                         getBunksForGrade(grade, divisions).forEach(function (bunk) {
                             var arr = pbs[String(bunk)] || [];
                             window.scheduleAssignments[String(bunk)] = arr.map(function (s) {
-                                return { field: s.event, sport: null, _activity: s.event, _startMin: s.startMin, _endMin: s.endMin, _fixed: true, _autoMode: true, _generic: true, continuation: false, type: s.type };
+                                // _generic now reflects the SLOT: a filled special is a real activity
+                                // (_generic:false → uniqueness/rotation count it); an unfilled tile stays
+                                // generic. _specialLocation/_subcat carried for the sharing step.
+                                return { field: s.event, sport: null, _activity: s.event, _startMin: s.startMin, _endMin: s.endMin, _fixed: true, _autoMode: true, _generic: !!s._generic, continuation: false, type: s.type, _subcat: s._subcat || null, _specialLocation: s._specialLocation || null };
                             });
                         });
                     });
@@ -17798,6 +17870,15 @@
                     // (facility → cross-grade capacity/pairs honored at placement time).
                     var _glShareFacs = 0, _glShareResv = 0;
                     try { Object.keys(_glResv).forEach(function (k) { _glShareFacs++; _glShareResv += (_glResv[k] || []).length; }); } catch (_e) {}
+
+                    // FILL summary (Step 1, specials): how many generic special tiles got a concrete
+                    // activity vs. were left generic (no duration-matching activity free in rotation).
+                    try {
+                        if (_doFillSpecials) {
+                            log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
+                                + (_glFill.miss ? (' — ' + _glFill.miss + ' left generic (no duration-matching activity free in rotation): ' + _glFill.missDetail.slice(0, 12).join(' | ') + (_glFill.miss > 12 ? ' …' : '')) : ''));
+                        }
+                    } catch (_glFillLogErr) {}
 
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
