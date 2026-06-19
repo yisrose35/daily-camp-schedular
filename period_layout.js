@@ -276,13 +276,15 @@
             periodPlans.push({ period: period, windows: planWindows });
         }
 
-        // ── SWAP REPAIR (only when a gate is active) ──────────────────────────
-        // A window left untiled because its only filler (sport) was spacing-blocked
-        // is NOT abandoned: find an already-placed generic tile of the SAME duration
-        // elsewhere that CAN legally move here, move it in, and drop the blocked
-        // filler (sport) into the slot it vacated (also gate-checked). Same tiles,
-        // positions swapped — "move that over and put the sport in its place".
-        // 1:1, bounded, gate-only (default behavior unchanged).
+        // ── SWAP REPAIR (gate-only, general) ──────────────────────────────────
+        // A window the gate left untiled is NOT abandoned. To open a legal slot we
+        // relocate a CONTIGUOUS RUN of already-placed tiles whose durations sum to
+        // the empty window (a 40, or 30+10, 20+20, 4×10, …) into that window, and
+        // drop a replacement tile into the region they vacated — EVERY move re-checked
+        // against the gate (which carries ALL the camp's rules: sport↔sport spacing,
+        // special↔special spacing, no-sport-after-lunch, …). So the same "move that
+        // over and put the needed thing in its place" works across the board, for any
+        // rule and any kind. Bounded; default (no gate) leaves this off.
         if (gate) {
             var _resid = [];
             for (var ppi = 0; ppi < periodPlans.length; ppi++) {
@@ -292,35 +294,67 @@
                     if (!rr.tiled && rr.len >= minSeg && rr.len % gran === 0) _resid.push(rr);
                 }
             }
-            // the filler kind to drop into the vacated slot (sport, else first non-special demand)
-            var fillerKind = null, fillerName = null;
-            for (var ffi = 0; ffi < floating.length; ffi++) { if (floating[ffi].kind !== 'special') { fillerKind = floating[ffi].kind; fillerName = _label(floating[ffi]); break; } }
-            for (var ridx = 0; ridx < _resid.length && fillerKind; ridx++) {
+            var _moved = [];                                  // tiles already relocated (no thrash)
+            var _isMoved = function (t) { for (var i = 0; i < _moved.length; i++) if (_moved[i] === t) return true; return false; };
+            for (var ridx = 0; ridx < _resid.length; ridx++) {
                 var W2 = _resid[ridx];
-                for (var ti2 = 0; ti2 < tiles.length; ti2++) {
-                    var T = tiles[ti2];
-                    if (!T.generic || T.pinned) continue;
-                    if (T.kind === fillerKind) continue;       // moving a sport in then a sport into its slot = still 2 sports
-                    if (T.durationMin !== W2.len) continue;     // 1:1 exact-duration swap keeps both sides wall-to-wall
-                    if (T.startMin === W2.start) continue;
-                    var Tstart = T.startMin, Tend = T.endMin;
-                    var others = [];
-                    for (var oi = 0; oi < tiles.length; oi++) if (oi !== ti2) others.push(_toBlock(tiles[oi]));
-                    // (1) the mover at the empty window must pass the gate
-                    var movBlock = { type: T.kind, event: T.name, startMin: W2.start, endMin: W2.start + T.durationMin };
-                    if (T.kind === 'special') { movBlock._assignedSpecial = T.name; movBlock._specialLocation = T.name; }
-                    var ok1 = true; try { ok1 = gate(movBlock, others); } catch (e) { ok1 = true; }
-                    if (!ok1) continue;
-                    // (2) the filler in the vacated slot must pass the gate (mover now at W)
-                    var fillBlock = { type: fillerKind, event: fillerName, startMin: Tstart, endMin: Tend };
-                    var ok2 = true; try { ok2 = gate(fillBlock, others.concat([movBlock])); } catch (e) { ok2 = true; }
-                    if (!ok2) continue;
-                    // commit the swap
-                    T.startMin = W2.start; T.endMin = W2.start + T.durationMin;
-                    tiles.push({ kind: fillerKind, subcat: null, name: fillerName, startMin: Tstart, endMin: Tend, durationMin: Tend - Tstart, generic: true, pinned: false });
-                    W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
-                    stats.windowsTiled++; stats.tilesPlaced++; stats.residualMin -= W2.len;
-                    break;
+                var L = W2.len;
+                // Replacement-tile candidates for the vacated region (a single tile of
+                // length L): the filler (sport/activity) first, then any special whose
+                // configured duration is exactly L and still has cap. The gate decides
+                // which is legal there.
+                var kCands = [];
+                for (var fk = 0; fk < floating.length; fk++) {
+                    var fd = floating[fk]; var kk = _demandKey(fd);
+                    if (fd.kind !== 'special') { kCands.push({ kind: fd.kind, name: _label(fd), subcat: null, key: kk }); continue; }
+                    var durs = (fd.durations && fd.durations.length) ? fd.durations : _durRange(fd.dMin, fd.dMax, gran);
+                    if (capRem[kk] > 0 && durs.indexOf(L) >= 0) kCands.push({ kind: 'special', name: _label(fd), subcat: fd.subcat || null, key: kk });
+                }
+                if (!kCands.length) continue;
+                // movable tiles (generic, not pinned, not already relocated), by time
+                var mov = [];
+                for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && !_isMoved(tt)) mov.push(tt); }
+                mov.sort(function (a, b) { return a.startMin - b.startMin; });
+
+                var done = false;
+                for (var s = 0; s < mov.length && !done; s++) {
+                    // grow a CONTIGUOUS run from s whose durations sum to exactly L
+                    var run = [mov[s]], sum = mov[s].durationMin, e = s;
+                    while (sum < L && e + 1 < mov.length && mov[e + 1].startMin === mov[e].endMin) { e++; run.push(mov[e]); sum += mov[e].durationMin; }
+                    if (sum !== L) continue;
+                    var Rs = run[0].startMin, Re = Rs + L;
+                    if (Rs === W2.start) continue;
+                    var keep = [];
+                    for (var ki = 0; ki < tiles.length; ki++) { if (run.indexOf(tiles[ki]) < 0) keep.push(_toBlock(tiles[ki])); }
+                    for (var kc = 0; kc < kCands.length && !done; kc++) {
+                        var K = kCands[kc];
+                        var kBlock = { type: K.kind, event: K.name, startMin: Rs, endMin: Re };
+                        if (K.kind === 'special') { kBlock._assignedSpecial = K.name; kBlock._specialLocation = K.name; }
+                        var okK = true; try { okK = gate(kBlock, keep); } catch (e2) { okK = true; }
+                        if (!okK) continue;
+                        // relocate the run into W (sequential), gate-checking each move
+                        var cur = W2.start, movedBlocks = [], allOk = true;
+                        for (var r2 = 0; r2 < run.length; r2++) {
+                            var rt = run[r2];
+                            var rb = { type: rt.kind, event: rt.name, startMin: cur, endMin: cur + rt.durationMin };
+                            if (rt.kind === 'special') { rb._assignedSpecial = rt.name; rb._specialLocation = rt.name; }
+                            var okM = true; try { okM = gate(rb, keep.concat([kBlock]).concat(movedBlocks)); } catch (e3) { okM = true; }
+                            if (!okM) { allOk = false; break; }
+                            movedBlocks.push(rb); cur += rt.durationMin;
+                        }
+                        if (!allOk) continue;
+                        // COMMIT: run -> W (in order), replacement K -> vacated region
+                        var c2 = W2.start;
+                        for (var r3 = 0; r3 < run.length; r3++) { run[r3].startMin = c2; run[r3].endMin = c2 + run[r3].durationMin; c2 += run[r3].durationMin; _moved.push(run[r3]); }
+                        tiles.push({ kind: K.kind, subcat: K.subcat || null, name: K.name, startMin: Rs, endMin: Re, durationMin: L, generic: true, pinned: false });
+                        if (K.kind === 'special') {
+                            if (remaining[K.key] > 0 && remaining[K.key] !== Infinity) remaining[K.key]--;
+                            if (capRem[K.key] > 0 && capRem[K.key] !== Infinity) capRem[K.key]--;
+                        }
+                        W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
+                        stats.windowsTiled++; stats.tilesPlaced++; stats.residualMin -= L;
+                        done = true;
+                    }
                 }
             }
         }

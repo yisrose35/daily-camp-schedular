@@ -189,6 +189,72 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.ok(ss[1][0] - ss[0][1] >= 40, 'the two sports end up >=40min apart after the swap');
     });
 
+    it('GATE + multi-tile SWAP: relocates a 20+20 run (not just a single 40) to open a legal sport slot', () => {
+        const sportGate = (block, template) => {
+            if (block.type !== 'sport') return true;
+            for (const w of template) {
+                if (w.type !== 'sport') continue;
+                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
+                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
+                if (gapBefore >= 0 && gapBefore < 40) return false;
+                if (gapAfter >= 0 && gapAfter < 40) return false;
+            }
+            return true;
+        };
+        // P1 fills with food20+theme20; P2 takes the only sport; P3 is sport-blocked
+        // (10min from P2) with no special left → empty. The repair must relocate the
+        // 20+20 RUN from P1 into P3 and drop a sport into P1 (far from P2's sport).
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(850, 890, 'P2'), P(900, 940, 'P3')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                { kind: 'special', subcat: 'food', durations: [20], window: [650, 945], qty: 1, cap: 1 },
+                { kind: 'special', subcat: 'theme', durations: [20], window: [650, 945], qty: 1, cap: 1 }
+            ],
+            gate: sportGate, packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'multi-tile relocation filled the gated window');
+        const sports = tilesOf(res).filter(t => t.kind === 'sport');
+        assert.strictEqual(sports.length, 2, 'two sports, none dropped');
+        const ss = sports.map(s => [s.startMin, s.endMin]).sort((a, b) => a[0] - b[0]);
+        assert.ok(ss[1][0] - ss[0][1] >= 40, 'sports spaced >=40min apart');
+        const food = tilesOf(res).find(t => t.subcat === 'food');
+        const theme = tilesOf(res).find(t => t.subcat === 'theme');
+        assert.ok(food && theme && food.durationMin === 20 && theme.durationMin === 20, 'both 20-min specials kept');
+        assert.ok(food.endMin === theme.startMin || theme.endMin === food.startMin, 'the 20+20 were relocated as a contiguous run');
+    });
+
+    it('GATE generality: a non-sport rule (two specials too close) is honored when relocating', () => {
+        // Rule: no two "special" tiles within 30min of each other (end->start gap).
+        const specialGate = (block, template) => {
+            if (block.type !== 'special') return true;
+            for (const w of template) {
+                if (w.type !== 'special') continue;
+                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
+                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
+                if (gapBefore >= 0 && gapBefore < 30) return false;
+                if (gapAfter >= 0 && gapAfter < 30) return false;
+            }
+            return true;
+        };
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(690, 730, 'P2')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: 1 }
+            ],
+            gate: specialGate, packer: PeriodPacker
+        });
+        // both periods tile; the two specials (food + the sport filler) never violate
+        // the special-spacing rule — i.e. no two 'special' tiles within 30min.
+        const specials = tilesOf(res).filter(t => t.kind === 'special').map(s => [s.startMin, s.endMin]).sort((a, b) => a[0] - b[0]);
+        for (let i = 1; i < specials.length; i++) {
+            assert.ok(specials[i][0] - specials[i - 1][1] >= 30, 'specials are >=30min apart (rule honored across the board)');
+        }
+    });
+
     it('GATE + cap: a special used as filler never exceeds its subcategory cap', () => {
         const blockAllSport = (block) => block.type !== 'sport'; // sport always blocked
         const res = Layout.planBunkLayout({
