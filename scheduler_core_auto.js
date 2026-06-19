@@ -29150,7 +29150,12 @@
                         _wbCfg[_wbNorm(s.name)] = { loc: s.location || null, cap: (parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2)), type: sw.type || 'not_sharable', wf: wf };
                     });
                 } catch (_e) {}
-                var _wbIsWorkshop = function (nmL) { var c = _wbCfg[nmL]; return !!(c && (c.type === 'not_sharable' || c.cap <= 1) && c.loc && _wbNorm(c.loc) !== nmL && c.wf >= 5); };
+                // workshop = a room-special (dedicated room, loc != name) with a ~daily exact-
+                //   frequency target (weekly>=5), at ANY share capacity (the user may set the
+                //   rooms not_sharable cap-1 OR cross_division cap-2). Generic fillers
+                //   (Sports/Sport 2) are excluded by name even though Sport 2 also carries a
+                //   room+weekly>=5 — it is the sportless filler, not a rotated workshop.
+                var _wbIsWorkshop = function (nmL) { var c = _wbCfg[nmL]; return !!(c && c.loc && _wbNorm(c.loc) !== nmL && c.wf >= 5 && !_wbFillerRe.test(nmL)); };
                 var _wbRoomOf = function (nmL) { var c = _wbCfg[nmL]; return (c && c.loc) ? c.loc : null; };
                 var _wbCapOf = function (nmL) { var c = _wbCfg[nmL]; return (c && c.cap) ? c.cap : 1; };
                 var _wbLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
@@ -29248,38 +29253,49 @@
                     return true;
                 };
 
-                // ---- greedy: each needy bunk (0 workshops) gets ONE donated session
+                // ---- even out toward a FAIR per-bunk target. A donor gives a workshop only
+                //   while it stays ABOVE target; a needy bunk receives until it reaches target.
+                //   Net room occupancy per swap is unchanged (donor out, recipient in), so the
+                //   configured room cap is never exceeded. This turns the live "5 bunks 0w / 2
+                //   bunks 3w" (or, post cap-bump, "5 bunks 1w / 6 bunks 3+w") into an even spread.
                 var _wbDonations = 0, _wbErr = 0, _usedSess = {};
                 var _wbDiag = { rejCap: 0, rejAccess: 0, rejTime: 0, rejLimit: 0, rejGive: 0, pairsTried: 0 };   // DIAG: per-gate reject counts
-                var _needy = Object.keys(_wbCount).filter(function (b) { return _wbCount[b] === 0 && _wbGradeOf[String(b)]; });
-                _needy.sort();
+                var _wbTotal = 0, _wbN = 0;
+                Object.keys(_wbCount).forEach(function (b) { if (_wbGradeOf[String(b)]) { _wbTotal += (_wbCount[b] || 0); _wbN++; } });
+                var _wbTarget = Math.max(1, Math.round(_wbTotal / Math.max(1, _wbN)));   // fair share, >=1
+                var _needy = Object.keys(_wbCount).filter(function (b) { return (_wbCount[b] || 0) < _wbTarget && _wbGradeOf[String(b)]; });
+                _needy.sort(function (a, b) { return (_wbCount[a] || 0) - (_wbCount[b] || 0); });   // neediest first
                 _needy.forEach(function (Z) {
-                    if ((_wbCount[Z] || 0) >= 1) return;
-                    var gZ = _wbGradeOf[String(Z)];
-                    var zHas = {}; (_wbSA[Z] || []).forEach(function (x) { if (x && !x.continuation) { var a = _wbNorm(x._assignedSpecial || x._activity || x.event); if (_wbIsWorkshop(a)) zHas[a] = 1; } });
-                    for (var si = 0; si < _wbSessions.length; si++) {
-                        var sess = _wbSessions[si];
-                        var sk = sess.bunk + '|' + sess.idx; if (_usedSess[sk]) continue;
-                        if (String(sess.bunk) === String(Z)) continue;
-                        if ((_wbCount[sess.bunk] || 0) < 2) continue;                  // donor must keep >=1
-                        if (zHas[sess.nmL]) continue;                                  // no duplicate workshop for Z
-                        _wbDiag.pairsTried++;
-                        var room = sess.room, cap = _wbCapOf(sess.nmL);
-                        if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) { _wbDiag.rejCap++; continue; }   // clean swap only (no over-cap)
-                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) { _wbDiag.rejAccess++; continue; } } catch (_e) { _wbDiag.rejAccess++; continue; }
-                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sess.name, gZ, sess.s, sess.e)) { _wbDiag.rejTime++; continue; } } catch (_e) {}
-                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) { _wbDiag.rejLimit++; continue; } } catch (_e) {}
-                        if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) { _wbDiag.rejGive++; continue; }      // atomic recipient first
-                        if (!_wbTakeFrom(sess.bunk, sess)) { _wbErr++; }                     // then relabel donor
-                        try { if (typeof claimField === 'function') claimField(room, sess.s, sess.e, Z, gZ, sess.name); } catch (_e) {}
-                        _usedSess[sk] = 1;
-                        _wbCount[Z] = (_wbCount[Z] || 0) + 1;
-                        _wbCount[sess.bunk] = (_wbCount[sess.bunk] || 0) - 1;
-                        _wbDonations++;
-                        break;   // one workshop per needy bunk this pass
+                    var gZ = _wbGradeOf[String(Z)]; if (!gZ) return;
+                    var _guard = 8;
+                    while ((_wbCount[Z] || 0) < _wbTarget && _guard-- > 0) {
+                        var zHas = {}; (_wbSA[Z] || []).forEach(function (x) { if (x && !x.continuation) { var a = _wbNorm(x._assignedSpecial || x._activity || x.event); if (_wbIsWorkshop(a)) zHas[a] = 1; } });
+                        var _placed = false;
+                        for (var si = 0; si < _wbSessions.length; si++) {
+                            var sess = _wbSessions[si];
+                            var sk = sess.bunk + '|' + sess.idx; if (_usedSess[sk]) continue;
+                            if (String(sess.bunk) === String(Z)) continue;
+                            if ((_wbCount[sess.bunk] || 0) <= _wbTarget) continue;         // donor must stay >= target (give only surplus)
+                            if (zHas[sess.nmL]) continue;                                  // no duplicate workshop for Z
+                            _wbDiag.pairsTried++;
+                            var room = sess.room, cap = _wbCapOf(sess.nmL);
+                            if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) { _wbDiag.rejCap++; continue; }   // net-neutral swap stays within cap
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) { _wbDiag.rejAccess++; continue; } } catch (_e) { _wbDiag.rejAccess++; continue; }
+                            try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sess.name, gZ, sess.s, sess.e)) { _wbDiag.rejTime++; continue; } } catch (_e) {}
+                            try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) { _wbDiag.rejLimit++; continue; } } catch (_e) {}
+                            if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) { _wbDiag.rejGive++; continue; }      // atomic recipient first
+                            if (!_wbTakeFrom(sess.bunk, sess)) { _wbErr++; }                     // then relabel donor
+                            try { if (typeof claimField === 'function') claimField(room, sess.s, sess.e, Z, gZ, sess.name); } catch (_e) {}
+                            _usedSess[sk] = 1;
+                            _wbCount[Z] = (_wbCount[Z] || 0) + 1;
+                            _wbCount[sess.bunk] = (_wbCount[sess.bunk] || 0) - 1;
+                            _wbDonations++; _placed = true;
+                            break;
+                        }
+                        if (!_placed) break;   // nothing more can be donated to Z
                     }
                 });
-                try { log('[6.862c-DIAG] workshops=' + Object.keys(_wbCfg).filter(_wbIsWorkshop).length + ' sessions=' + _wbSessions.length + ' needy=' + _needy.length + ' pairsTried=' + _wbDiag.pairsTried + ' rejCap=' + _wbDiag.rejCap + ' rejAccess=' + _wbDiag.rejAccess + ' rejTime=' + _wbDiag.rejTime + ' rejLimit=' + _wbDiag.rejLimit + ' rejGive=' + _wbDiag.rejGive + ' donations=' + _wbDonations); } catch (_e) {}
+                try { log('[6.862c-DIAG] workshops=' + Object.keys(_wbCfg).filter(_wbIsWorkshop).length + ' target=' + _wbTarget + ' sessions=' + _wbSessions.length + ' needy=' + _needy.length + ' pairsTried=' + _wbDiag.pairsTried + ' rejCap=' + _wbDiag.rejCap + ' rejAccess=' + _wbDiag.rejAccess + ' rejTime=' + _wbDiag.rejTime + ' rejLimit=' + _wbDiag.rejLimit + ' rejGive=' + _wbDiag.rejGive + ' donations=' + _wbDonations); } catch (_e) {}
                 if (_wbDonations > 0) {
                     log('[STEP 6.862c WORKSHOP-REBALANCE] ✅ donated ' + _wbDonations + ' workshop slot(s) from over-served to under-served bunk(s)' + (_wbErr ? ' (' + _wbErr + ' donor-relabel warning)' : '') + '. [kill switch: globalSettings.app1.workshopRebalance=\'off\']');
                     try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
