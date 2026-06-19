@@ -17738,11 +17738,11 @@
                             // Resolve each special's SHARING the same way auto_validator.
                             // buildFieldSharingMap does — from the special's own `sharableWith`
                             // (NOT getSpecialCapacity, which is a PLAYER count) — so the fill
-                            // prevents EXACTLY what the validator flags. Resource key =
-                            // (location || name). Capacity is enforced PER-GRADE for ALL sharing types —
-                            // the validator's CHECK B (capacity) groups by grade and its CHECK A
-                            // (cross-division) SKIPS specials, so cross-grade reuse of the same special
-                            // is allowed. As specials are assigned bunk-by-bunk, a candidate that would
+                            // prevents over-sharing per the special's OWN config — the user's THREE
+                            // options: not_sharable = NO sharing ever (≤1 bunk on the resource at any
+                            // instant, across every grade) / same_division = one grade at a time up to cap /
+                            // cross_division = any grade up to cap. Resource key = (location || name).
+                            // As specials are assigned bunk-by-bunk, a candidate that would
                             // exceed its capacity at an overlapping time is skipped and the next
                             // rotation-best is taken instead — which is ALSO what spreads a grade
                             // across different specials (the variety win).
@@ -17774,7 +17774,13 @@
                                 ev.forEach(function (x) { cur += x[1]; if (cur > mx) mx = cur; });
                                 return mx;
                             };
-                            // True iff assigning `cand` to `grade` over [s,e] keeps the resource within cap.
+                            // True iff assigning `cand` to `grade` over [s,e] keeps the resource within its
+                            // sharing config. TYPE-AWARE (the 3 options):
+                            //   • not_sharable → cap 1 + counts ALL overlapping (any grade) ⇒ truly never
+                            //     shared, not even within a grade (e.g. workshops).
+                            //   • same_division → a DIFFERENT grade already on the resource blocks it (two
+                            //     grades can't co-occupy); same-grade uses count toward cap.
+                            //   • cross_division → any grade may join, up to cap (allowedPairs = TBD refinement).
                             var _glCapFits = function (cand, grade, s, e) {
                                 var sh = _glShareOf(cand);
                                 var list = _glUsage[sh.key] || [];
@@ -17782,12 +17788,8 @@
                                 for (var i = 0; i < list.length; i++) {
                                     var u = list[i];
                                     if (!(u.s < e && u.e > s)) continue;        // must overlap the new tile
-                                    if (u.grade !== grade) continue;            // PER-GRADE cap — matches the validator exactly:
-                                                                                // CHECK B (capacity) groups by grade; CHECK A (cross-division)
-                                                                                // SKIPS specials (auto_validator.js:276 `if (sharing._isSpecial) return`).
-                                                                                // Cross-grade reuse of the same special is NOT a violation, so a
-                                                                                // global cap would wrongly strand legal placements (live: 136→82).
-                                    counted.push([Math.max(u.s, s), Math.min(u.e, e)]);  // clip to the new tile's span
+                                    if (sh.type === 'same_division' && u.grade !== grade) return false; // 2nd grade can't co-occupy
+                                    counted.push([Math.max(u.s, s), Math.min(u.e, e)]); // counts toward cap (global for not_sharable/cross_division; per-grade for same_division)
                                 }
                                 return (1 + _glMaxCover(counted)) <= sh.cap;
                             };
