@@ -187,15 +187,35 @@
         function _mkScoreFn(remView) {
             return function (packing) {
                 var total = 0;
+                // Count the floor bonus ONLY up to what each key still OWES, per packing.
+                // A subcat can now appear several times in one window (categories repeat),
+                // but its FLOOR (qty) is met by the FIRST tile — the extras are over-floor
+                // and must NOT each re-earn the must-place bonus, or the packer would stack
+                // a floored subcat just to farm bonuses. `granted[_key]` caps it at the owed
+                // count so the floor is honored exactly once and the over-floor tiles are
+                // ranked on their own merits (content score + duration²).
+                var granted = {};
                 for (var i = 0; i < packing.segments.length; i++) {
                     var s = packing.segments[i];
-                    total += (s.score || 0) + floorBonus(s, remView);
+                    var fb = floorBonus(s, remView);
+                    if (fb > 0) {
+                        var used = granted[s._key] || 0;
+                        if (used < remView[s._key]) granted[s._key] = used + 1; else fb = 0;
+                    }
+                    total += (s.score || 0) + fb;
                     // Prefer FEWER, LARGER tiles ("less activities the better"): reward
                     // duration² so a single 40 beats 20+20, a special is taken at its longest
-                    // permitted length, and the filler covers a big gap as ONE block instead
-                    // of fragmenting. Weight is far below a special floor (1000), so it only
+                    // permitted length. Weight is far below a special floor (1000), so it only
                     // breaks ties AMONG equal-floor tilings — never starves a required floor.
-                    total += 0.002 * s.durationMin * s.durationMin;
+                    // EXCEPTION: the abstract "activity" placeholder (sports-free camps with
+                    // no sport layer) must NOT earn this reward — otherwise one giant
+                    // placeholder outscores several REAL specials and the day fills with
+                    // "Activity" instead of the camp's actual specials (the live Leebi
+                    // complaint). Penalize its minutes so real specials always win when they
+                    // can tile the window; "activity" then survives only as the true last
+                    // resort (a remainder no available special duration can cover).
+                    if (s.kind === 'activity') total -= 0.01 * s.durationMin;
+                    else total += 0.002 * s.durationMin * s.durationMin;
                 }
                 total -= 0.01 * packing.segments.length; // mild extra nudge toward fewer tiles
                 return total;
@@ -273,14 +293,39 @@
                 var win = d.window;
                 if (win && (win[0] > wStart || win[1] < wEnd)) continue; // demand window must cover the sub-window
                 var durs = _demandDurs(d);
-                var seen = {};
+                var validDurs = [], seen = {};
                 for (var di = 0; di < durs.length; di++) {
                     var dur = durs[di];
                     if (_num(dur) == null || dur < minSeg || dur > len || dur % gran !== 0 || seen[dur]) continue;
-                    seen[dur] = 1;
-                    cands.push({ activity: key, durationMin: dur, kind: d.kind, subcat: d.subcat || null,
-                                 name: _label(d), score: (typeof d.score === 'number' ? d.score : (d.kind === 'sport' ? 1 : 0)),
-                                 _key: key, _ref: d });
+                    seen[dur] = 1; validDurs.push(dur);
+                }
+                if (!validDurs.length) continue;
+                // CATEGORIES REPEAT, ACTIVITIES DON'T. A special subcategory with N
+                // distinct available activities (cap = N) may appear up to N times in a
+                // SINGLE window — fill later assigns each generic tile a DISTINCT activity,
+                // so no activity ever repeats. Emit up to that many synthetic candidate
+                // SLOTS (same _key/name/_ref, but a distinct `activity` so the no-repeat
+                // packer can place several), each offered at every valid duration. Without
+                // this a big window held only ONE "Special: Uncategorized" and the rest fell
+                // to the abstract "activity" placeholder (the live Leebi complaint). Bounds:
+                //   • cap (capView[key]) — an "exactly 1 Food" subcat (cap 1) never doubles;
+                //   • maxSegments — a window can't hold more tiles than that;
+                //   • len/shortestDur — can't physically fit more.
+                // Non-specials stay single: sports are spaced by the gate, and the unlimited
+                // filler ('activity'/'sport') is a last resort, not something to multiply.
+                var shortest = Math.min.apply(null, validDurs);
+                var reps = 1;
+                if (d.kind === 'special') {
+                    var capN = _num(capView[key]); if (capN == null) capN = 1; // finite for specials
+                    reps = Math.max(1, Math.min(capN, maxSegments, Math.floor(len / shortest) || 1));
+                }
+                for (var rc = 0; rc < reps; rc++) {
+                    var actKey = (reps > 1) ? (key + '#' + rc) : key;  // distinct slot id; shared _key
+                    for (var vd = 0; vd < validDurs.length; vd++) {
+                        cands.push({ activity: actKey, durationMin: validDurs[vd], kind: d.kind, subcat: d.subcat || null,
+                                     name: _label(d), score: (typeof d.score === 'number' ? d.score : (d.kind === 'sport' ? 1 : 0)),
+                                     _key: key, _ref: d });
+                    }
                 }
             }
             if (!cands.length) { if (outMeta) outMeta.reason = 'no-candidates'; return null; }

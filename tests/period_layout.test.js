@@ -607,10 +607,12 @@ describe('PeriodLayout — LAYER SHARING watched at placement', () => {
 // The final reader fills any free time the exact packer left, GREEDILY with the
 // largest layer item that fits (fewest tiles), then grows a neighbor for slivers.
 describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles)', () => {
-    it('fills with MULTIPLE distinct specials where the exact tiler cannot (80-min window, one 40-min subcat)', () => {
-        // The exact packer needs durations summing to 80 with NO repeat of a kind → a
-        // single 40-min subcat can never tile an 80-min window. GAP-CLOSE places two
-        // 40-min specials greedily (fill assigns a DISTINCT activity to each later).
+    it('fills an 80-min window with TWO distinct specials of one 40-min subcat (categories repeat)', () => {
+        // "Categories repeat, activities don't": an 80-min window with a single 40-min
+        // subcat (cap 3 ⇒ 3 distinct available) now tiles wall-to-wall as two 40-min
+        // specials IN THE MAIN PASS — the packer is offered up to `cap` synthetic slots
+        // of the subcat, so it composes 40+40 directly (fill later assigns a DISTINCT
+        // activity to each). No "Activity" placeholder, no leftover gap.
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G',
             periods: [P(0, 80, 'P')], pinned: [],
@@ -620,7 +622,7 @@ describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles
         const specials = res.tiles.filter(t => t.generic && t.kind === 'special');
         assert.strictEqual(specials.length, 2, 'two 40-min specials fill the 80-min window');
         assert.strictEqual(res.stats.residualMin, 0, 'no gap left');
-        assert.ok(res.stats.gapCloseTilesPlaced >= 1, 'GAP-CLOSE placed the tiles the exact packer could not');
+        assert.ok(specials.every(s => s.durationMin === 40), 'each is a full 40-min special, not a fragment');
     });
 
     it('closes an OFF-GRID window by greedy fill + growing a filler over the sliver', () => {
@@ -654,6 +656,29 @@ describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles
         const gen = res.tiles.filter(t => t.generic);
         assert.strictEqual(gen.length, 1, 'one tile fills the window');
         assert.strictEqual(gen[0].kind, 'special', 'the real special wins over the activity placeholder');
+    });
+
+    it('big sports-free window fills with MULTIPLE real specials, NOT the "activity" placeholder', () => {
+        // The live Leebi case: no sport layer, so the only filler is the abstract
+        // "activity" placeholder. A 120-min window with one Regular subcat (cap 7 ⇒ 7
+        // distinct available activities) + the activity placeholder must fill with THREE
+        // 40-min real specials (categories repeat), NOT [one special + a giant Activity
+        // block]. Proves the scoring no longer lets the placeholder win on size and the
+        // packer is offered enough synthetic special slots to compose 40+40+40.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 120, 'P')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 7, score: 1 },
+                { kind: 'activity', dMin: 10, dMax: 120, window: [0, 945], score: 0 }
+            ],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'window fills wall-to-wall');
+        const specials = res.tiles.filter(t => t.generic && t.kind === 'special');
+        const activity = res.tiles.filter(t => t.generic && t.kind === 'activity');
+        assert.strictEqual(specials.length, 3, 'three 40-min real specials fill the 120-min window');
+        assert.strictEqual(activity.length, 0, 'the abstract "activity" placeholder is NOT used when real specials can fill');
     });
 
     it('never exceeds a subcat cap (distinct availability) — honest gap rather than a phantom repeat', () => {
