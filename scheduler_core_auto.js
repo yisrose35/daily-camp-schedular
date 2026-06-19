@@ -17516,9 +17516,27 @@
                                 });
                             } catch (_glReflErr) {}
 
+                            // Periods to tile. Bell-schedule camps have campPeriods (with 5-min
+                            // breaks). FREE-FORM division-times camps have NONE — then synthesize a
+                            // single day-spanning period bounded by the bunk's own pinned walls, so
+                            // freeSubWindows carves exactly the inter-wall gaps (never inventing time
+                            // beyond the day). Without this the layout had 0 periods ⇒ 0 windows ⇒ 0
+                            // tiles, and the early-return left those gaps empty (the live Leebi bug:
+                            // "0/0 free windows tiled" — 3rd/4th/5th gaps got nothing).
+                            var _glPeriods;
+                            if (rawPeriods.length) {
+                                _glPeriods = rawPeriods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _glBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; });
+                            } else if (pinned.length) {
+                                var _glWMin = Math.min.apply(null, pinned.map(function (w) { return w.startMin; }));
+                                var _glWMax = Math.max.apply(null, pinned.map(function (w) { return w.endMin; }));
+                                _glPeriods = [{ startMin: _glWMin, endMin: _glWMax, name: 'Day', isBreak: false }];
+                            } else {
+                                _glPeriods = [{ startMin: gStart, endMin: gEnd, name: 'Day', isBreak: false }];
+                            }
+
                             _glPerBunk[bunk] = {
                                 grade: grade,
-                                periods: rawPeriods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _glBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; }),
+                                periods: _glPeriods,
                                 pinned: pinned, floating: floating
                             };
                             _glOrder.push(bunk);
