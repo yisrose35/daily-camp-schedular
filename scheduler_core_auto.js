@@ -29114,6 +29114,179 @@
         } catch (_e6862b) { try { warn('[STEP 6.862b WORKSHOP-RECLAIM] skipped (error: ' + (_e6862b && _e6862b.message) + ')'); } catch (_e) {} }
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.862c — WORKSHOP-REBALANCE: even out workshop distribution across bunks.
+        // ───────────────────────────────────────────────────────────────────
+        //   The pre-place/solver can leave the cap-1 workshop rooms unevenly shared —
+        //   live: 5 bunks with 0 workshops while 2 hoard 3 — because the rooms saturate
+        //   during the post-lunch band and the neediest bunks' free windows collide with
+        //   anchors (so 6.862/6.862b find every room full and can't help them). This pass
+        //   DONATES a surplus bunk's workshop-room slot to a zero-served bunk that is free
+        //   at that exact window: the donor's block becomes a generic Sports, the recipient
+        //   reclaims its filler/gap into the workshop. Net room occupancy at that window is
+        //   UNCHANGED (donor out, recipient in), so cap-1 rooms stay within cap — only clean
+        //   single-occupant windows are swapped. The recipient side reuses 6.862/6.862b's
+        //   exact materialize → validate (equal-length, no-overlap, coverage-up) → rollback
+        //   primitive and is atomic (donor is only relabeled AFTER the recipient succeeds).
+        //   Config is read from the durable app1 (loadGlobalSettings() is {} mid-gen — the
+        //   FN-25c hazard). Kill switch: globalSettings.app1.workshopRebalance='off'.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _wbOff = false;
+            try { var _wbF = (globalSettings && globalSettings.app1 && globalSettings.app1.workshopRebalance); if (_wbF === 'off' || _wbF === false) _wbOff = true; } catch (_e) {}
+            if (!_wbOff && typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials) && todaysSpecials.length) {
+                var _wbNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _wbFillerRe = /^(sports|sport 2)$/i;
+                // ---- workshop set: a not_sharable cap-1 special with a DEDICATED room and a
+                //   ~daily exact-frequency target (weekly>=5). Cleanly selects the user's 4
+                //   workshops; excludes generic fillers (Sports/Sport 2), shared-cap fields,
+                //   and lower-frequency room-specials (Shiur 3/wk, HC/Leebi-in-Motion per-half).
+                var _wbCfg = {};
+                try {
+                    var _wbApp1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_wbApp1 && _wbApp1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return;
+                        var sw = s.sharableWith || {}; var per = _wbNorm(s.exactFrequencyPeriod); var fv = parseInt(s.exactFrequency) || 0;
+                        var wf = (per.indexOf('week') >= 0) ? fv : (per.indexOf('day') >= 0 ? fv * 7 : 0);
+                        _wbCfg[_wbNorm(s.name)] = { loc: s.location || null, cap: (parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2)), type: sw.type || 'not_sharable', wf: wf };
+                    });
+                } catch (_e) {}
+                var _wbIsWorkshop = function (nmL) { var c = _wbCfg[nmL]; return !!(c && (c.type === 'not_sharable' || c.cap <= 1) && c.loc && _wbNorm(c.loc) !== nmL && c.wf >= 5); };
+                var _wbRoomOf = function (nmL) { var c = _wbCfg[nmL]; return (c && c.loc) ? c.loc : null; };
+                var _wbCapOf = function (nmL) { var c = _wbCfg[nmL]; return (c && c.cap) ? c.cap : 1; };
+                var _wbLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+
+                var _wbSA = window.scheduleAssignments || {};
+                var _wbGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _wbGradeOf[String(b)] = g; }); });
+                var _wbPbs = function (g, b) { return (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(b)]) || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(b)]); };
+                var _wbProtected = function (c) { return !!(c._pinned || c._isChinuch || c._league || c._isTrip || c._trip || c._isRotationEvent || c._staggerReserved || c.type === 'custom'); };
+
+                // ---- per-bunk workshop count + donatable workshop sessions (head blocks)
+                var _wbCount = {}, _wbSessions = [];
+                Object.keys(_wbSA).forEach(function (b) {
+                    var g = _wbGradeOf[String(b)]; var arr = _wbSA[b]; if (!g || !Array.isArray(arr)) return;
+                    var n = 0;
+                    for (var i = 0; i < arr.length; i++) {
+                        var c = arr[i]; if (!c || c.continuation || c._startMin == null) continue;
+                        var nmL = _wbNorm(c._assignedSpecial || c._activity || c.event);
+                        if (!_wbIsWorkshop(nmL)) continue;
+                        n++;
+                        if (_wbProtected(c)) continue;   // counts toward the bunk's total but is never donated
+                        var tail = i; while (tail + 1 < arr.length && arr[tail + 1] && arr[tail + 1].continuation === true) tail++;
+                        _wbSessions.push({ bunk: b, g: g, name: (c._assignedSpecial || c._activity || c.event), nmL: nmL, room: (_wbRoomOf(nmL) || c.field), s: c._startMin, e: arr[tail]._endMin, idx: i, tail: tail });
+                    }
+                    _wbCount[b] = n;
+                });
+
+                // ---- live workshop-ROOM occupancy at [s,e) excluding a bunk
+                var _wbRoomConc = function (roomL, s, e, exclBunk) {
+                    var rl = _wbNorm(roomL), n = 0;
+                    Object.keys(_wbSA).forEach(function (b) {
+                        if (String(b) === String(exclBunk)) return;
+                        (_wbSA[b] || []).forEach(function (x) {
+                            if (!x || x.continuation || x._startMin == null || x._endMin == null) return;
+                            var xnm = _wbNorm(x._assignedSpecial || x._activity || x.event);
+                            var xr = _wbNorm(_wbRoomOf(xnm) || x.field);
+                            if (xr === rl && x._startMin < e && x._endMin > s) n++;
+                        });
+                    });
+                    return n;
+                };
+
+                // ---- recipient: give bunk Z the workshop (name@room) at [fS,fE], reclaiming
+                //   the filler/free cells it covers. Atomic: validate + rollback on failure.
+                var _wbGive = function (Z, gZ, name, room, fS, fE) {
+                    var slots = _wbSA[Z]; var pbs = _wbPbs(gZ, Z);
+                    if (!Array.isArray(slots) || !Array.isArray(pbs) || pbs.length !== slots.length) return false;
+                    var _isFreeCell = function (cc) { return (!cc || cc._startMin == null || _wbNorm(cc.field) === 'free' || _wbNorm(cc._activity) === 'free' || _wbNorm(cc.event) === 'free'); };
+                    var _isReclaim = function (cc) { if (!cc || cc._startMin == null) return false; var nm = _wbNorm(cc._assignedSpecial || cc._activity || cc.event); return _wbFillerRe.test(nm) && !_wbProtected(cc); };
+                    // every cell overlapping [fS,fE] must be reclaimable (filler/free) — never clobber real content
+                    for (var qi = 0; qi < slots.length; qi++) {
+                        var qc = slots[qi]; if (!qc || qc.continuation || qc._startMin == null) continue;
+                        if (qc._startMin < fE && qc._endMin > fS && !_isFreeCell(qc) && !_isReclaim(qc)) return false;
+                    }
+                    var _clS, _clP; try { _clS = JSON.parse(JSON.stringify(slots)); _clP = JSON.parse(JSON.stringify(pbs)); } catch (_e) { return false; }
+                    var groups = [];
+                    for (var pi = 0; pi < slots.length; pi++) {
+                        var cc = slots[pi], ss = pbs[pi];
+                        if (cc && cc.continuation === true && groups.length) { groups[groups.length - 1].cells.push({ cell: cc, slot: ss }); continue; }
+                        var st = (cc && cc._startMin != null) ? cc._startMin : (ss && ss.startMin != null ? ss.startMin : null);
+                        var en = (cc && cc._endMin != null) ? cc._endMin : (ss && ss.endMin != null ? ss.endMin : null);
+                        if (st != null && en != null && (_isFreeCell(cc) || _isReclaim(cc)) && (Math.max(fS, st) < Math.min(fE, en))) continue;   // dropped (covered by the workshop)
+                        var key0 = (cc && cc._startMin != null) ? cc._startMin : ((ss && ss.startMin != null) ? ss.startMin : 1e9);
+                        groups.push({ key: key0, cells: [{ cell: cc, slot: ss }] });
+                    }
+                    var cell = { field: room || name, sport: null, _activity: name, event: name, type: 'special', _autoSpecial: true, _assignedSpecial: name, _specialLocation: room, _isSpecialLocation: !!room, _startMin: fS, _endMin: fE, _autoMode: true, _workshopRebalance: true, _final: true, continuation: false };
+                    var slot = { startMin: fS, endMin: fE, startTime: _wbLabel(fS), endTime: _wbLabel(fE), event: name, type: 'special', _bunk: Z, _autoGenerated: true, _injected: true };
+                    groups.push({ key: fS, cells: [{ cell: cell, slot: slot }] });
+                    groups.sort(function (a, b) { return a.key - b.key; });
+                    var nS = [], nP = []; groups.forEach(function (grp) { grp.cells.forEach(function (pc) { nS.push(pc.cell); nP.push(pc.slot); }); });
+                    nP.forEach(function (s, idx) { if (s) s.slotIndex = idx; });
+                    var ok = (nS.length === nP.length);
+                    if (ok) {
+                        var occ = [];
+                        groups.forEach(function (grp) { var h0 = grp.cells[0].cell; if (_isFreeCell(h0)) return; var a = null, b = null; grp.cells.forEach(function (pc) { var cl = pc.cell; if (cl && cl._startMin != null && cl._endMin != null) { if (a == null || cl._startMin < a) a = cl._startMin; if (b == null || cl._endMin > b) b = cl._endMin; } }); if (a != null && b != null && b > a) occ.push({ s: a, e: b }); });
+                        occ.sort(function (a, b) { return a.s - b.s; });
+                        for (var vi = 0; vi + 1 < occ.length && ok; vi++) { if (occ[vi + 1].s < occ[vi].e) ok = false; }
+                    }
+                    if (!ok) return false;
+                    _wbSA[Z] = nS;
+                    if (window._perBunkSlots && window._perBunkSlots[gZ]) window._perBunkSlots[gZ][String(Z)] = nP;
+                    if (window.divisionTimes && window.divisionTimes[gZ] && window.divisionTimes[gZ]._perBunkSlots) window.divisionTimes[gZ]._perBunkSlots[String(Z)] = nP;
+                    return true;
+                };
+
+                // ---- donor: relabel the workshop block at its slot positions into generic Sports
+                //   (keeps timing/positions, so the donor's grid alignment is untouched).
+                var _wbTakeFrom = function (D, sess) {
+                    var arr = _wbSA[D]; if (!Array.isArray(arr)) return false;
+                    var head = arr[sess.idx]; if (!head || _wbNorm(head._assignedSpecial || head._activity || head.event) !== sess.nmL) return false;
+                    head.field = 'Sports'; head.sport = 'Sports'; head._activity = 'Sports'; head.event = 'Sports'; head.type = 'special';
+                    head._assignedSpecial = 'Sports'; head._specialLocation = null; head._isSpecialLocation = false; head._autoSpecial = true; head._source = 'wb-donor-sports';
+                    try { delete head._workshopRebalance; delete head._workshopReclaim; } catch (_e) {}
+                    for (var k = sess.idx + 1; k <= sess.tail && k < arr.length; k++) { if (arr[k] && arr[k].continuation) { arr[k].field = 'Sports'; arr[k].sport = 'Sports'; arr[k]._activity = 'Sports'; arr[k].event = 'Sports'; arr[k]._assignedSpecial = 'Sports'; arr[k]._specialLocation = null; } }
+                    return true;
+                };
+
+                // ---- greedy: each needy bunk (0 workshops) gets ONE donated session
+                var _wbDonations = 0, _wbErr = 0, _usedSess = {};
+                var _needy = Object.keys(_wbCount).filter(function (b) { return _wbCount[b] === 0 && _wbGradeOf[String(b)]; });
+                _needy.sort();
+                _needy.forEach(function (Z) {
+                    if ((_wbCount[Z] || 0) >= 1) return;
+                    var gZ = _wbGradeOf[String(Z)];
+                    var zHas = {}; (_wbSA[Z] || []).forEach(function (x) { if (x && !x.continuation) { var a = _wbNorm(x._assignedSpecial || x._activity || x.event); if (_wbIsWorkshop(a)) zHas[a] = 1; } });
+                    for (var si = 0; si < _wbSessions.length; si++) {
+                        var sess = _wbSessions[si];
+                        var sk = sess.bunk + '|' + sess.idx; if (_usedSess[sk]) continue;
+                        if (String(sess.bunk) === String(Z)) continue;
+                        if ((_wbCount[sess.bunk] || 0) < 2) continue;                  // donor must keep >=1
+                        if (zHas[sess.nmL]) continue;                                  // no duplicate workshop for Z
+                        var room = sess.room, cap = _wbCapOf(sess.nmL);
+                        if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) continue;   // clean swap only (no over-cap)
+                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) continue; } catch (_e) { continue; }
+                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sess.name, gZ, sess.s, sess.e)) continue; } catch (_e) {}
+                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) continue; } catch (_e) {}
+                        if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) continue;      // atomic recipient first
+                        if (!_wbTakeFrom(sess.bunk, sess)) { _wbErr++; }                     // then relabel donor
+                        try { if (typeof claimField === 'function') claimField(room, sess.s, sess.e, Z, gZ, sess.name); } catch (_e) {}
+                        _usedSess[sk] = 1;
+                        _wbCount[Z] = (_wbCount[Z] || 0) + 1;
+                        _wbCount[sess.bunk] = (_wbCount[sess.bunk] || 0) - 1;
+                        _wbDonations++;
+                        break;   // one workshop per needy bunk this pass
+                    }
+                });
+                if (_wbDonations > 0) {
+                    log('[STEP 6.862c WORKSHOP-REBALANCE] ✅ donated ' + _wbDonations + ' workshop slot(s) from over-served to under-served bunk(s)' + (_wbErr ? ' (' + _wbErr + ' donor-relabel warning)' : '') + '. [kill switch: globalSettings.app1.workshopRebalance=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('[STEP 6.862c WORKSHOP-REBALANCE] no donatable workshop slots matched needy bunks (balanced or capacity-locked)');
+                }
+            }
+        } catch (_e6862c) { try { warn('[STEP 6.862c WORKSHOP-REBALANCE] skipped (error: ' + (_e6862c && _e6862c.message) + ')'); } catch (_e) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
         //   activity)                       [KILL SWITCH + per-bunk rollback]
         // ───────────────────────────────────────────────────────────────────
