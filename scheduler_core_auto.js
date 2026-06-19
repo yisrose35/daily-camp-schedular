@@ -17797,27 +17797,38 @@
                                 var sh = _glShareOf(cand);
                                 (_glUsage[sh.key] = _glUsage[sh.key] || []).push({ grade: grade, s: s, e: e });
                             };
-                            // DIAGNOSTIC (upper bound): for a capacity-full miss, could the tile EVER be
-                            // placed somewhere in its layer window — i.e. does any unused subcat activity
-                            // have a capacity-OK slot anywhere in [window]? If NO → the resource is
-                            // SATURATED across the window: no stagger/move can recover it, only config
-                            // (raise capacity / make shareable). If YES → a stagger MIGHT recover it. This
-                            // splits capacity-full into capacity-saturated vs capacity-movable so we know
-                            // how much a restructure pass would actually buy before building it.
-                            var _glCapMovable = function (t, grade, pool, used) {
-                                var sub = _glCanon(t.subcat);
+                            // DIAGNOSTIC (true ceiling): for a capacity-full miss, could a WITHIN-BUNK
+                            // re-time actually recover it? A re-time can only move the tile onto one of the
+                            // bunk's OWN non-wall slots (a sport or special tile — walls like swim/lunch can't
+                            // move). So a miss is RECOVERABLE iff some unused subcat activity has a capacity-OK
+                            // slot at the time of one of the bunk's equal-duration sport/special tiles (a legal
+                            // swap target). Else it is STUCK: free capacity exists in the day but only at wall-
+                            // times the bunk can't use → only CONFIG (raise cap / make shareable) or a layout
+                            // band-spread can help, not a within-bunk shuffle. (Earlier _glCapMovable scanned
+                            // the whole window and over-counted, because the free time was often a wall.)
+                            var _glCapRecoverable = function (t, grade, pool, used, bunkTiles) {
+                                var sub = _glCanon(t.subcat), d = t.durationMin;
                                 var win = (t._ref && t._ref.window) || [t.startMin, t.endMin];
-                                var w0 = win[0], w1 = win[1];
+                                // candidate swap-target slots = bunk's own sport/special tiles, equal duration,
+                                // different from t, lying inside t's window.
+                                var targets = [];
+                                for (var ti = 0; ti < bunkTiles.length; ti++) {
+                                    var bt = bunkTiles[ti];
+                                    if (!bt || bt === t) continue;
+                                    if (bt.kind !== 'sport' && bt.kind !== 'special') continue;
+                                    if (bt.durationMin !== d) continue;
+                                    if (bt.startMin < win[0] || bt.endMin > win[1]) continue;
+                                    targets.push(bt);
+                                }
+                                if (!targets.length) return false;
                                 for (var i = 0; i < pool.length; i++) {
                                     var c = pool[i];
                                     if (!c || !c.name || used[String(c.name).toLowerCase()]) continue;
                                     if (_glCanon(c.subcategory) !== sub) continue;
-                                    var durs = _glSpecialDurs(c.name); if (!durs.length) durs = [t.durationMin];
-                                    for (var di = 0; di < durs.length; di++) {
-                                        var d = durs[di]; if (!(d > 0)) continue;
-                                        for (var x = w0; x + d <= w1; x += 5) {
-                                            if (_glCapFits(c, grade, x, x + d)) return true;
-                                        }
+                                    var durs = _glSpecialDurs(c.name);
+                                    if (durs.length && durs.indexOf(d) < 0) continue;
+                                    for (var k = 0; k < targets.length; k++) {
+                                        if (_glCapFits(c, grade, targets[k].startMin, targets[k].endMin)) return true;
                                     }
                                 }
                                 return false;
@@ -17884,10 +17895,10 @@
                                         var cause = !anySub ? 'no-activity-in-subcat'
                                                   : !anyDur ? ('no-activity-at-' + dur + 'min')
                                                   : !anyFree ? 'pool-exhausted'
-                                                  // capacity-full splits: saturated (no free slot anywhere in the
-                                                  // window → config only) vs movable (free slot exists → a stagger
-                                                  // could recover it).
-                                                  : (_glCapMovable(t, grade, pool, used) ? 'capacity-movable' : 'capacity-saturated');
+                                                  // capacity-full splits: recoverable (a within-bunk swap onto an
+                                                  // equal-dur sport/special slot could fill it) vs stuck (free
+                                                  // capacity only at wall-times → config / layout-spread only).
+                                                  : (_glCapRecoverable(t, grade, pool, used, res.tiles) ? 'capacity-recoverable' : 'capacity-stuck');
                                         _glFill.causes[cause] = (_glFill.causes[cause] || 0) + 1;
                                         if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min [' + cause + ']');
                                     }
