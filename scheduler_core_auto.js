@@ -17378,6 +17378,168 @@
                 }
             }
 
+            // ── GENERIC-LAYOUT PREVIEW (manual-model-in-auto) ────────────────────
+            //   Behind window.__useGenericLayout / globalSettings.app1.useGenericLayout.
+            //   Decouples LAYOUT from CONTENT: reads the per-bunk DEMAND from the layers
+            //   (pinned walls already placed in bunkTimelines + floating special-
+            //   subcategory floors + a sport filler), lays GENERIC kind-labeled tiles
+            //   wall-to-wall across each bell period via window.PeriodLayout (NO concrete
+            //   activity, NO content gates), writes them straight to divisionTimes /
+            //   _perBunkSlots / scheduleAssignments, persists, and RETURNS — so NONE of
+            //   the activity-assignment phases (2.5 / 3 / 4 / recapture / cap sweeps /
+            //   floor enforcers) run. The user sees Sport / Special: Food / Swim / Main
+            //   Activity / Change / Lunch / Cleanup tiles, not basketball / hit-the-deck.
+            //   Iteration 0 only. Fully fail-safe: ANY error falls through to normal gen.
+            if (totalIters < 1) {
+              try {
+                var _genOn = false;
+                try { _genOn = (typeof window !== 'undefined' && window.__useGenericLayout) || (globalSettings && globalSettings.app1 && globalSettings.app1.useGenericLayout) || false; } catch (_e) {}
+                if (_genOn && window.PeriodLayout && window.PeriodPacker && window.DivisionTimesSystem) {
+                    log('═══════════════════════════════════════════════════════════');
+                    log('[GENERIC-LAYOUT] ★ ACTIVE — laying generic kind tiles, NOT activities. (disable: window.__useGenericLayout=false)');
+
+                    var _glBreak = /break|transition|passing/i;
+                    var _glCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                    var _glTitle = function (s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); };
+                    var _glWallLabel = function (b) {
+                        var t = String(b.type || '').toLowerCase();
+                        if (t === 'swim') return 'Swim';
+                        if (t === 'change' || t === 'pre-change' || t === 'post-change') return 'Change';
+                        if (t === 'lunch') return 'Lunch';
+                        if (t === 'snack' || t === 'snacks') return 'Snack';
+                        if (t === 'cleanup' || t === 'dismissal') return 'Cleanup';
+                        if (t === 'league') return b.event || 'League';
+                        if (t === 'trip') return b.event || 'Trip';
+                        return b.event || b._assignedSpecial || _glTitle(t || 'Activity');
+                    };
+
+                    // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
+                    var _glOrder = [], _glPerBunk = {};
+                    allGrades.forEach(function (grade) {
+                        var rawPeriods = (window.campPeriods && window.campPeriods[grade]) || [];
+                        var gObj = divisions[grade] || divisions[String(grade)] || {};
+                        var gStart = parseTimeToMinutes(gObj.startTime);
+                        var gEnd = parseTimeToMinutes(gObj.endTime);
+                        if (gStart == null && rawPeriods.length) gStart = Math.min.apply(null, rawPeriods.map(function (p) { return p.startMin; }));
+                        if (gEnd == null && rawPeriods.length) gEnd = Math.max.apply(null, rawPeriods.map(function (p) { return p.endMin; }));
+                        if (gStart == null) gStart = 0;
+                        if (gEnd == null) gEnd = 1440;
+                        var maxLen = rawPeriods.reduce(function (m, p) { return Math.max(m, (p.endMin - p.startMin) || 0); }, 60);
+
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                            var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                            // pinned walls = whatever is already placed in bunkTimelines (swim/change/lunch/main/cleanup).
+                            var pinned = (bunkTimelines[bunk] || []).filter(function (b) { return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin; })
+                                .map(function (b) { return { kind: String(b.type || 'wall').toLowerCase(), subcat: null, name: _glWallLabel(b), startMin: b.startMin, endMin: b.endMin }; });
+
+                            var floating = [];
+                            // special-subcategory floors → ONE generic tile per subcat (food/theme/shiur/uncategorized/…)
+                            var subDur = {}, subFloor = {};
+                            var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
+                            Object.keys(caps).forEach(function (k) { var key = _glCanon(k); var c = caps[k]; subFloor[key] = (c === Infinity || c == null) ? 1 : c; });
+                            ((sl && sl.specials && sl.specials.priorityList) || []).forEach(function (sx) {
+                                var key = _glCanon(sx.subcategory);
+                                if (subFloor[key] == null) subFloor[key] = 1;
+                                var durs = [];
+                                try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(sx.name, window.activityProperties, globalSettings) : null; durs = (gd && gd.durations) || gd; } catch (_e) {}
+                                if (!Array.isArray(durs)) durs = [];
+                                if (!durs.length) { if (sx.dMin) durs.push(sx.dMin); if (sx.dMax && sx.dMax !== sx.dMin) durs.push(sx.dMax); }
+                                subDur[key] = subDur[key] || {};
+                                durs.forEach(function (d) { if (d) subDur[key][d] = 1; });
+                            });
+                            Object.keys(subFloor).forEach(function (key) {
+                                var durs = Object.keys(subDur[key] || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
+                                if (!durs.length) durs = [10, 20, 30, 40];
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], score: 0 });
+                            });
+                            // sport filler (unlimited) — fills whatever the special floors leave open.
+                            var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
+                            floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, 60), window: [gStart, gEnd], score: 1 });
+
+                            _glPerBunk[bunk] = {
+                                grade: grade,
+                                periods: rawPeriods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _glBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; }),
+                                pinned: pinned, floating: floating
+                            };
+                            _glOrder.push(bunk);
+                        });
+                    });
+
+                    // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent).
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+
+                    // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
+                    //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real
+                    //    `autoSkeleton` const isn't declared until ~:19732 (TDZ if touched here).
+                    var _genSkeleton = [];
+                    var _bunkToGrade = {};
+                    allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _bunkToGrade[String(b)] = g; }); });
+                    _glOrder.forEach(function (bunk) {
+                        var grade = _bunkToGrade[String(bunk)];
+                        var res = _glOut.layoutByBunk[bunk];
+                        if (!res) return;
+                        res.tiles.forEach(function (t) {
+                            _genSkeleton.push({ division: grade, _bunk: bunk, startMin: t.startMin, endMin: t.endMin, startTime: minutesToTimeLabel(t.startMin), endTime: minutesToTimeLabel(t.endMin), type: t.kind, event: t.name, _generic: !!t.generic });
+                        });
+                    });
+
+                    window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(_genSkeleton, divisions);
+                    allGrades.forEach(function (grade) {
+                        var ds = window.divisionTimes[grade]; if (!ds) return;
+                        var pbs = {};
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                            pbs[String(bunk)] = _genSkeleton.filter(function (b) { return b.division === grade && String(b._bunk) === String(bunk); })
+                                .sort(function (a, b) { return a.startMin - b.startMin; })
+                                .map(function (b, i) { return { startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true, _generic: !!b._generic }; });
+                        });
+                        window.divisionTimes[grade]._perBunkSlots = pbs;
+                    });
+                    window._perBunkSlots = {};
+                    allGrades.forEach(function (grade) { var ds = window.divisionTimes[grade]; if (ds && ds._perBunkSlots) window._perBunkSlots[grade] = ds._perBunkSlots; });
+
+                    // 4) scheduleAssignments aligned to _perBunkSlots — generic labels only.
+                    window.scheduleAssignments = {};
+                    allGrades.forEach(function (grade) {
+                        var pbs = window._perBunkSlots[grade] || {};
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                            var arr = pbs[String(bunk)] || [];
+                            window.scheduleAssignments[String(bunk)] = arr.map(function (s) {
+                                return { field: s.event, sport: null, _activity: s.event, _startMin: s.startMin, _endMin: s.endMin, _fixed: true, _autoMode: true, _generic: true, continuation: false, type: s.type };
+                            });
+                        });
+                    });
+
+                    // 5) Persist (mirrors STEP 5 :25589) so the generic skeleton survives reload.
+                    try {
+                        var _glDate = window._activeGenDate || currentDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                        var _glClean = {};
+                        Object.entries(window.scheduleAssignments || {}).forEach(function (kv) { _glClean[kv[0]] = (kv[1] || []).map(function (x) { return x || null; }); });
+                        var _glSpbs = {};
+                        Object.keys(window.divisionTimes || {}).forEach(function (g) { if (window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) _glSpbs[g] = window.divisionTimes[g]._perBunkSlots; });
+                        var _GLKEY = 'campDailyData_v1';
+                        var _glAll = JSON.parse(localStorage.getItem(_GLKEY) || '{}');
+                        if (!_glAll[_glDate]) _glAll[_glDate] = {};
+                        Object.assign(_glAll[_glDate], { scheduleAssignments: _glClean, leagueAssignments: {}, manualSkeleton: _genSkeleton, _perBunkSlotsData: _glSpbs, _autoGenerated: true, _genericLayout: true, _generatedAt: new Date().toISOString() });
+                        try { localStorage.setItem(_GLKEY, JSON.stringify(_glAll)); }
+                        catch (_q) { var _one = {}; _one[_glDate] = _glAll[_glDate]; try { localStorage.setItem(_GLKEY, JSON.stringify(_one)); } catch (_q2) {} }
+                        if (typeof window.saveGlobalSettings === 'function') {
+                            _glAll[_glDate].divisionTimes = (window.DivisionTimesSystem.serialize && window.DivisionTimesSystem.serialize(window.divisionTimes)) || window.divisionTimes || {};
+                            window.saveGlobalSettings('daily_schedules', _glAll);
+                        }
+                        log('[GENERIC-LAYOUT] saved ' + _glOrder.length + ' bunks for ' + _glDate);
+                    } catch (_glSaveErr) { warn('[GENERIC-LAYOUT] save: ' + (_glSaveErr && _glSaveErr.message)); }
+
+                    var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+                    log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s)');
+                    try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
+                    return true; // ← early return: skip ALL activity-assignment phases
+                }
+              } catch (_glErr) {
+                try { warn('[GENERIC-LAYOUT] error — falling through to normal generation: ' + (_glErr && _glErr.message)); } catch (_e) {}
+                try { if (_glErr && _glErr.stack) warn(_glErr.stack); } catch (_e) {}
+              }
+            }
+
             // ── PHASE 2.45: PeriodOrchestrator SHADOW (period-tiling projection) ──
             //   Behind globalSettings.app1.usePeriodTiling ('shadow'|'apply'). Computes,
             //   per bunk per non-break period, how the FREE REMAINDER around the pinned
