@@ -27938,6 +27938,22 @@
                 var _rfDivs = window.divisions || {};
                 var _rfB2G = {}; Object.keys(_rfDivs).forEach(function (g) { ((_rfDivs[g] && _rfDivs[g].bunks) || []).forEach(function (b) { _rfB2G[String(b)] = g; }); });
                 var _rfDT = window.divisionTimes || {};
+                // ── subcategory-cap awareness: don't refill a demoted slot with a special
+                //   whose subcategory is already at the bunk's layer cap — that just re-makes
+                //   a duplicate the FN-56 ceiling (which runs after this) demotes right back to
+                //   Free. Skipping it lets the refill pick an UNDER-cap subcat that survives
+                //   (live: Minors' food). canon ''/regular/uncategorized → 'uncategorized'.
+                //   No-op when no subcategory layers (map/caps empty → never skips).
+                var _rfNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _rfSubOf = {};
+                try {
+                    var _rfA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_rfA1 && _rfA1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return; var _n = _rfNorm(s.name); var _sc = _rfNorm(s.subcategory);
+                        _rfSubOf[_n] = (!_sc || _sc === 'regular' || _sc === 'uncategorized') ? 'uncategorized' : _sc;
+                    });
+                } catch (_e) {}
+                var _rfCapsByBunk = (typeof window !== 'undefined' && window._subcatCapsByBunk) || null;
                 var _rfSlotTime = function (bunk, grade, idx, e) {
                     if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
                     var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
@@ -27961,6 +27977,7 @@
                 Object.keys(_rfSA).forEach(function (bunk) {
                     var slots = _rfSA[bunk]; if (!Array.isArray(slots)) return;
                     var g = _rfB2G[String(bunk)] || '?';
+                    var _rfCaps = (_rfCapsByBunk && _rfCapsByBunk[bunk] && _rfCapsByBunk[bunk].enforced) ? _rfCapsByBunk[bunk].caps : null;
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
                         // Fill: (a) FN-19/21 cap demotions — tagged 'fn1921_type_cap'
@@ -27975,7 +27992,7 @@
                         _rfCands++;
                         var _t = _rfSlotTime(bunk, g, idx, e); if (!_t || _t.s == null || _t.e == null) return;
                         var width = _t.e - _t.s;
-                        var done = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
+                        var done = {}, _rfSubCount = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') { done[a] = 1; if (_rfCaps) { var _xsc = _rfSubOf[a]; if (_xsc != null) _rfSubCount[_xsc] = (_rfSubCount[_xsc] || 0) + 1; } } } });
                         // Pick a fitting special with spare capacity. Pass 1 prefers a special
                         // the bunk hasn't done today; pass 2 allows a repeat as a last resort so
                         // the slot still fills. Duration only needs to FIT the cell (dur<=width),
@@ -27986,6 +28003,7 @@
                                 var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
                                 var nm = String(sp.name).toLowerCase().trim();
                                 if (!allowRepeat && done[nm]) continue;
+                                if (_rfCaps) { var _sc = _rfSubOf[nm]; if (_sc != null) { var _cp = _rfCaps[_sc]; if (_cp != null && isFinite(_cp) && (_rfSubCount[_sc] || 0) >= _cp) continue; } }   // subcat already at cap → FN-56 would demote it
                                 try { if (!isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
                                 var dur = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0;
                                 if (dur <= 0 || dur > width) continue;            // must fit the cell
