@@ -35,7 +35,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '0.2.1';
+    var VERSION = '0.2.2';
 
     function _getPacker(opts) {
         if (opts && opts.packer) return opts.packer;
@@ -203,19 +203,25 @@
                         if (used < remView[s._key]) granted[s._key] = used + 1; else fb = 0;
                     }
                     total += fb;
-                    // REAL layer content (special / structural) vs the generic FILLERS
-                    // (sport + activity placeholders). The size reward (duration², "prefer
-                    // FEWER, LARGER tiles") applies ONLY to real content — a special is taken
-                    // at its longest permitted length and a few large specials beat many tiny
-                    // ones. The fillers get NO size reward and a per-minute PENALTY, so they
-                    // are a LAST RESORT: the packer fills with real specials and only drops in
-                    // a sport/activity filler for time no special can cover. Without this, a
-                    // big filler's duration² reward let it swallow a window the user wanted
-                    // filled with specials (live: a 70-min "Sport" / a giant "Activity" block).
-                    // The flat per-tile content score was also removed — it rewarded QUANTITY,
-                    // so many tiny specials beat fewer large ones (live: "food×5" fragmenting
-                    // + starving other floors).
-                    if (s.kind === 'sport' || s.kind === 'activity') total -= 0.01 * s.durationMin;
+                    // FILLER vs FLOOR, per the user's "even day" rule: give the MINIMUM
+                    // (floor) of each special, then fill the rest with SPORT — "one special,
+                    // then a sport, then a special, then a sport." The FLOOR specials are
+                    // already guaranteed by floorBonus (1000 / 100000 above), which dwarfs any
+                    // size reward, so "1 of each special" ALWAYS lands first and a sport can
+                    // never swallow a window the bunk still owes a special (the Majors fix).
+                    // PAST the floor the preference FLIPS to sport:
+                    //   • sport = the PREFERRED filler — a duration² size reward SLIGHTLY
+                    //     larger than a special's, so an extra SPORT beats an extra (over-floor)
+                    //     special and the remainder fills with sport (the even day). The bigger
+                    //     reward also means FEWER, LARGER sports (no slivers).
+                    //   • special = duration² size reward (fewer/larger). It wins the FLOOR
+                    //     slots via floorBonus and, in sports-FREE camps (no sport demand),
+                    //     still fills the whole day because it beats the 'activity' placeholder.
+                    //   • activity = abstract last-resort placeholder: a per-minute PENALTY.
+                    // (Was: sport PENALTY + special-only size reward, which made the layout
+                    // over-produce specials — uncat peaked at 32 across 38 bunks vs supply 17.)
+                    if (s.kind === 'activity') total -= 0.01 * s.durationMin;
+                    else if (s.kind === 'sport') total += 0.003 * s.durationMin * s.durationMin;
                     else total += 0.002 * s.durationMin * s.durationMin;
                 }
                 total -= 0.01 * packing.segments.length; // mild extra nudge toward fewer tiles
