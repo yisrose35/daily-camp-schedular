@@ -17430,7 +17430,7 @@
                         : null;
 
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
-                    var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0;
+                    var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0, _glCapLogged = {};
                     allGrades.forEach(function (grade) {
                         var rawPeriods = (window.campPeriods && window.campPeriods[grade]) || [];
                         var gObj = divisions[grade] || divisions[String(grade)] || {};
@@ -17460,7 +17460,8 @@
                             var subDur = {}, subFloor = {}, subCap = {}, subAvail = {};
                             var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
                             Object.keys(caps).forEach(function (k) { var key = _glCanon(k); var c = caps[k]; subFloor[key] = (c === Infinity || c == null) ? 1 : c; subCap[key] = (c === Infinity || c == null) ? Infinity : c; });
-                            ((sl && sl.specials && sl.specials.priorityList) || []).forEach(function (sx) {
+                            // Ingest one special into the per-subcat DISTINCT-availability + duration maps.
+                            var _glIngestSpecial = function (sx) {
                                 var key = _glCanon(sx.subcategory);
                                 if (subFloor[key] == null) subFloor[key] = 1;
                                 (subAvail[key] = subAvail[key] || {})[sx.name || ('#' + Math.round(sx.dMin || 0))] = 1;  // count DISTINCT available specials
@@ -17470,7 +17471,33 @@
                                 if (!durs.length) { if (sx.dMin) durs.push(sx.dMin); if (sx.dMax && sx.dMax !== sx.dMin) durs.push(sx.dMax); }
                                 subDur[key] = subDur[key] || {};
                                 durs.forEach(function (d) { if (d) subDur[key][d] = 1; });
-                            });
+                            };
+                            // CAP source = the FULL access-available special list (todaysSpecials),
+                            // NOT the rotation-thinned priorityList. priorityList drops specials for
+                            // cohort / maxUsage / multi-part / rotation reasons — a "how OFTEN" concern.
+                            // The generic-layout CAP is "how many DISTINCT specials EXIST that fill
+                            // could assign to this subcat" — a "what EXISTS" concern. Using the thinned
+                            // list throttled the cap (live: 5th grade lost 4 specials to cohort skips →
+                            // cap 3 → most of the day fell to the "activity" placeholder). Filter by
+                            // access (isSpecialAvailableForBunk) + drop fullGrade only; rotation fairness
+                            // is the FILL step's job, and over-counting just yields more real-special
+                            // tiles (capped per window) which is exactly the goal.
+                            var _glAvailN = 0;
+                            try {
+                                (typeof todaysSpecials !== 'undefined' && todaysSpecials ? todaysSpecials : []).forEach(function (s) {
+                                    if (!s || !s.name) return;
+                                    try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(s.name, grade, bunk, globalSettings)) return; } catch (_e) {}
+                                    var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                    if (_sp.fullGrade === true || s.fullGrade === true) return;
+                                    _glIngestSpecial(s); _glAvailN++;
+                                });
+                            } catch (_glAvErr) {}
+                            // Fallback: if the access scan yielded nothing (edge config), use the
+                            // priorityList so the subcats/floors are still discovered.
+                            if (_glAvailN === 0) {
+                                ((sl && sl.specials && sl.specials.priorityList) || []).forEach(_glIngestSpecial);
+                            }
+                            var _glCapParts = [];
                             Object.keys(subFloor).forEach(function (key) {
                                 var durs = Object.keys(subDur[key] || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
                                 if (!durs.length) durs = [10, 20, 30, 40];
@@ -17490,7 +17517,10 @@
                                 // score 1 (was 0): an over-floor special outranks the generic placeholder
                                 // filler below, so the day fills with REAL specials, not "Activity" tiles.
                                 floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], cap: _cap, score: 1 });
+                                _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + ', durs=[' + durs.join(',') + '])');
                             });
+                            // One cap-diagnostic line per grade (first bunk) so a throttled subcat is visible.
+                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)')); }
                             // Generic FILLER — fills whatever the layer demands leave open. A sport filler
                             // (real content) keeps score 1; the abstract "activity" placeholder (sports-free
                             // camps) drops to score 0 so it is a LAST resort and real specials are used first
