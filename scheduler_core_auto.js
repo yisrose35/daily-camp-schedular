@@ -17739,9 +17739,10 @@
                             // buildFieldSharingMap does — from the special's own `sharableWith`
                             // (NOT getSpecialCapacity, which is a PLAYER count) — so the fill
                             // prevents EXACTLY what the validator flags. Resource key =
-                            // (location || name). not_sharable ⇒ cap 1 enforced GLOBALLY (any grade);
-                            // every other type ⇒ per-grade cap (the validator's CHECK B groups by
-                            // grade). As specials are assigned bunk-by-bunk, a candidate that would
+                            // (location || name). Capacity is enforced PER-GRADE for ALL sharing types —
+                            // the validator's CHECK B (capacity) groups by grade and its CHECK A
+                            // (cross-division) SKIPS specials, so cross-grade reuse of the same special
+                            // is allowed. As specials are assigned bunk-by-bunk, a candidate that would
                             // exceed its capacity at an overlapping time is skipped and the next
                             // rotation-best is taken instead — which is ALSO what spreads a grade
                             // across different specials (the variety win).
@@ -17780,9 +17781,13 @@
                                 var counted = [];
                                 for (var i = 0; i < list.length; i++) {
                                     var u = list[i];
-                                    if (!(u.s < e && u.e > s)) continue;                          // must overlap the new tile
-                                    if (sh.type === 'same_division' && u.grade !== grade) continue; // per-grade cap; not_sharable/cross_division count all
-                                    counted.push([Math.max(u.s, s), Math.min(u.e, e)]);            // clip to the new tile's span
+                                    if (!(u.s < e && u.e > s)) continue;        // must overlap the new tile
+                                    if (u.grade !== grade) continue;            // PER-GRADE cap — matches the validator exactly:
+                                                                                // CHECK B (capacity) groups by grade; CHECK A (cross-division)
+                                                                                // SKIPS specials (auto_validator.js:276 `if (sharing._isSpecial) return`).
+                                                                                // Cross-grade reuse of the same special is NOT a violation, so a
+                                                                                // global cap would wrongly strand legal placements (live: 136→82).
+                                    counted.push([Math.max(u.s, s), Math.min(u.e, e)]);  // clip to the new tile's span
                                 }
                                 return (1 + _glMaxCover(counted)) <= sh.cap;
                             };
