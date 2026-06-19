@@ -17423,7 +17423,7 @@
                         : null;
 
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
-                    var _glOrder = [], _glPerBunk = {};
+                    var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0;
                     allGrades.forEach(function (grade) {
                         var rawPeriods = (window.campPeriods && window.campPeriods[grade]) || [];
                         var gObj = divisions[grade] || divisions[String(grade)] || {};
@@ -17464,6 +17464,57 @@
                             // sport filler (unlimited) — fills whatever the special floors leave open.
                             var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
                             floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, 60), window: [gStart, gEnd], score: 1 });
+
+                            // ── RE-FLOAT DEFERRED FIXED-DURATION / MOVEABLE-WINDOW LAYERS ──
+                            // A layer whose configured WINDOW is wider than its DURATION "floats"
+                            // (it may sit anywhere in its window). Most are pre-pinned by earlier
+                            // phases (e.g. swim by Phase 2.3), but the generic path RETURNs before
+                            // the fill phases — so any layer the pre-pass DEFERRED (pool full, wide
+                            // window, …) would silently vanish (the live Majors swim bug). Re-introduce
+                            // EVERY required, not-yet-pinned, fixed-duration layer — swim, elective, a
+                            // windowed custom/main, … — as a FLOATING demand so PeriodLayout slides the
+                            // other tiles aside to place it. These are STRUCTURAL floors (must-place),
+                            // so they outrank the optional special/sport fillers.
+                            //   Skipped (already handled, never a gap): special (floated by subcat
+                            //   above), sport/slot/activity (the unlimited filler fills all leftover
+                            //   time), lunch/snacks/dinner (always pre-pinned), league/trip (own
+                            //   placement), change (a swim envelope, not standalone).
+                            //   Dedup: a layer already placed as a wall for THIS bunk is matched by its
+                            //   (type|window) signature read off each wall's .layer back-ref — robust
+                            //   even though STEP 1.5 classification copies the layer object. swim also
+                            //   gated on todaysSwimmers (don't give swim to a non-swimmer). Pool
+                            //   capacity etc. are CONTENT concerns, deferred to the fill step.
+                            try {
+                                var _glPinnedSig = {};
+                                (bunkTimelines[bunk] || []).forEach(function (w) {
+                                    var _srcL = w && w.layer;
+                                    if (_srcL && _srcL.type != null) _glPinnedSig[String(_srcL.type).toLowerCase() + '|' + _srcL.startMin + '|' + _srcL.endMin] = 1;
+                                });
+                                var _glSkipKind = { special: 1, sport: 1, sports: 1, slot: 1, activity: 1, lunch: 1, snack: 1, snacks: 1, dinner: 1, league: 1, trip: 1, change: 1, 'pre-change': 1, 'post-change': 1 };
+                                (layersByGrade[grade] || []).forEach(function (L) {
+                                    if (!L) return;
+                                    var lk = String(L.type || '').toLowerCase();
+                                    if (_glSkipKind[lk]) return;
+                                    var _rawDur = L.durationMin || L.periodMin || L.duration || 0;
+                                    if (!(_rawDur > 0)) return; // not a FIXED-duration demand → leave to the filler
+                                    if (_glPinnedSig[lk + '|' + L.startMin + '|' + L.endMin]) return; // already a wall for this bunk
+                                    if (lk === 'swim') {
+                                        var _set = (typeof todaysSwimmers !== 'undefined' && todaysSwimmers) ? todaysSwimmers[grade] : null;
+                                        if (!(_set && typeof _set.has === 'function' && _set.has(String(bunk)))) return; // not swimming today
+                                    }
+                                    var _c = (typeof resolveConstraints === 'function') ? (resolveConstraints(L, lk) || {}) : {};
+                                    var _dMin = _c.dMin || _rawDur, _dMax = _c.dMax || _dMin;
+                                    var _ws = Math.max(L.startMin != null ? L.startMin : gStart, gStart);
+                                    var _we = Math.min(L.endMin != null ? L.endMin : gEnd, gEnd);
+                                    if (!(_we - _ws >= _dMin)) return; // window can't even fit it
+                                    var _qty = Number(L.qty != null ? L.qty : (L.quantity != null ? L.quantity : 1));
+                                    if (!(_qty > 0)) _qty = 1;
+                                    var _dem = { kind: lk, subcat: null, name: _glWallLabel(L), window: [_ws, _we], qty: _qty, cap: _qty, score: 0 };
+                                    if (_dMin === _dMax) _dem.durations = [_dMin]; else { _dem.dMin = _dMin; _dem.dMax = _dMax; }
+                                    floating.push(_dem);
+                                    if (lk === 'swim') _glInjectedSwim++; else _glInjectedLayer++;
+                                });
+                            } catch (_glReflErr) {}
 
                             _glPerBunk[bunk] = {
                                 grade: grade,
@@ -17539,7 +17590,7 @@
                     } catch (_glSaveErr) { warn('[GENERIC-LAYOUT] save: ' + (_glSaveErr && _glSaveErr.message)); }
 
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-                    log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s)');
+                    log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated');
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
                     return true; // ← early return: skip ALL activity-assignment phases
                 }

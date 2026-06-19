@@ -309,6 +309,74 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.ok(res.stats.residualMin >= 40, 'capped special cannot over-fill the 2nd window — left for legacy fill');
     });
 
+    it('SWIM (set duration, moveable window): a deferred required layer is placed and outranks optional specials', () => {
+        // Swim is a fixed-40 demand that may sit anywhere in its window (the manual
+        // "set duration, moveable window" case). Even though P1 could fit two special
+        // floors (2000 pts), the structural Swim floor must win a slot — and it must
+        // stay inside its window.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(700, 740, 'P2')], pinned: [],
+            floating: [
+                { kind: 'swim', name: 'Swim', durations: [40], window: [650, 740], qty: 1, cap: 1 },
+                { kind: 'special', subcat: 'food', durations: [20], window: [650, 945], qty: 1, cap: Infinity },
+                { kind: 'special', subcat: 'theme', durations: [20], window: [650, 945], qty: 1, cap: Infinity },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+            ],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'both periods wall-to-wall');
+        const swim = tilesOf(res).filter(t => t.kind === 'swim');
+        assert.strictEqual(swim.length, 1, 'swim placed exactly once (the required layer is not dropped)');
+        assert.strictEqual(swim[0].durationMin, 40, 'swim kept its set duration');
+        assert.ok(swim[0].startMin >= 650 && swim[0].endMin <= 740, 'swim stayed inside its moveable window');
+        assert.strictEqual(res.remaining['swim'], 0, 'swim floor consumed');
+        const foods = tilesOf(res).filter(t => t.subcat === 'food');
+        const themes = tilesOf(res).filter(t => t.subcat === 'theme');
+        assert.ok(foods.length === 1 && themes.length === 1, 'the special floors still fill the other window');
+    });
+
+    it('SWIM only lands where its (narrow) window covers — never outside it', () => {
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(900, 940, 'P7')], pinned: [],
+            floating: [
+                { kind: 'swim', name: 'Swim', durations: [40], window: [650, 690], qty: 1, cap: 1 }, // only P1
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+            ],
+            packer: PeriodPacker
+        });
+        const swim = tilesOf(res).filter(t => t.kind === 'swim');
+        assert.strictEqual(swim.length, 1);
+        assert.ok(swim[0].startMin >= 650 && swim[0].endMin <= 690, 'swim stayed in P1 (its only window)');
+        const p7 = res.periodPlans.find(pp => pp.period.startMin === 900).windows[0];
+        assert.ok(p7.tiled, 'the far period still filled (by sport)');
+    });
+
+    it('STRUCTURAL FLOOR is kind-agnostic: any required fixed-duration layer (e.g. elective) places once, like swim', () => {
+        // The engine re-floats ANY deferred fixed-duration/moveable-window layer
+        // (swim, elective, a windowed custom/main, …) — not just swim. PeriodLayout
+        // treats every non-special, non-filler finite-quota demand as a must-place
+        // structural floor, so the behavior must not be swim-name-specific.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(700, 740, 'P2')], pinned: [],
+            floating: [
+                { kind: 'elective', name: 'Elective', durations: [40], window: [650, 740], qty: 1, cap: 1 },
+                { kind: 'special', subcat: 'food', durations: [20], window: [650, 945], qty: 1, cap: Infinity },
+                { kind: 'special', subcat: 'theme', durations: [20], window: [650, 945], qty: 1, cap: Infinity },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] }
+            ],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'wall-to-wall');
+        const elec = tilesOf(res).filter(t => t.kind === 'elective');
+        assert.strictEqual(elec.length, 1, 'the elective floor placed exactly once');
+        assert.strictEqual(elec[0].durationMin, 40);
+        assert.ok(elec[0].startMin >= 650 && elec[0].endMin <= 740, 'stayed in its window');
+        assert.strictEqual(res.remaining['elective'], 0, 'elective floor consumed');
+    });
+
     it('no-candidates window is reported, not crashed', () => {
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G', periods: [P(855, 895, 'P6')], pinned: [],

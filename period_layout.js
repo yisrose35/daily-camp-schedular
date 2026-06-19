@@ -150,9 +150,16 @@
         }
         // Floor bonus drives the packer toward layers the bunk still OWES. Reads a
         // quota VIEW (the live `remaining`, or a snapshot during a trial re-pack).
+        // A demand with a FINITE quota is a must-place FLOOR. STRUCTURAL required
+        // layers (swim/change/main/… — anything that is neither a special nor the
+        // unlimited filler) outrank special-subcategory floors, so e.g. a deferred
+        // Swim is guaranteed a slot before optional specials. The unlimited filler
+        // (sport — qty omitted ⇒ Infinity) never earns the bonus.
         function floorBonus(seg, remView) {
-            if (seg.kind !== 'special') return 0;
-            return (remView[seg._key] > 0) ? 1000 : 0;
+            var r = remView[seg._key];
+            if (!(r > 0 && r !== Infinity)) return 0;
+            if (seg.kind === 'special') return 1000;
+            return 100000; // structural required layer (swim, …) — effectively must-place
         }
         function _mkScoreFn(remView) {
             return function (packing) {
@@ -262,10 +269,10 @@
                 var t = { kind: seg.kind, subcat: seg.subcat || null, name: seg.name, _key: seg._key, _ref: seg._ref,
                           startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin, generic: true, pinned: false };
                 tiles.push(t); if (rec) rec.tiles.push(t);
-                if (seg.kind === 'special') {
-                    if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
-                    if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
-                }
+                // consume floor + cap for any FINITE-quota demand (special floors AND
+                // structural required layers like swim); the unlimited filler is Infinity.
+                if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
+                if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
                 stats.tilesPlaced++;
             }
         }
@@ -328,6 +335,8 @@
                         var T = movers[mvi];
                         if (T.startMin === W2.start && T.durationMin === L) continue; // already exactly there
                         if (_demandDurs(T._ref).indexOf(L) < 0) continue;             // T can't be exactly L
+                        var Twin = T._ref && T._ref.window;
+                        if (Twin && (Twin[0] > W2.start || Twin[1] < W2.start + L)) continue; // would leave T's window
                         var baseNoT = [];
                         for (var bi = 0; bi < tiles.length; bi++) if (tiles[bi] !== T) baseNoT.push(tiles[bi]);
                         // T relocated to W (length L) must be gate-legal.
@@ -344,18 +353,16 @@
                         if (!laidR) continue;
                         // COMMIT: pull T out, drop it at W (length L), re-pack its old slot.
                         var idxT = tiles.indexOf(T); if (idxT >= 0) tiles.splice(idxT, 1);
-                        if (T.kind === 'special') {
-                            if (remaining[T._key] !== Infinity) remaining[T._key] = (remaining[T._key] || 0) + 1;
-                            if (capRem[T._key] !== Infinity) capRem[T._key] = (capRem[T._key] || 0) + 1;
-                        }
+                        // free T's finite quota, then re-consume it at W (net zero) — keeps
+                        // structural/special caps exact across the relocation.
+                        if (remaining[T._key] != null && remaining[T._key] !== Infinity) remaining[T._key] = remaining[T._key] + 1;
+                        if (capRem[T._key] != null && capRem[T._key] !== Infinity) capRem[T._key] = capRem[T._key] + 1;
                         stats.tilesPlaced--;
                         var Tt = { kind: T.kind, subcat: T.subcat || null, name: T.name, _key: T._key, _ref: T._ref,
                                    startMin: W2.start, endMin: W2.start + L, durationMin: L, generic: true, pinned: false };
                         tiles.push(Tt); stats.tilesPlaced++;
-                        if (T.kind === 'special') {
-                            if (remaining[T._key] > 0 && remaining[T._key] !== Infinity) remaining[T._key]--;
-                            if (capRem[T._key] > 0 && capRem[T._key] !== Infinity) capRem[T._key]--;
-                        }
+                        if (remaining[T._key] > 0 && remaining[T._key] !== Infinity) remaining[T._key]--;
+                        if (capRem[T._key] > 0 && capRem[T._key] !== Infinity) capRem[T._key]--;
                         _applyLaid(laidR, null);
                         W2.tiled = true; W2.residualMin = 0; W2.reason = 'elastic-fill';
                         stats.windowsTiled++; stats.residualMin -= L;
@@ -396,9 +403,11 @@
                 var kCands = [];
                 for (var fk = 0; fk < floating.length; fk++) {
                     var fd = floating[fk]; var kk = _demandKey(fd);
-                    if (fd.kind !== 'special') { kCands.push({ kind: fd.kind, name: _label(fd), subcat: null, key: kk }); continue; }
+                    // sport/activity = the unlimited filler → always an eligible replacement.
+                    if (fd.kind === 'sport' || fd.kind === 'activity') { kCands.push({ kind: fd.kind, name: _label(fd), subcat: null, key: kk, win: fd.window }); continue; }
+                    // special OR structural (swim/…) → only if a configured duration == L AND cap remains.
                     var durs = (fd.durations && fd.durations.length) ? fd.durations : _durRange(fd.dMin, fd.dMax, gran);
-                    if (capRem[kk] > 0 && durs.indexOf(L) >= 0) kCands.push({ kind: 'special', name: _label(fd), subcat: fd.subcat || null, key: kk });
+                    if (capRem[kk] > 0 && durs.indexOf(L) >= 0) kCands.push({ kind: fd.kind, name: _label(fd), subcat: fd.subcat || null, key: kk, win: fd.window });
                 }
                 if (!kCands.length) continue;
                 // movable tiles (generic, not pinned, not already relocated), by time
@@ -418,6 +427,7 @@
                     for (var ki = 0; ki < tiles.length; ki++) { if (run.indexOf(tiles[ki]) < 0) keep.push(_toBlock(tiles[ki])); }
                     for (var kc = 0; kc < kCands.length && !done; kc++) {
                         var K = kCands[kc];
+                        if (K.win && (K.win[0] > Rs || K.win[1] < Re)) continue; // replacement would leave its window
                         var kBlock = { type: K.kind, event: K.name, startMin: Rs, endMin: Re };
                         if (K.kind === 'special') { kBlock._assignedSpecial = K.name; kBlock._specialLocation = K.name; }
                         var okK = true; try { okK = gate(kBlock, keep); } catch (e2) { okK = true; }
@@ -426,6 +436,8 @@
                         var cur = W2.start, movedBlocks = [], allOk = true;
                         for (var r2 = 0; r2 < run.length; r2++) {
                             var rt = run[r2];
+                            var rtw = rt._ref && rt._ref.window;
+                            if (rtw && (rtw[0] > cur || rtw[1] < cur + rt.durationMin)) { allOk = false; break; } // relocated tile would leave its window
                             var rb = { type: rt.kind, event: rt.name, startMin: cur, endMin: cur + rt.durationMin };
                             if (rt.kind === 'special') { rb._assignedSpecial = rt.name; rb._specialLocation = rt.name; }
                             var okM = true; try { okM = gate(rb, keep.concat([kBlock]).concat(movedBlocks)); } catch (e3) { okM = true; }
@@ -436,11 +448,11 @@
                         // COMMIT: run -> W (in order), replacement K -> vacated region
                         var c2 = W2.start;
                         for (var r3 = 0; r3 < run.length; r3++) { run[r3].startMin = c2; run[r3].endMin = c2 + run[r3].durationMin; c2 += run[r3].durationMin; _moved.push(run[r3]); }
-                        tiles.push({ kind: K.kind, subcat: K.subcat || null, name: K.name, startMin: Rs, endMin: Re, durationMin: L, generic: true, pinned: false });
-                        if (K.kind === 'special') {
-                            if (remaining[K.key] > 0 && remaining[K.key] !== Infinity) remaining[K.key]--;
-                            if (capRem[K.key] > 0 && capRem[K.key] !== Infinity) capRem[K.key]--;
-                        }
+                        // carry the demand window so a LATER relocation of this swap-placed tile
+                        // still respects its window (the elastic/run-swap guards read _ref.window).
+                        tiles.push({ kind: K.kind, subcat: K.subcat || null, name: K.name, _key: K.key, _ref: (K.win ? { window: K.win } : null), startMin: Rs, endMin: Re, durationMin: L, generic: true, pinned: false });
+                        if (remaining[K.key] > 0 && remaining[K.key] !== Infinity) remaining[K.key]--;
+                        if (capRem[K.key] > 0 && capRem[K.key] !== Infinity) capRem[K.key]--;
                         W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
                         stats.windowsTiled++; stats.tilesPlaced++; stats.residualMin -= L;
                         done = true;
@@ -459,7 +471,7 @@
         var order = o.order || Object.keys(o.perBunk || {});
         var opts = o.opts || {};
         var layoutByBunk = {};
-        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0 };
+        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0 };
         for (var i = 0; i < order.length; i++) {
             var bunk = order[i];
             var b = (o.perBunk || {})[bunk];
@@ -476,7 +488,12 @@
             totals.residualMin += res.stats.residualMin;
             totals.tilesPlaced += res.stats.tilesPlaced;
             if (res.stats.windowsConsidered > 0 && res.stats.windowsTiled === res.stats.windowsConsidered) totals.bunksFullyTiled++;
-            Object.keys(res.remaining || {}).forEach(function (k) { if (k.indexOf('special:') === 0 && res.remaining[k] > 0 && res.remaining[k] !== Infinity) totals.unmetSpecialFloors += res.remaining[k]; });
+            Object.keys(res.remaining || {}).forEach(function (k) {
+                if (res.remaining[k] > 0 && res.remaining[k] !== Infinity) {
+                    totals.unmetFloors += res.remaining[k];
+                    if (k.indexOf('special:') === 0) totals.unmetSpecialFloors += res.remaining[k];
+                }
+            });
         }
         return { layoutByBunk: layoutByBunk, stats: totals };
     }
