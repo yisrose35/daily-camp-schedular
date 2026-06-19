@@ -508,8 +508,143 @@
             }
         }
 
+        // ── GAP-CLOSE (scan the schedule for gaps; fill from the LAYERS; fewest tiles) ──
+        // A final reader: it scans the committed schedule for any free time still left
+        // inside a non-break period and fills it with the LARGEST layer items that fit,
+        // GREEDILY (not exact subset-sum) — so it closes windows the exact packer rejects
+        // (no exact tiling, an odd/off-grid length, or a window where only ONE of a kind
+        // could be packed at a time). Per gap minute the preference is: (1) a still-OWED
+        // floor demand, (2) the largest REAL content (a special / sport), then the generic
+        // placeholder; finally it GROWS an adjacent elastic filler to swallow any leftover
+        // sub-minSeg sliver (0 extra tiles). The whole point: fill the ENTIRE day with the
+        // FEWEST, LARGEST tiles drawn from the layers. Respects the rule gate, the cross-
+        // bunk resourceGate, every demand window, and all caps/floors (via _applyLaid).
+        var _gcTiles = 0, _gcGrew = 0;
+        function _pickFill(start, maxLen, base) {
+            var best = null;
+            for (var fi = 0; fi < floating.length; fi++) {
+                var d = floating[fi];
+                var key = _demandKey(d);
+                if (!(capRem[key] > 0)) continue;
+                var win = d.window;
+                var durs = _demandDurs(d).filter(function (x) { return _num(x) != null && x >= minSeg && x <= maxLen; });
+                if (win) durs = durs.filter(function (x) { return win[0] <= start && win[1] >= start + x; });
+                if (!durs.length) continue;
+                var dur = Math.max.apply(null, durs);                       // LARGEST that fits → fewest tiles
+                var seg = { kind: d.kind, subcat: d.subcat || null, name: _label(d), _key: key, _ref: d, startMin: start, endMin: start + dur, durationMin: dur };
+                if (!_gatePass([seg], base)) continue;
+                var owed = (remaining[key] > 0 && remaining[key] !== Infinity) ? 1 : 0;   // a still-owed floor wins
+                var content = (d.kind === 'activity') ? 0 : 1;                            // real layer content beats the placeholder
+                var score = owed * 1e6 + content * 1e3 + dur;
+                if (!best || score > best.score) best = { seg: seg, score: score };
+            }
+            return best;
+        }
+        // Grow an adjacent generic FILLER (sport/activity → continuous duration) to swallow
+        // [s,e] — 0 new tiles. Only fillers grow (a special is fixed to its configured
+        // durations). Gate-checked and kept within the filler's demand window.
+        function _growInto(s, e) {
+            for (var i = 0; i < tiles.length; i++) {
+                var t = tiles[i];
+                if (!t.generic || t.pinned) continue;
+                if (t.kind !== 'sport' && t.kind !== 'activity') continue;
+                var win = t._ref && t._ref.window;
+                var others = []; for (var a = 0; a < tiles.length; a++) if (tiles[a] !== t) others.push(tiles[a]);
+                if (t.endMin === s) {                                        // extend its END forward over the gap
+                    if (win && win[1] < e) continue;
+                    if (!_gatePass([{ kind: t.kind, subcat: t.subcat, name: t.name, _ref: t._ref, startMin: t.startMin, endMin: e }], others)) continue;
+                    t.endMin = e; t.durationMin = t.endMin - t.startMin; return true;
+                }
+                if (t.startMin === e) {                                      // extend its START back over the gap
+                    if (win && win[0] > s) continue;
+                    if (!_gatePass([{ kind: t.kind, subcat: t.subcat, name: t.name, _ref: t._ref, startMin: s, endMin: t.endMin }], others)) continue;
+                    t.startMin = s; t.durationMin = t.endMin - t.startMin; return true;
+                }
+            }
+            return false;
+        }
+        // FLOOR-FIRST: place any still-OWED finite-quota floor (a deferred structural layer
+        // or an unmet special-subcat floor) into a gap its window covers BEFORE the greedy
+        // filler runs. Otherwise a wide-window filler greedily consuming the floor's only
+        // feasible slot would silently DROP the floor while still reporting wall-to-wall.
+        // Most-constrained (narrowest-window) floors first. Returns true if it placed any.
+        function _placeOwedFloorsIn(per) {
+            var owed = [];
+            for (var fi = 0; fi < floating.length; fi++) {
+                var dd = floating[fi], kk = _demandKey(dd);
+                if (remaining[kk] > 0 && remaining[kk] !== Infinity && capRem[kk] > 0) owed.push(dd);
+            }
+            owed.sort(function (a, b) {
+                var aw = a.window ? (a.window[1] - a.window[0]) : Infinity;
+                var bw = b.window ? (b.window[1] - b.window[0]) : Infinity;
+                return aw - bw;
+            });
+            var any = false;
+            for (var oi = 0; oi < owed.length; oi++) {
+                var d = owed[oi], key = _demandKey(d), guard = 0;
+                while (remaining[key] > 0 && remaining[key] !== Infinity && capRem[key] > 0 && guard++ < 12) {
+                    var gw = freeSubWindows(per.startMin, per.endMin, tiles), placed = false;
+                    for (var gi = 0; gi < gw.length; gi++) {
+                        var ws = d.window ? Math.max(gw[gi].start, d.window[0]) : gw[gi].start;
+                        var we = d.window ? Math.min(gw[gi].end, d.window[1]) : gw[gi].end;
+                        if (we - ws < minSeg) continue;
+                        var durs = _demandDurs(d).filter(function (x) { return _num(x) != null && x >= minSeg && x <= (we - ws); });
+                        if (!durs.length) continue;
+                        var dur = Math.max.apply(null, durs);
+                        var seg = { kind: d.kind, subcat: d.subcat || null, name: _label(d), _key: key, _ref: d, startMin: ws, endMin: ws + dur, durationMin: dur };
+                        if (!_gatePass([seg], tiles)) continue;
+                        _applyLaid([seg], null); _gcTiles++; placed = true; any = true; break;
+                    }
+                    if (!placed) break;
+                }
+            }
+            return any;
+        }
+        for (var _gcPass = 0; _gcPass < 2; _gcPass++) {
+            var _gcProgress = false;
+            for (var gpi = 0; gpi < periods.length; gpi++) {
+                var _per = periods[gpi];
+                if (_placeOwedFloorsIn(_per)) _gcProgress = true;   // (0) owed floors before the greedy filler
+                var _gw = freeSubWindows(_per.startMin, _per.endMin, tiles);
+                for (var ggi = 0; ggi < _gw.length; ggi++) {
+                    var _cur = _gw[ggi].start, _gend = _gw[ggi].end;
+                    while (_gend - _cur >= minSeg) {                          // greedy largest-first
+                        var _pk = _pickFill(_cur, _gend - _cur, tiles);
+                        if (!_pk) break;
+                        _applyLaid([_pk.seg], null);
+                        _cur = _pk.seg.endMin; _gcTiles++; _gcProgress = true;
+                    }
+                    if (_cur < _gend && _growInto(_cur, _gend)) { _gcGrew++; _gcProgress = true; }
+                }
+            }
+            if (!_gcProgress) break;
+        }
+        stats.gapCloseTilesPlaced = _gcTiles;
+        stats.gapCloseGrew = _gcGrew;
+
+        // Recompute final coverage from the committed tiles (post GAP-CLOSE): mark each
+        // window tiled iff no free time remains, sum the true residual, and expose the
+        // remaining gaps for the caller's "scan the schedule for gaps" diagnostic.
+        var gaps = [], _fResid = 0, _fTiled = 0;
+        for (var fpi = 0; fpi < periodPlans.length; fpi++) {
+            var _pp = periodPlans[fpi];
+            for (var fwi = 0; fwi < _pp.windows.length; fwi++) {
+                var _rec = _pp.windows[fwi];
+                var _free = freeSubWindows(_rec.start, _rec.end, tiles), _freeMin = 0;
+                for (var fri = 0; fri < _free.length; fri++) {
+                    var _g = _free[fri];
+                    _freeMin += (_g.end - _g.start);
+                    gaps.push({ startMin: _g.start, endMin: _g.end, len: _g.end - _g.start, period: (_pp.period && _pp.period.name) || null, reason: _rec.reason || 'unfillable' });
+                }
+                if (_freeMin === 0) { _rec.tiled = true; _rec.residualMin = 0; _fTiled++; } else { _rec.residualMin = _freeMin; }
+                _fResid += _freeMin;
+            }
+        }
+        stats.windowsTiled = _fTiled;
+        stats.residualMin = _fResid;
+
         tiles.sort(function (a, b) { return a.startMin - b.startMin; });
-        return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining };
+        return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining, gaps: gaps };
     }
 
     // Lay out all bunks (independent per bunk — no cross-bunk competition at the
@@ -518,7 +653,7 @@
         var order = o.order || Object.keys(o.perBunk || {});
         var opts = o.opts || {};
         var layoutByBunk = {};
-        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0 };
+        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0, gapCloseTilesPlaced: 0, gapCloseGrew: 0 };
         for (var i = 0; i < order.length; i++) {
             var bunk = order[i];
             var b = (o.perBunk || {})[bunk];
@@ -534,7 +669,10 @@
             totals.windowsTiled += res.stats.windowsTiled;
             totals.residualMin += res.stats.residualMin;
             totals.tilesPlaced += res.stats.tilesPlaced;
-            if (res.stats.windowsConsidered > 0 && res.stats.windowsTiled === res.stats.windowsConsidered) totals.bunksFullyTiled++;
+            totals.gapCloseTilesPlaced += (res.stats.gapCloseTilesPlaced || 0);
+            totals.gapCloseGrew += (res.stats.gapCloseGrew || 0);
+            // fully wall-to-wall = no free time left after GAP-CLOSE (the true residual).
+            if (res.stats.residualMin === 0) totals.bunksFullyTiled++;
             Object.keys(res.remaining || {}).forEach(function (k) {
                 if (res.remaining[k] > 0 && res.remaining[k] !== Infinity) {
                     totals.unmetFloors += res.remaining[k];

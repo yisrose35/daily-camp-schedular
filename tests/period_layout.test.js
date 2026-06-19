@@ -565,3 +565,137 @@ describe('PeriodLayout — LAYER SHARING watched at placement', () => {
         assert.strictEqual(mainCount(out, 'B1') + mainCount(out, 'B2'), 2, 'same-grade bunks share within capacity');
     });
 });
+
+// ── GAP-CLOSE: scan the schedule for gaps, fill from the layers, fewest tiles ──
+// The final reader fills any free time the exact packer left, GREEDILY with the
+// largest layer item that fits (fewest tiles), then grows a neighbor for slivers.
+describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles)', () => {
+    it('fills with MULTIPLE distinct specials where the exact tiler cannot (80-min window, one 40-min subcat)', () => {
+        // The exact packer needs durations summing to 80 with NO repeat of a kind → a
+        // single 40-min subcat can never tile an 80-min window. GAP-CLOSE places two
+        // 40-min specials greedily (fill assigns a DISTINCT activity to each later).
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 80, 'P')], pinned: [],
+            floating: [{ kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 3, score: 1 }],
+            packer: PeriodPacker
+        });
+        const specials = res.tiles.filter(t => t.generic && t.kind === 'special');
+        assert.strictEqual(specials.length, 2, 'two 40-min specials fill the 80-min window');
+        assert.strictEqual(res.stats.residualMin, 0, 'no gap left');
+        assert.ok(res.stats.gapCloseTilesPlaced >= 1, 'GAP-CLOSE placed the tiles the exact packer could not');
+    });
+
+    it('closes an OFF-GRID window by greedy fill + growing a filler over the sliver', () => {
+        // 23-min window (not a multiple of 5) → the exact packer rejects it outright.
+        // GAP-CLOSE lays a 20-min filler then grows it to 23 to close the gap fully.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 23, 'P')], pinned: [],
+            floating: [{ kind: 'sport', dMin: 10, dMax: 40, window: [0, 945] }],
+            packer: PeriodPacker
+        });
+        const gen = res.tiles.filter(t => t.generic);
+        assert.strictEqual(res.stats.residualMin, 0, 'off-grid window fully closed');
+        assert.strictEqual(gen.length, 1, 'closed with a single grown tile (fewest tiles)');
+        assert.strictEqual(gen[0].endMin - gen[0].startMin, 23, 'the filler was grown to span the whole 23-min window');
+        assert.ok(res.stats.gapCloseGrew >= 1, 'a neighbor was grown to swallow the sliver');
+    });
+
+    it('prefers a REAL special over the generic "activity" placeholder', () => {
+        // 40-min window; a 40-min special (score 1) and the activity placeholder (score 0)
+        // both fit — the special must win so the day fills with real layer content.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 40, 'P')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 2, score: 1 },
+                { kind: 'activity', dMin: 10, dMax: 40, window: [0, 945], score: 0 }
+            ],
+            packer: PeriodPacker
+        });
+        const gen = res.tiles.filter(t => t.generic);
+        assert.strictEqual(gen.length, 1, 'one tile fills the window');
+        assert.strictEqual(gen[0].kind, 'special', 'the real special wins over the activity placeholder');
+    });
+
+    it('never exceeds a subcat cap (distinct availability) — honest gap rather than a phantom repeat', () => {
+        // 160-min window, a single 40-min subcat capped at 2 (only 2 distinct activities).
+        // GAP-CLOSE places exactly 2, then leaves the rest an honest gap (no over-placement).
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 160, 'P')], pinned: [],
+            floating: [{ kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 2, score: 1 }],
+            packer: PeriodPacker
+        });
+        const specials = res.tiles.filter(t => t.generic && t.kind === 'special');
+        assert.strictEqual(specials.length, 2, 'capped at the 2 distinct available activities');
+        assert.strictEqual(res.stats.residualMin, 80, 'the remaining 80 min is an honest gap, not an over-cap repeat');
+        assert.ok(res.gaps.some(g => g.len === 80), 'the open gap is reported for the diagnostic');
+    });
+
+    it('FLOOR-FIRST: a still-owed narrow-window floor is placed, never starved by the greedy filler', () => {
+        // [0,200] is not exact-tileable (a 40-only kind cannot sum to 200 without repeat),
+        // so the main pass leaves it free and GAP-CLOSE owns it. A narrow-window floor
+        // (Shiur, window [125,165] = its 40-min duration) must be placed BEFORE the wide
+        // sport filler greedily consumes [120,160] across it. Without floor-first the floor
+        // is silently dropped while the window still reports wall-to-wall.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 200, 'P')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [0, 200], score: 1 },
+                { kind: 'special', subcat: 'shiur', durations: [40], window: [125, 165], qty: 1, cap: 1, score: 1 }
+            ],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.remaining['special:shiur'], 0, 'the narrow-window Shiur floor was placed, not dropped');
+        const shiur = res.tiles.find(t => t.kind === 'special' && t.subcat === 'shiur');
+        assert.ok(shiur && shiur.startMin === 125 && shiur.endMin === 165, 'Shiur sits exactly in its window [125,165]');
+        assert.strictEqual(res.stats.residualMin, 0, 'the rest of the period still fills wall-to-wall around it');
+    });
+});
+
+// ── INTEGRATION: the live "Soloists / Duetos cannot close the day" case ──────────
+// Reproduces the reported failure: the last 40-min window (3:05-3:45) was left empty
+// ("all-packings-gated") because a sport could not go there (the camp's "no two sports
+// within 40 min" rule) and every special subcat had been capped out. With the caps
+// raised to distinct-availability + the gap reader, the day must now CLOSE.
+describe('PeriodLayout — Soloists day closes under the real sport-spacing rule', () => {
+    // gate: two SPORT tiles need >=40 min between them (end-to-start, either order).
+    const sportSpacing = (block, template) => {
+        if (block.type !== 'sport') return true;
+        for (const t of template) {
+            if (t.type !== 'sport') continue;
+            const apart = (block.startMin >= t.endMin) ? (block.startMin - t.endMin) : (t.startMin - block.endMin);
+            if (apart < 40) return false;
+        }
+        return true;
+    };
+    it('fills every gap incl. the gated last window — residual 0', () => {
+        const res = Layout.planBunkLayout({
+            bunk: 'Soloists א', grade: 'Soloists',
+            // bell periods that, around the pinned walls, leave the four reported gaps
+            periods: [P(650, 690), P(700, 730), P(735, 775), P(780, 810), P(810, 850), P(855, 895), P(905, 945)],
+            pinned: [
+                { kind: 'swim', name: 'Swim', startMin: 650, endMin: 690 },
+                { kind: 'lunch', name: 'Lunch', startMin: 780, endMin: 810 },
+                { kind: 'wall', name: 'Main Activity', startMin: 810, endMin: 850 },
+                { kind: 'cleanup', name: 'Cleanup', startMin: 895, endMin: 905 }
+            ],
+            floating: [
+                // many distinct specials per subcat → caps raised to availability (the fix)
+                { kind: 'special', subcat: 'uncategorized', durations: [40], window: [650, 945], qty: 1, cap: 11, score: 1 },
+                { kind: 'special', subcat: 'food', durations: [10, 20], window: [650, 945], qty: 1, cap: 6, score: 1 },
+                { kind: 'special', subcat: 'shiur', durations: [20], window: [650, 945], qty: 1, cap: 3, score: 1 },
+                { kind: 'special', subcat: 'theme', durations: [10, 20], window: [650, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945], score: 1 }
+            ],
+            gate: sportSpacing, packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'the whole day is wall-to-wall — no gap left');
+        const last = res.tiles.find(t => t.generic && t.startMin >= 905 && t.endMin <= 945);
+        assert.ok(last, 'the last window (3:05-3:45) that used to be all-packings-gated is now filled');
+        assert.ok((res.gaps || []).length === 0, 'no open gaps reported');
+    });
+});

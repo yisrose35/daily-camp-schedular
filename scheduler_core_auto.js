@@ -17442,13 +17442,21 @@
                                 .map(function (b) { return { kind: String(b.type || 'wall').toLowerCase(), subcat: null, name: _glWallLabel(b), startMin: b.startMin, endMin: b.endMin }; });
 
                             var floating = [];
-                            // special-subcategory floors → ONE generic tile per subcat (food/theme/shiur/uncategorized/…)
-                            var subDur = {}, subFloor = {}, subCap = {};
+                            // special-subcategory demands → ONE generic tile per subcat (food/theme/shiur/uncategorized/…)
+                            //   FLOOR (qty) = the layer's configured count (deliver at least that).
+                            //   CAP        = the number of DISTINCT available specials in the subcat, so the
+                            //                day can be FILLED with the many specials the camp actually has —
+                            //                fill assigns a distinct activity to each generic tile — instead of
+                            //                being throttled to the floor (the live "Soloists/Duetos can't close
+                            //                the day" + the "utilize the >2 specials of dur 20-40" asks). One
+                            //                Regular subcat with 11 distinct activities can fill ~11 slots.
+                            var subDur = {}, subFloor = {}, subCap = {}, subAvail = {};
                             var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
                             Object.keys(caps).forEach(function (k) { var key = _glCanon(k); var c = caps[k]; subFloor[key] = (c === Infinity || c == null) ? 1 : c; subCap[key] = (c === Infinity || c == null) ? Infinity : c; });
                             ((sl && sl.specials && sl.specials.priorityList) || []).forEach(function (sx) {
                                 var key = _glCanon(sx.subcategory);
                                 if (subFloor[key] == null) subFloor[key] = 1;
+                                (subAvail[key] = subAvail[key] || {})[sx.name || ('#' + Math.round(sx.dMin || 0))] = 1;  // count DISTINCT available specials
                                 var durs = [];
                                 try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(sx.name, window.activityProperties, globalSettings) : null; durs = (gd && gd.durations) || gd; } catch (_e) {}
                                 if (!Array.isArray(durs)) durs = [];
@@ -17459,14 +17467,31 @@
                             Object.keys(subFloor).forEach(function (key) {
                                 var durs = Object.keys(subDur[key] || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
                                 if (!durs.length) durs = [10, 20, 30, 40];
-                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], cap: (subCap[key] == null ? Infinity : subCap[key]), score: 0 });
+                                var _avail = subAvail[key] ? Object.keys(subAvail[key]).length : 0;
+                                // CAP semantics for generic-layout fill:
+                                //  • an EXPLICIT finite cap ("<=" / "=") is the user's HARD ceiling → honor it
+                                //    EXACTLY (never inflate it to availability — that would place N "Special:
+                                //    Food" when the user said max 1).
+                                //  • ">=" (cap=Infinity) or NO configured cap (subcat seen only in the
+                                //    priorityList) → the only ceiling is the count of DISTINCT available
+                                //    specials, so the day FILLS with the many specials the camp has while fill
+                                //    still gives each generic tile a distinct activity (no forced same-day
+                                //    repeat). NOT left Infinity — that would let one subcat blanket the day.
+                                //  • a must-place FLOOR always wins.
+                                var _hasFiniteCfg = (subCap[key] != null && subCap[key] !== Infinity);
+                                var _cap = _hasFiniteCfg ? Math.max(subCap[key], subFloor[key]) : Math.max(_avail, subFloor[key]);
+                                // score 1 (was 0): an over-floor special outranks the generic placeholder
+                                // filler below, so the day fills with REAL specials, not "Activity" tiles.
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], cap: _cap, score: 1 });
                             });
-                            // sport filler (unlimited) — fills whatever the special floors leave open.
+                            // Generic FILLER — fills whatever the layer demands leave open. A sport filler
+                            // (real content) keeps score 1; the abstract "activity" placeholder (sports-free
+                            // camps) drops to score 0 so it is a LAST resort and real specials are used first
+                            // (the live "what is this Activity tile" complaint). dMax spans the grade day so
+                            // the filler can cover a LARGE gap as ONE block (free-form camps have no bell
+                            // periods, so maxLen defaults to 60 and a 140-min gap would fragment).
                             var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
-                            // dMax spans the grade day so the filler can cover a LARGE gap as ONE
-                            // block (free-form camps have no bell periods, so maxLen defaults to 60
-                            // and a 140-min gap would otherwise be untileable / fragmented).
-                            floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: 1 });
+                            floating.push({ kind: hasSport ? 'sport' : 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: hasSport ? 1 : 0 });
 
                             // ── RE-FLOAT DEFERRED FIXED-DURATION / MOVEABLE-WINDOW LAYERS ──
                             // A layer whose configured WINDOW is wider than its DURATION "floats"
@@ -17707,24 +17732,28 @@
                         log('[GENERIC-LAYOUT] saved ' + _glOrder.length + ' bunks for ' + _glDate);
                     } catch (_glSaveErr) { warn('[GENERIC-LAYOUT] save: ' + (_glSaveErr && _glSaveErr.message)); }
 
-                    // DIAGNOSTIC: list windows the layout could NOT close, with the bunk + the
-                    // reason the packer/repairs gave (no-candidates / no-exact-tiling / all-packings-
-                    // gated / window-not-granular). Tells us WHY e.g. Soloists can't close the day,
-                    // instead of inferring it. Capped so a pathological run can't flood the console.
+                    // DIAGNOSTIC: the GAP-CLOSE reader scanned every bunk's schedule for gaps and
+                    // filled them from the layers (fewest, largest tiles). Report how much it filled
+                    // and list any gap STILL open (no layer item fits without breaking a rule/cap) —
+                    // with the bunk + time + the packer's original reason — so a genuinely unclosable
+                    // window is visible instead of inferred. Capped so a pathological run can't flood.
                     try {
-                        var _glUntiled = [];
+                        var _glOpen = [], _glOpenMin = 0, _glGcTiles = 0, _glGcGrew = 0;
                         _glOrder.forEach(function (bunk) {
-                            var res = _glOut.layoutByBunk[bunk]; if (!res || !res.periodPlans) return;
-                            res.periodPlans.forEach(function (pp) {
-                                (pp.windows || []).forEach(function (w) {
-                                    if (!w.tiled && w.len >= 5) _glUntiled.push(bunk + ' ' + minutesToTimeLabel(w.start) + '-' + minutesToTimeLabel(w.end) + ' (' + w.len + 'min): ' + (w.reason || '?'));
-                                });
+                            var res = _glOut.layoutByBunk[bunk]; if (!res) return;
+                            _glGcTiles += (res.stats && res.stats.gapCloseTilesPlaced) || 0;
+                            _glGcGrew += (res.stats && res.stats.gapCloseGrew) || 0;
+                            (res.gaps || []).forEach(function (g) {
+                                if (g.len >= 5) { _glOpenMin += g.len; _glOpen.push(bunk + ' ' + minutesToTimeLabel(g.startMin) + '-' + minutesToTimeLabel(g.endMin) + ' (' + g.len + 'min): ' + (g.reason || 'unfillable')); }
                             });
                         });
-                        if (_glUntiled.length) {
-                            log('[GENERIC-LAYOUT] ⚠ ' + _glUntiled.length + ' window(s) left empty (could not close):');
-                            _glUntiled.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });
-                            if (_glUntiled.length > 25) log('[GENERIC-LAYOUT]     …and ' + (_glUntiled.length - 25) + ' more');
+                        log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)');
+                        if (_glOpen.length) {
+                            log('[GENERIC-LAYOUT] ⚠ ' + _glOpen.length + ' gap(s) STILL open (' + _glOpenMin + ' min) — no layer item fits without breaking a rule/cap:');
+                            _glOpen.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });
+                            if (_glOpen.length > 25) log('[GENERIC-LAYOUT]     …and ' + (_glOpen.length - 25) + ' more');
+                        } else {
+                            log('[GENERIC-LAYOUT] ✓ no gaps left — every bunk filled wall-to-wall from the layers');
                         }
                     } catch (_glDiagErr) {}
 
