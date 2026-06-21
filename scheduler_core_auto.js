@@ -17707,6 +17707,77 @@
                                     });
                                 }
                             } catch (_glFillDurErr) {}
+                            // ── WEEKLY-QUOTA FLOOR (on by default; kill: window.__weeklyQuota===false) ──
+                            // A subcategory whose accessible activities carry a per-WEEK minFrequency
+                            // (special_activities.js: minFrequency + minFrequencyPeriod 'week') expresses a
+                            // WEEKLY quota — "≥M per week, ≤X per week" — which a per-DAY layer floor cannot.
+                            // So make THIS bunk's per-day floor for such a subcat DYNAMIC: spread the bunk's
+                            // M weekly sessions across the period's camp-days (deterministic per-bunk phase →
+                            // ~even daily load, e.g. 13 bunks×1 shiur ≈ 2-3/day), force NOW-OR-NEVER as the
+                            // hard guarantee, and stop once the weekly MAX is reached. Reuses
+                            // SchedulerCoreUtils.getPeriodActivityCount (week-to-date) + getPeriodStartDate +
+                            // countCampDays. FAIL-SOFT: no weekly config on the subcat's activities → subFloor
+                            // untouched (byte-identical to today). Camp-generic (shiur, weekly trip, swim-3×, …).
+                            try {
+                                var _wqOn = (typeof window === 'undefined') || (window.__weeklyQuota !== false);
+                                var _U = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                var _wqToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                                if (_wqOn && _U && typeof _U.getPeriodActivityCount === 'function' && _wqToday) {
+                                    Object.keys(subAvail).forEach(function (key) {
+                                        var names = Object.keys(subAvail[key] || {});
+                                        if (!names.length) return;
+                                        // pull the weekly config across this subcat's accessible activities
+                                        var M = 0, X = Infinity, period = 'week', hasMin = false;
+                                        names.forEach(function (nm) {
+                                            var ap = (typeof window !== 'undefined' && window.activityProperties && window.activityProperties[nm]) || null;
+                                            if (!ap) return;
+                                            var _pg = (ap.minFrequencyPerGrade && ap.minFrequencyPerGrade[grade] != null) ? parseInt(ap.minFrequencyPerGrade[grade], 10) : null;
+                                            var _mf = (_pg != null && _pg > 0) ? _pg : (ap.minFrequency != null ? parseInt(ap.minFrequency, 10) : 0);
+                                            if (_mf > 0) { hasMin = true; if (_mf > M) M = _mf; period = ap.minFrequencyPeriod || 'week'; }
+                                            var _mxp = ap.maxUsagePeriod || 'half';
+                                            if ((_mxp === 'week' || _mxp === '1week') && ap.maxUsage != null) {
+                                                var _mxg = (ap.maxUsagePerGrade && ap.maxUsagePerGrade[grade] != null) ? parseInt(ap.maxUsagePerGrade[grade], 10) : null;
+                                                var _mx = (_mxg != null && _mxg > 0) ? _mxg : parseInt(ap.maxUsage, 10);
+                                                if (_mx > 0 && _mx < X) X = _mx;
+                                            }
+                                        });
+                                        if (!hasMin && X === Infinity) return; // no weekly config → leave subFloor as-is
+                                        var _per = (period === 'week') ? '1week' : period;
+                                        // week-to-date count for this bunk across the subcat's accessible activities
+                                        var wtd = 0;
+                                        names.forEach(function (nm) { try { wtd += _U.getPeriodActivityCount(bunk, nm, _per, _wqToday) || 0; } catch (_e) {} });
+                                        // weekly MAX ceiling: already met → block this subcat for today
+                                        if (X !== Infinity && wtd >= X) { subFloor[key] = 0; subCap[key] = 0; return; }
+                                        if (!hasMin || M <= 0) return; // ceiling-only config (no min to force)
+                                        var need = M - wtd;
+                                        if (need <= 0) { subFloor[key] = 0; return; } // weekly min already met → optional (cap-only)
+                                        // period camp-day geometry: D = camp-days in period, e = 1-based camp-day of today
+                                        var D = 5, e = 1;
+                                        try {
+                                            var _ps = (typeof _U.getPeriodStartDate === 'function') ? _U.getPeriodStartDate(_per, _wqToday) : null;
+                                            if (_ps && typeof _U.countCampDays === 'function') {
+                                                var _nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
+                                                var _peD = new Date(_ps + 'T00:00:00'); _peD.setDate(_peD.getDate() + _nW * 7 - 1);
+                                                var _peStr = _peD.getFullYear() + '-' + String(_peD.getMonth() + 1).padStart(2, '0') + '-' + String(_peD.getDate()).padStart(2, '0');
+                                                D = Math.max(1, _U.countCampDays(_ps, _peStr) || 5);
+                                                e = Math.max(1, _U.countCampDays(_ps, _wqToday) || 1);
+                                            }
+                                        } catch (_e) {}
+                                        var remaining = Math.max(1, D - e + 1);
+                                        // deterministic per-bunk phase → spread bunks evenly across the period's days
+                                        var _h = 0, _bs = String(bunk); for (var _hi = 0; _hi < _bs.length; _hi++) _h = ((_h << 5) - _h + _bs.charCodeAt(_hi)) | 0;
+                                        var phase = Math.abs(_h) % D;
+                                        var step = Math.max(1, Math.floor(D / Math.max(1, M)));
+                                        var dueToday = false;
+                                        for (var _dk = 0; _dk < M; _dk++) { if (((phase + _dk * step) % D) === (e - 1)) { dueToday = true; break; } }
+                                        var forceNow = need >= remaining; // now-or-never hard guarantee
+                                        if (dueToday || forceNow) {
+                                            subFloor[key] = Math.max(subFloor[key] || 0, 1);
+                                            try { log('[GENERIC-WEEKLY] ' + grade + ' ' + bunk + ' → ' + key + ' floor=1 (wk ' + wtd + '/' + M + (X !== Infinity ? ' max' + X : '') + ', day ' + e + '/' + D + ', ' + (forceNow ? 'deadline' : 'paced') + ')'); } catch (_e) {}
+                                        }
+                                    });
+                                }
+                            } catch (_wqErr) { try { warn('[GENERIC-WEEKLY] error — weekly quota skipped: ' + (_wqErr && _wqErr.message)); } catch (_e) {} }
                             // ── BAND-SPREAD (opt-in: window.__bandSpread, default ON) ───────────────
                             // Confine this grade's SPECIAL tiles to its matrix special band so grades
                             // SCATTER across the day: morning-band grades keep the morning special seats;
