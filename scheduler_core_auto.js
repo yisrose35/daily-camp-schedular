@@ -18604,8 +18604,29 @@
                     // next sport). A tile with no free field stays generic "Sport" (e.g. the >15-
                     // concurrent overflow). Kill: window.__fillSports=false.
                     if ((typeof window === 'undefined') || (window.__fillSports !== false)) {
-                        var _glSportFilled = 0, _glSportMiss = 0;
+                        var _glSportFilled = 0, _glSportMiss = 0, _glSportFieldsReset = 0;
                         try {
+                            // STALE-CLAIM RESET. The draft planner (runGlobalPlanner @15190) already
+                            // claimed fields in fieldLedger for its 95 *drafted* sports — but the generic
+                            // layout re-tiles from scratch and ignores those draft placements, so every
+                            // sport field reads as occupied here and the fill would place 0. Release the
+                            // occupancy on SPORT fields only (fields any sport can use), so the fill
+                            // claims reflect ONLY the generic sport tiles it actually places. Safe: the
+                            // validator never reads fieldLedger (it rebuilds from scheduleAssignments),
+                            // generic specials/swim key on activity name (not physical courts), and
+                            // nothing downstream of the generic block reads fieldLedger. Non-sport field
+                            // claims (e.g. league/trip courts) are left intact.
+                            var _glSportFieldSet = Object.create(null);
+                            _glOrder.forEach(function (bunk) {
+                                var _sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
+                                var _pl = (_sl && _sl.sports && _sl.sports.priorityList) || [];
+                                _pl.forEach(function (sp) { (sp && sp.fields || []).forEach(function (fn) { _glSportFieldSet[fn] = 1; }); });
+                            });
+                            try {
+                                Object.keys(_glSportFieldSet).forEach(function (fn) {
+                                    if (fieldLedger[fn] && Array.isArray(fieldLedger[fn].claims) && fieldLedger[fn].claims.length) { fieldLedger[fn].claims = []; _glSportFieldsReset++; }
+                                });
+                            } catch (_eClr) {}
                             _glOrder.forEach(function (bunk) {
                                 var res0 = _glOut.layoutByBunk[bunk]; if (!res0 || !res0.tiles) return;
                                 var grd = _bunkToGrade[String(bunk)];
@@ -18638,7 +18659,7 @@
                                         if (!placed) _glSportMiss++;
                                     });
                             });
-                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : ''));
+                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : '') + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)');
                         } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
                     }
 
