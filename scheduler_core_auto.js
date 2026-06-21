@@ -17663,22 +17663,35 @@
                     // checkable here (their sharing is enforced when fill assigns a field).
                     var _glFacKey = function (f) { return String(f == null ? '' : f).toLowerCase().trim(); };
 
-                    // ── SEATS: max bunks that can be on a category AT ONCE, counted from config.
-                    // The SAME idea as the swim pool's "only 8 swimmers at a time": the engine
-                    // never lays more than `seats` tiles of a category in any overlapping window.
-                    //   special:<subcat> = Σ that subcat's distinct activities' bunk-capacity
+                    // ── SEATS: max bunks that can be on a category AT ONCE, counted from the
+                    // specials that are ACTUALLY AVAILABLE TODAY (todaysSpecials — already filtered
+                    // by day-of-week / rainy / etc.), NOT the whole config. (Bug fixed: on a day
+                    // where a subcat has no available activity its seats are now 0, instead of
+                    // counting unavailable specials.) The SAME idea as the swim pool's "only 8
+                    // swimmers at a time": the engine never lays more than `seats` tiles of a
+                    // category in any overlapping window.
+                    //   special:<subcat> = Σ that subcat's AVAILABLE distinct activities' bunk-capacity
                     //                      (not_sharable = 1 seat each; shareable = its cap).
                     //   sport            = Σ enabled sport-hosting fields' bunk-capacity.
-                    //   swim             = the pool's bunk-capacity (already gated by poolSwimPairFreeAt).
+                    //   swim             = the pool's bunk-capacity (also gated by poolSwimPairFreeAt).
                     // Counted ONCE here, BEFORE layout, so the resourceGate below can enforce it.
-                    var _glSeats = {};
+                    var _glSeats = {};       // category -> concurrent SEATS (bunk capacity)
+                    var _glSpecActs = {};    // special:subcat -> # of DISTINCT available activities
+                    var _glSeatNames = {};   // special:subcat -> [activity names] (for the visible count)
                     try {
-                        ((globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || []).forEach(function (s) {
+                        var _seatSrc = (typeof todaysSpecials !== 'undefined' && todaysSpecials && todaysSpecials.length)
+                            ? todaysSpecials
+                            : ((globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || []);
+                        _seatSrc.forEach(function (s) {
                             if (!s || !s.name) return;
+                            var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
+                            if (_sp.fullGrade === true || s.fullGrade === true) return;   // whole-grade specials aren't per-bunk seats
                             var _sk = 'special:' + _glCanon(s.subcategory);
                             var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
                             var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
                             _glSeats[_sk] = (_glSeats[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                            _glSpecActs[_sk] = (_glSpecActs[_sk] || 0) + 1;
+                            (_glSeatNames[_sk] = _glSeatNames[_sk] || []).push(s.name);
                         });
                         var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
                         var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
@@ -17693,6 +17706,21 @@
                         });
                         if (_swimSeats > 0) _glSeats['swim'] = _swimSeats;
                     } catch (_glSeatErr) {}
+                    // ── VISIBLE COUNT: print exactly what the engine counted, so it's auditable.
+                    try {
+                        var _subKeys = Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort();
+                        var _totActs = _subKeys.reduce(function (a, k) { return a + (_glSpecActs[k] || 0); }, 0);
+                        var _totSeats = _subKeys.reduce(function (a, k) { return a + _glSeats[k]; }, 0);
+                        log('[SEAT COUNT] ═══ Special activities AVAILABLE TODAY: ' + _totActs + ' activit' + (_totActs === 1 ? 'y' : 'ies') + ' in ' + _subKeys.length + ' subcategor' + (_subKeys.length === 1 ? 'y' : 'ies') + ' → ' + _totSeats + ' total special seats ═══');
+                        if (_subKeys.length) {
+                            _subKeys.forEach(function (k) {
+                                log('[SEAT COUNT]    • ' + k.slice(8) + ': ' + (_glSpecActs[k] || 0) + ' activit' + ((_glSpecActs[k] || 0) === 1 ? 'y' : 'ies') + ' = ' + _glSeats[k] + ' seat' + (_glSeats[k] === 1 ? '' : 's') + '  [' + (_glSeatNames[k] || []).join(', ') + ']');
+                            });
+                        } else {
+                            log('[SEAT COUNT]    • (no special activities available today)');
+                        }
+                        log('[SEAT COUNT]    • sport: ' + (_glSeats['sport'] != null ? _glSeats['sport'] + ' seats (fields)' : '∞ (no field cap)') + '  |  swim: ' + (_glSeats['swim'] != null ? _glSeats['swim'] + ' seats (pool)' : 'n/a'));
+                    } catch (_glSeatLogErr) {}
                     // category key for a generic tile (swim handled by its own pool gate, not here)
                     var _glCatOf = function (kind, ref) {
                         var k = String(kind || '').toLowerCase();
@@ -17927,16 +17955,8 @@
                             // overflow). Before changing any placement, MEASURE where grades collide so the
                             // diagnosis is visible and the spread can be sized. Pure log, zero mutation.
                             // Silence with window.__spreadShadow=false.
-                            // SEATS were counted pre-layout (var _glSeats, above the resourceGate) and are
-                            // ENFORCED there as a hard per-timeframe cap. Here we just report them + measure.
-                            try {
-                                var _seatSpecParts = Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort().map(function (k) { return k.slice(8) + '=' + _glSeats[k]; });
-                                var _seatSpecTot = _seatSpecParts.reduce(function (a, k) { return a; }, 0);
-                                var _specTotN = Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).reduce(function (a, k) { return a + _glSeats[k]; }, 0);
-                                log('[SEATS] counted pre-generation (max bunks per category at once): specials ' + (_seatSpecParts.join(' ') || '(none)') + ' (total ' + _specTotN + ')'
-                                    + (_glSeats['sport'] != null ? ' | sport=' + _glSeats['sport'] : ' | sport=∞(fieldless)')
-                                    + (_glSeats['swim'] != null ? ' | swim=' + _glSeats['swim'] : ''));
-                            } catch (_e) {}
+                            // SEATS were counted + logged pre-layout ([SEAT COUNT], above the resourceGate)
+                            // and are ENFORCED there as a hard per-timeframe cap. Here we just measure peaks.
                             try {
                                 if (window.__spreadShadow !== false && window.GLBandPlan && typeof window.GLBandPlan.measure === 'function') {
                                     var _spBunks = [];
