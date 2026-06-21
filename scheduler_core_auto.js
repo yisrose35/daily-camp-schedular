@@ -18159,6 +18159,78 @@
                         } catch (_e) {}
                     };
 
+                    // ── SPECIAL STAGGER (window.__specialStagger, default OFF) — "do for specials
+                    // what we did for swim": spread a heavily-used special subcat's seat usage
+                    // across time so it never maxes ONE band (live: uncategorized@40 hit 14/14 @
+                    // 12:15-12:55 → Majors' open runs went dead). The layout's per-window greedy
+                    // lands a floored special in the EARLIEST gap regardless of cross-bunk load, so
+                    // here — BEFORE the layout — we narrow each bunk's floored uncat@40 demand to a
+                    // seat-FREE, LOW-contention slot among that bunk's own gaps, diffusing bunk-by-
+                    // bunk so they don't all pick the same slot. GENERIC: slot eligibility = the
+                    // engine's own seat model; contention = the same wall-derived curve as swim.
+                    // FAIL-SOFT: no seat-free slot for a bunk → leave its window full-day (defer to
+                    // normal packing) — never confine into a starved band (the band-spread guard).
+                    // First slice = uncategorized@40 only (the observed culprit). Diffusion uses a
+                    // LOCAL reservation map, NOT _glCatResv (the layout's resourceCommit owns that —
+                    // writing here too would double-count the seat).
+                    if (typeof window !== 'undefined' && window.__specialStagger === true) {
+                        try {
+                            var _ssCat = 'special:uncategorized@40', _ssDur = 40;
+                            var _ssResv = {}, _ssResvG = {};   // local: cat -> [{s,e}] / grade -> cat -> [{s,e}] (ranking only)
+                            var _ssHasCont = (typeof _p23ContentionAt === 'function' && typeof _p23ConSnap !== 'undefined' && _p23ConSnap && _p23ConSnap.length > 0);
+                            var _ssFree = function (cat, grade, s, e) {
+                                var seats = _glSeats[cat];
+                                if (seats > 0 && seats !== Infinity) {
+                                    var l = _ssResv[cat] || [], n = 0;
+                                    for (var i = 0; i < l.length; i++) if (l[i].s < e && l[i].e > s) n++;
+                                    if (n + 1 > seats) return false;
+                                }
+                                var gm = _glSeatsByGrade[grade];
+                                if (gm && cat.indexOf('special:') === 0) {
+                                    var gs = gm[cat] || 0;
+                                    if (gs <= 0) return false;
+                                    var gl = (_ssResvG[grade] && _ssResvG[grade][cat]) || [], gn = 0;
+                                    for (var j = 0; j < gl.length; j++) if (gl[j].s < e && gl[j].e > s) gn++;
+                                    if (gn + 1 > gs) return false;
+                                }
+                                return true;
+                            };
+                            var _ssPlaced = 0, _ssDeferred = 0, _ssLog = [];
+                            _glOrder.forEach(function (bunk) {
+                                var pb = _glPerBunk[bunk]; if (!pb) return;
+                                var grade = pb.grade;
+                                var dem = (pb.floating || []).filter(function (d) {
+                                    return d && d.kind === 'special' && _glCanon(d.subcat) === 'uncategorized'
+                                        && (d.qty > 0) && Array.isArray(d.durations) && d.durations.indexOf(_ssDur) >= 0;
+                                })[0];
+                                if (!dem) return;
+                                var walls = (pb.pinned || []).map(function (w) { return [w.startMin, w.endMin]; });
+                                var dayLo = (dem.window && dem.window[0] != null) ? dem.window[0] : (pb.periods[0] && pb.periods[0].startMin);
+                                var dayHi = (dem.window && dem.window[1] != null) ? dem.window[1] : (pb.periods[pb.periods.length - 1] && pb.periods[pb.periods.length - 1].endMin);
+                                if (dayLo == null || dayHi == null) return;
+                                var best = null;
+                                for (var s = dayLo; s + _ssDur <= dayHi; s += 5) {
+                                    var e = s + _ssDur, blocked = false;
+                                    for (var wi = 0; wi < walls.length; wi++) { if (walls[wi][0] < e && walls[wi][1] > s) { blocked = true; break; } }
+                                    if (blocked) continue;
+                                    if (!_ssFree(_ssCat, grade, s, e)) continue;
+                                    var cont = _ssHasCont ? _p23ContentionAt(s, e) : 0;
+                                    if (best === null || cont < best.cont || (cont === best.cont && s < best.s)) best = { s: s, e: e, cont: cont };
+                                }
+                                if (!best) { _ssDeferred++; return; }   // FAIL-SOFT: keep full-day window
+                                var slack = 0; (pb.periods || []).forEach(function (p) { var L = p.endMin - p.startMin; if (L > slack) slack = L; });
+                                if (slack < _ssDur) slack = _ssDur;
+                                dem.window = [best.s, Math.min(dayHi, best.s + slack)];
+                                (_ssResv[_ssCat] || (_ssResv[_ssCat] = [])).push({ s: best.s, e: best.e });
+                                var bg = (_ssResvG[grade] || (_ssResvG[grade] = {}));
+                                (bg[_ssCat] || (bg[_ssCat] = [])).push({ s: best.s, e: best.e });
+                                _ssPlaced++;
+                                if (_ssLog.length < 24) _ssLog.push(bunk + '→' + minutesToTimeLabel(best.s) + (best.cont ? ('(c' + best.cont + ')') : ''));
+                            });
+                            log('[SPECIAL-STAGGER] uncategorized@40: steered ' + _ssPlaced + ' bunk(s) to a seat-free ' + (_ssHasCont ? 'low-contention ' : '') + 'slot · ' + _ssDeferred + ' deferred (no free slot → full-day) — ' + (_ssLog.join(' | ') || '(none)'));
+                        } catch (_ssErr) { try { warn('[SPECIAL-STAGGER] error — windows left full-day: ' + (_ssErr && _ssErr.message)); } catch (_e) {} }
+                    }
+
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
                     var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
