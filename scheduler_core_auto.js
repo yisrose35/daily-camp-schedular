@@ -17431,6 +17431,34 @@
 
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
                     var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0, _glCapLogged = {};
+                    // ── FLOAT SWIM (opt-in: window.__floatSwim) ───────────────────────────
+                    // The user's "everything within its window": let the LAYOUT reposition swim
+                    // instead of the fixed Phase-2.3 slot, so it can reorder swim↔sport and stop
+                    // boxing windows into dead placeholders. We strip the pre-placed swim + its
+                    // change envelope from bunkTimelines here; the re-float pass below re-adds swim
+                    // as a FLOATING demand (wide window), the main packer positions it, and the
+                    // pool stays capped because poolSwimPairFreeAt counts live swim tiles in
+                    // bunkTimelines — kept current by a marker the commit hook adds per placement.
+                    // The change BUFFER isn't re-floated (a swim+change envelope is too long for the
+                    // 40-min gaps); its freed minutes become fillable time. v1: swim is a stable
+                    // anchor the main pass places (the repair passes don't move it). Default OFF.
+                    var _glFloatSwim = (typeof window !== 'undefined' && window.__floatSwim === true);
+                    if (_glFloatSwim) {
+                        try {
+                            var _glSwimStripped = 0;
+                            Object.keys(bunkTimelines || {}).forEach(function (bk) {
+                                var tl = bunkTimelines[bk]; if (!Array.isArray(tl)) return;
+                                var kept = [];
+                                for (var i = 0; i < tl.length; i++) {
+                                    var b = tl[i]; var ty = String((b && b.type) || '').toLowerCase();
+                                    if (b && b._swimGroupId != null && (ty === 'swim' || ty === 'change' || ty === 'pre-change' || ty === 'post-change')) { _glSwimStripped++; continue; }
+                                    kept.push(b);
+                                }
+                                if (kept.length !== tl.length) { tl.length = 0; Array.prototype.push.apply(tl, kept); }
+                            });
+                            log('[GENERIC-LAYOUT] FLOAT SWIM on — stripped ' + _glSwimStripped + ' pre-placed swim/change block(s); swim will be repositioned within its window (change buffer folded out)');
+                        } catch (_glStripErr) { try { warn('[GENERIC-LAYOUT] float-swim strip error — ' + (_glStripErr && _glStripErr.message)); } catch (_e) {} }
+                    }
                     allGrades.forEach(function (grade) {
                         var rawPeriods = (window.campPeriods && window.campPeriods[grade]) || [];
                         var gObj = divisions[grade] || divisions[String(grade)] || {};
@@ -17617,6 +17645,10 @@
                                     var _dMin = _c.dMin || _rawDur, _dMax = _c.dMax || _dMin;
                                     var _ws = Math.max(L.startMin != null ? L.startMin : gStart, gStart);
                                     var _we = Math.min(L.endMin != null ? L.endMin : gEnd, gEnd);
+                                    // FLOAT SWIM: widen swim's window to the whole grade day so the layout
+                                    // can place it anywhere a 40-min gap + the pool allow — that freedom is
+                                    // exactly what lets it reorder swim↔sport and unbox the stuck windows.
+                                    if (lk === 'swim' && _glFloatSwim) { _ws = gStart; _we = gEnd; }
                                     if (!(_we - _ws >= _dMin)) return; // window can't even fit it
                                     var _qty = Number(L.qty != null ? L.qty : (L.quantity != null ? L.quantity : 1));
                                     if (!(_qty > 0)) _qty = 1;
@@ -17906,6 +17938,12 @@
                                 var _bg = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
                                 (_bg[_cat2] || (_bg[_cat2] = [])).push({ s: sMin, e: eMin });
                             }
+                            // FLOAT SWIM: record the placed swim as a live tile so the NEXT bunk's
+                            // poolSwimPairFreeAt (which counts swim tiles in bunkTimelines) sees it →
+                            // the pool capacity stays enforced across bunks as the layout places swim.
+                            if (_glFloatSwim && String(kind || '').toLowerCase() === 'swim') {
+                                (bunkTimelines[bunk] || (bunkTimelines[bunk] = [])).push({ type: 'swim', event: 'Swim', startMin: sMin, endMin: eMin, _glFloatMark: true });
+                            }
                         } catch (_e) {}
                     };
                     // RELEASE the inverse of commit: when a repair pass RELOCATES an already-laid
@@ -17926,6 +17964,10 @@
                             var _cat2 = _glCatOf(kind, ref, sMin, eMin);
                             if (_cat2 && _glSeats[_cat2] > 0) _glSplice(_glCatResv[_cat2], sMin, eMin);
                             if (_cat2 && _cat2.indexOf('special:') === 0 && _glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_cat2], sMin, eMin);
+                            if (_glFloatSwim && String(kind || '').toLowerCase() === 'swim') {
+                                var _stl = bunkTimelines[bunk];
+                                if (_stl) { for (var _si = 0; _si < _stl.length; _si++) { if (_stl[_si] && _stl[_si]._glFloatMark && _stl[_si].startMin === sMin && _stl[_si].endMin === eMin) { _stl.splice(_si, 1); break; } } }
+                            }
                         } catch (_e) {}
                     };
 

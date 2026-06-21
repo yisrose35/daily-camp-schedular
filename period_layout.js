@@ -414,7 +414,7 @@
                 //   • generic special/sport tiles → per-CATEGORY SEAT count (the caller caps
                 //     concurrent specials-per-subcat / sports the way the pool caps swimmers).
                 // The caller's resourceCommit decides what to track from kind + _ref.
-                if (resourceCommit && seg._ref && (seg._ref.share || seg.kind === 'special' || seg.kind === 'sport')) {
+                if (resourceCommit && seg._ref && (seg._ref.share || seg.kind === 'special' || seg.kind === 'sport' || seg.kind === 'swim')) {
                     try { resourceCommit(seg.kind, _ctxGrade, _ctxBunk, seg.startMin, seg.endMin, seg._ref); } catch (e) {}
                 }
                 stats.tilesPlaced++;
@@ -471,7 +471,7 @@
                     var movers = [];
                     // shared layers (a `_ref.share` facility reservation) are anchors: never
                     // relocate them — that would desync the cross-bunk reservation. Fillers only.
-                    for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt._ref && !(tt._ref && tt._ref.share)) movers.push(tt); }
+                    for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt.kind !== 'swim' && tt._ref && !(tt._ref && tt._ref.share)) movers.push(tt); }
                     movers.sort(function (a, b) {
                         var af = (a.kind === 'sport' || a.kind === 'activity') ? 0 : 1;
                         var bf = (b.kind === 'sport' || b.kind === 'activity') ? 0 : 1;
@@ -569,7 +569,7 @@
                 if (!kCands.length) continue;
                 // movable tiles (generic, not pinned, not already relocated), by time
                 var mov = [];
-                for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && !_isMoved(tt) && !(tt._ref && tt._ref.share)) mov.push(tt); }
+                for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt.kind !== 'swim' && !_isMoved(tt) && !(tt._ref && tt._ref.share)) mov.push(tt); }
                 mov.sort(function (a, b) { return a.startMin - b.startMin; });
 
                 var done = false;
