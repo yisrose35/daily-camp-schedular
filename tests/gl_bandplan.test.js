@@ -117,6 +117,38 @@ test('enforce: per-grade cap is honored even when camp-wide has room', () => {
     assert.strictEqual(gUncat, 1, 'exactly one G-bunk keeps uncat');
 });
 
+test('byDuration: categoryOf and measure key specials by LENGTH', () => {
+    assert.strictEqual(GLBandPlan.categoryOf({ kind: 'special', subcat: 'Regular', startMin: 0, endMin: 30 }, canon, true), 'special:uncategorized@30');
+    assert.strictEqual(GLBandPlan.categoryOf({ kind: 'special', subcat: 'Regular', startMin: 0, endMin: 40 }, canon, true), 'special:uncategorized@40');
+    // 3 bunks: two 30-min uncat + one 40-min uncat at the same band. Per-length seats: @30=1, @40=13.
+    const bunks = [
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 30 }]),
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 30 }]),
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]),
+    ];
+    const r = GLBandPlan.measure({ bunks, supply: { 'special:uncategorized@30': 1, 'special:uncategorized@40': 13 }, canon, byDuration: true });
+    assert.strictEqual(r.cats['special:uncategorized@30'].peak, 2);   // two 30-min tiles
+    assert.strictEqual(r.cats['special:uncategorized@30'].over, 1);   // only 1 seat at 30min (Baking)
+    assert.strictEqual(r.cats['special:uncategorized@40'].over, 0);   // 1 ≤ 13 at 40min
+    assert.ok(r.overCats.includes('special:uncategorized@30'));
+    assert.ok(!r.overCats.includes('special:uncategorized@40'));
+});
+
+test('enforce byDuration: a 30-min slot over its @30 seat is pulled to sport; the 40-min slot is fine', () => {
+    const bunks = [
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 30 }]),
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 30 }]),  // 2nd 30-min — over the @30 seat (1)
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]),  // 40-min — within @40 seats
+    ];
+    const seats = { 'special:uncategorized@30': 1, 'special:uncategorized@40': 13, sport: 10 };
+    const byGrade = { G: { 'special:uncategorized@30': 1, 'special:uncategorized@40': 13 } };
+    const r = GLBandPlan.enforce({ bunks, seats, seatsByGrade: byGrade, canon, byDuration: true });
+    assert.strictEqual(r.toSport, 1, 'the excess 30-min uncat went to sport (only 1 activity does 30min)');
+    const min30 = bunks.filter(b => b.tiles.some(t => t.kind === 'special' && (t.endMin - t.startMin) === 30)).length;
+    assert.strictEqual(min30, 1, 'only one 30-min uncat remains (its single seat)');
+    assert.ok(bunks[2].tiles[0].kind === 'special', 'the 40-min uncat is untouched (within its seats)');
+});
+
 test('enforce: never moves a FILLED special, and leaves an honest residual when nothing has room', () => {
     // 2 bunks: one FILLED uncat (Baking) + one unfilled uncat; uncat seats=1, sport seats=0 (full) →
     // the filled one stays, the unfilled one can't go to sport (0 seats) → left as residual violation.

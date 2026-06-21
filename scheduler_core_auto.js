@@ -17675,9 +17675,22 @@
                     //   sport            = Σ enabled sport-hosting fields' bunk-capacity.
                     //   swim             = the pool's bunk-capacity (also gated by poolSwimPairFreeAt).
                     // Counted ONCE here, BEFORE layout, so the resourceGate below can enforce it.
-                    var _glSeats = {};       // category -> concurrent SEATS (bunk capacity)
-                    var _glSpecActs = {};    // special:subcat -> # of DISTINCT available activities
-                    var _glSeatNames = {};   // special:subcat -> [activity names] (for the visible count)
+                    // SEATS are PER-LENGTH: an activity that only runs 40 min can't fill a 30-min
+                    // slot, so a subcat's concurrent capacity is counted PER DURATION
+                    // ('special:uncategorized@30' etc.). e.g. 30-min uncat = only Baking = 1 seat,
+                    // even though there are 13 uncat activities (most are 40-min only).
+                    var _glSeats = {};        // 'special:<subcat>@<dur>' / 'sport' / 'swim' -> concurrent SEATS
+                    var _glSeatBySubDur = {}; // subcat -> { dur -> seats }   (for the visible breakdown)
+                    var _glSpecActsBySub = {};// subcat -> # of DISTINCT available activities
+                    var _glNamesBySub = {};   // subcat -> [activity names]
+                    var _glDurList = function (s) {   // an activity's permitted durations (numbers)
+                        var ds = [];
+                        try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(s.name, window.activityProperties, globalSettings) : null; ds = (gd && gd.durations) || gd; } catch (_e) {}
+                        if (!Array.isArray(ds)) ds = [];
+                        ds = ds.map(Number).filter(function (x) { return x > 0; });
+                        if (!ds.length) { if (s.dMin) ds.push(Number(s.dMin)); if (s.dMax && s.dMax !== s.dMin) ds.push(Number(s.dMax)); }
+                        return ds.length ? ds : [40];
+                    };
                     try {
                         var _seatSrc = (typeof todaysSpecials !== 'undefined' && todaysSpecials && todaysSpecials.length)
                             ? todaysSpecials
@@ -17686,18 +17699,23 @@
                             if (!s || !s.name) return;
                             var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
                             if (_sp.fullGrade === true || s.fullGrade === true) return;   // whole-grade specials aren't per-bunk seats
-                            var _sk = 'special:' + _glCanon(s.subcategory);
+                            var _sub = _glCanon(s.subcategory);
                             var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
                             var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
-                            _glSeats[_sk] = (_glSeats[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
-                            _glSpecActs[_sk] = (_glSpecActs[_sk] || 0) + 1;
-                            (_glSeatNames[_sk] = _glSeatNames[_sk] || []).push(s.name);
+                            var _seat = (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                            _glDurList(s).forEach(function (d) {
+                                var _k = 'special:' + _sub + '@' + d;
+                                _glSeats[_k] = (_glSeats[_k] || 0) + _seat;
+                                (_glSeatBySubDur[_sub] = _glSeatBySubDur[_sub] || {})[d] = (_glSeatBySubDur[_sub][d] || 0) + _seat;
+                            });
+                            _glSpecActsBySub[_sub] = (_glSpecActsBySub[_sub] || 0) + 1;
+                            (_glNamesBySub[_sub] = _glNamesBySub[_sub] || []).push(s.name);
                         });
                         var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
                         var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
                         var _sportSeats = 0;
                         _fldsSeat.forEach(function (f) { if (f && f.name && _disF.indexOf(f.name) < 0 && f.activities && f.activities.length) _sportSeats += Math.max(1, parseInt(f.capacity) || 1); });
-                        if (_sportSeats > 0) _glSeats['sport'] = _sportSeats;
+                        if (_sportSeats > 0) _glSeats['sport'] = _sportSeats;   // sport/swim are duration-independent (same field/pool)
                         var _swimSeats = 0;
                         ((globalSettings && globalSettings.facilities) || []).forEach(function (fac) {
                             ((fac && fac.generalActivities) || []).forEach(function (ga) {
@@ -17706,13 +17724,9 @@
                         });
                         if (_swimSeats > 0) _glSeats['swim'] = _swimSeats;
                     } catch (_glSeatErr) {}
-                    // ── PER-GRADE seats: some activities are restricted to certain grades (e.g.
-                    // Shiur 1 = Minors-only), so a GRADE's real concurrent capacity in a subcat is
-                    // ONLY the activities IT can access — the camp-wide count above overstates it.
-                    // The gate caps each grade by its own accessible-activity count, so a grade
-                    // never lays more of a subcat than it can actually fill (the live "16 uncat but
-                    // some are grade-limited, so they don't place" issue).
-                    var _glSeatsByGrade = {};   // grade -> { 'special:<subcat>' -> accessible seats }
+                    // ── PER-GRADE seats (also per-length): grade-restricted activities (e.g. Shiur 1 =
+                    // Minors-only) only count for the grades that can use them.
+                    var _glSeatsByGrade = {};   // grade -> { 'special:<subcat>@<dur>' -> accessible seats }
                     try {
                         (allGrades || []).forEach(function (g) {
                             var _rep = (typeof getBunksForGrade === 'function') ? (getBunksForGrade(g, divisions) || [])[0] : null;
@@ -17724,38 +17738,40 @@
                                 var _ok = true;
                                 try { if (typeof isSpecialAvailableForBunk === 'function') _ok = isSpecialAvailableForBunk(s.name, g, _rep, globalSettings); } catch (_e) { _ok = true; }
                                 if (!_ok) return;
-                                var _sk = 'special:' + _glCanon(s.subcategory);
+                                var _sub = _glCanon(s.subcategory);
                                 var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
                                 var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
-                                _gm[_sk] = (_gm[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                                var _seat = (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                                _glDurList(s).forEach(function (d) { var _k = 'special:' + _sub + '@' + d; _gm[_k] = (_gm[_k] || 0) + _seat; });
                             });
                         });
                     } catch (_glSeatGErr) {}
-                    // ── VISIBLE COUNT: print exactly what the engine counted, so it's auditable.
+                    // ── VISIBLE COUNT: print exactly what the engine counted (per length), auditable.
                     try {
-                        var _subKeys = Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort();
-                        var _totActs = _subKeys.reduce(function (a, k) { return a + (_glSpecActs[k] || 0); }, 0);
-                        var _totSeats = _subKeys.reduce(function (a, k) { return a + _glSeats[k]; }, 0);
-                        log('[SEAT COUNT] ═══ Special activities AVAILABLE TODAY: ' + _totActs + ' activit' + (_totActs === 1 ? 'y' : 'ies') + ' in ' + _subKeys.length + ' subcategor' + (_subKeys.length === 1 ? 'y' : 'ies') + ' → ' + _totSeats + ' total special seats ═══');
-                        if (_subKeys.length) {
-                            _subKeys.forEach(function (k) {
-                                log('[SEAT COUNT]    • ' + k.slice(8) + ': ' + (_glSpecActs[k] || 0) + ' activit' + ((_glSpecActs[k] || 0) === 1 ? 'y' : 'ies') + ' = ' + _glSeats[k] + ' seat' + (_glSeats[k] === 1 ? '' : 's') + '  [' + (_glSeatNames[k] || []).join(', ') + ']');
+                        var _subs = Object.keys(_glSeatBySubDur).sort();
+                        var _totActs = _subs.reduce(function (a, s) { return a + (_glSpecActsBySub[s] || 0); }, 0);
+                        log('[SEAT COUNT] ═══ Special activities AVAILABLE TODAY: ' + _totActs + ' activit' + (_totActs === 1 ? 'y' : 'ies') + ' in ' + _subs.length + ' subcategor' + (_subs.length === 1 ? 'y' : 'ies') + ' (seats counted PER LENGTH) ═══');
+                        if (_subs.length) {
+                            _subs.forEach(function (sub) {
+                                var dd = _glSeatBySubDur[sub];
+                                var parts = Object.keys(dd).map(Number).sort(function (a, b) { return a - b; }).map(function (d) { return d + 'min=' + dd[d] + ' seat' + (dd[d] === 1 ? '' : 's'); });
+                                log('[SEAT COUNT]    • ' + sub + ': ' + (_glSpecActsBySub[sub] || 0) + ' activit' + ((_glSpecActsBySub[sub] || 0) === 1 ? 'y' : 'ies') + ' → seats by length: ' + parts.join(', ') + '  [' + (_glNamesBySub[sub] || []).join(', ') + ']');
                             });
                         } else {
                             log('[SEAT COUNT]    • (no special activities available today)');
                         }
                         log('[SEAT COUNT]    • sport: ' + (_glSeats['sport'] != null ? _glSeats['sport'] + ' seats (fields)' : '∞ (no field cap)') + '  |  swim: ' + (_glSeats['swim'] != null ? _glSeats['swim'] + ' seats (pool)' : 'n/a'));
-                        // per-grade access — only shown for a subcat where some grade can reach FEWER
-                        // activities than the camp-wide count (i.e. grade-restricted activities exist).
-                        _subKeys.forEach(function (k) {
+                        // per-grade restriction, per (subcat, length), only where a grade reaches FEWER seats.
+                        Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort().forEach(function (k) {
                             var _anyR = (allGrades || []).some(function (g) { return ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0) < _glSeats[k]; });
                             if (_anyR) log('[SEAT COUNT]    ↳ ' + k.slice(8) + ' is grade-restricted → per-grade seats: ' + (allGrades || []).map(function (g) { return g + '=' + ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0); }).join(', '));
                         });
                     } catch (_glSeatLogErr) {}
-                    // category key for a generic tile (swim handled by its own pool gate, not here)
-                    var _glCatOf = function (kind, ref) {
+                    // category key for a generic tile — DURATION-AWARE for specials (seats are per length).
+                    // swim handled by its own pool gate, not here.
+                    var _glCatOf = function (kind, ref, sMin, eMin) {
                         var k = String(kind || '').toLowerCase();
-                        if (k === 'special') return 'special:' + _glCanon(ref && ref.subcat);
+                        if (k === 'special') { var d = (sMin != null && eMin != null) ? (eMin - sMin) : null; return 'special:' + _glCanon(ref && ref.subcat) + (d != null ? ('@' + d) : ''); }
                         if (k === 'sport') return 'sport';
                         return null;
                     };
@@ -17842,7 +17858,7 @@
                             // activities don't count for a grade that can't use them). When a category is
                             // full the packer is steered to one that still has room.
                             if (window.__seatGate !== false) {
-                                var _cat = _glCatOf(kind, ref);
+                                var _cat = _glCatOf(kind, ref, sMin, eMin);
                                 if (_cat && !_glSeatFreeAt(_cat, sMin, eMin)) return false;
                                 if (_cat && !_glSeatFreeAtGrade(_cat, grade, sMin, eMin)) return false;
                             }
@@ -17856,7 +17872,7 @@
                                 (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
                             }
                             // reserve the category seat so the next bunk's gate counts it (camp-wide + per-grade)
-                            var _cat2 = _glCatOf(kind, ref);
+                            var _cat2 = _glCatOf(kind, ref, sMin, eMin);
                             if (_cat2 && _glSeats[_cat2] > 0) (_glCatResv[_cat2] || (_glCatResv[_cat2] = [])).push({ s: sMin, e: eMin });
                             if (_cat2 && _cat2.indexOf('special:') === 0) {
                                 var _bg = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
@@ -18016,7 +18032,7 @@
                                 if (window.__spreadShadow !== false && window.GLBandPlan && typeof window.GLBandPlan.measure === 'function') {
                                     var _spBunks = [];
                                     _glOrder.forEach(function (b) { var r = _glOut.layoutByBunk[b]; if (r && r.tiles) _spBunks.push({ tiles: r.tiles }); });
-                                    var _spRes = window.GLBandPlan.measure({ bunks: _spBunks, supply: _glSeats, canon: _glCanon });
+                                    var _spRes = window.GLBandPlan.measure({ bunks: _spBunks, supply: _glSeats, canon: _glCanon, byDuration: true });
                                     var _spFmt = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
                                     var _peakStr = Object.keys(_spRes.cats).sort().map(function (k) { var c = _spRes.cats[k]; return k + ' ' + c.peak + (c.supply == null ? '/∞' : '/' + c.supply); }).join(', ');
                                     log('[GENERIC-SPREAD shadow] category peak-concurrency / seats: ' + _peakStr);
@@ -18165,7 +18181,7 @@
                                 if (window.__seatGate !== false && window.GLBandPlan && typeof window.GLBandPlan.enforce === 'function') {
                                     var _enfBunks = [];
                                     _glOrder.forEach(function (bunk) { var r = _glOut.layoutByBunk[bunk]; if (r && r.tiles) _enfBunks.push({ grade: (_glPerBunk[bunk] && _glPerBunk[bunk].grade), tiles: r.tiles }); });
-                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport' });
+                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport', byDuration: true });
                                     if (_enf) {
                                         var _fmtA = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
                                         log('[SEAT AUDIT] over-cap leftovers pulled down: ' + (_enf.toSport || 0) + ' → Sport, ' + (_enf.toOtherSpecial || 0) + ' → another subcat'

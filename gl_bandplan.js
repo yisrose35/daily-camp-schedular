@@ -31,10 +31,16 @@
     }
 
     // The category a tile competes for. Walls (lunch/change/cleanup/main/anchor/league…)
-    // return null — they don't draw on category supply. Specials key by canon subcat.
-    function categoryOf(t, canon) {
+    // return null — they don't draw on category supply. Specials key by canon subcat;
+    // with byDur, also by DURATION (e.g. 'special:uncategorized@30') because an activity
+    // that only runs 40 min can't fill a 30-min slot — seats are per-length.
+    function categoryOf(t, canon, byDur) {
         if (!t || !t.kind) return null;
-        if (t.kind === 'special') return 'special:' + (canon ? canon(t.subcat) : canonDefault(t.subcat));
+        if (t.kind === 'special') {
+            var sub = 'special:' + (canon ? canon(t.subcat) : canonDefault(t.subcat));
+            if (byDur) { var d = (t.durationMin != null) ? t.durationMin : (t.endMin - t.startMin); sub += '@' + d; }
+            return sub;
+        }
         if (t.kind === 'sport') return 'sport';
         if (t.kind === 'swim') return 'swim';
         if (t.kind === 'activity') return 'activity';
@@ -73,12 +79,13 @@
         var bunks = (ctx && ctx.bunks) || [];
         var supply = (ctx && ctx.supply) || {};
         var canon = (ctx && ctx.canon) || canonDefault;
+        var byDur = !!(ctx && ctx.byDuration);
         var byCat = {};
         for (var b = 0; b < bunks.length; b++) {
             var tiles = (bunks[b] && bunks[b].tiles) || [];
             for (var t = 0; t < tiles.length; t++) {
                 var tile = tiles[t];
-                var k = categoryOf(tile, canon);
+                var k = categoryOf(tile, canon, byDur);
                 if (!k) continue;
                 (byCat[k] = byCat[k] || []).push([tile.startMin, tile.endMin]);
             }
@@ -129,8 +136,9 @@
         var canon = (ctx && ctx.canon) || canonDefault;
         var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
         var sportLabel = (ctx && ctx.sportLabel) || 'Sport';
+        var byDur = !!(ctx && ctx.byDuration);
         var ents = [];
-        bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
+        bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon, byDur); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
         function cap(cat) { return (seats[cat] != null && isFinite(seats[cat])) ? seats[cat] : Infinity; }
         function gcap(cat, grade) { var gm = byGrade[grade]; if (!gm) return Infinity; var v = gm[cat]; if (v != null && isFinite(v)) return v; return (cat.indexOf('special:') === 0) ? 0 : Infinity; }
         function conc(cat, s, e, grade) { var c = 0, g = 0; for (var i = 0; i < ents.length; i++) { var en = ents[i]; if (en.cat !== cat) continue; if (en.t.startMin < e && en.t.endMin > s) { c++; if (grade != null && en.grade === grade) g++; } } return { camp: c, grade: g }; }
@@ -149,20 +157,23 @@
                 if (gate) { var tmpl = []; en.tiles.forEach(function (o) { if (o !== t) tmpl.push(toBlk(o)); }); try { ok = gate({ type: 'sport', event: sportLabel, startMin: t.startMin, endMin: t.endMin }, tmpl); } catch (e) { ok = true; } }
                 if (ok) target = 'sport';
             }
-            // (2) else another special subcat this grade can access that is under cap
+            // (2) else another special subcat this grade can access that is under cap — and,
+            //     when seats are duration-keyed, one that does THIS tile's length.
             if (!target) {
                 var gm = byGrade[en.grade] || {};
                 var keys = Object.keys(gm);
+                var durSfx = byDur ? ('@' + ((t.durationMin != null) ? t.durationMin : (t.endMin - t.startMin))) : '';
                 for (var k = 0; k < keys.length; k++) {
                     var ck = keys[k];
                     if (ck === en.cat || ck.indexOf('special:') !== 0 || !(gm[ck] > 0)) continue;
+                    if (durSfx && ck.slice(-durSfx.length) !== durSfx) continue;   // must run this length
                     var cc = conc(ck, t.startMin, t.endMin, en.grade);
                     if (cc.camp + 1 <= cap(ck) && cc.grade + 1 <= gcap(ck, en.grade)) { target = ck; break; }
                 }
             }
             if (!target) { left++; continue; }
             if (target === 'sport') { t.kind = 'sport'; t.subcat = null; t.name = sportLabel; t._fillLoc = null; en.cat = 'sport'; toSport++; }
-            else { var sub = target.slice(8); t.subcat = sub; t.name = 'Special: ' + (sub.charAt(0).toUpperCase() + sub.slice(1)); en.cat = target; toOtherSpecial++; }
+            else { var body = target.slice(8); var at = body.indexOf('@'); var sub = at >= 0 ? body.slice(0, at) : body; t.subcat = sub; t.name = 'Special: ' + (sub.charAt(0).toUpperCase() + sub.slice(1)); en.cat = target; toOtherSpecial++; }
         }
         // AUDIT the final state: any category still over its seats (camp-wide or per-grade)?
         var violations = [];
