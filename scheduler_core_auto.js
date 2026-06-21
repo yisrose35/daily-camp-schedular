@@ -18591,6 +18591,57 @@
                     var _genSkeleton = [];
                     var _bunkToGrade = {};
                     allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _bunkToGrade[String(b)] = g; }); });
+
+                    // 2.7) FILL SPORTS — turn each generic "Sport" tile into a CONCRETE sport on a
+                    // real field, so the day shows Basketball/Hockey/… instead of the "Sport"
+                    // placeholder. For each generic sport tile (incl. absorb-sport), take the
+                    // ROTATION-BEST sport from the bunk's sportPriorityList (already access+rotation
+                    // sorted) that (a) the bunk hasn't had today (no same-day repeat) and (b) has a
+                    // field FREE at the tile's time — checked + claimed via the same isFieldAvailable
+                    // / claimFieldGlobal the legacy solver uses, so no two bunks double-book a field,
+                    // no sport exceeds its field capacity, sharing/maxPlayers honored. The field claim
+                    // naturally SPREADS sports (once a sport's fields are full, the next bunk takes the
+                    // next sport). A tile with no free field stays generic "Sport" (e.g. the >15-
+                    // concurrent overflow). Kill: window.__fillSports=false.
+                    if ((typeof window === 'undefined') || (window.__fillSports !== false)) {
+                        var _glSportFilled = 0, _glSportMiss = 0;
+                        try {
+                            _glOrder.forEach(function (bunk) {
+                                var res0 = _glOut.layoutByBunk[bunk]; if (!res0 || !res0.tiles) return;
+                                var grd = _bunkToGrade[String(bunk)];
+                                var sl0 = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
+                                var plist = (sl0 && sl0.sports && sl0.sports.priorityList) || [];
+                                if (!plist.length) return;
+                                var usedSport = Object.create(null);
+                                res0.tiles.forEach(function (t) { if (t.kind === 'sport' && t._concrete) usedSport[String(t._concrete).toLowerCase()] = 1; });
+                                res0.tiles.filter(function (t) { return t.kind === 'sport' && t.generic !== false && !t._concrete; })
+                                    .sort(function (a, b) { return a.startMin - b.startMin; })
+                                    .forEach(function (t) {
+                                        var placed = false;
+                                        for (var i = 0; i < plist.length && !placed; i++) {
+                                            var sp = plist[i]; if (!sp || !sp.name) continue;
+                                            var nm = String(sp.name).toLowerCase();
+                                            if (usedSport[nm]) continue;                 // no same-day repeat
+                                            var flds = sp.fields || [];
+                                            for (var fi = 0; fi < flds.length; fi++) {
+                                                var ok = false;
+                                                try { ok = isFieldAvailable(flds[fi], t.startMin, t.endMin, bunk, grd, sp.name); } catch (_e) { ok = false; }
+                                                if (!ok) continue;
+                                                var claimed = false;
+                                                try { claimed = claimFieldGlobal(flds[fi], t.startMin, t.endMin, bunk, grd, sp.name); } catch (_e) { claimed = false; }
+                                                if (!claimed) continue;
+                                                t._concrete = sp.name; t.name = sp.name; t._assignedSport = sp.name; t._fillLoc = flds[fi];
+                                                usedSport[nm] = 1; placed = true; _glSportFilled++;
+                                                break;
+                                            }
+                                        }
+                                        if (!placed) _glSportMiss++;
+                                    });
+                            });
+                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : ''));
+                        } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
+                    }
+
                     _glOrder.forEach(function (bunk) {
                         var grade = _bunkToGrade[String(bunk)];
                         var res = _glOut.layoutByBunk[bunk];
@@ -18629,7 +18680,14 @@
                                 // _generic now reflects the SLOT: a filled special is a real activity
                                 // (_generic:false → uniqueness/rotation count it); an unfilled tile stays
                                 // generic. _specialLocation/_subcat carried for the sharing step.
-                                return { field: s.event, sport: null, _activity: s.event, _startMin: s.startMin, _endMin: s.endMin, _fixed: true, _autoMode: true, _generic: !!s._generic, continuation: false, type: s.type, _subcat: s._subcat || null, _specialLocation: s._specialLocation || null };
+                                // For a CONCRETE sport the `field` column must be the PHYSICAL field
+                                // we claimed (carried in _specialLocation), NOT the sport name — else
+                                // the validator keys two legal concurrent Basketballs (on different
+                                // courts) as one field and false-flags a conflict. _activity stays the
+                                // sport name so the grid still DISPLAYS "Basketball" (getActivityDisplayName
+                                // reads _activity first). Specials/generic tiles keep field = event.
+                                var _isSportConc = (s.type === 'sport' && !s._generic && s._specialLocation);
+                                return { field: _isSportConc ? s._specialLocation : s.event, sport: _isSportConc ? s.event : null, _activity: s.event, _startMin: s.startMin, _endMin: s.endMin, _fixed: true, _autoMode: true, _generic: !!s._generic, continuation: false, type: s.type, _subcat: s._subcat || null, _specialLocation: s._specialLocation || null };
                             });
                         });
                     });
