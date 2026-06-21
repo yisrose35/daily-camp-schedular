@@ -18215,9 +18215,19 @@
                             try {
                                 if (window.__absorbSport !== false && window.GLStagger && typeof window.GLStagger.absorbUnfilledToSport === 'function') {
                                     var _absBunks = [];
-                                    _glOrder.forEach(function (bunk) { var res = _glOut.layoutByBunk[bunk]; if (res && res.tiles) _absBunks.push({ tiles: res.tiles }); });
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40 });
-                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; }   // keep _glFill.miss as the count for the cause report below
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        _absBunks.push({ tiles: res.tiles, grade: grade, pool: pool });
+                                    });
+                                    // STEP 3 — pass the fill context so a Sport-spacing-blocked block is filled with a
+                                    // REAL special that still has a seat (aware of what fill already took) before any
+                                    // dead generic placeholder. capFits keeps sharing/cap strict; recordUse threads
+                                    // the cross-bunk usage so two bunks never over-share one activity.
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon });
+                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0); }
                                 }
                             } catch (_glAbsErr) { try { warn('[GENERIC-ABSORB] error — left as-is: ' + (_glAbsErr && _glAbsErr.message)); } catch (_e) {} }
                             // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,
@@ -18355,7 +18365,8 @@
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
                                 + (_glFill.absorbed ? (' — open time → ' + _glFill.absorbed + ' Sport block(s)'
-                                       + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept Special (sport-spacing rule blocked a Sport there)') : '')
+                                       + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')
+                                       + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept Special (no sport + no free special there)') : '')
                                        + '. couldn\'t-fill causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | '))
                                    : (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : '')));
                         }

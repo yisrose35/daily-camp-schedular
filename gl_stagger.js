@@ -28,7 +28,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '0.1.0';
+    const VERSION = '0.2.0';
 
     // Does interval [s,e) fit inside tile t's layer window? (no window ⇒ unconstrained)
     function inWindow(t, s, e) {
@@ -162,6 +162,25 @@
         return { recovered: recovered, attempts: attempts, bunks: bunks.length };
     }
 
+    // Any free activity (ANY subcat) of exactly `dur` minutes that still fits (cap-aware) at
+    // [s,e] for this bunk and isn't already used by it. Used by absorb's STEP-3 fallback: when
+    // a Sport is spacing-blocked, place a REAL special that still has a seat instead of a dead
+    // generic placeholder ("aware of what step-2 took"). Returns the candidate or null.
+    function pickAnyFillable(ctx, bunk, dur, s, e, used) {
+        const pool = (bunk && bunk.pool) || [];
+        for (let i = 0; i < pool.length; i++) {
+            const c = pool[i];
+            if (!c || !c.name) continue;
+            const durs = ctx.specialDurs ? ctx.specialDurs(c.name) : null;
+            if (durs && durs.length && durs.indexOf(dur) < 0) continue;
+            const key = String(c.name).toLowerCase();
+            if (used[key]) continue;
+            if (ctx.capFits && !ctx.capFits(c, bunk.grade, s, e)) continue;
+            return c;
+        }
+        return null;
+    }
+
     // an OPEN tile = a generic, not-yet-filled special/sport/activity (re-tileable leftover).
     // Everything else — walls (swim/lunch/change/anchor/cleanup) and FILLED specials — is
     // FIXED: a layer the day must keep, and a boundary that breaks an open run.
@@ -183,18 +202,27 @@
     // gap) also breaks a run. Coverage preserved (wall-to-wall within each run). The gate is
     // checked against the bunk's fixed tiles + the sports already placed in this pass, so
     // the resulting Sports obey the same spacing the layout did.
-    //   ctx: { bunks:[{tiles}], gate(block,template)->bool (optional), sportLabel='Sport',
-    //          specialLabel='Special: Uncategorized', maxMergeMin=40 }
+    //   ctx: { bunks:[{tiles, grade, pool}], gate(block,template)->bool (optional),
+    //          sportLabel='Sport', specialLabel='Special: Uncategorized', maxMergeMin=40,
+    //          // STEP-3 real-fill fallback (all optional; when present, a Sport-blocked block
+    //          // is filled with a REAL special that still has a seat before a dead placeholder):
+    //          capFits(cand,grade,s,e)->bool, recordUse(cand,grade,s,e), specialDurs(name)->[], canon(v)->str }
     function absorbUnfilledToSport(ctx) {
         var bunks = (ctx && ctx.bunks) || [];
         var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
         var label = (ctx && ctx.sportLabel) || 'Sport';
         var spLabel = (ctx && ctx.specialLabel) || 'Special: Uncategorized';
         var maxMerge = (ctx && ctx.maxMergeMin) || 40;
-        var toSport = 0, toSpecial = 0, blockedBySpacing = 0;
+        var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
+        var canFill = !!(ctx && typeof ctx.capFits === 'function' && typeof ctx.recordUse === 'function');
+        var toSport = 0, toSpecial = 0, blockedBySpacing = 0, toFilledSpecial = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
-            var tiles = (bunks[bi] && bunks[bi].tiles) || [];
+            var bunk = bunks[bi] || {};
+            var tiles = bunk.tiles || [];
             var sorted = tiles.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+            // names already concrete on this bunk's special tiles (no same-day repeat)
+            var used = Object.create(null);
+            for (var u = 0; u < sorted.length; u++) { var ut = sorted[u]; if (ut && ut.kind === 'special' && ut._concrete) used[String(ut._concrete).toLowerCase()] = 1; }
             var out = [];
             var tmpl = [];   // gate template: fixed tiles + decided blocks (grows as we place)
             for (var f = 0; f < sorted.length; f++) { if (!_isOpen(sorted[f])) tmpl.push(_toBlk(sorted[f])); }
@@ -204,18 +232,32 @@
                 // maximal contiguous open run
                 var runStart = sorted[k].startMin, runEnd = sorted[k].endMin, j = k + 1;
                 while (j < sorted.length && _isOpen(sorted[j]) && sorted[j].startMin === runEnd) { runEnd = sorted[j].endMin; j++; }
-                // re-tile [runStart,runEnd] into ≤maxMerge blocks, sport-where-gate-allows
+                // re-tile [runStart,runEnd] into ≤maxMerge blocks: Sport where the spacing gate
+                // allows; else a REAL special that still has a free seat (STEP 3 — aware of what
+                // fill already took); else a generic placeholder (genuine last resort).
                 for (var cur = runStart; cur < runEnd; ) {
                     var blkEnd = Math.min(cur + maxMerge, runEnd);
+                    var dur = blkEnd - cur;
                     var sportBlk = { type: 'sport', event: label, startMin: cur, endMin: blkEnd };
                     var allow = true;
                     if (gate) { try { allow = gate(sportBlk, tmpl); } catch (_e) { allow = true; } }
-                    var tile;
+                    var tile = null;
                     if (allow) {
-                        tile = { kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: blkEnd - cur, _ref: null };
+                        tile = { kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null };
                         toSport++;
-                    } else {
-                        tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: blkEnd - cur, _ref: null };
+                    } else if (canFill) {
+                        // Sport spacing-blocked → place a REAL special of this exact length that
+                        // still has a seat (cap-aware), instead of a dead "Special: Uncategorized".
+                        var pick = pickAnyFillable(ctx, bunk, dur, cur, blkEnd, used);
+                        if (pick) {
+                            tile = { kind: 'special', subcat: canon(pick.subcategory), name: pick.name, _concrete: pick.name, _fillLoc: pick.location || null, generic: false, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null };
+                            used[String(pick.name).toLowerCase()] = 1;
+                            try { ctx.recordUse(pick, bunk.grade, cur, blkEnd); } catch (_e) {}
+                            toFilledSpecial++;
+                        }
+                    }
+                    if (!tile) {
+                        tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null };
                         toSpecial++; blockedBySpacing++;
                     }
                     out.push(tile);
@@ -228,7 +270,7 @@
             tiles.length = 0;
             Array.prototype.push.apply(tiles, out);
         }
-        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing };
+        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };
