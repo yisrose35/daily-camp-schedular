@@ -17497,9 +17497,37 @@
                             if (_glAvailN === 0) {
                                 ((sl && sl.specials && sl.specials.priorityList) || []).forEach(_glIngestSpecial);
                             }
+                            // PER-BUNK FILLABLE LENGTHS: a (subcat,length) tile is only worth laying if THIS
+                            // bunk can actually FILL it at that length — i.e. an activity in the bunk's
+                            // rotation-thinned priorityList (cohort / maxUsage / cooldown / exact·min-freq
+                            // already applied — the exact set fill draws from) whose getSpecialDurations lists
+                            // that length. Offering the access-union [20,30,40] for uncategorized when only
+                            // Baking does 30 — and Baking is cohort-skipped today — is what strands the dead
+                            // "uncategorized 30min" placeholder. CAP stays from the full access set (how many
+                            // DISTINCT specials EXIST); only the LENGTHS are restricted to fillable ones.
+                            // Toggle: window.__fillableDurOnly=false.
+                            var subFillDur = {};
+                            try {
+                                if (window.__fillableDurOnly !== false) {
+                                    ((sl && sl.specials && sl.specials.priorityList) || []).forEach(function (px) {
+                                        if (!px || !px.name) return;
+                                        var _fk = _glCanon(px.subcategory);
+                                        var pds = [];
+                                        try { var pg = (typeof getSpecialDurations === 'function') ? getSpecialDurations(px.name, window.activityProperties, globalSettings) : null; pds = (pg && pg.durations) || pg; } catch (_e) {}
+                                        if (!Array.isArray(pds)) pds = [];
+                                        pds = pds.map(Number).filter(function (x) { return x > 0; });
+                                        if (!pds.length) { if (px.dMin) pds.push(Number(px.dMin)); if (px.dMax && px.dMax !== px.dMin) pds.push(Number(px.dMax)); }
+                                        if (pds.length) { subFillDur[_fk] = subFillDur[_fk] || {}; pds.forEach(function (d) { subFillDur[_fk][d] = 1; }); }
+                                    });
+                                }
+                            } catch (_glFillDurErr) {}
                             var _glCapParts = [];
                             Object.keys(subFloor).forEach(function (key) {
-                                var durs = Object.keys(subDur[key] || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
+                                // offer only lengths THIS bunk can FILL (rotation-thinned priorityList); fall
+                                // back to the access-union when the thinned list has nothing for the subcat
+                                // (preserve floor discovery for a fully-thinned subcat — absorb/sport heals it).
+                                var _fdSrc = (subFillDur[key] && Object.keys(subFillDur[key]).length) ? subFillDur[key] : subDur[key];
+                                var durs = Object.keys(_fdSrc || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
                                 if (!durs.length) durs = [10, 20, 30, 40];
                                 var _avail = subAvail[key] ? Object.keys(subAvail[key]).length : 0;
                                 // CAP semantics for generic-layout fill:
