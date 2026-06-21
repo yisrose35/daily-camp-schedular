@@ -17723,13 +17723,21 @@
                                 var _U = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
                                 var _wqToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
                                 if (_wqOn && _U && typeof _U.getPeriodActivityCount === 'function' && _wqToday) {
+                                    // Prefer the RAW special config (the UI's source of truth) for the weekly
+                                    // min/max. window.activityProperties may not carry specials on this page —
+                                    // the auto gen only sets it when unset (`if (!window.activityProperties)`),
+                                    // so on the Daily-Adjustments page it stays specials-less and reading it
+                                    // ALONE made the whole weekly-quota floor silently no-op for shiur etc.
+                                    // (floor=0, zero [GENERIC-WEEKLY]) even when minFrequency/maxUsage are set.
+                                    var _wqSpecByName = Object.create(null);
+                                    try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _wqSpecByName[s.name] = s; }); } catch (_e) {}
                                     Object.keys(subAvail).forEach(function (key) {
                                         var names = Object.keys(subAvail[key] || {});
                                         if (!names.length) return;
                                         // pull the weekly config across this subcat's accessible activities
                                         var M = 0, X = Infinity, period = 'week', hasMin = false;
                                         names.forEach(function (nm) {
-                                            var ap = (typeof window !== 'undefined' && window.activityProperties && window.activityProperties[nm]) || null;
+                                            var ap = _wqSpecByName[nm] || (typeof window !== 'undefined' && window.activityProperties && window.activityProperties[nm]) || null;
                                             if (!ap) return;
                                             var _pg = (ap.minFrequencyPerGrade && ap.minFrequencyPerGrade[grade] != null) ? parseInt(ap.minFrequencyPerGrade[grade], 10) : null;
                                             var _mf = (_pg != null && _pg > 0) ? _pg : (ap.minFrequency != null ? parseInt(ap.minFrequency, 10) : 0);
@@ -18042,7 +18050,18 @@
                         var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
                         var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
                         var _sportSeats = 0;
-                        _fldsSeat.forEach(function (f) { if (f && f.name && _disF.indexOf(f.name) < 0 && f.activities && f.activities.length) _sportSeats += Math.max(1, parseInt(f.capacity) || 1); });
+                        _fldsSeat.forEach(function (f) {
+                            if (!(f && f.name && _disF.indexOf(f.name) < 0 && f.activities && f.activities.length)) return;
+                            // Mirror the FILL ledger's capacity (see ~line 2687): a field's sharing lives
+                            // in f.sharableWith (modern config), NOT the legacy f.capacity. Counting only
+                            // f.capacity undercounted shared sport fields → false "over field capacity"
+                            // SEAT AUDIT flags AND throttled _glSeatFreeAt('sport') + the seat-enforce pull
+                            // (over-cap specials → Sport), since both read _glSeats['sport'].
+                            var _fsw = f.sharableWith || {};
+                            var _fty = _fsw.type || _fsw.shareType || 'not_sharable';
+                            var _fcap = parseInt(_fsw.capacity) || parseInt(f.capacity) || (_fty === 'not_sharable' ? 1 : (_fty === 'all' ? 999 : 2));
+                            _sportSeats += Math.max(1, _fcap);
+                        });
                         if (_sportSeats > 0) _glSeats['sport'] = _sportSeats;   // sport/swim are duration-independent (same field/pool)
                         var _swimSeats = 0;
                         ((globalSettings && globalSettings.facilities) || []).forEach(function (fac) {
