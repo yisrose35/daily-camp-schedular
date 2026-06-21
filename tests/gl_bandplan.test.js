@@ -107,6 +107,17 @@ test('enforce: over-cap unfilled uncat is pulled down to its seats (excess → s
     assert.strictEqual(r.violations.length, 0, 'no residual violation');
 });
 
+test('enforce SPORTLESS: an over-cap special in a sportless grade is never pulled down to Sport', () => {
+    // same as the "excess → sport" case, but grade G has NO sport layer (sportlessGrades) → the
+    // excess uncat must NOT become a Sport. With no other special subcat to take it, it stays.
+    const bunks = [0, 1, 2].map(() => gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]));
+    const r = GLBandPlan.enforce({ bunks, seats: { 'special:uncategorized': 2, sport: 10 }, seatsByGrade: { G: { 'special:uncategorized': 2 } }, canon, sportlessGrades: { G: 1 } });
+    assert.strictEqual(r.toSport, 0, 'sportless grade: nothing pulled to Sport');
+    assert.ok(bunks.every(b => b.tiles.every(t => t.kind !== 'sport')), 'no sport tiles at all');
+    // none can move (no sport allowed + no other subcat) → genuine over-capacity reported, not hidden as Sport
+    assert.strictEqual(r.left, 3, 'all over-cap tiles left in place (honest residual) rather than relabeled to Sport');
+});
+
 test('enforce: per-grade cap is honored even when camp-wide has room', () => {
     // grade G can only access 1 uncat activity (Shiur-style restriction) though camp-wide is 5.
     // 3 G-bunks on uncat at once → 2 must move (per-grade cap 1).

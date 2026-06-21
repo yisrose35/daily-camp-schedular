@@ -166,8 +166,13 @@
     // [s,e] for this bunk and isn't already used by it. Used by absorb's STEP-3 fallback: when
     // a Sport is spacing-blocked, place a REAL special that still has a seat instead of a dead
     // generic placeholder ("aware of what step-2 took"). Returns the candidate or null.
-    function pickAnyFillable(ctx, bunk, dur, s, e, used) {
+    //   allowRepeat (sportless repeat-fill): when no UNUSED special fits, a second pass
+    //   accepts a special the bunk already did today — so a sports-free camp with few
+    //   distinct specials still fills the day with REAL specials instead of a dead
+    //   placeholder. Pass 1 (prefer unused) keeps variety; pass 2 only repeats as needed.
+    function pickAnyFillable(ctx, bunk, dur, s, e, used, allowRepeat) {
         const pool = (bunk && bunk.pool) || [];
+        // pass 1 — prefer a special this bunk has NOT done today (variety)
         for (let i = 0; i < pool.length; i++) {
             const c = pool[i];
             if (!c || !c.name) continue;
@@ -177,6 +182,17 @@
             if (used[key]) continue;
             if (ctx.capFits && !ctx.capFits(c, bunk.grade, s, e)) continue;
             return c;
+        }
+        // pass 2 — repeat allowed: accept an already-used special that still has a seat
+        if (allowRepeat) {
+            for (let i = 0; i < pool.length; i++) {
+                const c = pool[i];
+                if (!c || !c.name) continue;
+                const durs = ctx.specialDurs ? ctx.specialDurs(c.name) : null;
+                if (durs && durs.length && durs.indexOf(dur) < 0) continue;
+                if (ctx.capFits && !ctx.capFits(c, bunk.grade, s, e)) continue;
+                return c;
+            }
         }
         return null;
     }
@@ -264,6 +280,13 @@
         // dropping it dead. Strictly additive — only fires where a dead placeholder would land.
         var canSplit = canFill && !!(ctx && ctx.splitFill);
         var toSplitFilled = 0;
+        // SPORTLESS MODE (per-bunk bunk.noSport): a grade with NO sport layer must never get
+        // a "Sport" block — skip the sport step so open time goes to a REAL special (fill →
+        // split → repeat) and only a neutral placeholder as last resort. allowRepeatFill lets
+        // a sports-free day fill with REAL specials (repeating when its few distinct specials
+        // run out) rather than leaving dead placeholders.
+        var allowRepeatFill = !!(ctx && ctx.allowRepeatFill);
+        var toRepeatFilled = 0;
         // REORDER FEASIBILITY PROBE (measure-only, ctx.probeReorder): for every dead "kept"
         // window, decide whether it is blocked SOLELY by a MOVABLE generic sport (a reorder
         // could relocate that sport and free a properly-spaced sport here) or by a WALL
@@ -277,6 +300,7 @@
         for (var bi = 0; bi < bunks.length; bi++) {
             var bunk = bunks[bi] || {};
             var tiles = bunk.tiles || [];
+            var bunkNoSport = !!bunk.noSport;   // sportless grade → never emit a Sport block
             var sorted = tiles.slice().sort(function (a, b) { return a.startMin - b.startMin; });
             // names already concrete on this bunk's special tiles (no same-day repeat)
             var used = Object.create(null);
@@ -299,7 +323,8 @@
                     var dur = blkEnd - cur;
                     var sportBlk = { type: 'sport', event: label, startMin: cur, endMin: blkEnd };
                     var allow = true;
-                    if (gate) { try { allow = gate(sportBlk, tmpl); } catch (_e) { allow = true; } }
+                    if (bunkNoSport) { allow = false; }   // sportless grade → force the special path (never a Sport block)
+                    else if (gate) { try { allow = gate(sportBlk, tmpl); } catch (_e) { allow = true; } }
                     var tile = null;
                     if (allow) {
                         tile = { kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-sport' };
@@ -354,6 +379,21 @@
                                 continue;   // covered by splits → no dead tile for this block
                             }
                         }
+                        // SPORTLESS REPEAT-FILL: a sports-free camp with few distinct specials
+                        // can run out of UNUSED specials before the day is full. Rather than a
+                        // dead placeholder (or a Sport this camp can't staff), fill with a REAL
+                        // special the bunk already did today — a same-day repeat is the lesser
+                        // evil in a camp that has no sports. Only fires when explicitly enabled
+                        // (window.__sportlessRepeatFill) for a sportless bunk.
+                        if (!tile && allowRepeatFill && bunkNoSport && canFill) {
+                            var rpick = pickAnyFillable(ctx, bunk, dur, cur, blkEnd, used, true);
+                            if (rpick) {
+                                tile = { kind: 'special', subcat: canon(rpick.subcategory), name: rpick.name, _concrete: rpick.name, _fillLoc: rpick.location || null, generic: false, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-repeat' };
+                                try { ctx.recordUse(rpick, bunk.grade, cur, blkEnd); } catch (_e) {}
+                                toRepeatFilled++;
+                            }
+                        }
+                        if (tile) { out.push(tile); tmpl.push(_toBlk(tile)); tmplMeta.push(false); cur = blkEnd; continue; }
                         // genuinely stuck: no sport (spacing) AND no free special here → the "blind"
                         // dead placeholder the user flagged. Tagged so the provenance log names it.
                         tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-kept' };
@@ -370,7 +410,7 @@
             tiles.length = 0;
             Array.prototype.push.apply(tiles, out);
         }
-        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, toSplitFilled: toSplitFilled, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
+        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, toSplitFilled: toSplitFilled, toRepeatFilled: toRepeatFilled, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };

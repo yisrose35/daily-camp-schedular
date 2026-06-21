@@ -17817,6 +17817,15 @@
                                 var durs = Object.keys(_fdSrc || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
                                 if (!durs.length) durs = [10, 20, 30, 40];
                                 var _avail = subAvail[key] ? Object.keys(subAvail[key]).length : 0;
+                                // AUTO-IGNORE EMPTY SUBCATEGORY (user-chosen; kill window.__dropEmptySubcat=false):
+                                // a special subcat with ZERO available activities (e.g. a "Sport" special tag in a
+                                // sports-free camp) can never be filled — demanding a floor for it only strands dead
+                                // "Special: <subcat>" tiles and inflates unmet floors. Drop the demand entirely.
+                                if (_avail === 0 && ((typeof window === 'undefined') || (window.__dropEmptySubcat !== false))) {
+                                    subFloor[key] = 0; subCap[key] = 0;
+                                    _glCapParts.push(key + ' (avail=0 → IGNORED: no matching activities)');
+                                    return;
+                                }
                                 // CAP semantics for generic-layout fill:
                                 //  • an EXPLICIT finite cap ("<=" / "=") is the user's HARD ceiling → honor it
                                 //    EXACTLY (never inflate it to availability — that would place N "Special:
@@ -18529,19 +18538,26 @@
                             try {
                                 if (window.__absorbSport !== false && window.GLStagger && typeof window.GLStagger.absorbUnfilledToSport === 'function') {
                                     var _absBunks = [];
+                                    // SPORTLESS (default ON, kill window.__sportlessNoSport=false): a grade with NO
+                                    // sport layer must never get a "Sport" filler — flag the bunk so absorb fills
+                                    // its open time with REAL specials instead. window.__sportlessRepeatFill (default
+                                    // OFF) lets such a bunk repeat a special to fill the day rather than go dead.
+                                    var _slNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
                                     _glOrder.forEach(function (bunk) {
                                         var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
                                         var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
                                         var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
                                         var pool = (sl && sl.specials && sl.specials.priorityList) || [];
-                                        _absBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool });
+                                        var _noSport = _slNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                        _absBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
                                     });
                                     // STEP 3 — pass the fill context so a Sport-spacing-blocked block is filled with a
                                     // REAL special that still has a seat (aware of what fill already took) before any
                                     // dead generic placeholder. capFits keeps sharing/cap strict; recordUse threads
                                     // the cross-bunk usage so two bunks never over-share one activity.
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false) });
-                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0); }
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true) });
+                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.absorbRepeat = _absRes.toRepeatFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0) + (_absRes.toRepeatFilled || 0); }
+                                    if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }
                                     if (_absRes && (_absRes.toSplitFilled || 0) > 0) { log('[GENERIC-ABSORB-SPLIT] ' + _absRes.toSplitFilled + ' short special tile(s) placed by splitting stuck 40-min windows (theme/food/shiur combos) that would otherwise be dead'); }
                                     // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
                                     // help. RELOCATABLE = a movable sport blocks it (the reorder the user asked for
@@ -18569,7 +18585,10 @@
                                 if (window.__seatGate !== false && window.GLBandPlan && typeof window.GLBandPlan.enforce === 'function') {
                                     var _enfBunks = [];
                                     _glOrder.forEach(function (bunk) { var r = _glOut.layoutByBunk[bunk]; if (r && r.tiles) _enfBunks.push({ grade: (_glPerBunk[bunk] && _glPerBunk[bunk].grade), tiles: r.tiles }); });
-                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport', byDuration: true });
+                                    // sportless grades (no sport layer) → enforce must never pull an over-cap special down to Sport
+                                    var _enfSportless = {};
+                                    try { if ((typeof window === 'undefined') || (window.__sportlessNoSport !== false)) { allGrades.forEach(function (g) { if (typeof gradeHasSportLayer === 'function' && !gradeHasSportLayer(g)) _enfSportless[String(g)] = 1; }); } } catch (_e) {}
+                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport', byDuration: true, sportlessGrades: _enfSportless });
                                     if (_enf) {
                                         var _fmtA = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
                                         log('[SEAT AUDIT] over-cap leftovers pulled down: ' + (_enf.toSport || 0) + ' → Sport, ' + (_enf.toOtherSpecial || 0) + ' → another subcat'
@@ -18760,6 +18779,29 @@
                         } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
                     }
 
+                    // SPORTLESS SAFETY (belt-and-suspenders; kill window.__sportlessNoSport=false):
+                    // a grade with NO sport layer must never show a generic "Sport" tile. The absorb
+                    // + seat-enforce are already gated, but convert ANY residual generic sport tile in
+                    // a sportless grade to a neutral special placeholder so a camp that can't staff a
+                    // single sport never ends up with phantom "Sport" cells, whatever pass laid them.
+                    try {
+                        if ((typeof window === 'undefined') || (window.__sportlessNoSport !== false)) {
+                            var _splessN = 0;
+                            _glOrder.forEach(function (bunk) {
+                                var _sg = _bunkToGrade[String(bunk)];
+                                if (typeof gradeHasSportLayer === 'function' && gradeHasSportLayer(_sg)) return; // grade has sport → leave
+                                var _sres = _glOut.layoutByBunk[bunk]; if (!_sres || !_sres.tiles) return;
+                                _sres.tiles.forEach(function (t) {
+                                    if (t && t.kind === 'sport' && t.generic !== false && !t._concrete) {
+                                        t.kind = 'special'; t.subcat = 'uncategorized'; t.name = 'Special: Uncategorized'; t._fillLoc = null; t._origin = 'sportless-safety';
+                                        _splessN++;
+                                    }
+                                });
+                            });
+                            if (_splessN) log('[GENERIC-SPORTLESS] converted ' + _splessN + ' residual generic Sport tile(s) → Special (grade has no sport layer)');
+                        }
+                    } catch (_splessErr) { try { warn('[GENERIC-SPORTLESS] error — ' + (_splessErr && _splessErr.message)); } catch (_e) {} }
+
                     _glOrder.forEach(function (bunk) {
                         var grade = _bunkToGrade[String(bunk)];
                         var res = _glOut.layoutByBunk[bunk];
@@ -18865,13 +18907,15 @@
                     try {
                         if (_doFillSpecials) {
                             var _glCauseStr = Object.keys(_glFill.causes).map(function (k) { return k + '×' + _glFill.causes[k]; }).join(', ');
+                            var _anyAbsorb = (_glFill.absorbed || _glFill.absorbFilled || _glFill.absorbSplit || _glFill.absorbRepeat || _glFill.absorbBlocked) ? true : false;
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
-                                + (_glFill.absorbed ? (' — open time → ' + _glFill.absorbed + ' Sport block(s)'
+                                + (_anyAbsorb ? (' — open time → ' + (_glFill.absorbed || 0) + ' Sport block(s)'
                                        + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')
                                        + (_glFill.absorbSplit ? (' + ' + _glFill.absorbSplit + ' split into shorter specials (stuck 40-min → theme/food combos)') : '')
-                                       + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept Special (no sport + no free special there)') : '')
+                                       + (_glFill.absorbRepeat ? (' + ' + _glFill.absorbRepeat + ' filled with a REPEAT special (sportless camp)') : '')
+                                       + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept generic Special (no sport + no free special there)') : '')
                                        + '. couldn\'t-fill causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | '))
                                    : (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : '')));
                         }

@@ -136,6 +136,10 @@
         var canon = (ctx && ctx.canon) || canonDefault;
         var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
         var sportLabel = (ctx && ctx.sportLabel) || 'Sport';
+        // SPORTLESS GRADES (ctx.sportlessGrades: {grade:1} map): a grade with NO sport layer
+        // must never get a "Sport" tile, so an over-cap special in such a grade is relabeled
+        // to another special subcat (or left) — never pulled down to Sport.
+        var sportless = (ctx && ctx.sportlessGrades) || null;
         var byDur = !!(ctx && ctx.byDuration);
         var ents = [];
         bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon, byDur); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
@@ -150,9 +154,11 @@
             var cur = conc(en.cat, t.startMin, t.endMin, en.grade);
             if (!(cur.camp > cap(en.cat) || cur.grade > gcap(en.cat, en.grade))) continue;
             var target = null;
-            // (1) sport — preferred (the user's "use the sports"), if under its seats + spacing-legal
+            // (1) sport — preferred (the user's "use the sports"), if under its seats + spacing-legal.
+            //     SKIPPED for a sportless grade (no sport layer) — it never gets a Sport tile.
+            var _grSportless = !!(sportless && sportless[String(en.grade)]);
             var sc = conc('sport', t.startMin, t.endMin, en.grade);
-            if (sc.camp + 1 <= cap('sport')) {
+            if (!_grSportless && sc.camp + 1 <= cap('sport')) {
                 var ok = true;
                 if (gate) { var tmpl = []; en.tiles.forEach(function (o) { if (o !== t) tmpl.push(toBlk(o)); }); try { ok = gate({ type: 'sport', event: sportLabel, startMin: t.startMin, endMin: t.endMin }, tmpl); } catch (e) { ok = true; } }
                 if (ok) target = 'sport';

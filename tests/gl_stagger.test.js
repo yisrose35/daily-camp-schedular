@@ -237,6 +237,65 @@ test('absorb SPLIT: a stuck 40-min block becomes two shorter specials instead of
     assert.strictEqual(tiles2[0]._origin, 'absorb-kept');
 });
 
+test('absorb SPORTLESS: bunk.noSport never emits a Sport block (fills a real special instead)', () => {
+    // The spacing gate WOULD allow a sport, but the bunk's grade has no sport layer (noSport) —
+    // so the open block must become a REAL special, never a phantom "Sport" the camp can't staff.
+    var pool = [{ name: 'ArtRoom', subcategory: 'Regular' }];
+    var durs = { artroom: [40] };
+    var common = {
+        gate: function () { return true; },                  // sport WOULD be allowed
+        maxMergeMin: 40,
+        canon: function (v) { return String(v || '').toLowerCase().trim(); },
+        specialDurs: function (n) { return durs[String(n).toLowerCase()] || []; },
+        capFits: function () { return true; },
+        recordUse: function () {}
+    };
+    // baseline (sporty): open block → Sport
+    var t0 = [abTile({ k: 'activity', d: 40, s: 0, e: 40 })];
+    var r0 = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: t0, grade: 'G', pool: pool }] }, common));
+    assert.strictEqual(r0.toSport, 1, 'baseline (sporty grade) places a Sport');
+
+    // sportless: same block → a real special, ZERO sport
+    var t1 = [abTile({ k: 'activity', d: 40, s: 0, e: 40 })];
+    var r1 = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: t1, grade: 'G', pool: pool, noSport: true }] }, common));
+    assert.strictEqual(r1.toSport, 0, 'sportless grade emits NO Sport');
+    assert.ok(t1.every(t => t.kind !== 'sport'), 'no sport tile present');
+    assert.ok(t1.some(t => t.kind === 'special' && t._concrete === 'ArtRoom'), 'filled with a real special');
+});
+
+test('absorb SPORTLESS repeat-fill: scarce specials repeat instead of going dead — only when enabled', () => {
+    var pool = [{ name: 'OnlySpecial', subcategory: 'Regular' }];
+    var durs = { onlyspecial: [40] };
+    var common = {
+        gate: function () { return true; },                  // sport allowed, but noSport overrides
+        maxMergeMin: 40,
+        canon: function (v) { return String(v || '').toLowerCase().trim(); },
+        specialDurs: function (n) { return durs[String(n).toLowerCase()] || []; },
+        capFits: function () { return true; },
+        recordUse: function () {}
+    };
+    function mk() { return [
+        abTile({ k: 'activity', d: 40, s: 0, e: 40 }),
+        abTile({ k: 'lunch', d: 20, s: 40, e: 60, g: false }),   // wall → breaks the run (no merge)
+        abTile({ k: 'activity', d: 40, s: 60, e: 100 })
+    ]; }
+
+    // repeat OFF (default): only ONE distinct special exists → 1 filled + 1 dead placeholder, 0 sport
+    var off = mk();
+    var rOff = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: off, grade: 'G', pool: pool, noSport: true }] }, common));
+    assert.strictEqual(rOff.toSport, 0, 'no sport even when specials run out');
+    assert.strictEqual(rOff.toRepeatFilled || 0, 0, 'no repeat when disabled');
+    assert.strictEqual(rOff.blockedBySpacing, 1, 'second block is a dead placeholder when repeat off');
+
+    // repeat ON: BOTH blocks become the real special (the second is a same-day repeat), 0 sport, 0 dead
+    var on = mk();
+    var rOn = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: on, grade: 'G', pool: pool, noSport: true }], allowRepeatFill: true }, common));
+    assert.strictEqual(rOn.toSport, 0);
+    assert.strictEqual(rOn.toRepeatFilled, 1, 'second block filled by a repeat special');
+    assert.strictEqual(rOn.blockedBySpacing, 0, 'no dead placeholder when repeat on');
+    assert.strictEqual(on.filter(t => t.kind === 'special' && t._concrete === 'OnlySpecial').length, 2, 'both open blocks are the real special');
+});
+
 test('stress: 40 bunks × 8 tiles — terminates, invariants hold (no stack/cap/overlap/repeat issues)', () => {
     const bunks = [];
     const durs = {};
