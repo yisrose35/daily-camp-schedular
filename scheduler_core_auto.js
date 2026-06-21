@@ -18134,6 +18134,19 @@
                                 for (var i = 0; i < list.length; i++) {
                                     var u = list[i];
                                     if (!(u.s < e && u.e > s)) continue;        // must overlap the new tile
+                                    // STAGGERED-SHARING GUARD (Issue-2 · window.__alignShared, default ON):
+                                    // two bunks co-occupying a shared (cap>1) resource must START at the same
+                                    // minute, else auto_validator [staggered_sharing] flags it. Mirror the
+                                    // validator EXACTLY (auto_validator.js checkStaggeredSharing): it flags on a
+                                    // DIFFERING START only (same-start / different-duration is benign), and
+                                    // EXEMPTS cross-GRADE overlap on cross_division/any_division/custom resources
+                                    // (those are designed for divisions to arrive on their own clocks). So reject
+                                    // here iff the validator would flag — never on an end-only mismatch (the
+                                    // earlier `|| u.e !== e` form over-blocked benign fills and stranded floors).
+                                    if (sh.cap > 1 && (typeof window === 'undefined' || window.__alignShared !== false) && u.s !== s) {
+                                        if (u.grade === grade) return false;                                       // same-grade offset start → always flagged
+                                        if (sh.type !== 'cross_division' && sh.type !== 'any_division' && sh.type !== 'custom') return false; // cross-grade offset on a non-exempt type → flagged
+                                    }
                                     if (sh.type === 'same_division' && u.grade !== grade) return false; // 2nd grade can't co-occupy
                                     counted.push([Math.max(u.s, s), Math.min(u.e, e)]); // counts toward cap (global for not_sharable/cross_division; per-grade for same_division)
                                 }
@@ -18341,14 +18354,29 @@
                                         var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
                                         var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
                                         var pool = (sl && sl.specials && sl.specials.priorityList) || [];
-                                        _absBunks.push({ tiles: res.tiles, grade: grade, pool: pool });
+                                        _absBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool });
                                     });
                                     // STEP 3 — pass the fill context so a Sport-spacing-blocked block is filled with a
                                     // REAL special that still has a seat (aware of what fill already took) before any
                                     // dead generic placeholder. capFits keeps sharing/cap strict; recordUse threads
                                     // the cross-bunk usage so two bunks never over-share one activity.
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon });
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, probeReorder: (window.__reorderProbe !== false) });
                                     if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0); }
+                                    // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
+                                    // help. RELOCATABLE = a movable sport blocks it (the reorder the user asked for
+                                    // is worth building); WALL-STUCK = blocked by lunch/swim/anchor (reorder can't
+                                    // help — the lever is config: raise this special's cap/sharing or add a seat).
+                                    if (_absRes && _absRes.reorderProbe) {
+                                        var _rp = _absRes.reorderProbe;
+                                        var _rpTot = (_rp.feasible || 0) + (_rp.wallStuck || 0);
+                                        var _rpFmt = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
+                                        if (_rpTot) {
+                                            log('[GENERIC-REORDER-PROBE] ' + _rpTot + ' dead window(s): ' + (_rp.feasible || 0) + ' RELOCATABLE (a movable sport blocks them — a reorder could free a properly-spaced sport) · ' + (_rp.wallStuck || 0) + ' WALL-STUCK (blocked by lunch/swim/anchor — reorder cannot help; raise the special\'s cap/sharing or add a seat)');
+                                            (_rp.detail || []).slice(0, 20).forEach(function (d) { log('[GENERIC-REORDER-PROBE]   • ' + d.bunk + ' ' + _rpFmt(d.s) + '-' + _rpFmt(d.e) + ' → ' + (d.feasible ? 'RELOCATABLE (movable sport blocker)' : 'WALL-STUCK')); });
+                                        } else {
+                                            log('[GENERIC-REORDER-PROBE] ✓ no dead windows to reorder');
+                                        }
+                                    }
                                 }
                             } catch (_glAbsErr) { try { warn('[GENERIC-ABSORB] error — left as-is: ' + (_glAbsErr && _glAbsErr.message)); } catch (_e) {} }
                             // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,

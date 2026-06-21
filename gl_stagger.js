@@ -206,7 +206,9 @@
     //          sportLabel='Sport', specialLabel='Special: Uncategorized', maxMergeMin=40,
     //          // STEP-3 real-fill fallback (all optional; when present, a Sport-blocked block
     //          // is filled with a REAL special that still has a seat before a dead placeholder):
-    //          capFits(cand,grade,s,e)->bool, recordUse(cand,grade,s,e), specialDurs(name)->[], canon(v)->str }
+    //          capFits(cand,grade,s,e)->bool, recordUse(cand,grade,s,e), specialDurs(name)->[], canon(v)->str,
+    //          probeReorder:bool (measure-only — report per dead window whether a movable sport blocks it) }
+    //   bunk objects may carry .name (used only by the reorder probe's per-window detail).
     function absorbUnfilledToSport(ctx) {
         var bunks = (ctx && ctx.bunks) || [];
         var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
@@ -215,6 +217,15 @@
         var maxMerge = (ctx && ctx.maxMergeMin) || 40;
         var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
         var canFill = !!(ctx && typeof ctx.capFits === 'function' && typeof ctx.recordUse === 'function');
+        // REORDER FEASIBILITY PROBE (measure-only, ctx.probeReorder): for every dead "kept"
+        // window, decide whether it is blocked SOLELY by a MOVABLE generic sport (a reorder
+        // could relocate that sport and free a properly-spaced sport here) or by a WALL
+        // (lunch/swim/anchor — no reorder can help; the only lever is config: more seats/cap).
+        // Read-only: it never mutates a tile, it only hypothesizes removing one movable sport
+        // from the spacing template and re-tests the gate. This is the necessary condition for
+        // the reorder the user asked for; if it comes back ~0 the dead tiles are wall-bound.
+        var probeReorder = !!(ctx && ctx.probeReorder);
+        var probeFeasible = 0, probeWallStuck = 0, probeDetail = [];
         var toSport = 0, toSpecial = 0, blockedBySpacing = 0, toFilledSpecial = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
             var bunk = bunks[bi] || {};
@@ -225,7 +236,8 @@
             for (var u = 0; u < sorted.length; u++) { var ut = sorted[u]; if (ut && ut.kind === 'special' && ut._concrete) used[String(ut._concrete).toLowerCase()] = 1; }
             var out = [];
             var tmpl = [];   // gate template: fixed tiles + decided blocks (grows as we place)
-            for (var f = 0; f < sorted.length; f++) { if (!_isOpen(sorted[f])) tmpl.push(_toBlk(sorted[f])); }
+            var tmplMeta = []; // parallel to tmpl: true ⇔ a MOVABLE generic sport (a reorder candidate)
+            for (var f = 0; f < sorted.length; f++) { if (!_isOpen(sorted[f])) { tmpl.push(_toBlk(sorted[f])); tmplMeta.push(false); } }
             var k = 0;
             while (k < sorted.length) {
                 if (!_isOpen(sorted[k])) { out.push(sorted[k]); k++; continue; }
@@ -257,6 +269,26 @@
                         }
                     }
                     if (!tile) {
+                        // PROBE (measure-only): this window took no sport (spacing gate) AND no free
+                        // special seat → it WILL become a dead placeholder. Before recording it, decide
+                        // whether a reorder could ever rescue it: hypothesize removing each movable generic
+                        // sport (within the cooldown radius) from the template and re-test the sport gate.
+                        // If ANY single removal makes the gate pass, the window is blocked by a relocatable
+                        // sport (RELOCATABLE); else it is blocked by a wall (WALL-STUCK). Pure read-only.
+                        if (probeReorder && gate) {
+                            var _pBlk = { type: 'sport', event: label, startMin: cur, endMin: blkEnd };
+                            var _pFeasible = false;
+                            for (var _pi = 0; _pi < tmpl.length; _pi++) {
+                                if (!tmplMeta[_pi]) continue;                                   // only movable generic sports
+                                var _pb = tmpl[_pi];
+                                if (!(_pb.startMin < blkEnd + maxMerge && _pb.endMin > cur - maxMerge)) continue; // outside cooldown radius → not a blocker
+                                var _pMinus = tmpl.slice(0, _pi).concat(tmpl.slice(_pi + 1));
+                                var _pOk = true; try { _pOk = gate(_pBlk, _pMinus); } catch (_pe) { _pOk = true; }
+                                if (_pOk) { _pFeasible = true; break; }
+                            }
+                            if (_pFeasible) probeFeasible++; else probeWallStuck++;
+                            if (probeDetail.length < 60) probeDetail.push({ bunk: (bunk.name || ('bunk#' + bi)), s: cur, e: blkEnd, feasible: _pFeasible });
+                        }
                         // genuinely stuck: no sport (spacing) AND no free special here → the "blind"
                         // dead placeholder the user flagged. Tagged so the provenance log names it.
                         tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-kept' };
@@ -264,6 +296,7 @@
                     }
                     out.push(tile);
                     tmpl.push(_toBlk(tile));   // later blocks are spacing-checked against this one
+                    tmplMeta.push(tile.kind === 'sport' && tile.generic === true); // a placed generic sport is a future reorder candidate
                     cur = blkEnd;
                 }
                 k = j;
@@ -272,7 +305,7 @@
             tiles.length = 0;
             Array.prototype.push.apply(tiles, out);
         }
-        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial };
+        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };
