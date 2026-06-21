@@ -217,6 +217,12 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             Photos
         </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Financial</div>
+        <button class="lk-nav-item" data-page="tips" onclick="nav('tips')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
+            Tips Setup
+        </button>
     </div>
 </nav>
 
@@ -233,6 +239,10 @@
     <button class="lk-bnav-item" data-page="photos" onclick="nav('photos')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
         Photos
+    </button>
+    <button class="lk-bnav-item" data-page="tips" onclick="nav('tips')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
+        Tips
     </button>
 </div></div>
 
@@ -568,6 +578,79 @@
 </div>
 
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  TIPS SETUP                                         -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-tips">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
+        </div>
+        <div>
+            <h1>Tips Setup</h1>
+            <p>Configure tip amounts and staff recipients shown to parents in the portal</p>
+        </div>
+    </div>
+
+    <!-- Suggested tip amounts -->
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Suggested Tip Amounts</h2>
+        </div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Parents tap these quick amounts when sending a tip. You can add custom values.</p>
+        <div id="tipsAmountsRow" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;"></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="number" id="tipNewAmt" class="lk-input" min="1" max="500" step="1" placeholder="e.g. 15" style="max-width:130px;">
+            <button class="btn btn-secondary btn-sm" onclick="addTipAmount()">+ Add Amount</button>
+        </div>
+    </div>
+
+    <!-- Recipient categories -->
+    <div class="lk-card" style="margin-top:18px;">
+        <div class="lk-card-head">
+            <h2>Recipient Categories</h2>
+            <button class="btn btn-secondary btn-sm" onclick="openAddTipsCategory()">+ Add Category</button>
+        </div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Define staff roles that can receive tips. Add specific names to each role — or leave blank to auto-match from the camp roster.</p>
+        <div id="tipsCategoriesList"></div>
+        <div id="tipsCategoriesEmpty" class="lk-empty" style="display:none;padding:24px 0;">
+            <div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+            <h3>No categories yet</h3>
+            <p>Add a category like "Counselor" or "Teacher" to get started.</p>
+        </div>
+    </div>
+
+    <!-- Tip history -->
+    <div class="lk-card" style="margin-top:18px;">
+        <div class="lk-card-head">
+            <h2>Tip History</h2>
+        </div>
+        <div id="tipsHistoryList"><div class="lk-empty" style="padding:24px 0;"><div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/></svg></div><h3>No tips yet</h3><p>Parent tips will appear here.</p></div></div>
+    </div>
+</div>
+
+<!-- Add category modal -->
+<div id="tipsCatBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeTipsCatModal()"></div>
+<div id="tipsCatModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.18);z-index:951;width:420px;max-width:calc(100vw - 32px);padding:28px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+        <h2 style="font-size:1rem;font-weight:700;margin:0;">Add Recipient Category</h2>
+        <button onclick="closeTipsCatModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem;">✕</button>
+    </div>
+    <div class="lk-field">
+        <label>Category name</label>
+        <input type="text" class="lk-input" id="tipsCatName" placeholder='e.g. Counselor, Junior Counselor, Teacher'>
+    </div>
+    <div class="lk-field" style="margin-top:12px;">
+        <label>Staff members <span style="font-weight:400;color:var(--text-muted);">(optional — one per line)</span></label>
+        <textarea class="lk-textarea" id="tipsCatStaff" rows="4" placeholder="Sarah M.&#10;Jake T.&#10;Emma S."></textarea>
+        <p style="font-size:.74rem;color:var(--text-muted);margin-top:5px;">Leave blank to show all staff from camp roster under this role.</p>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">
+        <button class="btn btn-ghost btn-sm" onclick="closeTipsCatModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="saveTipsCategory()">Add Category</button>
+    </div>
+</div>
+
 </div><!-- /.lk-main -->
 <div id="toastBox"></div>
 
@@ -729,6 +812,7 @@ function nav(p) {
     if (p === 'campers') renderCampers('');
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
     if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
+    if (p === 'tips') renderTipsAdmin();
 }
 
 function switchMsgTab(tab, btn) {
@@ -2055,6 +2139,196 @@ function previewPhotos() {
     entries.forEach(function(e) { h += '<div style="padding:6px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;display:flex;justify-content:space-between;"><span>' + esc(e[0]) + '</span><span class="badge badge-ok">' + e[1].count + '</span></div>'; });
     h += '</div>';
     box.innerHTML = h; box.style.display = 'block';
+}
+
+// ─── TIPS ADMIN ──────────────────────────────────────────────────────────────
+var TIPS_CONFIG_KEY = 'link_tips_config';
+var TIPS_LOG_KEY    = 'link_tips';
+
+function _loadTipsConfig() {
+    var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e){}
+    return gs[TIPS_CONFIG_KEY] || { amounts: [5, 10, 20, 50], categories: [] };
+}
+
+function _saveTipsConfig(cfg) {
+    var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e){}
+    gs[TIPS_CONFIG_KEY] = cfg;
+    gs.updated_at = new Date().toISOString();
+    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(gs));
+    try { localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(gs)); } catch(e){}
+    _cloudSaveTipsConfig(cfg);
+}
+
+function _cloudSaveTipsConfig(cfg) {
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
+        window.saveGlobalSettings(TIPS_CONFIG_KEY, cfg); return;
+    }
+    try {
+        var db = window.CampistryDB;
+        if (!db || !db.client) return;
+        var campId = db.getCampId && db.getCampId(); if (!campId) return;
+        db.client.from('camp_state_kv')
+            .upsert({ camp_id: campId, key: TIPS_CONFIG_KEY, value: cfg, updated_at: new Date().toISOString() }, { onConflict: 'camp_id,key' })
+            .then(function(r) { if (r.error) console.warn('[Tips] Cloud save failed:', r.error.message); });
+    } catch(e) { console.warn('[Tips] Cloud save error:', e); }
+}
+
+function _loadTipsLog() {
+    var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e){}
+    return gs[TIPS_LOG_KEY] || [];
+}
+
+function renderTipsAdmin() {
+    var cfg = _loadTipsConfig();
+    _renderTipAmounts(cfg);
+    _renderTipCategories(cfg);
+    _renderTipHistory();
+}
+
+function _renderTipAmounts(cfg) {
+    var el = document.getElementById('tipsAmountsRow'); if (!el) return;
+    var amounts = cfg.amounts || [];
+    el.innerHTML = amounts.map(function(a, i) {
+        return '<div style="display:inline-flex;align-items:center;gap:4px;background:var(--link-tint);color:var(--link-color);border:1.5px solid var(--link-color);border-radius:999px;padding:5px 14px;font-size:.85rem;font-weight:700;">' +
+            '$' + a +
+            '<button onclick="removeTipAmount(' + i + ')" style="background:none;border:none;cursor:pointer;color:var(--link-color);margin-left:2px;font-size:.85rem;line-height:1;padding:0 2px;" title="Remove">×</button></div>';
+    }).join('');
+    if (!amounts.length) el.innerHTML = '<span style="font-size:.8rem;color:var(--text-muted);">No amounts set — add one below.</span>';
+}
+
+function addTipAmount() {
+    var inp = document.getElementById('tipNewAmt'); if (!inp) return;
+    var v = parseInt(inp.value, 10);
+    if (!v || v < 1 || v > 500) { toast('Enter a valid amount ($1–$500)'); return; }
+    var cfg = _loadTipsConfig();
+    if (cfg.amounts.indexOf(v) >= 0) { toast('Amount already in list'); inp.value=''; return; }
+    cfg.amounts.push(v);
+    cfg.amounts.sort(function(a, b) { return a - b; });
+    _saveTipsConfig(cfg);
+    inp.value = '';
+    _renderTipAmounts(cfg);
+    toast('$' + v + ' added');
+}
+
+function removeTipAmount(idx) {
+    var cfg = _loadTipsConfig();
+    cfg.amounts.splice(idx, 1);
+    _saveTipsConfig(cfg);
+    _renderTipAmounts(cfg);
+}
+
+function _renderTipCategories(cfg) {
+    var el = document.getElementById('tipsCategoriesList'); if (!el) return;
+    var em = document.getElementById('tipsCategoriesEmpty');
+    var cats = cfg.categories || [];
+    if (!cats.length) {
+        el.innerHTML = ''; if (em) em.style.display = '';
+        return;
+    }
+    if (em) em.style.display = 'none';
+    el.innerHTML = cats.map(function(cat, ci) {
+        var staffHtml = (cat.staff && cat.staff.length)
+            ? cat.staff.map(function(s, si) {
+                return '<div style="display:inline-flex;align-items:center;gap:3px;background:var(--slate-50);border:1px solid var(--slate-200);border-radius:999px;padding:3px 10px;font-size:.77rem;color:var(--slate-700);">' +
+                    esc(s) +
+                    '<button onclick="removeTipStaff(' + ci + ',' + si + ')" style="background:none;border:none;cursor:pointer;color:var(--slate-400);padding:0 2px;font-size:.82rem;" title="Remove">×</button></div>';
+            }).join('')
+            : '<span style="font-size:.78rem;color:var(--text-muted);">Auto-matched from roster</span>';
+        return '<div style="padding:14px 0;border-bottom:1px solid var(--slate-100);">' +
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">' +
+                '<div>' +
+                    '<div style="font-size:.88rem;font-weight:700;color:var(--slate-900);">' + esc(cat.label) + '</div>' +
+                    '<div style="font-size:.74rem;color:var(--text-muted);margin-top:2px;">' + (cat.staff && cat.staff.length ? cat.staff.length + ' staff member' + (cat.staff.length===1?'':'s') : 'Roster auto-match') + '</div>' +
+                '</div>' +
+                '<div style="display:flex;gap:6px;">' +
+                    '<button class="btn btn-ghost btn-sm" onclick="openEditTipsCategory(' + ci + ')">Edit</button>' +
+                    '<button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="deleteTipsCategory(' + ci + ')">Delete</button>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' + staffHtml + '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function openAddTipsCategory() {
+    document.getElementById('tipsCatName').value = '';
+    document.getElementById('tipsCatStaff').value = '';
+    document.getElementById('tipsCatModal')._editIndex = -1;
+    document.getElementById('tipsCatModal').style.display = 'block';
+    document.getElementById('tipsCatBackdrop').style.display = 'block';
+    document.getElementById('tipsCatName').focus();
+}
+
+function openEditTipsCategory(ci) {
+    var cfg = _loadTipsConfig();
+    var cat = cfg.categories[ci]; if (!cat) return;
+    document.getElementById('tipsCatName').value = cat.label || '';
+    document.getElementById('tipsCatStaff').value = (cat.staff || []).join('\n');
+    document.getElementById('tipsCatModal')._editIndex = ci;
+    document.getElementById('tipsCatModal').style.display = 'block';
+    document.getElementById('tipsCatBackdrop').style.display = 'block';
+}
+
+function closeTipsCatModal() {
+    document.getElementById('tipsCatModal').style.display = 'none';
+    document.getElementById('tipsCatBackdrop').style.display = 'none';
+}
+
+function saveTipsCategory() {
+    var name = (document.getElementById('tipsCatName').value || '').trim();
+    if (!name) { toast('Enter a category name'); return; }
+    var staffRaw = (document.getElementById('tipsCatStaff').value || '').trim();
+    var staff = staffRaw ? staffRaw.split('\n').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+    var cfg = _loadTipsConfig();
+    var editIdx = document.getElementById('tipsCatModal')._editIndex;
+    var cat = { id: name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now(), label: name, staff: staff };
+    if (editIdx >= 0 && editIdx < cfg.categories.length) {
+        cat.id = cfg.categories[editIdx].id;
+        cfg.categories[editIdx] = cat;
+    } else {
+        cfg.categories.push(cat);
+    }
+    _saveTipsConfig(cfg);
+    closeTipsCatModal();
+    _renderTipCategories(cfg);
+    toast(editIdx >= 0 ? 'Category updated' : 'Category added');
+}
+
+function deleteTipsCategory(ci) {
+    var cfg = _loadTipsConfig();
+    cfg.categories.splice(ci, 1);
+    _saveTipsConfig(cfg);
+    _renderTipCategories(cfg);
+    toast('Category removed');
+}
+
+function removeTipStaff(ci, si) {
+    var cfg = _loadTipsConfig();
+    cfg.categories[ci].staff.splice(si, 1);
+    _saveTipsConfig(cfg);
+    _renderTipCategories(cfg);
+}
+
+function _renderTipHistory() {
+    var el = document.getElementById('tipsHistoryList'); if (!el) return;
+    var log = _loadTipsLog();
+    if (!log.length) {
+        el.innerHTML = '<div class="lk-empty" style="padding:24px 0;"><div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/></svg></div><h3>No tips yet</h3><p>Parent tips will appear here.</p></div>';
+        return;
+    }
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">' +
+        '<thead><tr style="border-bottom:1.5px solid var(--slate-200);"><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">From</th><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">For</th><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Role</th><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Child</th><th style="text-align:right;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Amount</th><th style="text-align:right;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Date</th></tr></thead>' +
+        '<tbody>' + log.slice(0, 100).map(function(t) {
+            var d = t.date ? new Date(t.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
+            return '<tr style="border-bottom:1px solid var(--slate-100);">' +
+                '<td style="padding:8px 10px;">' + esc(t.from||'—') + '</td>' +
+                '<td style="padding:8px 10px;font-weight:600;">' + esc(t.recipientName||'—') + '</td>' +
+                '<td style="padding:8px 10px;">' + esc(t.role||'—') + '</td>' +
+                '<td style="padding:8px 10px;color:var(--text-muted);">' + esc(t.childName||'—') + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;color:var(--green-600);font-weight:700;">$' + (t.amount||0).toFixed(2) + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + d + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table>';
 }
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
