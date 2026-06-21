@@ -17706,6 +17706,31 @@
                         });
                         if (_swimSeats > 0) _glSeats['swim'] = _swimSeats;
                     } catch (_glSeatErr) {}
+                    // ── PER-GRADE seats: some activities are restricted to certain grades (e.g.
+                    // Shiur 1 = Minors-only), so a GRADE's real concurrent capacity in a subcat is
+                    // ONLY the activities IT can access — the camp-wide count above overstates it.
+                    // The gate caps each grade by its own accessible-activity count, so a grade
+                    // never lays more of a subcat than it can actually fill (the live "16 uncat but
+                    // some are grade-limited, so they don't place" issue).
+                    var _glSeatsByGrade = {};   // grade -> { 'special:<subcat>' -> accessible seats }
+                    try {
+                        (allGrades || []).forEach(function (g) {
+                            var _rep = (typeof getBunksForGrade === 'function') ? (getBunksForGrade(g, divisions) || [])[0] : null;
+                            var _gm = _glSeatsByGrade[g] = {};
+                            ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || []).forEach(function (s) {
+                                if (!s || !s.name) return;
+                                var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                if (_sp.fullGrade === true || s.fullGrade === true) return;
+                                var _ok = true;
+                                try { if (typeof isSpecialAvailableForBunk === 'function') _ok = isSpecialAvailableForBunk(s.name, g, _rep, globalSettings); } catch (_e) { _ok = true; }
+                                if (!_ok) return;
+                                var _sk = 'special:' + _glCanon(s.subcategory);
+                                var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
+                                var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
+                                _gm[_sk] = (_gm[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                            });
+                        });
+                    } catch (_glSeatGErr) {}
                     // ── VISIBLE COUNT: print exactly what the engine counted, so it's auditable.
                     try {
                         var _subKeys = Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort();
@@ -17720,6 +17745,12 @@
                             log('[SEAT COUNT]    • (no special activities available today)');
                         }
                         log('[SEAT COUNT]    • sport: ' + (_glSeats['sport'] != null ? _glSeats['sport'] + ' seats (fields)' : '∞ (no field cap)') + '  |  swim: ' + (_glSeats['swim'] != null ? _glSeats['swim'] + ' seats (pool)' : 'n/a'));
+                        // per-grade access — only shown for a subcat where some grade can reach FEWER
+                        // activities than the camp-wide count (i.e. grade-restricted activities exist).
+                        _subKeys.forEach(function (k) {
+                            var _anyR = (allGrades || []).some(function (g) { return ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0) < _glSeats[k]; });
+                            if (_anyR) log('[SEAT COUNT]    ↳ ' + k.slice(8) + ' is grade-restricted → per-grade seats: ' + (allGrades || []).map(function (g) { return g + '=' + ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0); }).join(', '));
+                        });
                     } catch (_glSeatLogErr) {}
                     // category key for a generic tile (swim handled by its own pool gate, not here)
                     var _glCatOf = function (kind, ref) {
@@ -17730,13 +17761,30 @@
                     };
                     // cross-bunk reservation of generic special/sport tiles, keyed by category, so the
                     // seat gate sees how many bunks already hold that category at an overlapping time.
-                    var _glCatResv = {};   // category -> [{ s, e }]
+                    var _glCatResv = {};   // category -> [{ s, e }]  (camp-wide)
+                    var _glCatResvByGrade = {};   // grade -> category -> [{ s, e }]  (per-grade)
                     var _glSeatFreeAt = function (cat, sMin, eMin) {
                         var seats = _glSeats[cat];
                         if (!(seats > 0) || seats === Infinity) return true;   // uncounted category ⇒ no cap
                         var list = _glCatResv[cat] || [], n = 0;
                         for (var i = 0; i < list.length; i++) { if (list[i].s < eMin && list[i].e > sMin) n++; }
                         return (n + 1) <= seats;   // counts THIS tile too — never exceed the seat count
+                    };
+                    // PER-GRADE seat check: a grade may hold at most as many tiles of a special
+                    // subcat as it has ACCESSIBLE activities (grade-restricted activities don't
+                    // count for grades that can't use them). seats 0 ⇒ grade can't fill this subcat
+                    // at all ⇒ don't lay it (a sport/other category fills instead). Only specials are
+                    // grade-access-limited; sport/swim use the camp-wide check above.
+                    var _glSeatFreeAtGrade = function (cat, grade, sMin, eMin) {
+                        if (!cat || cat.indexOf('special:') !== 0) return true;
+                        var gm = _glSeatsByGrade[grade];
+                        if (!gm) return true;                                   // unknown grade ⇒ no per-grade cap
+                        var seats = gm[cat] || 0;
+                        if (seats <= 0) return false;                          // grade can't access ANY activity here
+                        var byG = _glCatResvByGrade[grade] || {};
+                        var list = byG[cat] || [], n = 0;
+                        for (var i = 0; i < list.length; i++) { if (list[i].s < eMin && list[i].e > sMin) n++; }
+                        return (n + 1) <= seats;
                     };
 
                     var _glResv = {};   // facilityKey -> [{ grade, bunk, s, e }]  (this-run reservations)
@@ -17789,11 +17837,14 @@
                                 return _glFacilityFreeAt(ref.share.facility, grade, sMin, eMin, bunk, ref.share);
                             }
                             // SEAT GATE: a generic special/sport tile may only be laid if its category
-                            // still has a free seat at this time (the swim-pool rule, generalized). When a
-                            // category is full the packer is steered to a category that still has room.
+                            // still has a free seat at this time (the swim-pool rule, generalized) —
+                            // BOTH camp-wide AND for this grade's accessible activities (grade-restricted
+                            // activities don't count for a grade that can't use them). When a category is
+                            // full the packer is steered to one that still has room.
                             if (window.__seatGate !== false) {
                                 var _cat = _glCatOf(kind, ref);
                                 if (_cat && !_glSeatFreeAt(_cat, sMin, eMin)) return false;
+                                if (_cat && !_glSeatFreeAtGrade(_cat, grade, sMin, eMin)) return false;
                             }
                         } catch (_e) {}
                         return true;
@@ -17804,9 +17855,13 @@
                                 var key = _glFacKey(ref.share.facility);
                                 (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
                             }
-                            // reserve the category seat so the next bunk's gate counts it
+                            // reserve the category seat so the next bunk's gate counts it (camp-wide + per-grade)
                             var _cat2 = _glCatOf(kind, ref);
                             if (_cat2 && _glSeats[_cat2] > 0) (_glCatResv[_cat2] || (_glCatResv[_cat2] = [])).push({ s: sMin, e: eMin });
+                            if (_cat2 && _cat2.indexOf('special:') === 0) {
+                                var _bg = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
+                                (_bg[_cat2] || (_bg[_cat2] = [])).push({ s: sMin, e: eMin });
+                            }
                         } catch (_e) {}
                     };
 
