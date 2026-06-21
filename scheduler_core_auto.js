@@ -18299,6 +18299,75 @@
                         } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
                     }
 
+                    // ── FLOAT SWIM: re-attach the CHANGE buffer adjacent to each repositioned swim.
+                    // A swim+change envelope (≈60 min) is too long for the 40-min gaps, so swim floats
+                    // alone; here we carve the configured pre/post-change from the generic SPORT block
+                    // touching swim (abundant after absorb) so swimmers keep their change time next to
+                    // swim. Carve from a sport only (never a filled special) → no real activity is lost.
+                    if (_glFloatSwim) {
+                        try {
+                            var _swChAtt = 0, _swChMiss = 0;
+                            _glOrder.forEach(function (bunk) {
+                                var r = _glOut.layoutByBunk[bunk]; if (!r || !r.tiles) return;
+                                var _gr = _glPerBunk[bunk] && _glPerBunk[bunk].grade;
+                                var _sL = (layersByGrade[_gr] || []).filter(function (L) { return L && String(L.type || '').toLowerCase() === 'swim'; })[0];
+                                var _preC = (_sL && _sL.preChangeMin > 0) ? _sL.preChangeMin : 0;
+                                var _postC = (_sL && _sL.postChangeMin > 0) ? _sL.postChangeMin : 0;
+                                if (_preC <= 0 && _postC <= 0) return;
+                                var _tiles = r.tiles;
+                                _tiles.filter(function (t) { return t.kind === 'swim'; }).forEach(function (sw) {
+                                    var _did = false;
+                                    if (_postC > 0) {
+                                        var _aft = _tiles.filter(function (t) { return t !== sw && t.kind === 'sport' && t.generic !== false && t.startMin === sw.endMin && (t.endMin - t.startMin) >= _postC; })[0];
+                                        if (_aft) {
+                                            var _cs = _aft.startMin; _aft.startMin = _cs + _postC; _aft.durationMin = _aft.endMin - _aft.startMin;
+                                            if (_aft.durationMin <= 0) { var _ai = _tiles.indexOf(_aft); if (_ai >= 0) _tiles.splice(_ai, 1); }
+                                            _tiles.push({ kind: 'change', subcat: null, name: 'Change', generic: false, startMin: _cs, endMin: _cs + _postC, durationMin: _postC, _origin: 'swim-change' });
+                                            _swChAtt++; _did = true;
+                                        }
+                                    }
+                                    if (!_did && _preC > 0) {
+                                        var _bef = _tiles.filter(function (t) { return t !== sw && t.kind === 'sport' && t.generic !== false && t.endMin === sw.startMin && (t.endMin - t.startMin) >= _preC; })[0];
+                                        if (_bef) {
+                                            var _ce = _bef.endMin; _bef.endMin = _ce - _preC; _bef.durationMin = _bef.endMin - _bef.startMin;
+                                            if (_bef.durationMin <= 0) { var _bi = _tiles.indexOf(_bef); if (_bi >= 0) _tiles.splice(_bi, 1); }
+                                            _tiles.push({ kind: 'change', subcat: null, name: 'Change', generic: false, startMin: _ce - _preC, endMin: _ce, durationMin: _preC, _origin: 'swim-change' });
+                                            _swChAtt++; _did = true;
+                                        }
+                                    }
+                                    if (!_did) _swChMiss++;
+                                });
+                            });
+                            log('[GENERIC-LAYOUT] FLOAT SWIM: attached ' + _swChAtt + ' change block(s) next to swim' + (_swChMiss ? (' — ' + _swChMiss + ' swim(s) had no adjacent sport to carve change from (left without change)') : ''));
+                        } catch (_glSwChErr) { try { warn('[GENERIC-LAYOUT] swim-change attach error — ' + (_glSwChErr && _glSwChErr.message)); } catch (_e) {} }
+                    }
+
+                    // ── PROVENANCE: name every UNFILLED generic Special still in the schedule — bunk +
+                    // time + which pass placed it — so the "blind" ones are explicit. origin legend:
+                    //   layout       = original wall-to-wall tiling (the main packer)
+                    //   absorb-kept  = ADDED LATER: a sport was spacing-blocked AND no special seat was
+                    //                  free there → the blind dead placeholder the user flagged
+                    //   absorb-fill / enforce-* = post-pass relabels. (user ask: "see when… bunk + time")
+                    try {
+                        var _provList = [], _provBy = {};
+                        _glOrder.forEach(function (bunk) {
+                            var r = _glOut.layoutByBunk[bunk]; if (!r || !r.tiles) return;
+                            r.tiles.forEach(function (t) {
+                                if (t.kind === 'special' && t.generic !== false && !t._concrete) {
+                                    var o = t._origin || '?'; _provBy[o] = (_provBy[o] || 0) + 1;
+                                    _provList.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + '-' + minutesToTimeLabel(t.endMin) + ' (' + (t.subcat || 'uncategorized') + ') [' + o + ']');
+                                }
+                            });
+                        });
+                        if (_provList.length) {
+                            log('[GENERIC-PROVENANCE] ' + _provList.length + ' unfilled generic Special tile(s) remain — by origin: ' + Object.keys(_provBy).sort().map(function (o) { return o + '×' + _provBy[o]; }).join(', '));
+                            log('[GENERIC-PROVENANCE]   legend: layout=original tiling · absorb-kept=added later (sport blocked + no free special) · enforce-*=seat-cap relabel');
+                            _provList.slice(0, 50).forEach(function (s) { log('[GENERIC-PROVENANCE]   • ' + s); });
+                        } else {
+                            log('[GENERIC-PROVENANCE] ✓ no unfilled generic Special tiles remain in the final schedule');
+                        }
+                    } catch (_glProvErr) {}
+
                     // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
                     //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real
                     //    `autoSkeleton` const isn't declared until ~:19732 (TDZ if touched here).

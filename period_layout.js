@@ -403,7 +403,8 @@
             for (var ci = 0; ci < laid.length; ci++) {
                 var seg = laid[ci];
                 var t = { kind: seg.kind, subcat: seg.subcat || null, name: seg.name, _key: seg._key, _ref: seg._ref,
-                          startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin, generic: true, pinned: false };
+                          startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin, generic: true, pinned: false,
+                          _origin: seg._origin || 'layout' };   // provenance: which pass placed this tile
                 tiles.push(t); if (rec) rec.tiles.push(t);
                 // consume floor + cap for any FINITE-quota demand (special floors AND
                 // structural required layers like swim); the unlimited filler is Infinity.

@@ -172,8 +172,8 @@
                 }
             }
             if (!target) { left++; continue; }
-            if (target === 'sport') { t.kind = 'sport'; t.subcat = null; t.name = sportLabel; t._fillLoc = null; en.cat = 'sport'; toSport++; }
-            else { var body = target.slice(8); var at = body.indexOf('@'); var sub = at >= 0 ? body.slice(0, at) : body; t.subcat = sub; t.name = 'Special: ' + (sub.charAt(0).toUpperCase() + sub.slice(1)); en.cat = target; toOtherSpecial++; }
+            if (target === 'sport') { t.kind = 'sport'; t.subcat = null; t.name = sportLabel; t._fillLoc = null; t._origin = 'enforce-sport'; en.cat = 'sport'; toSport++; }
+            else { var body = target.slice(8); var at = body.indexOf('@'); var sub = at >= 0 ? body.slice(0, at) : body; t.subcat = sub; t.name = 'Special: ' + (sub.charAt(0).toUpperCase() + sub.slice(1)); t._origin = 'enforce-relabel'; en.cat = target; toOtherSpecial++; }
         }
         // AUDIT the final state: any category still over its seats (camp-wide or per-grade)?
         var violations = [];

@@ -243,21 +243,23 @@
                     if (gate) { try { allow = gate(sportBlk, tmpl); } catch (_e) { allow = true; } }
                     var tile = null;
                     if (allow) {
-                        tile = { kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null };
+                        tile = { kind: 'sport', subcat: null, name: label, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-sport' };
                         toSport++;
                     } else if (canFill) {
                         // Sport spacing-blocked → place a REAL special of this exact length that
                         // still has a seat (cap-aware), instead of a dead "Special: Uncategorized".
                         var pick = pickAnyFillable(ctx, bunk, dur, cur, blkEnd, used);
                         if (pick) {
-                            tile = { kind: 'special', subcat: canon(pick.subcategory), name: pick.name, _concrete: pick.name, _fillLoc: pick.location || null, generic: false, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null };
+                            tile = { kind: 'special', subcat: canon(pick.subcategory), name: pick.name, _concrete: pick.name, _fillLoc: pick.location || null, generic: false, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-fill' };
                             used[String(pick.name).toLowerCase()] = 1;
                             try { ctx.recordUse(pick, bunk.grade, cur, blkEnd); } catch (_e) {}
                             toFilledSpecial++;
                         }
                     }
                     if (!tile) {
-                        tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null };
+                        // genuinely stuck: no sport (spacing) AND no free special here → the "blind"
+                        // dead placeholder the user flagged. Tagged so the provenance log names it.
+                        tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-kept' };
                         toSpecial++; blockedBySpacing++;
                     }
                     out.push(tile);
