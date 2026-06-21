@@ -17880,10 +17880,30 @@
                             }
                         } catch (_e) {}
                     };
+                    // RELEASE the inverse of commit: when a repair pass RELOCATES an already-laid
+                    // seat-bearing tile, its old [s,e] reservation must be freed so the ledger
+                    // follows the tile to its new slot. Without this the layout module conservatively
+                    // REFUSES to relocate seat tiles (no leak, but fewer swap-repair fills) — and any
+                    // relocation that did slip through would leave a phantom seat the next bunk's gate
+                    // double-counts (the cross-grade over-placement bug). Splices one matching entry.
+                    var _glSplice = function (arr, sMin, eMin) {
+                        if (!arr) return; for (var i = 0; i < arr.length; i++) { if (arr[i].s === sMin && arr[i].e === eMin) { arr.splice(i, 1); return; } }
+                    };
+                    var _glResourceRelease = function (kind, grade, bunk, sMin, eMin, ref) {
+                        try {
+                            if (ref && ref.share && ref.share.facility) {
+                                var key = _glFacKey(ref.share.facility), list = _glResv[key];
+                                if (list) { for (var i = 0; i < list.length; i++) { if (list[i].s === sMin && list[i].e === eMin && list[i].grade === grade && list[i].bunk === bunk) { list.splice(i, 1); break; } } }
+                            }
+                            var _cat2 = _glCatOf(kind, ref, sMin, eMin);
+                            if (_cat2 && _glSeats[_cat2] > 0) _glSplice(_glCatResv[_cat2], sMin, eMin);
+                            if (_cat2 && _cat2.indexOf('special:') === 0 && _glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_cat2], sMin, eMin);
+                        } catch (_e) {}
+                    };
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
 
                     // 2.5) FILL — assign a CONCRETE special activity to each generic special tile.
                     // STEP 1 (specials, per-bunk): for each generic "Special: <subcat>" tile, pick the

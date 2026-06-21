@@ -129,7 +129,34 @@
         // accurate because shared-`_ref.share` tiles are never relocated by the elastic /
         // swap passes below (they are anchors; only the unlimited fillers flow around them).
         var resourceCommit = (typeof ctx.resourceCommit === 'function') ? ctx.resourceCommit : null;
+        // Optional RELEASE hook: resourceRelease(kind, grade, bunk, startMin, endMin, ref).
+        // The inverse of resourceCommit — frees a reservation a tile previously held. The
+        // repair passes below RELOCATE already-committed special/sport tiles (swap-repair
+        // moves a contiguous run into an empty window; elastic/inverse-elastic shuffle
+        // fillers). A relocated tile's OLD reservation must be released and a NEW one taken
+        // at its new (start,end) — otherwise the seat ledger keeps the stale slot while the
+        // tile physically moves, and the next bunk's resourceGate sees a phantom seat (the
+        // cross-bunk over-placement leak). With no resourceRelease wired, relocations that
+        // would move a seat-bearing tile are SKIPPED (conservative: never leak).
+        var resourceRelease = (typeof ctx.resourceRelease === 'function') ? ctx.resourceRelease : null;
         var _ctxGrade = ctx.grade, _ctxBunk = ctx.bunk;
+        // Move a single already-placed seat-bearing tile `T` to [ns,ne] (same duration),
+        // keeping the cross-bunk reservation ledger exact: release old, gate new, commit new.
+        // Returns true if the move is legal+done, false if it must be skipped (gate refused,
+        // or no release hook so we won't risk a stale reservation). Non-resource tiles
+        // (no _ref / not special|sport) move freely (nothing to track).
+        function _relocateSeatTile(T, ns, ne) {
+            var tracks = !!(T && T._ref && (T._ref.share || T.kind === 'special' || T.kind === 'sport'));
+            if (!tracks) { T.startMin = ns; T.endMin = ne; T.durationMin = ne - ns; return true; }
+            if (!resourceCommit) { T.startMin = ns; T.endMin = ne; T.durationMin = ne - ns; return true; } // caller isn't tracking seats at all
+            if (!resourceRelease) return false; // tracking but can't release → don't risk a stale seat
+            try { resourceRelease(T.kind, _ctxGrade, _ctxBunk, T.startMin, T.endMin, T._ref); } catch (e) {}
+            var rok = true; try { rok = resourceGate ? resourceGate(T.kind, _ctxGrade, _ctxBunk, ns, ne, T._ref) : true; } catch (e) { rok = true; }
+            if (!rok) { try { resourceCommit(T.kind, _ctxGrade, _ctxBunk, T.startMin, T.endMin, T._ref); } catch (e) {} return false; } // re-commit old, abort
+            T.startMin = ns; T.endMin = ne; T.durationMin = ne - ns;
+            try { resourceCommit(T.kind, _ctxGrade, _ctxBunk, ns, ne, T._ref); } catch (e) {}
+            return true;
+        }
 
         var periods = (ctx.periods || []).filter(function (p) {
             return p && !p.isBreak && _num(p.startMin) != null && _num(p.endMin) != null && p.endMin > p.startMin;
@@ -458,8 +485,10 @@
                         if (Twin && (Twin[0] > W2.start || Twin[1] < W2.start + L)) continue; // would leave T's window
                         var baseNoT = [];
                         for (var bi = 0; bi < tiles.length; bi++) if (tiles[bi] !== T) baseNoT.push(tiles[bi]);
-                        // T relocated to W (length L) must be gate-legal.
-                        var Tnew = { kind: T.kind, subcat: T.subcat, name: T.name, startMin: W2.start, endMin: W2.start + L };
+                        // T relocated to W (length L) must be gate-legal. Carry _key/_ref so the
+                        // resourceGate (seat check) reads the correct (subcat,duration) bucket —
+                        // without _ref it defaulted to 'uncategorized' and checked the wrong seat.
+                        var Tnew = { kind: T.kind, subcat: T.subcat, name: T.name, _key: T._key, _ref: T._ref, startMin: W2.start, endMin: W2.start + L };
                         if (!_gatePass([Tnew], baseNoT)) continue;
                         // Re-pack T's vacated slot [Rs,Re] with specials only (the sport is
                         // leaving). Quota view = live quotas WITHOUT freeing T (it still
@@ -472,6 +501,12 @@
                         if (!laidR) continue;
                         // COMMIT: pull T out, drop it at W (length L), re-pack its old slot.
                         var idxT = tiles.indexOf(T); if (idxT >= 0) tiles.splice(idxT, 1);
+                        // release T's OLD cross-bunk seat reservation — it's vacating [Rs,Re]; the
+                        // re-pack below fills that region with fresh (gated+committed) tiles. Without
+                        // this the old seat lingers as a phantom, wasting capacity for other bunks.
+                        if (resourceRelease && T._ref && (T._ref.share || T.kind === 'special' || T.kind === 'sport')) {
+                            try { resourceRelease(T.kind, _ctxGrade, _ctxBunk, Rs, Re, T._ref); } catch (e) {}
+                        }
                         // free T's finite quota, then re-consume it at W (net zero) — keeps
                         // structural/special caps exact across the relocation.
                         if (remaining[T._key] != null && remaining[T._key] !== Infinity) remaining[T._key] = remaining[T._key] + 1;
@@ -479,9 +514,9 @@
                         stats.tilesPlaced--;
                         var Tt = { kind: T.kind, subcat: T.subcat || null, name: T.name, _key: T._key, _ref: T._ref,
                                    startMin: W2.start, endMin: W2.start + L, durationMin: L, generic: true, pinned: false };
-                        tiles.push(Tt); stats.tilesPlaced++;
-                        if (remaining[T._key] > 0 && remaining[T._key] !== Infinity) remaining[T._key]--;
-                        if (capRem[T._key] > 0 && capRem[T._key] !== Infinity) capRem[T._key]--;
+                        // commit via _applyLaid (was a raw push): consumes T's freed quota AND records
+                        // the cross-bunk seat reservation (resourceCommit) so the next bunk's gate sees it.
+                        _applyLaid([Tt], null);
                         _applyLaid(laidR, null);
                         W2.tiled = true; W2.residualMin = 0; W2.reason = 'elastic-fill';
                         stats.windowsTiled++; stats.residualMin -= L;
@@ -545,6 +580,17 @@
                     if (sum !== L) continue;
                     var Rs = run[0].startMin, Re = Rs + L;
                     if (Rs === W2.start) continue;
+                    // SEAT SAFETY: relocating a seat-bearing run tile (special/sport/shared)
+                    // changes the slot its cross-bunk reservation occupies. We can only do that
+                    // without leaving a STALE reservation if the caller wired a resourceRelease
+                    // (release-old → commit-new). If it tracks seats (resourceCommit) but gave us
+                    // no release, skip this run — moving it would leak a phantom seat to the next
+                    // bunk (the over-placement bug). Non-tracked tiles relocate freely.
+                    if (resourceCommit && !resourceRelease) {
+                        var _runSeat = false;
+                        for (var _rs = 0; _rs < run.length; _rs++) { var _rt = run[_rs]; if (_rt._ref && (_rt._ref.share || _rt.kind === 'special' || _rt.kind === 'sport')) { _runSeat = true; break; } }
+                        if (_runSeat) continue;
+                    }
                     var keep = [];
                     for (var ki = 0; ki < tiles.length; ki++) { if (run.indexOf(tiles[ki]) < 0) keep.push(_toBlock(tiles[ki])); }
                     for (var kc = 0; kc < kCands.length && !done; kc++) {
@@ -553,6 +599,9 @@
                         var kBlock = { type: K.kind, event: K.name, startMin: Rs, endMin: Re };
                         if (K.kind === 'special') { kBlock._assignedSpecial = K.name; kBlock._specialLocation = K.name; }
                         var okK = true; try { okK = gate(kBlock, keep); } catch (e2) { okK = true; }
+                        // SEAT GATE: the replacement special/sport must have a free seat at its
+                        // (subcat,duration) too — was missing, so swap-placed specials bypassed the cap.
+                        if (okK && resourceGate) { try { okK = resourceGate(K.kind, _ctxGrade, _ctxBunk, Rs, Re, { subcat: K.subcat || null, window: K.win || null }); } catch (e2b) { okK = true; } }
                         if (!okK) continue;
                         // relocate the run into W (sequential), gate-checking each move
                         var cur = W2.start, movedBlocks = [], allOk = true;
@@ -564,19 +613,36 @@
                             if (rt.kind === 'special') { rb._assignedSpecial = rt.name; rb._specialLocation = rt.name; }
                             var okM = true; try { okM = gate(rb, keep.concat([kBlock]).concat(movedBlocks)); } catch (e3) { okM = true; }
                             if (!okM) { allOk = false; break; }
+                            // SEAT GATE for the MOVED tile too: its new slot [cur, cur+dur]
+                            // must have a free seat (its own old slot is disjoint from W, so it
+                            // doesn't mask the count). Without this, swapping a special into an
+                            // over-subscribed window slipped past the cap (the live leak).
+                            if (resourceGate && rt._ref && (rt._ref.share || rt.kind === 'special' || rt.kind === 'sport')) {
+                                var okMR = true; try { okMR = resourceGate(rt.kind, _ctxGrade, _ctxBunk, cur, cur + rt.durationMin, rt._ref); } catch (e3b) { okMR = true; }
+                                if (!okMR) { allOk = false; break; }
+                            }
                             movedBlocks.push(rb); cur += rt.durationMin;
                         }
                         if (!allOk) continue;
-                        // COMMIT: run -> W (in order), replacement K -> vacated region
-                        var c2 = W2.start;
-                        for (var r3 = 0; r3 < run.length; r3++) { run[r3].startMin = c2; run[r3].endMin = c2 + run[r3].durationMin; c2 += run[r3].durationMin; _moved.push(run[r3]); }
+                        // COMMIT: run -> W (in order), replacement K -> vacated region. Move each
+                        // run tile via _relocateSeatTile so its cross-bunk reservation follows it
+                        // (release old slot, take new) — keeping the seat ledger exact. Pre-checks
+                        // above guarantee each move is legal, so this won't roll back mid-run.
+                        var c2 = W2.start, _moveOk = true;
+                        for (var r3 = 0; r3 < run.length; r3++) {
+                            if (!_relocateSeatTile(run[r3], c2, c2 + run[r3].durationMin)) { _moveOk = false; break; }
+                            c2 += run[r3].durationMin; _moved.push(run[r3]);
+                        }
+                        if (!_moveOk) continue;
                         // carry the demand window so a LATER relocation of this swap-placed tile
                         // still respects its window (the elastic/run-swap guards read _ref.window).
-                        tiles.push({ kind: K.kind, subcat: K.subcat || null, name: K.name, _key: K.key, _ref: (K.win ? { window: K.win } : null), startMin: Rs, endMin: Re, durationMin: L, generic: true, pinned: false });
-                        if (remaining[K.key] > 0 && remaining[K.key] !== Infinity) remaining[K.key]--;
-                        if (capRem[K.key] > 0 && capRem[K.key] !== Infinity) capRem[K.key]--;
+                        // commit via _applyLaid (was a raw push that skipped the seat reservation):
+                        // records the cross-bunk seat + consumes K's quota. _ref carries subcat + window
+                        // so resourceGate/Commit key the correct (subcat,duration) seat and later
+                        // relocations still respect the window.
+                        _applyLaid([{ kind: K.kind, subcat: K.subcat || null, name: K.name, _key: K.key, _ref: { window: K.win || null, subcat: K.subcat || null }, startMin: Rs, endMin: Re, durationMin: L }], null);
                         W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
-                        stats.windowsTiled++; stats.tilesPlaced++; stats.residualMin -= L;
+                        stats.windowsTiled++; stats.residualMin -= L;
                         done = true;
                     }
                 }
@@ -650,6 +716,22 @@
                         var _allOk = true;
                         for (var _idj = 0; _idj < _sportRepl.length; _idj++) { if (!_ieSportFits(_sportRepl[_idj], _sportRepl, _baseND)) { _allOk = false; break; } }
                         if (!_allOk) continue;
+                        // SEAT GATE for the replacement SPORTS: each must have a free sport seat at
+                        // its slot too (the donor special is vacating it, but sport is a different
+                        // category). Without this, sports dropped here bypassed the cross-bunk sport
+                        // cap. Skip the seat check if we can't release the donor seats (we won't
+                        // mutate seat-bearing tiles without a release hook — see commit below).
+                        var _ieDonorSeat = false;
+                        for (var _dsi = 0; _dsi < _combo.length; _dsi++) { var _dc = _combo[_dsi]; if (_dc._ref && (_dc._ref.share || _dc.kind === 'special' || _dc.kind === 'sport')) { _ieDonorSeat = true; break; } }
+                        if (_ieDonorSeat && resourceCommit && !resourceRelease) continue; // can't relocate seats safely
+                        if (resourceGate) {
+                            var _ieSeatOk = true;
+                            for (var _idj2 = 0; _idj2 < _sportRepl.length; _idj2++) {
+                                var _sr = _sportRepl[_idj2];
+                                try { if (!resourceGate(_sr.kind, _ctxGrade, _ctxBunk, _sr.startMin, _sr.endMin, _sr._ref)) { _ieSeatOk = false; break; } } catch (_e) {}
+                            }
+                            if (!_ieSeatOk) continue;
+                        }
                         // trial caps with the donor(s) freed
                         var _capView = {}, _remView = {};
                         Object.keys(capRem).forEach(function (k) { _capView[k] = capRem[k]; });
@@ -675,11 +757,18 @@
                         for (var _cdi = 0; _cdi < _combo.length; _cdi++) {
                             var _D = _combo[_cdi];
                             var _idx = tiles.indexOf(_D); if (_idx >= 0) tiles.splice(_idx, 1);
+                            // release the donor special's cross-bunk seat — it's leaving its slot (a
+                            // sport takes its place). Else the freed special seat lingers as a phantom.
+                            if (resourceRelease && _D._ref && (_D._ref.share || _D.kind === 'special' || _D.kind === 'sport')) {
+                                try { resourceRelease(_D.kind, _ctxGrade, _ctxBunk, _D.startMin, _D.endMin, _D._ref); } catch (e) {}
+                            }
                             if (capRem[_D._key] != null && capRem[_D._key] !== Infinity) capRem[_D._key]++;
                             if (remaining[_D._key] != null && remaining[_D._key] !== Infinity) remaining[_D._key]++;
                             stats.tilesPlaced--;
                         }
-                        for (var _sri = 0; _sri < _sportRepl.length; _sri++) { tiles.push(_sportRepl[_sri]); stats.tilesPlaced++; }
+                        // commit the sport replacements via _applyLaid (was a raw push that skipped
+                        // the cross-bunk seat reservation) so the next bunk's sport gate counts them.
+                        _applyLaid(_sportRepl, null);
                         _applyLaid(_laidW, null);
                         _WW.tiled = true; _WW.residualMin = 0; _WW.reason = 'inverse-elastic';
                         stats.windowsTiled++; stats.residualMin -= _WW.len;
@@ -833,6 +922,12 @@
                 _bestSp.durationMin = _bestSp.endMin - _bestSp.startMin;
                 tiles.splice(_ai, 1);
                 _gcGrew++;
+                // the special's (subcat,duration) bucket CHANGED (e.g. @20→@30); record the seat
+                // for the grown span so the next bunk's gate counts it (the grow was gate-checked
+                // at the new span above, but the reservation was never updated → a leak).
+                if (resourceCommit && _bestSp._ref && _bestSp.kind === 'special') {
+                    try { resourceCommit('special', _ctxGrade, _ctxBunk, _bestSp.startMin, _bestSp.endMin, _bestSp._ref); } catch (_e) {}
+                }
             }
         }
 
@@ -877,7 +972,7 @@
             if (!b) continue;
             var res = planBunkLayout({
                 bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
-                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit
+                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit, resourceRelease: o.resourceRelease
             });
             layoutByBunk[bunk] = res;
             totals.bunks++;

@@ -473,6 +473,49 @@ describe('PeriodLayout.planAllBunksLayout', () => {
         assert.strictEqual(out.stats.unmetSpecialFloors, 0);
     });
 
+    it('LEAK FIX: the SWAP/ELASTIC repair paths honor the cross-bunk seat gate (no over-placement)', () => {
+        // Repro of the live leak: a sport-spacing gate forces SWAP-REPAIR to pull a special
+        // into a gated window. A shared seat ledger caps each special bucket at 1 camp-wide.
+        // Before the fix, swap/elastic committed the special WITHOUT recording the seat, so a
+        // 2nd/3rd bunk over-placed it. Now every commit routes through the gate+reservation.
+        const resv = [];   // {cat, s, e}
+        const catOf = (kind, ref, s, e) => kind === 'special' ? ('special:' + (ref && ref.subcat) + '@' + (e - s)) : (kind === 'sport' ? 'sport' : null);
+        const seats = { 'special:food@40': 1, 'special:theme@40': 1 };   // 1 seat each, camp-wide
+        const resourceGate = (kind, grade, bunk, s, e, ref) => {
+            const c = catOf(kind, ref, s, e); if (!c || seats[c] == null) return true;
+            let n = 0; for (const r of resv) if (r.cat === c && r.s < e && r.e > s) n++;
+            return (n + 1) <= seats[c];
+        };
+        const resourceCommit = (kind, grade, bunk, s, e, ref) => { const c = catOf(kind, ref, s, e); if (c && seats[c] != null) resv.push({ cat: c, s, e }); };
+        const sportGate = (block, template) => {   // no two sports within 40 min (forces swap/elastic)
+            if (block.type !== 'sport') return true;
+            for (const w of template) { if (w.type !== 'sport') continue; const a = (w.startMin || 0) - (block.endMin || 0), b = (block.startMin || 0) - (w.endMin || 0); if (a >= 0 && a < 40) return false; if (b >= 0 && b < 40) return false; }
+            return true;
+        };
+        const mk = (b) => ({ bunk: b, grade: 'G', periods: [P(650, 690, 'P1'), P(690, 730, 'P2'), P(730, 770, 'P3'), P(770, 810, 'P4')], pinned: [],
+            floating: [ { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                        { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: 3 },
+                        { kind: 'special', subcat: 'theme', durations: [40], window: [650, 945], qty: 1, cap: 3 } ] });
+        // release hook so a relocated tile's seat follows it (release-old → commit-new)
+        const resourceRelease = (kind, grade, bunk, s, e, ref) => { const c = catOf(kind, ref, s, e); if (c && seats[c] != null) { for (let i = 0; i < resv.length; i++) { if (resv[i].cat === c && resv[i].s === s && resv[i].e === e) { resv.splice(i, 1); break; } } } };
+        const out = Layout.planAllBunksLayout({ order: ['B1', 'B2', 'B3'], perBunk: { B1: mk('B1'), B2: mk('B2'), B3: mk('B3') },
+            packer: PeriodPacker, gate: sportGate, resourceGate, resourceCommit, resourceRelease, opts: {} });
+        // TRUE concurrent peak from the FINAL tiles (sweep distinct edges; a band counts
+        // a tile if it spans the whole [pt[i], pt[i+1]] slice). The bug was over-placing
+        // the same bucket at the SAME band across bunks — not total tiles in the day.
+        const concurrentPeak = (cat) => {
+            const ivs = [];
+            ['B1', 'B2', 'B3'].forEach(b => out.layoutByBunk[b].tiles.forEach(t => { if (catOf(t.kind, t, t.startMin, t.endMin) === cat) ivs.push([t.startMin, t.endMin]); }));
+            const pts = [...new Set(ivs.reduce((a, iv) => a.concat(iv), []))].sort((a, b) => a - b);
+            let mx = 0;
+            for (let i = 0; i + 1 < pts.length; i++) { let n = 0; ivs.forEach(iv => { if (iv[0] <= pts[i] && iv[1] >= pts[i + 1]) n++; }); if (n > mx) mx = n; }
+            return mx;
+        };
+        // across all bunks, no special@40 bucket exceeds its 1 seat at any overlapping band
+        assert.ok(concurrentPeak('special:food@40') <= 1, 'food@40 within its 1 seat across bunks (swap/elastic respected the gate)');
+        assert.ok(concurrentPeak('special:theme@40') <= 1, 'theme@40 within its 1 seat across bunks');
+    });
+
     it('counts an unmet special floor when the window cannot fit it', () => {
         const out = Layout.planAllBunksLayout({
             order: ['B1'],
