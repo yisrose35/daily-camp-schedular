@@ -181,6 +181,49 @@
         return null;
     }
 
+    // SPLIT FALLBACK: a [s,end] block that can take NO spacing-legal sport AND no single
+    // full-length special is the dead "Special: Uncategorized" the user flagged. But a 40-min
+    // gap can often be covered by TWO shorter specials (e.g. theme@20 + food@20) drawn from
+    // pools that still have seats — the human "do the smaller specials for some bunks." This
+    // recursively tiles [s,end] with 2+ DISTINCT fillable specials (each a free seat, cap-aware
+    // via ctx.capFits inside pickAnyFillable, no same-day repeat via `used`), largest pieces
+    // first (fewer/bigger tiles, human-like). Returns the committed sub-tiles (recordUse done +
+    // `used` marked) or null if it can't FULLY cover the block (then it stays dead — never worse).
+    // Pieces are strictly SHORTER than the block (the full length already failed), so ≥2 pieces.
+    function _absSplitFill(ctx, bunk, s, end, used, canon) {
+        var MENU = [30, 20, 10];          // sub-tile lengths (standard 10-min grid; pickAnyFillable filters by what exists)
+        var span = end - s;
+        var picks = [];
+        function rec(pos) {
+            if (pos === end) return true;
+            for (var mi = 0; mi < MENU.length; mi++) {
+                var d = MENU[mi];
+                if (d >= span) continue;       // a piece must be shorter than the whole block
+                if (pos + d > end) continue;
+                var pk = pickAnyFillable(ctx, bunk, d, pos, pos + d, used);
+                if (!pk) continue;
+                var nm = String(pk.name).toLowerCase();
+                used[nm] = 1;                   // tentatively reserve (no same-day repeat across pieces)
+                picks.push({ pick: pk, s: pos, e: pos + d, dur: d });
+                if (rec(pos + d)) return true;
+                picks.pop(); delete used[nm];   // backtrack
+            }
+            return false;
+        }
+        var ok = rec(s);
+        if (!ok || picks.length < 2) {
+            for (var p = 0; p < picks.length; p++) delete used[String(picks[p].pick.name).toLowerCase()];
+            return null;
+        }
+        var tiles = [];
+        for (var q = 0; q < picks.length; q++) {
+            var P = picks[q];
+            try { ctx.recordUse(P.pick, bunk.grade, P.s, P.e); } catch (_e) {}
+            tiles.push({ kind: 'special', subcat: canon(P.pick.subcategory), name: P.pick.name, _concrete: P.pick.name, _fillLoc: P.pick.location || null, generic: false, startMin: P.s, endMin: P.e, durationMin: P.dur, _ref: null, _origin: 'absorb-split' });
+        }
+        return tiles;
+    }
+
     // an OPEN tile = a generic, not-yet-filled special/sport/activity (re-tileable leftover).
     // Everything else — walls (swim/lunch/change/anchor/cleanup) and FILLED specials — is
     // FIXED: a layer the day must keep, and a boundary that breaks an open run.
@@ -217,6 +260,10 @@
         var maxMerge = (ctx && ctx.maxMergeMin) || 40;
         var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
         var canFill = !!(ctx && typeof ctx.capFits === 'function' && typeof ctx.recordUse === 'function');
+        // SPLIT FALLBACK (ctx.splitFill): cover a stuck block with 2+ shorter specials before
+        // dropping it dead. Strictly additive — only fires where a dead placeholder would land.
+        var canSplit = canFill && !!(ctx && ctx.splitFill);
+        var toSplitFilled = 0;
         // REORDER FEASIBILITY PROBE (measure-only, ctx.probeReorder): for every dead "kept"
         // window, decide whether it is blocked SOLELY by a MOVABLE generic sport (a reorder
         // could relocate that sport and free a properly-spaced sport here) or by a WALL
@@ -289,6 +336,24 @@
                             if (_pFeasible) probeFeasible++; else probeWallStuck++;
                             if (probeDetail.length < 60) probeDetail.push({ bunk: (bunk.name || ('bunk#' + bi)), s: cur, e: blkEnd, feasible: _pFeasible });
                         }
+                        // ── SPLIT FALLBACK: before going dead, try to cover this block with 2+
+                        // shorter REAL specials drawn from pools that still have seats (the "do the
+                        // smaller specials for some bunks" fix). If it fully covers, emit those tiles
+                        // and skip the dead drop entirely.
+                        if (canSplit) {
+                            var _splitTiles = _absSplitFill(ctx, bunk, cur, blkEnd, used, canon);
+                            if (_splitTiles && _splitTiles.length) {
+                                for (var _si = 0; _si < _splitTiles.length; _si++) {
+                                    var _stl = _splitTiles[_si];
+                                    out.push(_stl);
+                                    tmpl.push(_toBlk(_stl));
+                                    tmplMeta.push(false);
+                                }
+                                toSplitFilled += _splitTiles.length;
+                                cur = blkEnd;
+                                continue;   // covered by splits → no dead tile for this block
+                            }
+                        }
                         // genuinely stuck: no sport (spacing) AND no free special here → the "blind"
                         // dead placeholder the user flagged. Tagged so the provenance log names it.
                         tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-kept' };
@@ -305,7 +370,7 @@
             tiles.length = 0;
             Array.prototype.push.apply(tiles, out);
         }
-        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
+        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, toSplitFilled: toSplitFilled, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };

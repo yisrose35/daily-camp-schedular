@@ -18469,8 +18469,9 @@
                                     // REAL special that still has a seat (aware of what fill already took) before any
                                     // dead generic placeholder. capFits keeps sharing/cap strict; recordUse threads
                                     // the cross-bunk usage so two bunks never over-share one activity.
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, probeReorder: (window.__reorderProbe !== false) });
-                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0); }
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false) });
+                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0); }
+                                    if (_absRes && (_absRes.toSplitFilled || 0) > 0) { log('[GENERIC-ABSORB-SPLIT] ' + _absRes.toSplitFilled + ' short special tile(s) placed by splitting stuck 40-min windows (theme/food/shiur combos) that would otherwise be dead'); }
                                     // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
                                     // help. RELOCATABLE = a movable sport blocks it (the reorder the user asked for
                                     // is worth building); WALL-STUCK = blocked by lunch/swim/anchor (reorder can't
@@ -18693,6 +18694,7 @@
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
                                 + (_glFill.absorbed ? (' — open time → ' + _glFill.absorbed + ' Sport block(s)'
                                        + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')
+                                       + (_glFill.absorbSplit ? (' + ' + _glFill.absorbSplit + ' split into shorter specials (stuck 40-min → theme/food combos)') : '')
                                        + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept Special (no sport + no free special there)') : '')
                                        + '. couldn\'t-fill causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | '))
                                    : (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : '')));

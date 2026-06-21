@@ -206,6 +206,37 @@ test('absorb is layer-safe: a FILLED special floor is never converted to Sport',
     assert.strictEqual(r.toSport, 1);   // only the empty special converted
 });
 
+test('absorb SPLIT: a stuck 40-min block becomes two shorter specials instead of dead', () => {
+    // one 40-min open generic special; sport is fully gate-blocked; NO 40-min special exists,
+    // but two distinct 20-min specials each have a free seat → split 40 → 20+20 (theme + food).
+    var pool = [{ name: 'ThemeAct', subcategory: 'theme' }, { name: 'Popcorn', subcategory: 'food' }];
+    var durs = { themeact: [20], popcorn: [20] };
+    var common = {
+        gate: function (b) { return b.type !== 'sport'; },          // block every sport (spacing)
+        maxMergeMin: 40,
+        canon: function (v) { return String(v || '').toLowerCase().trim(); },
+        specialDurs: function (n) { return durs[String(n).toLowerCase()] || []; },
+        capFits: function () { return true; },                      // seats free
+        recordUse: function () {}
+    };
+    var tiles = [abTile({ k: 'special', sub: 'Regular', d: 40, s: 0, e: 40 })];
+    var r = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: tiles, grade: 'G', pool: pool }], splitFill: true }, common));
+    var occ = tiles.slice().sort((a, b) => a.startMin - b.startMin);
+    assert.strictEqual(r.toSplitFilled, 2, 'split produced 2 short specials');
+    assert.strictEqual(r.blockedBySpacing, 0, 'no dead placeholder');
+    assert.strictEqual(occ.length, 2);
+    assert.ok(occ.every(t => t.kind === 'special' && t._concrete && t.generic === false), 'both concrete specials');
+    assert.deepStrictEqual(occ.map(t => t.startMin + '-' + t.endMin), ['0-20', '20-40'], 'wall-to-wall, no gap');
+    assert.ok(occ[0]._concrete !== occ[1]._concrete, 'two DISTINCT activities (no same-day repeat)');
+
+    // contrast: splitFill OFF (default) → the same block stays one dead placeholder
+    var tiles2 = [abTile({ k: 'special', sub: 'Regular', d: 40, s: 0, e: 40 })];
+    var r2 = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: tiles2, grade: 'G', pool: pool }] }, common));
+    assert.strictEqual(r2.toSplitFilled || 0, 0);
+    assert.strictEqual(r2.blockedBySpacing, 1, 'stays one dead placeholder when split is off');
+    assert.strictEqual(tiles2[0]._origin, 'absorb-kept');
+});
+
 test('stress: 40 bunks × 8 tiles — terminates, invariants hold (no stack/cap/overlap/repeat issues)', () => {
     const bunks = [];
     const durs = {};
