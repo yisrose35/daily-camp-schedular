@@ -15256,6 +15256,14 @@
                 var _p23SameGradeSoftCap = 2;
                 var _p23SlotLoad = {};        // startMin -> total bunks placed there (ALL grades)
                 var _p23SlotGradeLoad = {};   // startMin -> { grade -> count }  (same-grade soft cap)
+                // FIELD-BALANCE (window.__swimFieldBalance, default ON when interleaving): a running
+                // estimate of LAND pressure per candidate start = how many already-placed bunks will be
+                // on land (sport/special, NOT swimming) during that period. Pure pool-spread leaves the
+                // high-contention morning periods under-swum → those bunks pile onto the 15 fields (the
+                // 19>15 peak). Steering each swimmer to the start that RELIEVES the most land pressure
+                // flattens concurrent land demand so no period outruns the fields. Same hard caps (pool
+                // ≤8 via canUsePoolAtTime, ≤2 same-grade) so the cross-grade reference mix is preserved.
+                var _p23LandLoad = {};        // startMin -> running count of placed bunks on land there
                 // ★ v16.0: Brain-directed swim grade ordering — grades that failed
                 // swim in previous iterations get first pick of pool time
                 var _p23GradeOrder = adaptiveBrain.getSwimGradeOrder() || allGrades;
@@ -15445,14 +15453,23 @@
                         var _p23PickIdx = 0;
                         if (_p23Interleave && _p23AllFree.length > 1) {
                             try {
-                                var _ilBest = -1, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
+                                var _ilFieldBal = (typeof window === 'undefined') || (window.__swimFieldBalance !== false); // default ON when interleaving
+                                // FIELD-BALANCED objective: relieve the most LAND pressure first (so a
+                                // period never ends up with more land bunks than there are fields), then
+                                // tiebreak toward cross-grade pool spread (least pool-loaded) then wet-
+                                // bundle score then earliest. With field-balance OFF this reduces to the
+                                // original pure pool-spread (relief term forced to 0).
+                                var _ilBest = -1, _ilBestRelief = -Infinity, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
                                 for (var _ilk = 0; _ilk < _p23AllFree.length; _ilk++) {
                                     var _ilC = _p23AllFree[_ilk];
                                     var _ilGL = (_p23SlotGradeLoad[_ilC.start] && _p23SlotGradeLoad[_ilC.start][grade]) || 0;
                                     if (_ilGL >= _p23SameGradeSoftCap) continue;       // ≤~2 same-grade per start
-                                    var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide load → cross-grade spread
-                                    if (_ilLoad < _ilBestLoad || (_ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
-                                        _ilBest = _ilk; _ilBestLoad = _ilLoad; _ilBestScore = _ilC.score;
+                                    var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide pool load → cross-grade spread
+                                    var _ilRelief = _ilFieldBal ? (_p23LandLoad[_ilC.start] || 0) : 0; // land/field pressure relieved by swimming here
+                                    if (_ilRelief > _ilBestRelief
+                                        || (_ilRelief === _ilBestRelief && _ilLoad < _ilBestLoad)
+                                        || (_ilRelief === _ilBestRelief && _ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
+                                        _ilBest = _ilk; _ilBestRelief = _ilRelief; _ilBestLoad = _ilLoad; _ilBestScore = _ilC.score;
                                     }
                                 }
                                 if (_ilBest >= 0) _p23PickIdx = _ilBest;
@@ -15544,6 +15561,17 @@
                         if (_p23Interleave) {   // additive spread tally (not a 2nd pool ledger) so later bunks pick a different/less-loaded start
                             _p23SlotLoad[_p23SwimS] = (_p23SlotLoad[_p23SwimS] || 0) + 1;
                             (_p23SlotGradeLoad[_p23SwimS] || (_p23SlotGradeLoad[_p23SwimS] = {}))[grade] = ((_p23SlotGradeLoad[_p23SwimS] || {})[grade] || 0) + 1;
+                            // FIELD-BALANCE: this bunk now swims at _p23SwimS, so it will be on LAND at
+                            // every OTHER period it was free to swim in → bump those starts' land pressure
+                            // so later swimmers gravitate to the busiest land periods and flatten the peak.
+                            try {
+                                var _llSeen = {};
+                                _p23AllFree.forEach(function (c) {
+                                    if (c.start === _p23SwimS || _llSeen[c.start]) return;
+                                    _llSeen[c.start] = 1;
+                                    _p23LandLoad[c.start] = (_p23LandLoad[c.start] || 0) + 1;
+                                });
+                            } catch (_eLL) {}
                         }
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
@@ -15560,6 +15588,10 @@
                         var _ilSlots = Object.keys(_p23SlotLoad).map(Number).sort(function (a, b) { return a - b; });
                         var _ilMaxSG = 0; _ilSlots.forEach(function (st) { var gm = _p23SlotGradeLoad[st] || {}; Object.keys(gm).forEach(function (g) { if (gm[g] > _ilMaxSG) _ilMaxSG = gm[g]; }); });
                         log('[Phase2.3-Interleave] pool slots (start=total[grades]): ' + _ilSlots.map(function (st) { var gm = _p23SlotGradeLoad[st] || {}; return minutesToTimeLabel(st) + '=' + _p23SlotLoad[st] + '[' + Object.keys(gm).map(function (g) { return String(g).slice(0, 3) + ':' + gm[g]; }).join(',') + ']'; }).join(' | ') + '  — maxSameGradePerSlot=' + _ilMaxSG + ' (≤' + _p23SameGradeSoftCap + ' target; each slot should mix grades)');
+                        if ((typeof window === 'undefined') || (window.__swimFieldBalance !== false)) {
+                            var _llSlots = Object.keys(_p23LandLoad).map(Number).sort(function (a, b) { return a - b; });
+                            if (_llSlots.length) log('[Phase2.3-FieldBalance] residual land pressure by start (swimmers steered to flatten it): ' + _llSlots.map(function (st) { return minutesToTimeLabel(st) + '=' + _p23LandLoad[st]; }).join(' | ') + ' (lower+flatter ⇒ fewer bunks competing for the 15 fields at any one time)');
+                        }
                     } catch (_eILlog) {}
                 }
                 if (_p23Count > 0) {
