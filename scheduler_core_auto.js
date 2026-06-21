@@ -5291,6 +5291,10 @@
                 return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v;
             };
             const specialSubcategoryCap = {};
+            // Per-subcat REQUIRED count (operator floor): '<='/at-most → 0, '='/'>=' → qty.
+            // Carried alongside the cap so the generic layout can honor "at most N" as a
+            // CEILING (floor 0) instead of re-deriving floor=cap and demanding it as a quota.
+            const specialSubcategoryFloor = {};
             let _hasSubcategoryTags = false;
             specialNeeds.forEach(n => {
                 const subRaw = (n.layer && typeof n.layer.subcategory === 'string') ? n.layer.subcategory.trim() : '';
@@ -5300,6 +5304,7 @@
                 specialSubcategoryCap[subKey] = (specialSubcategoryCap[subKey] === Infinity || c === Infinity)
                     ? Infinity
                     : ((specialSubcategoryCap[subKey] || 0) + c);
+                specialSubcategoryFloor[subKey] = (specialSubcategoryFloor[subKey] || 0) + (n.count || 0); // n.count = operator floor (0 for '<=')
             });
 
             const specialPriorityList = [];
@@ -5558,7 +5563,7 @@
             return {
                 bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
                 sports: { required: sportCount, cap: sportCap, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
-                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryEnforced: _hasSubcategoryTags },
+                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryFloor: specialSubcategoryFloor, subcategoryEnforced: _hasSubcategoryTags },
                 snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
@@ -17628,7 +17633,19 @@
                             //                Regular subcat with 11 distinct activities can fill ~11 slots.
                             var subDur = {}, subFloor = {}, subCap = {}, subAvail = {};
                             var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
-                            Object.keys(caps).forEach(function (k) { var key = _glCanon(k); var c = caps[k]; subFloor[key] = (c === Infinity || c == null) ? 1 : c; subCap[key] = (c === Infinity || c == null) ? Infinity : c; });
+                            var capFloors = (sl && sl.specials && sl.specials.subcategoryFloor) || {};
+                            // HONOR THE OPERATOR (window.__capOnlyNoFloor, default ON): a subcat the user set
+                            // as "< N / at most N" carries floor 0 — a CEILING, not a quota. We must NOT
+                            // demand it, so it never leaves a dead "Special:<subcat>" placeholder when no seat
+                            // is free; it fills opportunistically up to cap and the rest of the window goes to
+                            // sport / an abundant subcat. "=N" and ">=N" keep their real floor. OFF (or no
+                            // floor info) reverts to the legacy floor=cap behavior.
+                            var _honorOpFloor = (typeof window === 'undefined') || (window.__capOnlyNoFloor !== false);
+                            Object.keys(caps).forEach(function (k) {
+                                var key = _glCanon(k); var c = caps[k]; var fRaw = capFloors[k];
+                                subFloor[key] = (_honorOpFloor && fRaw != null) ? fRaw : ((c === Infinity || c == null) ? 1 : c);
+                                subCap[key] = (c === Infinity || c == null) ? Infinity : c;
+                            });
                             // Ingest one special into the per-subcat DISTINCT-availability + duration maps.
                             var _glIngestSpecial = function (sx) {
                                 var key = _glCanon(sx.subcategory);
@@ -18732,7 +18749,7 @@
                                     var loc = sx.location || sx.name; try { var c = (typeof getSpecialActivityByName === 'function') ? getSpecialActivityByName(sx.name) : null; if (c && c.location) loc = c.location; } catch (_e) {}
                                     return { name: sx.name, durations: durs, dMin: sx.dMin, dMax: sx.dMax, subcategoryKey: _potCanon(sx.subcategory), location: loc, baseScore: -(sx.rotationScore || 0) };
                                 });
-                                var floors = {}; var caps = (sl.specials && sl.specials.subcategoryCap) || {}; Object.keys(caps).forEach(function (k) { var c = caps[k]; floors[k] = (c === Infinity || c == null) ? 1 : c; });
+                                var floors = {}; var caps = (sl.specials && sl.specials.subcategoryCap) || {}; var _cFl = (sl.specials && sl.specials.subcategoryFloor) || {}; var _honorOpFloorP = (typeof window === 'undefined') || (window.__capOnlyNoFloor !== false); Object.keys(caps).forEach(function (k) { var c = caps[k]; floors[k] = (_honorOpFloorP && _cFl[k] != null) ? _cFl[k] : ((c === Infinity || c == null) ? 1 : c); });
                                 _potPerBunk[bunk] = {
                                     grade: grade,
                                     periods: periods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _potBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; }),
