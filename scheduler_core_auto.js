@@ -18656,8 +18656,16 @@
                                                 var ok = false;
                                                 try { ok = isFieldAvailable(flds[fi], t.startMin, t.endMin, bunk, grd, sp.name); } catch (_e) { ok = false; }
                                                 if (!ok) continue;
+                                                // Claim by DIRECT ledger push. claimFieldGlobal is nested inside
+                                                // runGlobalPlanner (out of scope here — it was silently throwing,
+                                                // which is why every tile missed despite isFieldAvailable=Y).
+                                                // fieldLedger is in scope (the wall passes push to it the same
+                                                // way at :15857/:17496/:19767); availability already verified above.
                                                 var claimed = false;
-                                                try { claimed = claimFieldGlobal(flds[fi], t.startMin, t.endMin, bunk, grd, sp.name); } catch (_e) { claimed = false; }
+                                                try {
+                                                    var _fl = fieldLedger[flds[fi]];
+                                                    if (_fl && Array.isArray(_fl.claims)) { _fl.claims.push({ bunk: bunk, grade: grd, activity: sp.name, startMin: t.startMin, endMin: t.endMin }); claimed = true; }
+                                                } catch (_e) { claimed = false; }
                                                 if (!claimed) continue;
                                                 t._concrete = sp.name; t.name = sp.name; t._assignedSport = sp.name; t._fillLoc = flds[fi];
                                                 usedSport[nm] = 1; placed = true; _glSportFilled++;
