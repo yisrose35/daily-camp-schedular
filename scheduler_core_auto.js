@@ -15241,6 +15241,21 @@
             // naturally works around them, just like it does for fullGrade swim.
             {
                 var _p23Count = 0;
+                // ── INTERLEAVE SWIM (opt-in: window.__interleaveSwim, default OFF) ──────
+                // Match the human Neranina reference: instead of dumping a whole grade into one
+                // swim band, spread bunks so each pool slot holds a MIX of grades (~1-2 per
+                // grade). The de-congestion that kills the dead "Special: Uncategorized" tiles
+                // comes from CROSS-grade spread, so the load map is CAMP-WIDE (NOT reset per
+                // grade): each bunk picks the least globally-loaded pool start among its
+                // already-pool-gated candidates, capped at ~2 same-grade per start. Even though
+                // the outer loop drains grade-by-grade, later grades fill the least-loaded
+                // starts → grades mix on each slot → each grade's free time spreads → the
+                // downstream special demand stops piling on one band. Window-flag only (no
+                // persisted setting), fail-soft; OFF reproduces today's exact clustered output.
+                var _p23Interleave = false; try { _p23Interleave = (typeof window !== 'undefined' && window.__interleaveSwim === true); } catch (_eIL) {}
+                var _p23SameGradeSoftCap = 2;
+                var _p23SlotLoad = {};        // startMin -> total bunks placed there (ALL grades)
+                var _p23SlotGradeLoad = {};   // startMin -> { grade -> count }  (same-grade soft cap)
                 // ★ v16.0: Brain-directed swim grade ordering — grades that failed
                 // swim in previous iterations get first pick of pool time
                 var _p23GradeOrder = adaptiveBrain.getSwimGradeOrder() || allGrades;
@@ -15420,8 +15435,31 @@
                             if (b.score !== a.score) return b.score - a.score;
                             return a.start - b.start;
                         });
-                        var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[0].period : null;
-                        var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[0].start : null;
+                        // INTERLEAVE: override the earliest-first pick with the LEAST camp-wide-
+                        // loaded start (cross-grade spread), skipping starts already at the
+                        // same-grade soft cap. Load LEADS (score only a tiebreak) so spread isn't
+                        // re-clustered by a high wet-bundle score. Falls back to index 0 (earliest)
+                        // if every legal start is at the soft cap → the bunk still swims. Every
+                        // candidate already passed canUsePoolAtTime, so this is a pure re-order
+                        // over a pre-gated set — it can never exceed pool cap 8 / break allowedPairs.
+                        var _p23PickIdx = 0;
+                        if (_p23Interleave && _p23AllFree.length > 1) {
+                            try {
+                                var _ilBest = -1, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
+                                for (var _ilk = 0; _ilk < _p23AllFree.length; _ilk++) {
+                                    var _ilC = _p23AllFree[_ilk];
+                                    var _ilGL = (_p23SlotGradeLoad[_ilC.start] && _p23SlotGradeLoad[_ilC.start][grade]) || 0;
+                                    if (_ilGL >= _p23SameGradeSoftCap) continue;       // ≤~2 same-grade per start
+                                    var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide load → cross-grade spread
+                                    if (_ilLoad < _ilBestLoad || (_ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
+                                        _ilBest = _ilk; _ilBestLoad = _ilLoad; _ilBestScore = _ilC.score;
+                                    }
+                                }
+                                if (_ilBest >= 0) _p23PickIdx = _ilBest;
+                            } catch (_eILpick) { _p23PickIdx = 0; }
+                        }
+                        var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[_p23PickIdx].period : null;
+                        var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[_p23PickIdx].start : null;
 
                         if (!_p23Chosen) {
                             // ★ FN-59: a bunk on a trip is EXCUSED from swim — the
@@ -15503,6 +15541,10 @@
                         }
 
                         registerPoolUsage(grade, _p23SwimS, _p23SwimE);
+                        if (_p23Interleave) {   // additive spread tally (not a 2nd pool ledger) so later bunks pick a different/less-loaded start
+                            _p23SlotLoad[_p23SwimS] = (_p23SlotLoad[_p23SwimS] || 0) + 1;
+                            (_p23SlotGradeLoad[_p23SwimS] || (_p23SlotGradeLoad[_p23SwimS] = {}))[grade] = ((_p23SlotGradeLoad[_p23SwimS] || {})[grade] || 0) + 1;
+                        }
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
                             + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
@@ -15513,6 +15555,13 @@
                 // Always log the summary (even 0) so a live log definitively shows
                 // whether swim was reserved BEFORE specials, vs left to Phase 3.
                 log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change block(s) as walls (before specials)');
+                if (_p23Interleave) {
+                    try {
+                        var _ilSlots = Object.keys(_p23SlotLoad).map(Number).sort(function (a, b) { return a - b; });
+                        var _ilMaxSG = 0; _ilSlots.forEach(function (st) { var gm = _p23SlotGradeLoad[st] || {}; Object.keys(gm).forEach(function (g) { if (gm[g] > _ilMaxSG) _ilMaxSG = gm[g]; }); });
+                        log('[Phase2.3-Interleave] pool slots (start=total[grades]): ' + _ilSlots.map(function (st) { var gm = _p23SlotGradeLoad[st] || {}; return minutesToTimeLabel(st) + '=' + _p23SlotLoad[st] + '[' + Object.keys(gm).map(function (g) { return String(g).slice(0, 3) + ':' + gm[g]; }).join(',') + ']'; }).join(' | ') + '  — maxSameGradePerSlot=' + _ilMaxSG + ' (≤' + _p23SameGradeSoftCap + ' target; each slot should mix grades)');
+                    } catch (_eILlog) {}
+                }
                 if (_p23Count > 0) {
                     allGrades.forEach(function(grade) {
                         getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
