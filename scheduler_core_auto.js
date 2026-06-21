@@ -5330,6 +5330,26 @@
                 // Per-grade cap overrides the global cap for this grade
                 const gradeMaxUsage = parseInt((props.maxUsagePerGrade || {})[grade]) || 0;
                 if (gradeMaxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= gradeMaxUsage) return;
+                // ★ WEEKLY-MUST guard: is THIS bunk still under its per-week minFrequency for this
+                //   special THIS week? A per-week minimum is a hard generator promise, so the COHORT
+                //   thinning below (which uses cross-week LIFETIME counts) must NOT evict it — doing so
+                //   stranded a required weekly special out of the fill pool → an unfillable
+                //   "Special:<subcat>" placeholder (the live shiur miss). General (shiur, weekly trip,
+                //   swim-3×); reads activityProperties AND the special config (mirrors the min-freq
+                //   block below) so a config-only minFrequency still counts. Gated; fail-soft to false.
+                //   NOT applied to the exact/maxUsage CEILINGS — only the cohort fairness skip.
+                let _wmOwes = false;
+                try {
+                    if ((typeof window === 'undefined') || (window.__weeklyQuota !== false)) {
+                        const _wmCfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(s.name, globalSettings) : null;
+                        const _wmMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(_wmCfg && _wmCfg.minFrequency) || 0;
+                        if (_wmMin > 0) {
+                            const _wmPer = props.minFrequencyPeriod || (_wmCfg && _wmCfg.minFrequencyPeriod) || 'week';
+                            const _wmPerN = (_wmPer === 'week') ? '1week' : _wmPer;
+                            _wmOwes = ((getPeriodCount(bunk, s.name, _wmPerN) || 0) < _wmMin);
+                        }
+                    }
+                } catch (_wmErr) { _wmOwes = false; }
                 // Rotation cohort: every bunk in the cohort must visit this
                 // special the same number of times before any bunk visits it
                 // again. Skip this special for `bunk` if its lifetime count
@@ -5351,7 +5371,7 @@
                             const c = getLifetimeSpecialCount(b, s.name);
                             if (c < minCount) minCount = c;
                         }
-                        if (myCount > minCount) {
+                        if (myCount > minCount && !_wmOwes) {
                             log('[cohort] skip ' + s.name + ' for ' + bunk +
                                 ' (count=' + myCount + ' > cohort min=' + minCount + ')');
                             return;
@@ -17654,7 +17674,7 @@
                                 var _subR = _glCanon(s.subcategory);
                                 var _mR = _wqDueDay[_subR] || (_wqDueDay[_subR] = Object.create(null));
                                 for (var _gi = 0; _gi < _grp.length; _gi++) {
-                                    if (_mR[_grp[_gi]] == null) _mR[_grp[_gi]] = _gi % _Dr;   // first assignment wins (1:1 subcats: only one)
+                                    if (_mR[_grp[_gi]] == null) _mR[_grp[_gi]] = _gi % Math.max(1, _Dr - 2);   // first assignment wins; clamp off the trailing (ungenerated) camp-day AND leave ≥1 retry day for the persistent floor
                                 }
                             });
                             try { var _rrKeys = Object.keys(_wqDueDay); if (_rrKeys.length) log('[GENERIC-WEEKLY] seat round-robin base-days computed for subcats: ' + _rrKeys.join(', ')); } catch (_e) {}
@@ -17829,13 +17849,34 @@
                                         var remaining = Math.max(1, D - e + 1);
                                         // base day → spread bunks across the period's days. Prefer the SEAT-AWARE
                                         // round-robin rank (paces same-seat contenders to ~capacity/day); fall back
-                                        // to the deterministic per-bunk name hash when no round-robin entry exists.
+                                        // to the deterministic per-bunk name hash. Clamp the hash span to D-2 so a
+                                        // base day never lands on (or one day before) a trailing camp-day the
+                                        // generation won't reach — a Sun-Fri camp whose Monday-anchored period counts
+                                        // a trailing Sunday as day D, which a Mon-Fri gen never reaches — and so EVERY
+                                        // bunk gets ≥2 generated days from its base day for the persistent floor to
+                                        // retry. (The round-robin map is clamped the same way.)
                                         var _h = 0, _bs = String(bunk); for (var _hi = 0; _hi < _bs.length; _hi++) _h = ((_h << 5) - _h + _bs.charCodeAt(_hi)) | 0;
-                                        var phase = (_wqDueDay[key] && _wqDueDay[key][bunk] != null) ? _wqDueDay[key][bunk] : (Math.abs(_h) % D);
+                                        var _phaseSpan = Math.max(1, D - 2);
+                                        var phase = (_wqDueDay[key] && _wqDueDay[key][bunk] != null) ? _wqDueDay[key][bunk] : (Math.abs(_h) % _phaseSpan);
                                         var step = Math.max(1, Math.floor(D / Math.max(1, M)));
+                                        // PERSISTENT FLOOR (deadline-independent): fire on the bunk's base day AND
+                                        // every camp-day after it, until the weekly min is met. The old single-shot
+                                        // (phase === e-1, ONE day) gave each bunk exactly one attempt; a miss
+                                        // (rotation-thinned / contended / base-day on an ungenerated trailing day)
+                                        // stranded it at 0, because the now-or-never deadline can land on a day that is
+                                        // never generated (D=6 Sun-Fri camp, gen Mon-Fri → Fri is day 5/6, remaining=2,
+                                        // forceNow never fires). Persisting retries the placement Mon→Fri. It does NOT
+                                        // spam early placeholders — it stays OFF until the staggered base day — and
+                                        // CANNOT exceed max: need<=0 zeroes the floor once met (above) and the weekly
+                                        // MAX ceiling hard-blocks at wtd>=X (above). Gated by window.__weeklyQuota.
+                                        var _wqPersist = (typeof window === 'undefined') || (window.__weeklyQuota !== false);
                                         var dueToday = false;
-                                        for (var _dk = 0; _dk < M; _dk++) { if (((phase + _dk * step) % D) === (e - 1)) { dueToday = true; break; } }
-                                        var forceNow = need >= remaining; // now-or-never hard guarantee
+                                        if (_wqPersist) {
+                                            dueToday = ((e - 1) >= phase);   // base day onward; need<=0 / max ceiling stop it
+                                        } else {
+                                            for (var _dk = 0; _dk < M; _dk++) { if (((phase + _dk * step) % D) === (e - 1)) { dueToday = true; break; } }
+                                        }
+                                        var forceNow = need >= remaining; // now-or-never hard guarantee (redundant safety w/ persist)
                                         if (dueToday || forceNow) {
                                             subFloor[key] = Math.max(subFloor[key] || 0, 1);
                                             try { log('[GENERIC-WEEKLY] ' + grade + ' ' + bunk + ' → ' + key + ' floor=1 (wk ' + wtd + '/' + M + (X !== Infinity ? ' max' + X : '') + ', day ' + e + '/' + D + ', ' + (forceNow ? 'deadline' : 'paced') + ')'); } catch (_e) {}
@@ -19075,7 +19116,10 @@
                                             _ew = Math.max(1, _wmU.countCampDays(_psw, _wmToday) || 1);
                                         }
                                     } catch (_e) {}
-                                    var _isLast = (_ew >= _Dw);
+                                    // Escalate on the last GENERATED camp-day. A Sun-Fri camp whose Monday-anchored
+                                    // period counts a trailing Sunday (Dw=6) never reaches e=Dw on a Mon-Fri gen, so
+                                    // (e >= Dw-1) lets the shortfall surface on Friday (the real last generated day).
+                                    var _isLast = (_ew >= (_Dw - 1));
                                     var _short = [], _okN = 0, _phN = 0, _grpN = 0;
                                     (allGrades || []).forEach(function (g) {
                                         (getBunksForGrade(g, divisions) || []).forEach(function (bk) {
