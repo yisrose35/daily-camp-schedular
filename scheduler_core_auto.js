@@ -17549,6 +17549,33 @@
                                     });
                                 }
                             } catch (_glFillDurErr) {}
+                            // ── BAND-SPREAD (opt-in: window.__bandSpread, default ON) ───────────────
+                            // Confine this grade's SPECIAL tiles to its matrix special band so grades
+                            // SCATTER across the day: morning-band grades keep the morning special seats;
+                            // afternoon-band grades do their specials in the afternoon and SPORT in their
+                            // morning gaps. That drops per-band special demand to ≤ seats, so the bunks
+                            // that were stuck at the congested 11:30-12:55 bands (all the absorb-kept dead
+                            // tiles) can fill a real special instead. SAFE-GUARD against the old over-confine
+                            // frees: only narrow when THIS bunk has enough FREE time inside the band for its
+                            // floor specials (+40 margin); otherwise keep the full-day window so a floor is
+                            // never starved. Sport stays full-day (pushed below) → off-band gaps fill with sport.
+                            var _glBand = null, _glBandWhy = 'full-day';
+                            try {
+                                if (window.__bandSpread !== false) {
+                                    var _sb = staggerPlan && staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
+                                    if (_sb && _sb.start != null && _sb.end != null && _sb.end > _sb.start) {
+                                        var _bs = Math.max(_sb.start, gStart), _be = Math.min(_sb.end, gEnd), _bandFree = _be - _bs;
+                                        pinned.forEach(function (w) { var os = Math.max(w.startMin, _bs), oe = Math.min(w.endMin, _be); if (oe > os) _bandFree -= (oe - os); });
+                                        var _floorMin = 0;
+                                        Object.keys(subFloor).forEach(function (k) {
+                                            var _dd = Object.keys(((subFillDur[k] && Object.keys(subFillDur[k]).length) ? subFillDur[k] : subDur[k]) || {}).map(Number).filter(Boolean);
+                                            _floorMin += (subFloor[k] || 0) * (_dd.length ? Math.min.apply(null, _dd) : 40);
+                                        });
+                                        if (_bandFree >= _floorMin + 40) { _glBand = [_bs, _be]; _glBandWhy = minutesToTimeLabel(_bs) + '-' + minutesToTimeLabel(_be); }
+                                        else { _glBandWhy = 'full-day (band too tight: free ' + _bandFree + 'min < floors ' + _floorMin + '+40)'; }
+                                    }
+                                }
+                            } catch (_glBandErr) {}
                             var _glCapParts = [];
                             Object.keys(subFloor).forEach(function (key) {
                                 // offer only lengths THIS bunk can FILL (rotation-thinned priorityList); fall
@@ -17572,11 +17599,11 @@
                                 var _cap = _hasFiniteCfg ? Math.max(subCap[key], subFloor[key]) : Math.max(_avail, subFloor[key]);
                                 // score 1 (was 0): an over-floor special outranks the generic placeholder
                                 // filler below, so the day fills with REAL specials, not "Activity" tiles.
-                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], cap: _cap, score: 1 });
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: (_glBand || [gStart, gEnd]), qty: subFloor[key], cap: _cap, score: 1 });
                                 _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + ', durs=[' + durs.join(',') + '])');
                             });
                             // One cap-diagnostic line per grade (first bunk) so a throttled subcat is visible.
-                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)')); }
+                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _glBandWhy); }
                             // Generic FILLER — fills whatever the layer demands leave open. A sport filler
                             // (real content) keeps score 1; the abstract "activity" placeholder (sports-free
                             // camps) drops to score 0 so it is a LAST resort and real specials are used first
