@@ -17561,7 +17561,10 @@
                             // never starved. Sport stays full-day (pushed below) → off-band gaps fill with sport.
                             var _glBand = null, _glBandWhy = 'full-day';
                             try {
-                                if (window.__bandSpread !== false) {
+                                // DEFAULT OFF: band-confinement shifts congestion rather than resolving it
+                                // (confining a grade to its band overloads that band for others) → frees +
+                                // sport overflow + unmet floors. Kept opt-in for experiments only.
+                                if (window.__bandSpread === true) {
                                     var _sb = staggerPlan && staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
                                     if (_sb && _sb.start != null && _sb.end != null && _sb.end > _sb.start) {
                                         var _bs = Math.max(_sb.start, gStart), _be = Math.min(_sb.end, gEnd), _bandFree = _be - _bs;
