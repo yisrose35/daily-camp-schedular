@@ -111,7 +111,75 @@
         return { cats: cats, overCats: overCats, totalOverMin: totalOverMin };
     }
 
-    return { VERSION: VERSION, canonDefault: canonDefault, categoryOf: categoryOf, sweep: sweep, peakOverlap: peakOverlap, measure: measure };
+    // enforce(ctx) — HARD seat cap on the FINAL laid tiles, regardless of which pass
+    // created them. For each UNFILLED generic special tile whose category is over its
+    // seats at that moment (camp-wide OR for its grade), relabel it to a category that
+    // still has room: SPORT first (if the spacing gate allows + sport is under its own
+    // seats), else another special subcat the grade can access that is under cap. If
+    // nothing has room, leave it (genuine over-capacity) and report it. Only UNFILLED
+    // generic tiles are touched — a filled special (a real activity) is never moved, and
+    // filled tiles are always ≤ seats anyway (you can't fill more than distinct activities).
+    //   ctx: { bunks:[{grade,tiles}], seats:{cat:int}, seatsByGrade:{grade:{cat:int}},
+    //          canon?, gate?(block,template)->bool, sportLabel='Sport' }
+    // Returns { toSport, toOtherSpecial, left, violations:[{cat,grade,peak,cap,at}] }
+    function enforce(ctx) {
+        var bunks = (ctx && ctx.bunks) || [];
+        var seats = (ctx && ctx.seats) || {};
+        var byGrade = (ctx && ctx.seatsByGrade) || {};
+        var canon = (ctx && ctx.canon) || canonDefault;
+        var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
+        var sportLabel = (ctx && ctx.sportLabel) || 'Sport';
+        var ents = [];
+        bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
+        function cap(cat) { return (seats[cat] != null && isFinite(seats[cat])) ? seats[cat] : Infinity; }
+        function gcap(cat, grade) { var gm = byGrade[grade]; if (!gm) return Infinity; var v = gm[cat]; if (v != null && isFinite(v)) return v; return (cat.indexOf('special:') === 0) ? 0 : Infinity; }
+        function conc(cat, s, e, grade) { var c = 0, g = 0; for (var i = 0; i < ents.length; i++) { var en = ents[i]; if (en.cat !== cat) continue; if (en.t.startMin < e && en.t.endMin > s) { c++; if (grade != null && en.grade === grade) g++; } } return { camp: c, grade: g }; }
+        function toBlk(t) { return { type: t.kind, event: t.name || null, startMin: t.startMin, endMin: t.endMin }; }
+        var toSport = 0, toOtherSpecial = 0, left = 0;
+        for (var i = 0; i < ents.length; i++) {
+            var en = ents[i], t = en.t;
+            if (t.kind !== 'special' || t.generic === false || t._concrete) continue;  // only UNFILLED generic specials
+            var cur = conc(en.cat, t.startMin, t.endMin, en.grade);
+            if (!(cur.camp > cap(en.cat) || cur.grade > gcap(en.cat, en.grade))) continue;
+            var target = null;
+            // (1) sport — preferred (the user's "use the sports"), if under its seats + spacing-legal
+            var sc = conc('sport', t.startMin, t.endMin, en.grade);
+            if (sc.camp + 1 <= cap('sport')) {
+                var ok = true;
+                if (gate) { var tmpl = []; en.tiles.forEach(function (o) { if (o !== t) tmpl.push(toBlk(o)); }); try { ok = gate({ type: 'sport', event: sportLabel, startMin: t.startMin, endMin: t.endMin }, tmpl); } catch (e) { ok = true; } }
+                if (ok) target = 'sport';
+            }
+            // (2) else another special subcat this grade can access that is under cap
+            if (!target) {
+                var gm = byGrade[en.grade] || {};
+                var keys = Object.keys(gm);
+                for (var k = 0; k < keys.length; k++) {
+                    var ck = keys[k];
+                    if (ck === en.cat || ck.indexOf('special:') !== 0 || !(gm[ck] > 0)) continue;
+                    var cc = conc(ck, t.startMin, t.endMin, en.grade);
+                    if (cc.camp + 1 <= cap(ck) && cc.grade + 1 <= gcap(ck, en.grade)) { target = ck; break; }
+                }
+            }
+            if (!target) { left++; continue; }
+            if (target === 'sport') { t.kind = 'sport'; t.subcat = null; t.name = sportLabel; t._fillLoc = null; en.cat = 'sport'; toSport++; }
+            else { var sub = target.slice(8); t.subcat = sub; t.name = 'Special: ' + (sub.charAt(0).toUpperCase() + sub.slice(1)); en.cat = target; toOtherSpecial++; }
+        }
+        // AUDIT the final state: any category still over its seats (camp-wide or per-grade)?
+        var violations = [];
+        var seen = {};
+        for (var j = 0; j < ents.length; j++) {
+            var e2 = ents[j];
+            if (e2.cat.indexOf('special:') !== 0 && e2.cat !== 'sport') continue;
+            var c2 = conc(e2.cat, e2.t.startMin, e2.t.endMin, e2.grade);
+            var campKey = e2.cat + '|camp';
+            if (c2.camp > cap(e2.cat) && !seen[campKey]) { seen[campKey] = 1; violations.push({ cat: e2.cat, grade: null, peak: c2.camp, cap: cap(e2.cat), at: [e2.t.startMin, e2.t.endMin] }); }
+            var gKey = e2.cat + '|' + e2.grade;
+            if (c2.grade > gcap(e2.cat, e2.grade) && !seen[gKey]) { seen[gKey] = 1; violations.push({ cat: e2.cat, grade: e2.grade, peak: c2.grade, cap: gcap(e2.cat, e2.grade), at: [e2.t.startMin, e2.t.endMin] }); }
+        }
+        return { toSport: toSport, toOtherSpecial: toOtherSpecial, left: left, violations: violations };
+    }
+
+    return { VERSION: VERSION, canonDefault: canonDefault, categoryOf: categoryOf, sweep: sweep, peakOverlap: peakOverlap, measure: measure, enforce: enforce };
 });
 
 if (typeof window !== 'undefined' && window.console) {

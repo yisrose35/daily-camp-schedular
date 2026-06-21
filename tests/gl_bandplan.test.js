@@ -93,3 +93,41 @@ test('measure: mixed categories ranked by overflow; non-hardcoded category set',
     assert.ok(r.overCats.includes('special:theme'));
     assert.ok(r.overCats.includes('special:food'));
 });
+
+// helper: bunk with grade for enforce tests
+function gbunk(grade, tiles) { return { grade, tiles: tiles.map(tile) }; }
+
+test('enforce: over-cap unfilled uncat is pulled down to its seats (excess → sport)', () => {
+    // 3 bunks, all uncategorized at the same band; uncat seats=2, sport plenty → 1 → sport
+    const bunks = [0, 1, 2].map(i => gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]));
+    const r = GLBandPlan.enforce({ bunks, seats: { 'special:uncategorized': 2, sport: 10 }, seatsByGrade: { G: { 'special:uncategorized': 2 } }, canon });
+    assert.strictEqual(r.toSport, 1, 'one excess uncat relabeled to sport');
+    const after = GLBandPlan.measure({ bunks, supply: { 'special:uncategorized': 2 }, canon });
+    assert.ok(after.cats['special:uncategorized'].peak <= 2, 'uncat now within its 2 seats');
+    assert.strictEqual(r.violations.length, 0, 'no residual violation');
+});
+
+test('enforce: per-grade cap is honored even when camp-wide has room', () => {
+    // grade G can only access 1 uncat activity (Shiur-style restriction) though camp-wide is 5.
+    // 3 G-bunks on uncat at once → 2 must move (per-grade cap 1).
+    const bunks = [0, 1, 2].map(() => gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]));
+    const r = GLBandPlan.enforce({ bunks, seats: { 'special:uncategorized': 5, sport: 10 }, seatsByGrade: { G: { 'special:uncategorized': 1 } }, canon });
+    assert.strictEqual(r.toSport, 2, 'two relabeled to respect the per-grade cap of 1');
+    const gUncat = bunks.filter(b => b.tiles.some(t => t.kind === 'special')).length;
+    assert.strictEqual(gUncat, 1, 'exactly one G-bunk keeps uncat');
+});
+
+test('enforce: never moves a FILLED special, and leaves an honest residual when nothing has room', () => {
+    // 2 bunks: one FILLED uncat (Baking) + one unfilled uncat; uncat seats=1, sport seats=0 (full) →
+    // the filled one stays, the unfilled one can't go to sport (0 seats) → left as residual violation.
+    const bunks = [
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]),
+        gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]),
+    ];
+    bunks[0].tiles[0]._concrete = 'Baking';   // filled — must never move
+    const r = GLBandPlan.enforce({ bunks, seats: { 'special:uncategorized': 1, sport: 0 }, seatsByGrade: { G: { 'special:uncategorized': 1 } }, canon });
+    assert.ok(bunks[0].tiles[0]._concrete === 'Baking' && bunks[0].tiles[0].kind === 'special', 'filled special untouched');
+    assert.strictEqual(r.toSport, 0);
+    assert.ok(r.left >= 1, 'the unfilled excess could not be placed (sport full) → reported, not silently dropped');
+    assert.ok(r.violations.length >= 1, 'residual over-cap surfaced for the audit');
+});

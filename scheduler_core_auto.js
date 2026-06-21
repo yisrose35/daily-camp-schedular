@@ -18156,6 +18156,30 @@
                                     if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; }   // keep _glFill.miss as the count for the cause report below
                                 }
                             } catch (_glAbsErr) { try { warn('[GENERIC-ABSORB] error — left as-is: ' + (_glAbsErr && _glAbsErr.message)); } catch (_e) {} }
+                            // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,
+                            // no matter which pass laid a tile. Any UNFILLED generic special over its
+                            // seats (camp-wide OR per-grade) is pulled down to a category with room (sport
+                            // first, then another accessible special). Then AUDIT the final state and log
+                            // any residual so the cap is always visible/accountable. Toggle window.__seatGate.
+                            try {
+                                if (window.__seatGate !== false && window.GLBandPlan && typeof window.GLBandPlan.enforce === 'function') {
+                                    var _enfBunks = [];
+                                    _glOrder.forEach(function (bunk) { var r = _glOut.layoutByBunk[bunk]; if (r && r.tiles) _enfBunks.push({ grade: (_glPerBunk[bunk] && _glPerBunk[bunk].grade), tiles: r.tiles }); });
+                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport' });
+                                    if (_enf) {
+                                        var _fmtA = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
+                                        log('[SEAT AUDIT] over-cap leftovers pulled down: ' + (_enf.toSport || 0) + ' → Sport, ' + (_enf.toOtherSpecial || 0) + ' → another subcat'
+                                            + ((_enf.left || 0) ? ('; ' + _enf.left + ' could NOT be moved (every category full at that time)') : ''));
+                                        if (_enf.violations && _enf.violations.length) {
+                                            _enf.violations.slice(0, 8).forEach(function (v) {
+                                                log('[SEAT AUDIT]   ⚠ STILL OVER ' + v.cat + (v.grade ? (' (' + v.grade + ')') : ' (camp-wide)') + ': ' + v.peak + ' > ' + v.cap + ' seats @ ' + _fmtA(v.at[0]) + '-' + _fmtA(v.at[1]) + ' — genuine over-capacity (raise this activity\'s sharing/capacity or add one)');
+                                            });
+                                        } else {
+                                            log('[SEAT AUDIT]   ✓ every category within its seats (camp-wide AND per-grade) in the final schedule');
+                                        }
+                                    }
+                                }
+                            } catch (_glEnfErr) { try { warn('[SEAT AUDIT] error — ' + (_glEnfErr && _glEnfErr.message)); } catch (_e) {} }
                         } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
                     }
 
