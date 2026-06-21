@@ -15264,6 +15264,53 @@
                 // flattens concurrent land demand so no period outruns the fields. Same hard caps (pool
                 // ≤8 via canUsePoolAtTime, ≤2 same-grade) so the cross-grade reference mix is preserved.
                 var _p23LandLoad = {};        // startMin -> running count of placed bunks on land there
+                // ── CONTENTION CURVE (window.__swimContention, default OFF) ─────────────
+                // The user's principle: swim is a RELEASE VALVE — place it where the day is
+                // most CONTENDED (most bunks free, all competing for fields/specials), so it
+                // pulls bunks out of the scramble exactly when the scramble is worst. The
+                // morning (few walls → everyone free) is peak contention; the afternoon (Main
+                // Activity / lunch / cleanup occupy chunks of camp) is slack. GENERIC: derived
+                // from the actual pinned-wall shape, so a morning-Main-Activity camp gets the
+                // mirror image automatically — no hardcoded times. STATIC pre-swim snapshot
+                // (taken once, before any swim is placed) so every bunk steers to the same
+                // base-contention peaks; pool cap 8 + same-grade cap 2 then bound the pile-up.
+                var _p23ContentionOn = false; try { _p23ContentionOn = (typeof window !== 'undefined' && window.__swimContention === true); } catch (_eC0) {}
+                var _p23ConSnap = [];   // per swimming bunk: { s:dayStart, e:dayEnd, walls:[[ws,we]...] } from pinned/_fixed walls (excl pre/post-change)
+                if (_p23ContentionOn) {
+                    try {
+                        allGrades.forEach(function (g) {
+                            var today = todaysSwimmers[g];
+                            if (!today || today.size === 0) return;
+                            var dv = divisions[g] || divisions[String(g)];
+                            var dStart = parseTimeToMinutes(dv && dv.startTime) || 540;
+                            var dEnd   = parseTimeToMinutes(dv && dv.endTime)   || 960;
+                            getBunksForGrade(g, divisions).forEach(function (bk) {
+                                if (!today.has(String(bk))) return;
+                                var walls = [];
+                                (bunkTimelines[bk] || []).forEach(function (b) {
+                                    if (!b) return;
+                                    if (!(b._activityLocked || b._fixed || b._classification === 'pinned')) return;
+                                    var bt = (b.type || '').toLowerCase();
+                                    if (bt === 'pre-change' || bt === 'post-change') return; // sub-walls, counted via parent
+                                    walls.push([b.startMin, b.endMin]);
+                                });
+                                _p23ConSnap.push({ s: dStart, e: dEnd, walls: walls });
+                            });
+                        });
+                    } catch (_eConSnap) { _p23ConSnap = []; }
+                }
+                // free (uncontended-by-a-wall) swimming bunks active across [st,en) — higher = more contended
+                var _p23ContentionAt = function (st, en) {
+                    var free = 0;
+                    for (var ci = 0; ci < _p23ConSnap.length; ci++) {
+                        var b = _p23ConSnap[ci];
+                        if (!(b.s <= st && b.e >= en)) continue;          // bunk not active across the whole slot
+                        var walled = false;
+                        for (var wi = 0; wi < b.walls.length; wi++) { if (b.walls[wi][0] < en && b.walls[wi][1] > st) { walled = true; break; } }
+                        if (!walled) free++;
+                    }
+                    return free;
+                };
                 // ★ v16.0: Brain-directed swim grade ordering — grades that failed
                 // swim in previous iterations get first pick of pool time
                 var _p23GradeOrder = adaptiveBrain.getSwimGradeOrder() || allGrades;
@@ -15453,23 +15500,28 @@
                         var _p23PickIdx = 0;
                         if (_p23Interleave && _p23AllFree.length > 1) {
                             try {
-                                var _ilFieldBal = (typeof window === 'undefined') || (window.__swimFieldBalance !== false); // default ON when interleaving
-                                // FIELD-BALANCED objective: relieve the most LAND pressure first (so a
-                                // period never ends up with more land bunks than there are fields), then
-                                // tiebreak toward cross-grade pool spread (least pool-loaded) then wet-
-                                // bundle score then earliest. With field-balance OFF this reduces to the
-                                // original pure pool-spread (relief term forced to 0).
-                                var _ilBest = -1, _ilBestRelief = -Infinity, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
+                                // PRIMARY objective (higher = better), MUTUALLY EXCLUSIVE so the two
+                                // never fight:
+                                //  • CONTENTION (window.__swimContention): steer swim to the MOST contended
+                                //    start (most free bunks competing) — the release valve. Wall-aware.
+                                //  • else FIELD-BALANCE (window.__swimFieldBalance, proven neutral): flatten
+                                //    land pressure. Kept only when contention is OFF.
+                                //  • else pure pool-spread (both terms 0).
+                                // Tiebreak: least pool-loaded (cross-grade spread) → wet-bundle score → earliest.
+                                var _ilContention = _p23ContentionOn && _p23ConSnap.length > 0;
+                                var _ilFieldBal = !_ilContention && ((typeof window === 'undefined') || (window.__swimFieldBalance !== false));
+                                var _ilBest = -1, _ilBestKey = -Infinity, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
                                 for (var _ilk = 0; _ilk < _p23AllFree.length; _ilk++) {
                                     var _ilC = _p23AllFree[_ilk];
                                     var _ilGL = (_p23SlotGradeLoad[_ilC.start] && _p23SlotGradeLoad[_ilC.start][grade]) || 0;
                                     if (_ilGL >= _p23SameGradeSoftCap) continue;       // ≤~2 same-grade per start
-                                    var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide pool load → cross-grade spread
-                                    var _ilRelief = _ilFieldBal ? (_p23LandLoad[_ilC.start] || 0) : 0; // land/field pressure relieved by swimming here
-                                    if (_ilRelief > _ilBestRelief
-                                        || (_ilRelief === _ilBestRelief && _ilLoad < _ilBestLoad)
-                                        || (_ilRelief === _ilBestRelief && _ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
-                                        _ilBest = _ilk; _ilBestRelief = _ilRelief; _ilBestLoad = _ilLoad; _ilBestScore = _ilC.score;
+                                    var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide pool load → cross-grade spread (tiebreak)
+                                    var _ilKey = _ilContention ? _p23ContentionAt(_ilC.start, _ilC.start + _p23SwimDur)
+                                               : (_ilFieldBal ? (_p23LandLoad[_ilC.start] || 0) : 0);
+                                    if (_ilKey > _ilBestKey
+                                        || (_ilKey === _ilBestKey && _ilLoad < _ilBestLoad)
+                                        || (_ilKey === _ilBestKey && _ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
+                                        _ilBest = _ilk; _ilBestKey = _ilKey; _ilBestLoad = _ilLoad; _ilBestScore = _ilC.score;
                                     }
                                 }
                                 if (_ilBest >= 0) _p23PickIdx = _ilBest;
@@ -15576,7 +15628,8 @@
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
                             + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
-                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : '')));
+                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : ''))
+                            + ((_p23ContentionOn && _p23ConSnap.length) ? ' (contention=' + _p23ContentionAt(_p23SwimS, _p23SwimE) + ' free)' : ''));
                     });
                 });
 
@@ -15588,7 +15641,14 @@
                         var _ilSlots = Object.keys(_p23SlotLoad).map(Number).sort(function (a, b) { return a - b; });
                         var _ilMaxSG = 0; _ilSlots.forEach(function (st) { var gm = _p23SlotGradeLoad[st] || {}; Object.keys(gm).forEach(function (g) { if (gm[g] > _ilMaxSG) _ilMaxSG = gm[g]; }); });
                         log('[Phase2.3-Interleave] pool slots (start=total[grades]): ' + _ilSlots.map(function (st) { var gm = _p23SlotGradeLoad[st] || {}; return minutesToTimeLabel(st) + '=' + _p23SlotLoad[st] + '[' + Object.keys(gm).map(function (g) { return String(g).slice(0, 3) + ':' + gm[g]; }).join(',') + ']'; }).join(' | ') + '  — maxSameGradePerSlot=' + _ilMaxSG + ' (≤' + _p23SameGradeSoftCap + ' target; each slot should mix grades)');
-                        if ((typeof window === 'undefined') || (window.__swimFieldBalance !== false)) {
+                        if (_p23ContentionOn && _p23ConSnap.length) {
+                            var _cLo = Infinity, _cHi = -Infinity;
+                            _p23ConSnap.forEach(function (b) { if (b.s < _cLo) _cLo = b.s; if (b.e > _cHi) _cHi = b.e; });
+                            var _cParts = [];
+                            for (var _ct = _cLo; _ct + 40 <= _cHi && _cParts.length < 16; _ct += 40) { _cParts.push(minutesToTimeLabel(_ct) + '=' + _p23ContentionAt(_ct, _ct + 40)); }
+                            log('[Phase2.3-Contention] pre-swim bunks-free per 40-min start (swim steered to the HIGHEST as a release valve): ' + _cParts.join(' | ') + ' (higher = more contended; mornings should top this if afternoon holds Main Activity)');
+                        }
+                        if (!_p23ContentionOn && ((typeof window === 'undefined') || (window.__swimFieldBalance !== false))) {
                             var _llSlots = Object.keys(_p23LandLoad).map(Number).sort(function (a, b) { return a - b; });
                             if (_llSlots.length) log('[Phase2.3-FieldBalance] residual land pressure by start (swimmers steered to flatten it): ' + _llSlots.map(function (st) { return minutesToTimeLabel(st) + '=' + _p23LandLoad[st]; }).join(' | ') + ' (lower+flatter ⇒ fewer bunks competing for the 15 fields at any one time)');
                         }
