@@ -17497,33 +17497,6 @@
                             if (_glAvailN === 0) {
                                 ((sl && sl.specials && sl.specials.priorityList) || []).forEach(_glIngestSpecial);
                             }
-                            // ── BAND-SPREAD: confine this grade's specials to its rotation-matrix
-                            // special BAND so DIFFERENT grades' specials land in DIFFERENT bands — that
-                            // keeps each band's concurrent special demand within the counted seats
-                            // (see [SEATS] below) instead of every grade piling specials into the same
-                            // morning gaps. Sport (full-day window) fills the gaps OUTSIDE the band, so
-                            // the day stays wall-to-wall and sport-rich. SAFE: only narrow when the band's
-                            // FREE minutes for THIS bunk comfortably hold the floor durations; otherwise
-                            // keep the full day so a floor is NEVER starved. Toggle window.__bandSpread=false.
-                            var _specWin = [gStart, gEnd], _specBandStr = 'full-day';
-                            try {
-                                var _sb = (window.__bandSpread !== false && staggerPlan && staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special) || null;
-                                if (_sb && _sb.end > _sb.start) {
-                                    var _bS = Math.max(gStart, _sb.start), _bE = Math.min(gEnd, _sb.end);
-                                    var _bandFree = Math.max(0, _bE - _bS);
-                                    pinned.forEach(function (p) { var os = Math.max(p.startMin, _bS), oe = Math.min(p.endMin, _bE); if (oe > os) _bandFree -= (oe - os); });
-                                    var _floorMin = 0;
-                                    Object.keys(subFloor).forEach(function (k) {
-                                        var f = subFloor[k]; if (!(f > 0)) return;
-                                        var ds = Object.keys(subDur[k] || {}).map(Number).filter(Boolean);
-                                        _floorMin += f * (ds.length ? Math.min.apply(null, ds) : 10);
-                                    });
-                                    if (_bandFree >= _floorMin + 20 && _bE > _bS) {   // 20-min safety margin
-                                        _specWin = [_bS, _bE];
-                                        _specBandStr = (typeof minutesToTimeLabel === 'function') ? (minutesToTimeLabel(_bS) + '-' + minutesToTimeLabel(_bE)) : (_bS + '-' + _bE);
-                                    }
-                                }
-                            } catch (_glBandErr) {}
                             var _glCapParts = [];
                             Object.keys(subFloor).forEach(function (key) {
                                 var durs = Object.keys(subDur[key] || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
@@ -17543,11 +17516,11 @@
                                 var _cap = _hasFiniteCfg ? Math.max(subCap[key], subFloor[key]) : Math.max(_avail, subFloor[key]);
                                 // score 1 (was 0): an over-floor special outranks the generic placeholder
                                 // filler below, so the day fills with REAL specials, not "Activity" tiles.
-                                floating.push({ kind: 'special', subcat: key, durations: durs, window: _specWin.slice(), qty: subFloor[key], cap: _cap, score: 1 });
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: [gStart, gEnd], qty: subFloor[key], cap: _cap, score: 1 });
                                 _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + ', durs=[' + durs.join(',') + '])');
                             });
                             // One cap-diagnostic line per grade (first bunk) so a throttled subcat is visible.
-                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _specBandStr); }
+                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)')); }
                             // Generic FILLER — fills whatever the layer demands leave open. A sport filler
                             // (real content) keeps score 1; the abstract "activity" placeholder (sports-free
                             // camps) drops to score 0 so it is a LAST resort and real specials are used first
@@ -17689,6 +17662,55 @@
                     // Sport/Special placeholder tiles have no concrete field yet → not
                     // checkable here (their sharing is enforced when fill assigns a field).
                     var _glFacKey = function (f) { return String(f == null ? '' : f).toLowerCase().trim(); };
+
+                    // ── SEATS: max bunks that can be on a category AT ONCE, counted from config.
+                    // The SAME idea as the swim pool's "only 8 swimmers at a time": the engine
+                    // never lays more than `seats` tiles of a category in any overlapping window.
+                    //   special:<subcat> = Σ that subcat's distinct activities' bunk-capacity
+                    //                      (not_sharable = 1 seat each; shareable = its cap).
+                    //   sport            = Σ enabled sport-hosting fields' bunk-capacity.
+                    //   swim             = the pool's bunk-capacity (already gated by poolSwimPairFreeAt).
+                    // Counted ONCE here, BEFORE layout, so the resourceGate below can enforce it.
+                    var _glSeats = {};
+                    try {
+                        ((globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || []).forEach(function (s) {
+                            if (!s || !s.name) return;
+                            var _sk = 'special:' + _glCanon(s.subcategory);
+                            var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
+                            var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
+                            _glSeats[_sk] = (_glSeats[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                        });
+                        var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
+                        var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
+                        var _sportSeats = 0;
+                        _fldsSeat.forEach(function (f) { if (f && f.name && _disF.indexOf(f.name) < 0 && f.activities && f.activities.length) _sportSeats += Math.max(1, parseInt(f.capacity) || 1); });
+                        if (_sportSeats > 0) _glSeats['sport'] = _sportSeats;
+                        var _swimSeats = 0;
+                        ((globalSettings && globalSettings.facilities) || []).forEach(function (fac) {
+                            ((fac && fac.generalActivities) || []).forEach(function (ga) {
+                                if (ga && /swim/i.test(String(ga.name || '')) && ga.sharableWith && parseInt(ga.sharableWith.capacity) > 0) _swimSeats = Math.max(_swimSeats, parseInt(ga.sharableWith.capacity));
+                            });
+                        });
+                        if (_swimSeats > 0) _glSeats['swim'] = _swimSeats;
+                    } catch (_glSeatErr) {}
+                    // category key for a generic tile (swim handled by its own pool gate, not here)
+                    var _glCatOf = function (kind, ref) {
+                        var k = String(kind || '').toLowerCase();
+                        if (k === 'special') return 'special:' + _glCanon(ref && ref.subcat);
+                        if (k === 'sport') return 'sport';
+                        return null;
+                    };
+                    // cross-bunk reservation of generic special/sport tiles, keyed by category, so the
+                    // seat gate sees how many bunks already hold that category at an overlapping time.
+                    var _glCatResv = {};   // category -> [{ s, e }]
+                    var _glSeatFreeAt = function (cat, sMin, eMin) {
+                        var seats = _glSeats[cat];
+                        if (!(seats > 0) || seats === Infinity) return true;   // uncounted category ⇒ no cap
+                        var list = _glCatResv[cat] || [], n = 0;
+                        for (var i = 0; i < list.length; i++) { if (list[i].s < eMin && list[i].e > sMin) n++; }
+                        return (n + 1) <= seats;   // counts THIS tile too — never exceed the seat count
+                    };
+
                     var _glResv = {};   // facilityKey -> [{ grade, bunk, s, e }]  (this-run reservations)
                     var _glFacilityFreeAt = function (facility, grade, sMin, eMin, ignoreBunk, share) {
                         try {
@@ -17738,14 +17760,25 @@
                             if (ref && ref.share && ref.share.facility) {
                                 return _glFacilityFreeAt(ref.share.facility, grade, sMin, eMin, bunk, ref.share);
                             }
+                            // SEAT GATE: a generic special/sport tile may only be laid if its category
+                            // still has a free seat at this time (the swim-pool rule, generalized). When a
+                            // category is full the packer is steered to a category that still has room.
+                            if (window.__seatGate !== false) {
+                                var _cat = _glCatOf(kind, ref);
+                                if (_cat && !_glSeatFreeAt(_cat, sMin, eMin)) return false;
+                            }
                         } catch (_e) {}
                         return true;
                     };
                     var _glResourceCommit = function (kind, grade, bunk, sMin, eMin, ref) {
                         try {
-                            if (!ref || !ref.share || !ref.share.facility) return;
-                            var key = _glFacKey(ref.share.facility);
-                            (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
+                            if (ref && ref.share && ref.share.facility) {
+                                var key = _glFacKey(ref.share.facility);
+                                (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
+                            }
+                            // reserve the category seat so the next bunk's gate counts it
+                            var _cat2 = _glCatOf(kind, ref);
+                            if (_cat2 && _glSeats[_cat2] > 0) (_glCatResv[_cat2] || (_glCatResv[_cat2] = [])).push({ s: sMin, e: eMin });
                         } catch (_e) {}
                     };
 
@@ -17894,47 +17927,8 @@
                             // overflow). Before changing any placement, MEASURE where grades collide so the
                             // diagnosis is visible and the spread can be sized. Pure log, zero mutation.
                             // Silence with window.__spreadShadow=false.
-                            // SEATS = how many bunks can be on a category AT ONCE (its concurrent
-                            // capacity), COUNTED FROM CONFIG BEFORE we place anything. This is the per-
-                            // period budget: at any moment a category can hold at most `seats` bunks.
-                            //   • special:<subcat> = Σ over that subcat's distinct activities of their
-                            //     bunk-capacity (not_sharable = 1 seat each; shareable = its cap). Each
-                            //     activity holds one bunk (cap 1) ⇒ seats ≈ how many DISTINCT activities.
-                            //   • sport = Σ over enabled sport-hosting fields of the field's bunk-capacity
-                            //     (further bounded by each sport's maxPlayers headcount at fill).
-                            //   • swim = the pool's bunk-capacity.
-                            // Built once here (in scope for the spread + shadow below). Reusable as _glSeats.
-                            var _glSeats = {};
-                            try {
-                                ((globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || []).forEach(function (s) {
-                                    if (!s || !s.name) return;
-                                    var _sk = 'special:' + _glCanon(s.subcategory);
-                                    var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
-                                    var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
-                                    _glSeats[_sk] = (_glSeats[_sk] || 0) + (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
-                                });
-                                // sport seats = Σ enabled sport fields' capacity (a field = a place a bunk plays)
-                                var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
-                                var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
-                                var _sportSeats = 0;
-                                _fldsSeat.forEach(function (f) {
-                                    if (!f || !f.name || _disF.indexOf(f.name) >= 0) return;
-                                    if (!(f.activities && f.activities.length)) return;   // a sport-hosting field
-                                    _sportSeats += Math.max(1, parseInt(f.capacity) || 1);
-                                });
-                                if (_sportSeats > 0) _glSeats['sport'] = _sportSeats;
-                                // swim seats = pool capacity (counts bunks). Read the Swim general activity's
-                                // sharableWith.capacity from the facilities registry; default 8.
-                                var _swimSeats = 0;
-                                try {
-                                    ((globalSettings && globalSettings.facilities) || []).forEach(function (fac) {
-                                        ((fac && fac.generalActivities) || []).forEach(function (ga) {
-                                            if (ga && /swim/i.test(String(ga.name || '')) && ga.sharableWith && parseInt(ga.sharableWith.capacity) > 0) _swimSeats = Math.max(_swimSeats, parseInt(ga.sharableWith.capacity));
-                                        });
-                                    });
-                                } catch (_e) {}
-                                if (_swimSeats > 0) _glSeats['swim'] = _swimSeats;
-                            } catch (_glSeatErr) {}
+                            // SEATS were counted pre-layout (var _glSeats, above the resourceGate) and are
+                            // ENFORCED there as a hard per-timeframe cap. Here we just report them + measure.
                             try {
                                 var _seatSpecParts = Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort().map(function (k) { return k.slice(8) + '=' + _glSeats[k]; });
                                 var _seatSpecTot = _seatSpecParts.reduce(function (a, k) { return a; }, 0);

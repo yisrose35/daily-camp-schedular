@@ -484,6 +484,36 @@ describe('PeriodLayout.planAllBunksLayout', () => {
         });
         assert.strictEqual(out.stats.unmetSpecialFloors, 1, '40-min food cannot fit a 20-min window → unmet');
     });
+
+    it('SEAT GATE: a category capped via resourceGate is never exceeded across bunks; excess flows elsewhere', () => {
+        // The swim-pool rule, generalized: cap "sport" at 1 concurrent seat. Two bunks each
+        // have a food FLOOR (P1) then an over-floor slot (P2) the scorer would fill with sport.
+        // Only ONE bunk may take sport in P2 (seat 1); the other is steered to a special.
+        const resv = [];
+        const catOf = (kind) => kind === 'sport' ? 'sport' : (kind === 'special' ? 'special' : null);
+        const seats = { sport: 1 };
+        const resourceGate = (kind, grade, bunk, s, e) => {
+            const c = catOf(kind); if (!c || seats[c] == null) return true;
+            let n = 0; for (const r of resv) if (r.c === c && r.s < e && r.e > s) n++;
+            return (n + 1) <= seats[c];
+        };
+        const resourceCommit = (kind, grade, bunk, s, e) => { const c = catOf(kind); if (c) resv.push({ c, s, e }); };
+        const mk = (bunk) => ({ bunk, grade: 'G', periods: [P(650, 690, 'P1'), P(700, 740, 'P2')], pinned: [],
+            floating: [{ kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                       { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: 3, score: 1 }] });
+        const out = Layout.planAllBunksLayout({
+            order: ['B1', 'B2'], perBunk: { B1: mk('B1'), B2: mk('B2') },
+            packer: PeriodPacker, resourceGate, resourceCommit, opts: {}
+        });
+        let sportsP2 = 0, specialsP2 = 0;
+        ['B1', 'B2'].forEach(b => out.layoutByBunk[b].tiles.forEach(t => {
+            if (!t.generic || t.startMin < 700 || t.endMin > 740) return;
+            if (t.kind === 'sport') sportsP2++; else if (t.kind === 'special') specialsP2++;
+        }));
+        assert.ok(sportsP2 <= 1, 'sport seat cap (1) respected across bunks in P2, got ' + sportsP2);
+        assert.strictEqual(specialsP2, 1, 'the seat-blocked bunk got a special in P2 instead (no blank)');
+        assert.strictEqual(out.stats.residualMin, 0, 'still wall-to-wall — the cap rerouted, it did not blank');
+    });
 });
 
 // ── LAYER SHARING watched AT PLACEMENT (the engine's _glFacilityFreeAt mirror) ──

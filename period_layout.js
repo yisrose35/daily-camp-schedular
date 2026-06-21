@@ -382,10 +382,12 @@
                 // structural required layers like swim); the unlimited filler is Infinity.
                 if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
                 if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
-                // record a cross-bunk reservation for a shared layer (Auditorium etc.) so
-                // the next bunk's resourceGate sees it. Only shared-`_ref.share` tiles —
-                // these are never relocated below, so the reservation never goes stale.
-                if (resourceCommit && seg._ref && seg._ref.share) {
+                // record a cross-bunk reservation so the next bunk's resourceGate sees it:
+                //   • shared-`_ref.share` layers (Auditorium etc.) → facility capacity.
+                //   • generic special/sport tiles → per-CATEGORY SEAT count (the caller caps
+                //     concurrent specials-per-subcat / sports the way the pool caps swimmers).
+                // The caller's resourceCommit decides what to track from kind + _ref.
+                if (resourceCommit && seg._ref && (seg._ref.share || seg.kind === 'special' || seg.kind === 'sport')) {
                     try { resourceCommit(seg.kind, _ctxGrade, _ctxBunk, seg.startMin, seg.endMin, seg._ref); } catch (e) {}
                 }
                 stats.tilesPlaced++;
