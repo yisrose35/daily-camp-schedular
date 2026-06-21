@@ -18604,7 +18604,7 @@
                     // next sport). A tile with no free field stays generic "Sport" (e.g. the >15-
                     // concurrent overflow). Kill: window.__fillSports=false.
                     if ((typeof window === 'undefined') || (window.__fillSports !== false)) {
-                        var _glSportFilled = 0, _glSportMiss = 0, _glSportFieldsReset = 0;
+                        var _glSportFilled = 0, _glSportMiss = 0, _glSportFieldsReset = 0, _glSpDiag = '';
                         try {
                             // STALE-CLAIM RESET. The draft planner (runGlobalPlanner @15190) already
                             // claimed fields in fieldLedger for its 95 *drafted* sports — but the generic
@@ -18632,13 +18632,21 @@
                                 var grd = _bunkToGrade[String(bunk)];
                                 var sl0 = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
                                 var plist = (sl0 && sl0.sports && sl0.sports.priorityList) || [];
-                                if (!plist.length) return;
+                                if (!plist.length) { if (!_glSpDiag) _glSpDiag = ' · DIAG bunk=' + bunk + ' EMPTY plist (sl0=' + !!sl0 + ' sports=' + !!(sl0 && sl0.sports) + ')'; return; }
+                                if (!_glSpDiag) {
+                                    var _d0 = plist[0] || {}, _df = _d0.fields || [];
+                                    _glSpDiag = ' · DIAG bunk=' + bunk + ' grade=' + grd + ' plist=' + plist.length + ' sp0="' + _d0.name + '" sp0.fields=' + JSON.stringify(_df) + ' ledgerHas=' + JSON.stringify(_df.map(function (f) { return !!fieldLedger[f]; })) + ' fieldLedgerKeys=' + Object.keys(fieldLedger || {}).length;
+                                }
                                 var usedSport = Object.create(null);
                                 res0.tiles.forEach(function (t) { if (t.kind === 'sport' && t._concrete) usedSport[String(t._concrete).toLowerCase()] = 1; });
                                 res0.tiles.filter(function (t) { return t.kind === 'sport' && t.generic !== false && !t._concrete; })
                                     .sort(function (a, b) { return a.startMin - b.startMin; })
                                     .forEach(function (t) {
                                         var placed = false;
+                                        if (_glSpDiag.indexOf(' avail=') < 0) {
+                                            var _t0 = plist[0] || {}, _tf = _t0.fields || [];
+                                            _glSpDiag += ' · tile=' + t.startMin + '-' + t.endMin + ' avail=' + JSON.stringify(_tf.map(function (f) { try { return isFieldAvailable(f, t.startMin, t.endMin, bunk, grd, _t0.name) ? 'Y' : 'N'; } catch (e) { return 'ERR:' + (e && e.message); } }));
+                                        }
                                         for (var i = 0; i < plist.length && !placed; i++) {
                                             var sp = plist[i]; if (!sp || !sp.name) continue;
                                             var nm = String(sp.name).toLowerCase();
@@ -18659,7 +18667,7 @@
                                         if (!placed) _glSportMiss++;
                                     });
                             });
-                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : '') + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)');
+                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : '') + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)' + _glSpDiag);
                         } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
                     }
 
