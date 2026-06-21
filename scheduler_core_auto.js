@@ -18142,6 +18142,13 @@
                                 _glSeats[_k] = (_glSeats[_k] || 0) + _seat;
                                 (_glSeatBySubDur[_sub] = _glSeatBySubDur[_sub] || {})[d] = (_glSeatBySubDur[_sub][d] || 0) + _seat;
                             });
+                            // TOTAL POOL cap (length-INDEPENDENT): the SAME physical activities back EVERY
+                            // duration bucket, so per-length seats SUM to MORE than the distinct pool
+                            // (uncategorized: 14@40 + 1@30 = 15 counted from ~13-14 activities). Count each
+                            // activity's seat ONCE here; the gate checks this pool ALONGSIDE the per-length cap,
+                            // so a subcat can never have more tiles laid than it has activities to fill them —
+                            // even split across lengths — while the per-length cap still protects a scarce length.
+                            _glSeats['special:' + _sub] = (_glSeats['special:' + _sub] || 0) + _seat;
                             _glSpecActsBySub[_sub] = (_glSpecActsBySub[_sub] || 0) + 1;
                             (_glNamesBySub[_sub] = _glNamesBySub[_sub] || []).push(s.name);
                         });
@@ -18190,6 +18197,7 @@
                                 var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
                                 var _seat = (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
                                 _glDurList(s).forEach(function (d) { var _k = 'special:' + _sub + '@' + d; _gm[_k] = (_gm[_k] || 0) + _seat; });
+                                _gm['special:' + _sub] = (_gm['special:' + _sub] || 0) + _seat;   // length-independent pool cap (see camp-wide build)
                                 (_bySub[_sub] = _bySub[_sub] || []).push(s);
                             });
                             // PER-PHYSICAL-ACTIVITY seat (window.__physActSeat, default ON): when a grade reaches
@@ -18230,7 +18238,8 @@
                             _subs.forEach(function (sub) {
                                 var dd = _glSeatBySubDur[sub];
                                 var parts = Object.keys(dd).map(Number).sort(function (a, b) { return a - b; }).map(function (d) { return d + 'min=' + dd[d] + ' seat' + (dd[d] === 1 ? '' : 's'); });
-                                log('[SEAT COUNT]    • ' + sub + ': ' + (_glSpecActsBySub[sub] || 0) + ' activit' + ((_glSpecActsBySub[sub] || 0) === 1 ? 'y' : 'ies') + ' → seats by length: ' + parts.join(', ') + '  [' + (_glNamesBySub[sub] || []).join(', ') + ']');
+                                var _poolCap = _glSeats['special:' + sub];
+                                log('[SEAT COUNT]    • ' + sub + ': ' + (_glSpecActsBySub[sub] || 0) + ' activit' + ((_glSpecActsBySub[sub] || 0) === 1 ? 'y' : 'ies') + ' → seats by length: ' + parts.join(', ') + (_poolCap != null ? (' · POOL cap=' + _poolCap + ' (length-independent ceiling)') : '') + '  [' + (_glNamesBySub[sub] || []).join(', ') + ']');
                             });
                         } else {
                             log('[SEAT COUNT]    • (no special activities available today)');
@@ -18345,6 +18354,18 @@
                                 var _cat = _glCatOf(kind, ref, sMin, eMin, grade);
                                 if (_cat && !_glSeatFreeAt(_cat, sMin, eMin)) return false;
                                 if (_cat && !_glSeatFreeAtGrade(_cat, grade, sMin, eMin)) return false;
+                                // TOTAL-POOL cap (window.__seatPoolCap, default ON): a per-length special key
+                                // ALSO counts against its subcat's length-independent pool, so 14@40 + 1@30 can't
+                                // exceed the ~13-14 distinct activities that back BOTH lengths. (The duration-
+                                // independent 'specialact:' solo key has no '@' → skipped, already pool-level.)
+                                if ((typeof window === 'undefined' || window.__seatPoolCap !== false) && _cat && _cat.indexOf('special:') === 0) {
+                                    var _atG = _cat.indexOf('@');
+                                    if (_atG > 0) {
+                                        var _poolG = _cat.slice(0, _atG);
+                                        if (!_glSeatFreeAt(_poolG, sMin, eMin)) return false;
+                                        if (!_glSeatFreeAtGrade(_poolG, grade, sMin, eMin)) return false;
+                                    }
+                                }
                             }
                         } catch (_e) {}
                         return true;
@@ -18361,6 +18382,14 @@
                             if (_cat2 && (_cat2.indexOf('special:') === 0 || _cat2.indexOf('specialact:') === 0)) {
                                 var _bg = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
                                 (_bg[_cat2] || (_bg[_cat2] = [])).push({ s: sMin, e: eMin });
+                            }
+                            // mirror the gate's TOTAL-POOL reservation (length-independent subcat key)
+                            var _atC = _cat2 ? _cat2.indexOf('@') : -1;
+                            if (_atC > 0 && _cat2.indexOf('special:') === 0) {
+                                var _poolC = _cat2.slice(0, _atC);
+                                if (_glSeats[_poolC] > 0) (_glCatResv[_poolC] || (_glCatResv[_poolC] = [])).push({ s: sMin, e: eMin });
+                                var _bgP = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
+                                (_bgP[_poolC] || (_bgP[_poolC] = [])).push({ s: sMin, e: eMin });
                             }
                             // FLOAT SWIM: record the placed swim as a live tile so the NEXT bunk's
                             // poolSwimPairFreeAt (which counts swim tiles in bunkTimelines) sees it →
@@ -18388,6 +18417,12 @@
                             var _cat2 = _glCatOf(kind, ref, sMin, eMin, grade);
                             if (_cat2 && _glSeats[_cat2] > 0) _glSplice(_glCatResv[_cat2], sMin, eMin);
                             if (_cat2 && (_cat2.indexOf('special:') === 0 || _cat2.indexOf('specialact:') === 0) && _glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_cat2], sMin, eMin);
+                            var _atR = _cat2 ? _cat2.indexOf('@') : -1;
+                            if (_atR > 0 && _cat2.indexOf('special:') === 0) {
+                                var _poolR = _cat2.slice(0, _atR);
+                                if (_glSeats[_poolR] > 0) _glSplice(_glCatResv[_poolR], sMin, eMin);
+                                if (_glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_poolR], sMin, eMin);
+                            }
                             if (_glFloatSwim && String(kind || '').toLowerCase() === 'swim') {
                                 var _stl = bunkTimelines[bunk];
                                 if (_stl) { for (var _si = 0; _si < _stl.length; _si++) { if (_stl[_si] && _stl[_si]._glFloatMark && _stl[_si].startMin === sMin && _stl[_si].endMin === eMin) { _stl.splice(_si, 1); break; } } }
