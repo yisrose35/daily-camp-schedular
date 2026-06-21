@@ -1364,6 +1364,11 @@ function getStyles() {
     '.pc3-filter-specials td:not(.cell-pinned):not([colspan]){opacity:.12;}' +
     '.pc3-filter-general td:not(.cell-general):not([colspan]){opacity:.12;}' +
     '.pc3-filter-free td:not(.cell-free):not([colspan]){opacity:.12;}' +
+    /* Timeline parity: dim non-matching activity cards under the same filters */
+    '.pc3-filter-leagues .pc3-tl-block:not(.cell-league){opacity:.12;}' +
+    '.pc3-filter-specials .pc3-tl-block:not(.cell-pinned){opacity:.12;}' +
+    '.pc3-filter-general .pc3-tl-block:not(.cell-general){opacity:.12;}' +
+    '.pc3-filter-free .pc3-tl-block{opacity:.12;}' +
     /* Make tables fully visible during print regardless of overflow scrolling */
     '@media print{' +
         '.pc3-sheet-table-wrap{overflow:visible !important;width:100% !important;}' +
@@ -3069,7 +3074,7 @@ function attachCellInteractivity(pc) {
     var tip = _pcCellTipEl();
     var hideTimer = null;
 
-    pc.querySelectorAll('td[data-bunk][data-slot]').forEach(function (td) {
+    pc.querySelectorAll('td[data-bunk][data-slot], .pc3-tl-block[data-bunk][data-slot]').forEach(function (td) {
         var bunk = td.getAttribute('data-bunk');
         var slotIdx = parseInt(td.getAttribute('data-slot'));
         var divName = td.getAttribute('data-div');
