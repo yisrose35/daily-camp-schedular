@@ -1232,29 +1232,35 @@ function getStyles() {
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
     /* ── Auto TIMELINE (brick model): each bunk = one track, cards sized to duration ── */
-    '.pc3-tl{font-family:Calibri,"Segoe UI",Arial,sans-serif;background:#fff;width:100%;user-select:none;}' +
-    '.pc3-tl-row{display:flex;align-items:stretch;border-bottom:1px solid #e6e6e6;}' +
-    '.pc3-tl-row:last-child{border-bottom:none;}' +
-    '.pc3-tl-headrow{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #c6c6c6;}' +
-    '.pc3-tl-periodrow{background:#fafafa;border-bottom:1px solid #d6d6d6;}' +
-    '.pc3-tl-corner,.pc3-tl-bunk{width:120px;min-width:120px;flex-shrink:0;display:flex;align-items:center;padding:6px 10px;font-size:13px;color:#1f1f1f;border-right:1px solid #c6c6c6;background:#f2f2f2;position:sticky;left:0;z-index:2;box-sizing:border-box;}' +
-    '.pc3-tl-corner{font-weight:700;}' +
+    '.pc3-tl{font-family:"Segoe UI",Calibri,Helvetica,Arial,sans-serif;background:#fff;width:100%;user-select:none;-webkit-font-smoothing:antialiased;}' +
+    '.pc3-tl-row{display:flex;align-items:stretch;}' +
+    '.pc3-tl-row:not(:last-child){border-bottom:1px solid #eef1f4;}' +
+    '.pc3-tl-bodyrow.pc3-tl-alt .pc3-tl-track{background:#fbfcfd;}' +
+    '.pc3-tl-bodyrow:hover .pc3-tl-track{background:#f5f9ff;}' +
+    '.pc3-tl-headrow{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #dfe3e8;box-shadow:0 1px 0 rgba(15,23,42,.04);}' +
+    '.pc3-tl-periodrow{background:linear-gradient(#fafbfc,#f4f6f8);border-bottom:1px solid #e4e8ec;}' +
+    '.pc3-tl-corner,.pc3-tl-bunk{width:132px;min-width:132px;flex-shrink:0;display:flex;align-items:center;padding:6px 14px;font-size:13px;color:#1e293b;border-right:1px solid #e2e8f0;background:#f8fafc;position:sticky;left:0;z-index:2;box-sizing:border-box;letter-spacing:.01em;}' +
+    '.pc3-tl-corner{font-weight:700;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.06em;}' +
     '.pc3-tl-bunk{font-weight:600;}' +
-    '.pc3-tl-track{position:relative;flex:1;min-width:0;height:48px;}' +
-    '.pc3-tl-headrow .pc3-tl-track{height:30px;}' +
-    '.pc3-tl-periodrow .pc3-tl-track{height:26px;}' +
-    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #ededed;}' +
-    '.pc3-tl-tick.major{border-left-color:#c6c6c6;}' +
-    '.pc3-tl-tick span{position:absolute;top:8px;left:3px;font-size:10px;color:#555;white-space:nowrap;}' +
-    '.pc3-tl-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f0f0f0;}' +
-    '.pc3-tl-vline.major{border-left-color:#dcdcdc;}' +
-    '.pc3-tl-period{position:absolute;top:3px;bottom:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#1f1f1f;background:#e6e6e6;border:1px solid #b0b0b0;border-radius:4px;overflow:hidden;white-space:nowrap;padding:0 6px;box-sizing:border-box;}' +
-    '.pc3-tl-block{position:absolute;top:4px;bottom:4px;border:1px solid #c9c9c9;border-radius:6px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.06);display:flex;box-sizing:border-box;}' +
-    '.pc3-tl-block-in{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;padding:3px 8px;}' +
-    '.pc3-tl-name{font-size:12px;font-weight:600;color:#000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-    '.pc3-tl-sub{font-size:10px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}' +
-    '.pc3-tl-dur{font-size:9px;color:#999;margin-top:1px;}' +
-    '.pc3-tl-chg{flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#fce4d6;color:#833c00;font-size:9px;font-weight:600;min-width:14px;}' +
+    '.pc3-tl-bodyrow.pc3-tl-alt .pc3-tl-bunk{background:#f4f7fa;}' +
+    '.pc3-tl-track{position:relative;flex:1;min-width:0;height:54px;transition:background .12s;}' +
+    '.pc3-tl-headrow .pc3-tl-track{height:32px;}' +
+    '.pc3-tl-periodrow .pc3-tl-track{height:28px;}' +
+    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #f1f3f5;}' +
+    '.pc3-tl-tick.major{border-left-color:#dde2e7;}' +
+    '.pc3-tl-tick span{position:absolute;top:9px;left:4px;font-size:10px;font-weight:500;color:#94a3b8;white-space:nowrap;letter-spacing:.01em;}' +
+    '.pc3-tl-tick.major span{color:#64748b;font-weight:600;}' +
+    '.pc3-tl-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f4f6f8;}' +
+    '.pc3-tl-vline.major{border-left-color:#e6eaee;}' +
+    '.pc3-tl-period{position:absolute;top:4px;bottom:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#475569;background:#eef2f6;border:1px solid #dde3ea;border-radius:6px;overflow:hidden;white-space:nowrap;padding:0 8px;box-sizing:border-box;letter-spacing:.02em;}' +
+    '.pc3-tl-block{position:absolute;top:5px;bottom:5px;border:1px solid #e3e8ee;border-left:3px solid #cbd5e1;border-radius:8px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.06),0 1px 1px rgba(15,23,42,.04);display:flex;box-sizing:border-box;transition:box-shadow .12s,transform .12s;}' +
+    '.pc3-tl-block:hover{box-shadow:0 4px 10px rgba(15,23,42,.12);transform:translateY(-1px);z-index:3;}' +
+    '.pc3-tl-block-in{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;padding:4px 10px;}' +
+    '.pc3-tl-name{font-size:12.5px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;}' +
+    '.pc3-tl-sub{font-size:10.5px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}' +
+    '.pc3-tl-dur{font-size:9px;font-weight:500;color:#aab4c0;margin-top:2px;letter-spacing:.03em;}' +
+    '.pc3-tl-chg{flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#fff4ec;color:#b45309;font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;min-width:16px;border-right:1px solid #f3e3d4;}' +
+    '@media print{.pc3-tl-block{box-shadow:none;}.pc3-tl-headrow{box-shadow:none;}.pc3-tl-bodyrow:hover .pc3-tl-track{background:transparent;}}' +
 
     /* ── Sheet Header — Excel sheet-tab feel ── */
     '.pc3-sheet-head{padding:10px 14px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #c6c6c6;background:#f7f7f7;}' +
@@ -2062,6 +2068,14 @@ function renderAutoDivisionTable(divName, bunks) {
     var totalMin = Math.max(1, dayEnd - dayStart);
     function pctL(min) { return ((min - dayStart) / totalMin) * 100; }
     function pctW(min) { return (min / totalMin) * 100; }
+    // Subtle left-edge accent per activity type — keeps cards clean white while
+    // letting a head counselor scan swim vs sports vs league at a glance.
+    var TL_ACCENT = {
+        swim: '#0ea5e9', sport: '#16a34a', sports: '#16a34a', league: '#8b5cf6',
+        specialty_league: '#8b5cf6', special: '#f59e0b', pinned: '#f59e0b',
+        elective: '#6366f1', swim_elective: '#06b6d4', activity: '#0d9488',
+        transition: '#cbd5e1', free: '#e2e8f0'
+    };
 
     var sheetId = pcNextSheetId();
     var minW = Math.max(720, Math.round(totalMin * 4));
@@ -2093,8 +2107,8 @@ function renderAutoDivisionTable(divName, bunks) {
     html += '</div></div>';
 
     // ── Bunk rows ──
-    bunks.forEach(function (bunk) {
-        html += '<div class="pc3-tl-row">';
+    bunks.forEach(function (bunk, bunkIdx) {
+        html += '<div class="pc3-tl-row pc3-tl-bodyrow' + (bunkIdx % 2 ? ' pc3-tl-alt' : '') + '">';
         html += '<div class="pc3-tl-bunk">' + escHtml(bunk) + '</div>';
         html += '<div class="pc3-tl-track">';
 
@@ -2125,7 +2139,8 @@ function renderAutoDivisionTable(divName, bunks) {
             var splitPre = a.entry._splitPreChange || 0;
             var splitPost = a.entry._splitPostChange || 0;
 
-            html += '<div class="pc3-tl-block cell-' + a.type + '" style="left:' + pctL(a.startMin).toFixed(2) + '%;width:calc(' + pctW(dur).toFixed(2) + '% - 4px);" title="' + escHtml(exportTxt + ' (' + dur + ' min)') + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + a.slotIdx + '" data-div="' + escHtml(divName) + '" data-cell-text="' + escHtml(exportTxt) + '">';
+            var accent = TL_ACCENT[a.type] || '#cbd5e1';
+            html += '<div class="pc3-tl-block cell-' + a.type + '" style="left:' + pctL(a.startMin).toFixed(2) + '%;width:calc(' + pctW(dur).toFixed(2) + '% - 4px);border-left-color:' + accent + ';" title="' + escHtml(exportTxt + ' (' + dur + ' min)') + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + a.slotIdx + '" data-div="' + escHtml(divName) + '" data-cell-text="' + escHtml(exportTxt) + '">';
             if (splitPre > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPre / dur * 100).toFixed(2) + '%;">Chg</div>';
             html += '<div class="pc3-tl-block-in">';
             html += '<span class="pc3-tl-name">' + escHtml(nameTxt + sharers) + '</span>';
