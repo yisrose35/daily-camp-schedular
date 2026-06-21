@@ -17605,6 +17605,61 @@
                             log('[GENERIC-LAYOUT] FLOAT SWIM on — stripped ' + _glSwimStripped + ' pre-placed swim/change block(s); swim will be repositioned within its window (change buffer folded out)');
                         } catch (_glStripErr) { try { warn('[GENERIC-LAYOUT] float-swim strip error — ' + (_glStripErr && _glStripErr.message)); } catch (_e) {} }
                     }
+                    // ── SEAT-AWARE ROUND-ROBIN base-day for weekly-quota specials (window.__seatRoundRobin, default ON) ──
+                    // The per-bunk weekly floor (below) spreads a bunk's M weekly sessions across the period's
+                    // camp-days using a per-bunk NAME-HASH phase. That hash is blind to how many OTHER bunks
+                    // share the SAME scarce cap-1 physical seat (e.g. ~13 bunks all restricted to "Shiur 1"),
+                    // so it CLUMPS contenders onto the same day, overflowing that day's window capacity → the
+                    // losers fall to the Friday deadline where everyone piles up again → permanent zeros for the
+                    // crowded seats (Shiur 1 got 5/13 while the lucky-hash Shiur 3 got 11/12). Fix: give each
+                    // contender a DISTINCT base day by its stable RANK within the seat's contention group
+                    // (round-robin across the period's camp-days), pacing demand to ~capacity/day. Fail-soft:
+                    // a bunk→base-day map only for specials with a per-week minFrequency; the floor block falls
+                    // back to the hash when a bunk has no entry. Byte-identical when no weekly-quota special.
+                    var _wqDueDay = Object.create(null);   // subcatKey -> { bunkName -> baseDayIndex (0..D-1) }
+                    try {
+                        var _rrOn = (typeof window === 'undefined') || (window.__seatRoundRobin !== false);
+                        var _rrU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                        var _rrToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                        if (_rrOn && _rrU && _rrToday && typeof todaysSpecials !== 'undefined' && todaysSpecials) {
+                            todaysSpecials.forEach(function (s) {
+                                if (!s || !s.name) return;
+                                var _ap = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                var _mf = (_ap.minFrequency != null) ? parseInt(_ap.minFrequency, 10) : 0;
+                                if (!(_mf > 0) && _ap.minFrequencyPerGrade) { Object.keys(_ap.minFrequencyPerGrade).forEach(function (g) { var v = parseInt(_ap.minFrequencyPerGrade[g], 10); if (v > 0) _mf = Math.max(_mf, v); }); }
+                                if (!(_mf > 0)) return;                                  // no weekly min → not a quota seat
+                                var _perR = ((_ap.minFrequencyPeriod || 'week') === 'week') ? '1week' : (_ap.minFrequencyPeriod || '1week');
+                                // period camp-day count D (same for all bunks; depends only on the period + today)
+                                var _Dr = 5;
+                                try {
+                                    var _psr = (typeof _rrU.getPeriodStartDate === 'function') ? _rrU.getPeriodStartDate(_perR, _rrToday) : null;
+                                    if (_psr && typeof _rrU.countCampDays === 'function') {
+                                        var _nWr = (_ap.minFrequencyPeriod === '2weeks') ? 2 : (_ap.minFrequencyPeriod === '3weeks') ? 3 : (_ap.minFrequencyPeriod === '4weeks') ? 4 : 1;
+                                        var _per = new Date(_psr + 'T00:00:00'); _per.setDate(_per.getDate() + _nWr * 7 - 1);
+                                        var _peSr = _per.getFullYear() + '-' + String(_per.getMonth() + 1).padStart(2, '0') + '-' + String(_per.getDate()).padStart(2, '0');
+                                        _Dr = Math.max(1, _rrU.countCampDays(_psr, _peSr) || 5);
+                                    }
+                                } catch (_e) {}
+                                // contention group = camp-wide bunks that can access THIS physical activity
+                                var _grp = [];
+                                (allGrades || []).forEach(function (g) {
+                                    (getBunksForGrade(g, divisions) || []).forEach(function (bk) {
+                                        var _ok = true;
+                                        try { if (typeof isSpecialAvailableForBunk === 'function') _ok = isSpecialAvailableForBunk(s.name, g, bk, globalSettings); } catch (_e) { _ok = true; }
+                                        if (_ok) _grp.push(bk);
+                                    });
+                                });
+                                if (!_grp.length) return;
+                                _grp.sort();                                             // stable + deterministic across days/regens
+                                var _subR = _glCanon(s.subcategory);
+                                var _mR = _wqDueDay[_subR] || (_wqDueDay[_subR] = Object.create(null));
+                                for (var _gi = 0; _gi < _grp.length; _gi++) {
+                                    if (_mR[_grp[_gi]] == null) _mR[_grp[_gi]] = _gi % _Dr;   // first assignment wins (1:1 subcats: only one)
+                                }
+                            });
+                            try { var _rrKeys = Object.keys(_wqDueDay); if (_rrKeys.length) log('[GENERIC-WEEKLY] seat round-robin base-days computed for subcats: ' + _rrKeys.join(', ')); } catch (_e) {}
+                        }
+                    } catch (_rrErr) { try { warn('[GENERIC-WEEKLY] round-robin error — falling back to per-bunk hash: ' + (_rrErr && _rrErr.message)); } catch (_e) {} }
                     allGrades.forEach(function (grade) {
                         var rawPeriods = (window.campPeriods && window.campPeriods[grade]) || [];
                         var gObj = divisions[grade] || divisions[String(grade)] || {};
@@ -17772,9 +17827,11 @@
                                             }
                                         } catch (_e) {}
                                         var remaining = Math.max(1, D - e + 1);
-                                        // deterministic per-bunk phase → spread bunks evenly across the period's days
+                                        // base day → spread bunks across the period's days. Prefer the SEAT-AWARE
+                                        // round-robin rank (paces same-seat contenders to ~capacity/day); fall back
+                                        // to the deterministic per-bunk name hash when no round-robin entry exists.
                                         var _h = 0, _bs = String(bunk); for (var _hi = 0; _hi < _bs.length; _hi++) _h = ((_h << 5) - _h + _bs.charCodeAt(_hi)) | 0;
-                                        var phase = Math.abs(_h) % D;
+                                        var phase = (_wqDueDay[key] && _wqDueDay[key][bunk] != null) ? _wqDueDay[key][bunk] : (Math.abs(_h) % D);
                                         var step = Math.max(1, Math.floor(D / Math.max(1, M)));
                                         var dueToday = false;
                                         for (var _dk = 0; _dk < M; _dk++) { if (((phase + _dk * step) % D) === (e - 1)) { dueToday = true; break; } }
@@ -18074,10 +18131,12 @@
                     // ── PER-GRADE seats (also per-length): grade-restricted activities (e.g. Shiur 1 =
                     // Minors-only) only count for the grades that can use them.
                     var _glSeatsByGrade = {};   // grade -> { 'special:<subcat>@<dur>' -> accessible seats }
+                    var _glSoloAct = {};        // grade -> { '<subcat>' -> physical activity NAME }  (only when the grade reaches EXACTLY ONE activity in the subcat)
                     try {
                         (allGrades || []).forEach(function (g) {
                             var _rep = (typeof getBunksForGrade === 'function') ? (getBunksForGrade(g, divisions) || [])[0] : null;
                             var _gm = _glSeatsByGrade[g] = {};
+                            var _bySub = Object.create(null);   // subcat -> [accessible activity objects]
                             ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || []).forEach(function (s) {
                                 if (!s || !s.name) return;
                                 var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
@@ -18090,7 +18149,35 @@
                                 var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
                                 var _seat = (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
                                 _glDurList(s).forEach(function (d) { var _k = 'special:' + _sub + '@' + d; _gm[_k] = (_gm[_k] || 0) + _seat; });
+                                (_bySub[_sub] = _bySub[_sub] || []).push(s);
                             });
+                            // PER-PHYSICAL-ACTIVITY seat (window.__physActSeat, default ON): when a grade reaches
+                            // EXACTLY ONE activity in a subcat (e.g. each grade → one Shiur), the subcat seat count
+                            // (= Σ DISTINCT activities camp-wide) OVER-states what THIS grade's generic tile can
+                            // become. Register a seat keyed by the PHYSICAL ACTIVITY so the cap-1 not_sharable
+                            // resource is enforced ACROSS the different grades that share it (Minors+Duetos both
+                            // = Shiur 1): the layout then STAGGERS them to distinct windows instead of co-placing
+                            // two tiles in one window that fill can't both name (the "Special: Shiur" placeholder).
+                            // Multi-activity subcats (Regular, …) keep the subcat seat (no 1:1 mapping).
+                            if ((typeof window === 'undefined') || (window.__physActSeat !== false)) {
+                                Object.keys(_bySub).forEach(function (_sub) {
+                                    var _acts = _bySub[_sub];
+                                    if (_acts.length !== 1) return;                      // only the unambiguous 1:1 case
+                                    var s1 = _acts[0];
+                                    (_glSoloAct[g] || (_glSoloAct[g] = {}))[_sub] = s1.name;
+                                    var _sw1 = s1.sharableWith || {}; var _ty1 = _sw1.type || 'not_sharable';
+                                    var _cp1 = parseInt(_sw1.capacity) || (_ty1 === 'not_sharable' ? 1 : 2);
+                                    var _seat1 = (_ty1 === 'not_sharable' ? 1 : Math.max(1, _cp1));
+                                    // DURATION-INDEPENDENT physical seat (mirrors the duration-agnostic fill
+                                    // ledger _glCapFits): one physical chair regardless of session length, so two
+                                    // overlapping tiles of the SAME activity at DIFFERENT lengths (e.g. @30 vs @40)
+                                    // still contend for the single seat and get staggered. A '@dur'-keyed seat
+                                    // would split them into separate buckets and miss the overlap.
+                                    var _pk = 'specialact:' + s1.name;
+                                    _gm[_pk] = _seat1;                               // per-grade seat for the physical-activity key
+                                    if (!(_glSeats[_pk] > 0)) _glSeats[_pk] = _seat1; // camp-wide cap for this ONE physical activity
+                                });
+                            }
                         });
                     } catch (_glSeatGErr) {}
                     // ── VISIBLE COUNT: print exactly what the engine counted (per length), auditable.
@@ -18116,9 +18203,18 @@
                     } catch (_glSeatLogErr) {}
                     // category key for a generic tile — DURATION-AWARE for specials (seats are per length).
                     // swim handled by its own pool gate, not here.
-                    var _glCatOf = function (kind, ref, sMin, eMin) {
+                    var _glCatOf = function (kind, ref, sMin, eMin, grade) {
                         var k = String(kind || '').toLowerCase();
-                        if (k === 'special') { var d = (sMin != null && eMin != null) ? (eMin - sMin) : null; return 'special:' + _glCanon(ref && ref.subcat) + (d != null ? ('@' + d) : ''); }
+                        if (k === 'special') {
+                            var d = (sMin != null && eMin != null) ? (eMin - sMin) : null;
+                            var _sub = _glCanon(ref && ref.subcat);
+                            // when this grade reaches exactly ONE activity in the subcat, key the seat by that
+                            // PHYSICAL ACTIVITY (cap-1 enforced across the grades sharing it); else by subcat.
+                            if (grade && _glSoloAct[grade] && _glSoloAct[grade][_sub]) {
+                                return 'specialact:' + _glSoloAct[grade][_sub];   // duration-independent: one physical seat for all lengths
+                            }
+                            return 'special:' + _sub + (d != null ? ('@' + d) : '');
+                        }
                         if (k === 'sport') return 'sport';
                         return null;
                     };
@@ -18139,7 +18235,7 @@
                     // at all ⇒ don't lay it (a sport/other category fills instead). Only specials are
                     // grade-access-limited; sport/swim use the camp-wide check above.
                     var _glSeatFreeAtGrade = function (cat, grade, sMin, eMin) {
-                        if (!cat || cat.indexOf('special:') !== 0) return true;
+                        if (!cat || (cat.indexOf('special:') !== 0 && cat.indexOf('specialact:') !== 0)) return true;
                         var gm = _glSeatsByGrade[grade];
                         if (!gm) return true;                                   // unknown grade ⇒ no per-grade cap
                         var seats = gm[cat] || 0;
@@ -18205,7 +18301,7 @@
                             // activities don't count for a grade that can't use them). When a category is
                             // full the packer is steered to one that still has room.
                             if (window.__seatGate !== false) {
-                                var _cat = _glCatOf(kind, ref, sMin, eMin);
+                                var _cat = _glCatOf(kind, ref, sMin, eMin, grade);
                                 if (_cat && !_glSeatFreeAt(_cat, sMin, eMin)) return false;
                                 if (_cat && !_glSeatFreeAtGrade(_cat, grade, sMin, eMin)) return false;
                             }
@@ -18219,9 +18315,9 @@
                                 (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
                             }
                             // reserve the category seat so the next bunk's gate counts it (camp-wide + per-grade)
-                            var _cat2 = _glCatOf(kind, ref, sMin, eMin);
+                            var _cat2 = _glCatOf(kind, ref, sMin, eMin, grade);
                             if (_cat2 && _glSeats[_cat2] > 0) (_glCatResv[_cat2] || (_glCatResv[_cat2] = [])).push({ s: sMin, e: eMin });
-                            if (_cat2 && _cat2.indexOf('special:') === 0) {
+                            if (_cat2 && (_cat2.indexOf('special:') === 0 || _cat2.indexOf('specialact:') === 0)) {
                                 var _bg = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
                                 (_bg[_cat2] || (_bg[_cat2] = [])).push({ s: sMin, e: eMin });
                             }
@@ -18248,9 +18344,9 @@
                                 var key = _glFacKey(ref.share.facility), list = _glResv[key];
                                 if (list) { for (var i = 0; i < list.length; i++) { if (list[i].s === sMin && list[i].e === eMin && list[i].grade === grade && list[i].bunk === bunk) { list.splice(i, 1); break; } } }
                             }
-                            var _cat2 = _glCatOf(kind, ref, sMin, eMin);
+                            var _cat2 = _glCatOf(kind, ref, sMin, eMin, grade);
                             if (_cat2 && _glSeats[_cat2] > 0) _glSplice(_glCatResv[_cat2], sMin, eMin);
-                            if (_cat2 && _cat2.indexOf('special:') === 0 && _glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_cat2], sMin, eMin);
+                            if (_cat2 && (_cat2.indexOf('special:') === 0 || _cat2.indexOf('specialact:') === 0) && _glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_cat2], sMin, eMin);
                             if (_glFloatSwim && String(kind || '').toLowerCase() === 'swim') {
                                 var _stl = bunkTimelines[bunk];
                                 if (_stl) { for (var _si = 0; _si < _stl.length; _si++) { if (_stl[_si] && _stl[_si]._glFloatMark && _stl[_si].startMin === sMin && _stl[_si].endMin === eMin) { _stl.splice(_si, 1); break; } } }
@@ -18939,6 +19035,74 @@
                                    : (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : '')));
                         }
                     } catch (_glFillLogErr) {}
+
+                    // ── WEEKLY-MUST SHORTFALL REPORT (general; window.__weeklyMustReport, default ON) ──
+                    // A per-WEEK minimum (minFrequency + minFrequencyPeriod:'week'/2-4weeks) is a HARD
+                    // generator promise — not a shiur-specific rule. The floor + round-robin + cap-1 seat
+                    // passes DELIVER it whenever it is physically feasible; this report makes the outcome
+                    // VISIBLE so a must-have is never SILENTLY skipped. Every gen it prints a per-subcat
+                    // status line; on the LAST camp-day of the period it ESCALATES any bunk still under its
+                    // weekly minimum to a ★ SHORTFALL warning (= infeasible config or a starved scarce seat →
+                    // the operator must add a slot/instructor/day or lower the minimum). Diagnostic only
+                    // (counts week-to-date from saved days + concrete fills laid today); never blocks gen.
+                    try {
+                        if ((typeof window === 'undefined') || (window.__weeklyMustReport !== false)) {
+                            var _wmU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                            var _wmToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                            if (_wmU && _wmToday && typeof _wmU.getPeriodActivityCount === 'function' && typeof todaysSpecials !== 'undefined' && todaysSpecials) {
+                                var _wmSub = Object.create(null);   // subcat -> { min, period, names:[] }
+                                todaysSpecials.forEach(function (s) {
+                                    if (!s || !s.name) return;
+                                    var _ap = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                    var _mf = (_ap.minFrequency != null) ? parseInt(_ap.minFrequency, 10) : 0;
+                                    if (!(_mf > 0) && _ap.minFrequencyPerGrade) { Object.keys(_ap.minFrequencyPerGrade).forEach(function (g) { var v = parseInt(_ap.minFrequencyPerGrade[g], 10); if (v > 0) _mf = Math.max(_mf, v); }); }
+                                    if (!(_mf > 0)) return;
+                                    var _sc = _glCanon(s.subcategory);
+                                    var _o = _wmSub[_sc] || (_wmSub[_sc] = { min: 0, period: (_ap.minFrequencyPeriod || 'week'), names: [] });
+                                    _o.min = Math.max(_o.min, _mf); _o.names.push(s.name);
+                                });
+                                Object.keys(_wmSub).forEach(function (_sc) {
+                                    var _info = _wmSub[_sc];
+                                    var _perW = (_info.period === 'week') ? '1week' : _info.period;
+                                    var _Dw = 5, _ew = 1;
+                                    try {
+                                        var _psw = (typeof _wmU.getPeriodStartDate === 'function') ? _wmU.getPeriodStartDate(_perW, _wmToday) : null;
+                                        if (_psw && typeof _wmU.countCampDays === 'function') {
+                                            var _nWw = (_info.period === '2weeks') ? 2 : (_info.period === '3weeks') ? 3 : (_info.period === '4weeks') ? 4 : 1;
+                                            var _pew = new Date(_psw + 'T00:00:00'); _pew.setDate(_pew.getDate() + _nWw * 7 - 1);
+                                            var _peSw = _pew.getFullYear() + '-' + String(_pew.getMonth() + 1).padStart(2, '0') + '-' + String(_pew.getDate()).padStart(2, '0');
+                                            _Dw = Math.max(1, _wmU.countCampDays(_psw, _peSw) || 5);
+                                            _ew = Math.max(1, _wmU.countCampDays(_psw, _wmToday) || 1);
+                                        }
+                                    } catch (_e) {}
+                                    var _isLast = (_ew >= _Dw);
+                                    var _short = [], _okN = 0, _phN = 0, _grpN = 0;
+                                    (allGrades || []).forEach(function (g) {
+                                        (getBunksForGrade(g, divisions) || []).forEach(function (bk) {
+                                            var _canAcc = _info.names.some(function (nm) { try { return (typeof isSpecialAvailableForBunk !== 'function') || isSpecialAvailableForBunk(nm, g, bk, globalSettings); } catch (_e) { return true; } });
+                                            if (!_canAcc) return;
+                                            _grpN++;
+                                            var _wtd = 0; _info.names.forEach(function (nm) { try { _wtd += _wmU.getPeriodActivityCount(bk, nm, _perW, _wmToday) || 0; } catch (_e) {} });
+                                            var _todayN = 0, _ph = 0;
+                                            var _res = _glOut && _glOut.layoutByBunk && _glOut.layoutByBunk[bk];
+                                            if (_res && _res.tiles) _res.tiles.forEach(function (t) {
+                                                if (!t || t.kind !== 'special' || _glCanon(t.subcat) !== _sc) return;
+                                                if (t._concrete || (!t.generic && t.name)) _todayN++; else _ph++;
+                                            });
+                                            if (_ph > 0) _phN++;
+                                            if ((_wtd + _todayN) >= _info.min) _okN++;
+                                            else if (_isLast) _short.push(bk + ' (' + (_wtd + _todayN) + '/' + _info.min + (_ph ? ', +' + _ph + ' unfilled' : '') + ')');
+                                        });
+                                    });
+                                    if (_isLast && _short.length) {
+                                        warn('[WEEKLY-MUST] ★ SHORTFALL — ' + _sc + ' (min ' + _info.min + '/' + _info.period + '): ' + _short.length + '/' + _grpN + ' bunk(s) UNDER after the last camp-day → add a slot/instructor/day or lower the minimum. ' + _short.join(', '));
+                                    } else {
+                                        log('[WEEKLY-MUST] ' + _sc + ' (min ' + _info.min + '/' + _info.period + '): ' + _okN + '/' + _grpN + ' bunk(s) on track' + (_phN ? (' (' + _phN + ' have an unfilled placeholder today)') : '') + (_isLast ? ' [last camp-day]' : ' [day ' + _ew + '/' + _Dw + ']'));
+                                    }
+                                });
+                            }
+                        }
+                    } catch (_wmErr) { try { warn('[WEEKLY-MUST] report error: ' + (_wmErr && _wmErr.message)); } catch (_e) {} }
 
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
