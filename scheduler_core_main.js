@@ -4628,6 +4628,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const _isSpecial65 = (a) => !!_specByName65[String(a || '').toLowerCase().trim()];
             const _kindOf65 = (b, g, idx, e) => { const k = _kindByCell76[String(b) + '|' + idx]; return (k && k !== 'any') ? k : slotKindOf(_slotEvent76(b, g, idx, e)); };
             const _isFree65 = (e) => { const a = String((e && (e._activity || e.field || e.sport) || '')).toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
+            const _bunkNum65 = (bn) => { const m = String(bn || '').match(/(\d+)/); return m ? parseInt(m[1], 10) : Infinity; }; // leading bunk number, matches the solver's getBunkNumber
             // Occupancy by location from the post-empty-fill schedule.
             const _occL65 = {};
             Object.keys(_sa76).forEach(b => {
@@ -4655,32 +4656,38 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
             };
             let _shared65 = 0, _backfilled65 = 0;
-            // Round 0 — share into an under-capacity same-grade location (kind-matched), fresh only.
-            for (let _round65 = 0; _round65 < 1; _round65++) {
-                Object.keys(_sa76).forEach(b => {
-                    if (_allowed76 && !_allowed76.has(String(b))) return;
-                    const g = _b2g76[String(b)] || '?';
-                    (_sa76[b] || []).forEach((e, idx) => {
-                        if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree65(e)) return;
-                        const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                        const kind = _kindOf65(b, g, idx, e);
-                        for (const fl of Object.keys(_occL65)) {
-                            const cfg = _loc65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
-                            const occ = _occAt65(fl, t.s, t.e, String(b));
-                            if (occ.length === 0 || occ.length >= cfg.cap) continue; // need 1+ occupant AND room under cap
-                            if (occ.some(o => o.grade !== g)) continue;             // same-grade share only (always legal)
-                            if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-started, no staggered share
-                            if (cfg.type === 'custom' && cfg.divs.length > 0 && cfg.divs.indexOf(g) < 0) continue;
-                            const act = occ[0].act; if (!act) continue;            // join the location's in-progress activity
-                            const actSp = _isSpecial65(act);
-                            if (kind === 'special' && !actSp) continue;            // special slot → join a special only
-                            if (kind === 'sport' && actSp) continue;               // sport slot → join a sport only
-                            if (_round65 === 0 && _done76[String(b)] && _done76[String(b)][String(act).toLowerCase()]) continue;
-                            _seat65(b, idx, occ[0].field, act, t.s, t.e); _shared65++; break;
-                        }
-                    });
+            // Round 0 — share into an under-capacity same-grade location (kind-matched),
+            // fresh only. Among the legal shares, prefer the room whose occupant is the
+            // CLOSEST bunk-number neighbour, mirroring the solver's adjacent-bunk bonus
+            // (pairing 20+21 beats 20+22).
+            Object.keys(_sa76).forEach(b => {
+                if (_allowed76 && !_allowed76.has(String(b))) return;
+                const g = _b2g76[String(b)] || '?';
+                (_sa76[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree65(e)) return;
+                    const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    const kind = _kindOf65(b, g, idx, e);
+                    const _myNum65 = _bunkNum65(b);
+                    let _best65 = null;
+                    for (const fl of Object.keys(_occL65)) {
+                        const cfg = _loc65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
+                        const occ = _occAt65(fl, t.s, t.e, String(b));
+                        if (occ.length === 0 || occ.length >= cfg.cap) continue; // need 1+ occupant AND room under cap
+                        if (occ.some(o => o.grade !== g)) continue;             // same-grade share only (always legal)
+                        if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-started, no staggered share
+                        if (cfg.type === 'custom' && cfg.divs.length > 0 && cfg.divs.indexOf(g) < 0) continue;
+                        const act = occ[0].act; if (!act) continue;            // join the location's in-progress activity
+                        const actSp = _isSpecial65(act);
+                        if (kind === 'special' && !actSp) continue;            // special slot → join a special only
+                        if (kind === 'sport' && actSp) continue;               // sport slot → join a sport only
+                        if (_done76[String(b)] && _done76[String(b)][String(act).toLowerCase()]) continue; // never a repeat
+                        let _dist65 = Infinity;
+                        occ.forEach(o => { const dd = Math.abs(_bunkNum65(o.bunk) - _myNum65); if (dd < _dist65) _dist65 = dd; });
+                        if (!_best65 || _dist65 < _best65.dist) _best65 = { field: occ[0].field, act: act, dist: _dist65 };
+                    }
+                    if (_best65) { _seat65(b, idx, _best65.field, _best65.act, t.s, t.e); _shared65++; }
                 });
-            }
+            });
             // Round 2 — special-slot backfill: a still-Free Special-Activity slot
             // opens a grade-accessible special on a free location (prefer one the
             // bunk has NOT done today; a repeat is the last resort).
