@@ -4516,6 +4516,81 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             });
             if (_filled76 > 0) console.log(`[STEP 7.6] Empty-field free-fill: filled ${_filled76} Free slot(s) with sports on empty fields`);
             else console.log('[STEP 7.6] Empty-field free-fill: no fillable Free slots');
+
+            // ─────────────────────────────────────────────────────────────
+            // STEP 7.65: Share-fill. The empty-field pass above only seats a
+            // Free bunk on a COMPLETELY EMPTY field, so a bunk whose only
+            // remaining options are "repeat-on-empty" (blocked by the no-same-
+            // day-repeat filter) or "share a grade-mate's half-full field" was
+            // left Free even though the share is perfectly legal (same_division,
+            // under capacity). Seat each still-Free bunk into an UNDER-CAPACITY
+            // SAME-GRADE field, joining that field's in-progress activity. This
+            // runs after the capacity/validator sweeps (7.55/7.56), so it
+            // self-guarantees a legal share: the field is under its OWN cap,
+            // every current occupant is the SAME grade, the sharing type permits
+            // it (never not_sharable), the window co-starts (no staggered share),
+            // and access + time-rules pass. Round 0 prefers an activity the bunk
+            // has NOT done today; round 1 allows a same-day repeat as the
+            // absolute last resort (a shared repeat still beats a Free). Only
+            // fills Free cells — never displaces an existing placement.
+            const _norm65 = (sw) => {
+                let ty = (sw && sw.type) || 'not_sharable';
+                const dv = (sw && Array.isArray(sw.divisions)) ? sw.divisions : [];
+                if (ty === 'custom' && dv.length === 0) ty = 'same_division';
+                if (ty === 'all') ty = 'same_division';
+                return { type: ty, cap: parseInt(sw && sw.capacity) || (ty === 'not_sharable' ? 1 : 2), divs: dv };
+            };
+            const _cfg65 = {}, _fByName65 = {};
+            _sportFields76.forEach(f => { const k = String(f.name).toLowerCase().trim(); _cfg65[k] = _norm65(f.sharableWith || {}); _fByName65[k] = f; });
+            // Rich occupancy from the post-empty-fill schedule: field(lc) -> occupants.
+            const _occR65 = {};
+            Object.keys(_sa76).forEach(b => {
+                const g = _b2g76[String(b)] || '?';
+                (_sa76[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation) return;
+                    const fl = String(e.field || '').toLowerCase().trim();
+                    if (!fl || _skip76[fl] || e.field === 'Free') return;
+                    const act = e._activity || e.sport; if (!act || String(act).toLowerCase() === 'free') return;
+                    const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    (_occR65[fl] = _occR65[fl] || []).push({ bunk: String(b), grade: g, act: act, s: t.s, e: t.e });
+                });
+            });
+            let _shared65 = 0;
+            for (let _round65 = 0; _round65 < 2; _round65++) {
+                Object.keys(_sa76).forEach(b => {
+                    if (_allowed76 && !_allowed76.has(String(b))) return;
+                    const g = _b2g76[String(b)] || '?';
+                    (_sa76[b] || []).forEach((e, idx) => {
+                        if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                        const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
+                        if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
+                        const _ck = _kindByCell76[String(b) + '|' + idx];
+                        if (_ck === 'special' || (!_ck && slotKindOf(_slotEvent76(b, g, idx, e)) === 'special')) return;
+                        const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                        const flKeys = Object.keys(_occR65);
+                        for (let fi = 0; fi < flKeys.length; fi++) {
+                            const fl = flKeys[fi];
+                            const f = _fByName65[fl]; if (!f) continue;            // real, available sport fields only
+                            const cfg = _cfg65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
+                            const occ = _occR65[fl].filter(o => o.bunk !== String(b) && o.s < t.e && o.e > t.s);
+                            if (occ.length === 0 || occ.length >= cfg.cap) continue; // need 1+ occupant AND room under cap
+                            if (occ.some(o => o.grade !== g)) continue;             // same-grade share only (always legal)
+                            if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-started, no staggered share
+                            if (cfg.type === 'custom' && cfg.divs.length > 0 && cfg.divs.indexOf(g) < 0) continue;
+                            if (!_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
+                            const act = occ[0].act; if (!act) continue;            // join the field's in-progress activity
+                            if (_round65 === 0 && _done76[String(b)] && _done76[String(b)][String(act).toLowerCase()]) continue;
+                            _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, _shareFilled: true, continuation: false };
+                            (_occR65[fl]).push({ bunk: String(b), grade: g, act: act, s: t.s, e: t.e });
+                            (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
+                            _shared65++;
+                            break;
+                        }
+                    });
+                });
+            }
+            if (_shared65 > 0) console.log('[STEP 7.65] share-fill: seated ' + _shared65 + ' Free bunk(s) into under-capacity same-grade field(s)');
+            else console.log('[STEP 7.65] share-fill: no shareable Free slots');
         } catch (_e76) {
             console.warn('[STEP 7.6] Empty-field free-fill failed:', _e76);
         }
