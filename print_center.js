@@ -4469,59 +4469,26 @@ function buildExcelRows(item) {
             var periodRow = ['Bunk'];
             var incRow = [''];
 
-            // Continuous, boundary-re-anchored increment ruler.
-            // Step by `inc`, but never step across a period boundary — when a
-            // period ends off-grid (e.g. 12:15), that boundary becomes a tick
-            // and the cadence picks up from there (12:15 → 12:25 → 12:35…),
-            // instead of every period restarting at a "clean" multiple.
-            var periodsSorted = slotMeta.map(function (s, i) {
-                return { startMin: s.startMin, endMin: s.endMin, idx: i };
-            }).sort(function (a, b) { return a.startMin - b.startMin; });
-            var dayS = periodsSorted[0].startMin;
-            var dayE = periodsSorted[periodsSorted.length - 1].endMin;
-            var endBoundaries = periodsSorted.map(function (p) { return p.endMin; })
-                                             .sort(function (a, b) { return a - b; });
-            var findPeriodIdx = function (cStart, cEnd) {
-                // First period overlapping the column's time span (handles small gaps).
-                for (var i = 0; i < periodsSorted.length; i++) {
-                    var p = periodsSorted[i];
-                    if (p.startMin < cEnd && p.endMin > cStart) return p.idx;
-                }
-                return -1;
-            };
-            var columns = []; // { startMin, endMin, idx }
-            var t = dayS, guard = 0;
-            while (t < dayE && guard++ < 2000) {
-                var nextEnd = null;
-                for (var e2 = 0; e2 < endBoundaries.length; e2++) {
-                    if (endBoundaries[e2] > t) { nextEnd = endBoundaries[e2]; break; }
-                }
-                var step = t + inc;
-                if (nextEnd != null && nextEnd < step) step = nextEnd; // don't cross a period end
-                if (step <= t) step = Math.min(t + inc, dayE);
-                columns.push({ startMin: t, endMin: step, idx: findPeriodIdx(t, step) });
-                t = step;
-            }
-
-            // Increment labels (tier-2) — one per column.
-            columns.forEach(function (col) { incRow.push(incLabel(col.startMin)); });
-
-            // Group consecutive columns of the same period → one merged activity
-            // cell + one merged period super-header.
-            var runs = [];
-            columns.forEach(function (col, k) {
-                var abs = 1 + k;
-                var last = runs.length ? runs[runs.length - 1] : null;
-                if (last && last.idx === col.idx && col.idx !== -1) last.colEnd = abs;
-                else runs.push({ idx: col.idx, colStart: abs, colEnd: abs });
-            });
-
-            // Tier-1 period super-header.
-            for (var pc = 0; pc <= columns.length; pc++) periodRow[pc] = (pc === 0 ? 'Bunk' : '');
-            runs.forEach(function (run) {
-                if (run.idx < 0) return;
-                periodRow[run.colStart] = slotMeta[run.idx].label;
-                if (run.colEnd > run.colStart) merges.push({ s: { r: periodRowIdx, c: run.colStart }, e: { r: periodRowIdx, c: run.colEnd } });
+            // Each period's increment cadence is anchored to its OWN start time
+            // and steps by `inc`, clamped to the period end. So a period that
+            // starts at 12:20 reads 12:20, 12:30, 12:40… (it does not continue a
+            // previous period's off-grid 12:15 cadence). The activity is merged
+            // across all of its period's increment columns.
+            var slotCols = []; // per slot: { colStart, colEnd, count }
+            var colCursor = 1;
+            slotMeta.forEach(function (sm) {
+                var times = [];
+                for (var t = sm.startMin; t < sm.endMin; t += inc) times.push(t);
+                if (!times.length) times.push(sm.startMin);
+                var colStart = colCursor;
+                times.forEach(function (tk, k) {
+                    periodRow.push(k === 0 ? sm.label : '');
+                    incRow.push(incLabel(tk));
+                });
+                var colEnd = colStart + times.length - 1;
+                slotCols.push({ colStart: colStart, colEnd: colEnd, count: times.length });
+                if (times.length > 1) merges.push({ s: { r: periodRowIdx, c: colStart }, e: { r: periodRowIdx, c: colEnd } });
+                colCursor = colEnd + 1;
             });
             // Vertical merge for the 'Bunk' corner across both header rows.
             merges.push({ s: { r: periodRowIdx, c: 0 }, e: { r: incRowIdx, c: 0 } });
@@ -4532,11 +4499,11 @@ function buildExcelRows(item) {
             bunks.forEach(function (bk, bi) {
                 var rowAbs = rows.length;
                 var line = [bk];
-                for (var fc = 0; fc < columns.length; fc++) line.push('');
-                runs.forEach(function (run) {
-                    if (run.idx < 0) return;
-                    line[run.colStart] = grid[run.idx + 1][bi + 1] || '';
-                    if (run.colEnd > run.colStart) merges.push({ s: { r: rowAbs, c: run.colStart }, e: { r: rowAbs, c: run.colEnd } });
+                slotMeta.forEach(function (sm, si2) {
+                    var val = grid[si2 + 1][bi + 1] || '';
+                    var sc = slotCols[si2];
+                    for (var k = 0; k < sc.count; k++) line.push(k === 0 ? val : '');
+                    if (sc.count > 1) merges.push({ s: { r: rowAbs, c: sc.colStart }, e: { r: rowAbs, c: sc.colEnd } });
                 });
                 rows.push(line);
             });
