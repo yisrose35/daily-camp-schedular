@@ -4180,7 +4180,10 @@ function buildPolishedWorkbook(sel) {
     if (_activeView === 'week') {
         sheetSpecs = [{ name: 'Week', rows: buildWeekExcelRows(sel) }];
     } else if (combinedAllBunks) {
-        var combinedRows = buildCombinedExcelRows(sel);
+        // "Combine all bunks" = the WHOLE camp on one sheet, regardless of which
+        // divisions happen to be selected in the sidebar.
+        var allCampDivs = Object.keys(getDivisions());
+        var combinedRows = buildCombinedExcelRows(allCampDivs);
         // If the combined builder found nothing (no resolvable bunks/activities),
         // fall back to per-division sheets so the export is never empty.
         sheetSpecs = (combinedRows && combinedRows.length)
