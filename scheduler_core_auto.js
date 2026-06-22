@@ -32838,6 +32838,22 @@
             }
         } catch (_e687) { try { warn('[STEP 6.87 EDGE-CLIP] error: ' + (_e687 && _e687.message)); } catch (_x) {} }
 
+        // ★ STEP 6.88 — FINAL FREQUENCY BACKSTOP. After every placement/healing
+        //   pass, guarantee no max/exact ceiling or frequencyDays cooldown the user
+        //   set survives — regardless of which writer (generic-layout fill,
+        //   recapture, perfection extend, …) produced the slot. DEMOTE-ONLY → Free,
+        //   mirroring FN-15 / FN-19/21. Runs BEFORE STEP 6.9 so the demoted slots
+        //   are excluded from the authoritative rotation counts below.
+        try {
+            if (window.SchedulerCoreUtils?.enforceFrequencyLimitsSweep) {
+                var _freqSweep = window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: currentDate || window.currentScheduleDate || '' });
+                if (_freqSweep && _freqSweep.count > 0) {
+                    log('[STEP 6.88 FREQ-SWEEP] demoted ' + _freqSweep.count + ' over-limit/cooldown placement(s) → Free');
+                    try { warnings.push({ type: 'frequency_demotions', count: _freqSweep.count, items: _freqSweep.demotions }); } catch (_ewf) {}
+                }
+            }
+        } catch (_eFreqSweep) { try { warn('[STEP 6.88 FREQ-SWEEP] error: ' + (_eFreqSweep && _eFreqSweep.message)); } catch (_x) {} }
+
         // ★ STEP 6.9 — AUTHORITATIVE ROTATION COUNT (relocated from STEP 5). Runs AFTER every
         //   post-complete pass mutated window.scheduleAssignments, so rotation counts reflect
         //   the ACTUAL final schedule — not the pre-pass grid the solver "intended". Refreshes

@@ -2627,6 +2627,159 @@
     };
 
     // =========================================================================
+    // ★ FINAL FREQUENCY BACKSTOP SWEEP — provably-perfect ceiling/cooldown ★
+    // =========================================================================
+    // The write trust points (commitWriteIfLegal / commitManualWriteIfLegal) gate
+    // most placements, but BOTH pipelines also have direct writers that bypass
+    // them (auto: generic-layout fill, recapture, perfection passes; manual:
+    // fillBlock trusts the upstream pick). Each of those has its own inline
+    // checks, but to keep max / exact-ceiling / cooldown PERFECT regardless of
+    // which writer (current or future) produced a slot, this DEMOTE-ONLY sweep
+    // runs on the FINAL grid at the end of generation — exactly the idiom the
+    // auto pipeline already uses for sharing/capacity (FN-15, FN-19/21).
+    //
+    // It keeps the FIRST N legal occurrences and frees the EXCESS, so it can
+    // never itself create a violation and never over-demotes a legal placement
+    // (the planner placed at most N; if it placed more, those extras ARE the
+    // violation). Cooldown: if a prior saved day holds this activity within the
+    // cooldown window, EVERY occurrence today is freed (it can't be here at all).
+    //
+    // Never touches: user pins, league/trip/chinuch/prep, manual overrides,
+    // post-edit slots, or any activity WITHOUT a configured limit — so the blast
+    // radius is exactly the activities the user put limits on. Clears trailing
+    // continuation slots of any demoted multi-period block.
+    //
+    // Returns { demotions:[{bunk,slot,activity,kind}], count }.
+    Utils.enforceFrequencyLimitsSweep = function(opts) {
+        opts = opts || {};
+        var result = { demotions: [], count: 0 };
+        try {
+            var sa = window.scheduleAssignments || {};
+            var divisions = window.divisions || {};
+            var today = opts.date || (window.currentScheduleDate
+                ? (typeof window.currentScheduleDate === 'string'
+                    ? window.currentScheduleDate
+                    : window.currentScheduleDate.toISOString().slice(0, 10))
+                : null);
+
+            var b2g = {};
+            Object.keys(divisions).forEach(function(g) {
+                var info = divisions[g];
+                if (info && Array.isArray(info.bunks)) {
+                    info.bunks.forEach(function(b) { b2g[String(b)] = g; });
+                }
+            });
+
+            function propsFor(act) {
+                var p = (window.activityProperties && window.activityProperties[act]) || null;
+                if (!p && typeof window.getSpecialActivityByName === 'function') {
+                    try { p = window.getSpecialActivityByName(act) || null; } catch (_e) { p = null; }
+                }
+                return p;
+            }
+            function freeEntry(reason) {
+                return { field: 'Free', sport: null, _activity: 'Free', _autoMode: true,
+                    _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
+            }
+            // Gap (in calendar days) to the most recent PRIOR saved day holding
+            // this activity for the bunk — mirrors Phase 4.9's cooldown look-back.
+            // Reads saved days directly (NOT getDaysSinceActivity, which returns 0
+            // when the activity is also present today and would mask the prior-day
+            // violation we are here to catch).
+            var _allDaily = null;
+            function priorDayGap(bunk, act) {
+                if (!today) return null;
+                if (_allDaily === null) _allDaily = (window.loadAllDailyData ? window.loadAllDailyData() : {}) || {};
+                var keys = Object.keys(_allDaily).sort();
+                for (var x = keys.length - 1; x >= 0; x--) {
+                    if (keys[x] >= today) continue;
+                    var slots = _allDaily[keys[x]] && _allDaily[keys[x]].scheduleAssignments
+                        && _allDaily[keys[x]].scheduleAssignments[String(bunk)];
+                    if (Array.isArray(slots) && slots.some(function(s) {
+                        return s && !s.continuation && (s._activity === act || s.field === act);
+                    })) {
+                        return Math.floor((new Date(today) - new Date(keys[x])) / 86400000);
+                    }
+                }
+                return null;
+            }
+
+            Object.keys(sa).forEach(function(bunk) {
+                var arr = sa[bunk];
+                if (!Array.isArray(arr)) return;
+                var grade = b2g[String(bunk)] || null;
+                var todayKept = Object.create(null); // act -> kept (legal) count today
+
+                for (var i = 0; i < arr.length; i++) {
+                    var e = arr[i];
+                    if (!e || e.continuation) continue;
+                    // Protected / out-of-scope writers — never demote.
+                    if (e._pinned || e._league || e._isTrip || e._isChinuch || e._isPrep
+                        || e._staggerReserved || e._bunkOverride || e._postEdit) continue;
+                    var act = e._activity || (e.field && e.field !== 'Free' ? e.field : null);
+                    if (!act || act === 'Free') continue;
+                    var props = propsFor(act);
+                    if (!props) continue;
+
+                    var maxUsage = parseInt(props.maxUsage, 10) || 0;
+                    if (grade && props.maxUsagePerGrade && parseInt(props.maxUsagePerGrade[grade], 10) > 0) {
+                        maxUsage = parseInt(props.maxUsagePerGrade[grade], 10);
+                    }
+                    var exactFreq = parseInt(props.exactFrequency, 10) || 0;
+                    if (grade && props.exactFrequencyPerGrade && parseInt(props.exactFrequencyPerGrade[grade], 10) > 0) {
+                        exactFreq = parseInt(props.exactFrequencyPerGrade[grade], 10);
+                    }
+                    var cd = parseInt(props.frequencyDays, 10) || 0;
+                    if (maxUsage <= 0 && exactFreq <= 0 && cd <= 0) continue; // no limit → leave as-is
+
+                    var kept = todayKept[act] || 0;
+                    var kind = null;
+
+                    if (maxUsage > 0) {
+                        var priorM = (Utils.getPeriodActivityCount
+                            ? Utils.getPeriodActivityCount(bunk, act, props.maxUsagePeriod || 'half', today) : 0) || 0;
+                        if (priorM + kept >= maxUsage) kind = 'max';
+                    }
+                    if (!kind && exactFreq > 0) {
+                        var priorE = (Utils.getPeriodActivityCount
+                            ? Utils.getPeriodActivityCount(bunk, act, props.exactFrequencyPeriod || '1week', today) : 0) || 0;
+                        if (priorE + kept >= exactFreq) kind = 'exact';
+                    }
+                    if (!kind && cd > 0) {
+                        var gap = priorDayGap(bunk, act);
+                        if (gap !== null && gap > 0 && gap < cd) kind = 'cooldown';
+                    }
+
+                    if (kind) {
+                        var reason = 'freq_' + kind + '_sweep';
+                        arr[i] = freeEntry(reason);
+                        for (var k = i + 1; k < arr.length; k++) {
+                            if (arr[k] && arr[k].continuation) arr[k] = freeEntry(reason);
+                            else break;
+                        }
+                        result.demotions.push({ bunk: String(bunk), slot: i, activity: act, kind: kind });
+                        result.count++;
+                    } else {
+                        todayKept[act] = kept + 1;
+                    }
+                }
+            });
+
+            if (result.count > 0) {
+                try {
+                    console.warn('[FREQ-SWEEP] demoted ' + result.count + ' over-limit/cooldown placement(s) → Free: '
+                        + result.demotions.slice(0, 10).map(function(d) {
+                            return d.bunk + ' ' + d.activity + ' (' + d.kind + ')';
+                        }).join(', ') + (result.demotions.length > 10 ? ', …' : ''));
+                } catch (_) {}
+            }
+        } catch (e) {
+            try { console.warn('[enforceFrequencyLimitsSweep] non-fatal:', e && e.message); } catch (_) {}
+        }
+        return result;
+    };
+
+    // =========================================================================
     // ★ FLOOR SHORTFALL REPORT — minimum / exact-floor "best-effort + report" ★
     // =========================================================================
     // Ceilings and cooldowns are hard-gated at the write trust points
