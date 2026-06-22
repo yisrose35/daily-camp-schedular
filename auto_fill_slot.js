@@ -322,11 +322,14 @@
         const lastDoneByAct = {};
         const todayActs = new Set();
 
-        // Live slots for TODAY from window.scheduleAssignments
+        // Live slots for TODAY from window.scheduleAssignments. Stored LOWERCASED so
+        // the same-day-repeat guard is case-insensitive — camps often have the same
+        // special entered with different capitalization ("Off The Wall" vs "off the
+        // wall"); without this they'd be treated as different and double-book.
         (window.scheduleAssignments?.[bunk] || []).forEach(e => {
             if (!e || e.continuation || e._isTransition) return;
             const a = e._activity || e.activity || e.sport || '';
-            if (a && a !== 'Free' && !a.toLowerCase().includes('transition')) todayActs.add(a);
+            if (a && a !== 'Free' && !a.toLowerCase().includes('transition')) todayActs.add(a.toLowerCase());
         });
 
         // Historical data (skip today — we use live data above)
@@ -366,7 +369,7 @@
             const act = c.activity;
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
-            if (todayActs.has(act)) return null;     // already doing it today
+            if (todayActs.has(String(act).toLowerCase())) return null;     // already doing it today (case-insensitive)
             // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
             //   against a period-windowed count, NOT the lifetime countsByAct — else
             //   the cap silently degrades into a lifetime cap and permanently blocks
