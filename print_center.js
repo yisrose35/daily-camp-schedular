@@ -644,18 +644,51 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
 // keep it in `_specialLocation` / `_customField` (and `field` may hold the
 // special's NAME, not its room). Prefer the real special location so e.g.
 // Baking shows its "Baking Shop".
+// Look up a special's CONFIGURED room by activity name. Manual mode stores
+// field = the special's NAME (not its room); the room lives in the special
+// config, resolved via getLocationForActivity (scheduler_core_main.js). Cached
+// per name since the specials list is stable within a print session.
+var _pcSpecialLocCache = {};
+function pcConfiguredSpecialLocation(act) {
+    if (!act) return '';
+    if (Object.prototype.hasOwnProperty.call(_pcSpecialLocCache, act)) return _pcSpecialLocCache[act];
+    var loc = '';
+    try {
+        if (typeof window.getLocationForActivity === 'function') {
+            var l = window.getLocationForActivity(act);
+            if (l && typeof l === 'string') loc = l;
+        }
+    } catch (e) { /* ignore */ }
+    _pcSpecialLocCache[act] = loc;
+    return loc;
+}
+
 function pcResolveLocation(entry) {
     if (!entry) return '';
+    var act = entry._activity || entry.sport || '';
     var loc = entry._specialLocation || entry._customField || entry._location || '';
-    if (!loc) loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    if (!loc) {
+        var f = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+        if (f && f !== 'Free') loc = f;
+    }
+    // No real location, or it just echoes the activity name (manual specials):
+    // fall back to the special's configured room.
+    if ((!loc || loc === act) && act) {
+        var cfg = pcConfiguredSpecialLocation(act);
+        if (cfg) loc = cfg;
+    }
     if (!loc || loc === 'Free') return '';
     return loc;
 }
-// A special's location lives in _specialLocation/_customField. For those we
-// always show "Activity - Location" (even when the room name contains the
-// activity, e.g. Baking → Baking Shop); sports keep the substring dedup.
+// A special's location lives in _specialLocation/_customField or the special
+// config. For those we always show "Activity - Location" (even when the room
+// name contains the activity, e.g. Baking → Baking Shop); sports keep the
+// substring dedup.
 function pcHasSpecialLoc(entry) {
-    return !!(entry && (entry._specialLocation || entry._customField || entry._location));
+    if (!entry) return false;
+    if (entry._specialLocation || entry._customField || entry._location) return true;
+    var act = entry._activity || entry.sport || '';
+    return !!(act && pcConfiguredSpecialLocation(act));
 }
 
 function formatEntry(entry) {
