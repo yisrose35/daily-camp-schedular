@@ -1269,29 +1269,24 @@ function shouldHighlightBunk(bunkName) {
         const activity = entry._activity || '';
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
-       if (entry._h2h) return entry._gameLabel || sport || 'League Game';
-        // ★ Resolve the real facility for an activity whose `field` is just its own
-        //   name (e.g. a Special placed by name) so every cell shows Name – Facility.
-        //   Sports already carry a real field below; this fills the gap for specials.
-        const _facility = function () {
-            let loc = entry._specialLocation || '';
-            if (!loc && typeof window.getLocationForActivity === 'function') {
-                try { loc = window.getLocationForActivity(activity) || ''; } catch (_e) { loc = ''; }
-            }
-            loc = fieldLabel(loc) || loc || '';
-            return (loc && loc !== activity && loc !== field) ? loc : '';
-        };
-// * FIX: Bunk overrides set _fixed but also have a meaningful field — show both
-if (entry._fixed) {
-    if (field && activity && field !== activity) return `${field} – ${activity}`;
-    if (field && sport && field !== sport) return `${field} – ${sport}`;
-    const _loc = _facility();
-    return _loc ? `${activity || field} – ${_loc}` : (activity || field);
-}
-if (field && sport && field !== sport) return `${field} – ${sport}`;
-const _loc2 = _facility();
-if (_loc2) return `${activity || field} – ${_loc2}`;
-return activity || field || '';    }
+        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+        // ★ Every cell reads "Activity – Facility" — same order as the print center
+        //   and the auto grid, no matter the source (smart tile, split, general,
+        //   sport, special). e.g. "Basketball – Basketball Court 1", "Baking – Baking Room".
+        //   Name honors multiPart labels and falls back through activity → sport →
+        //   field. Facility uses the shared resolver, which reads a sport's real
+        //   field AND resolves a special whose `field` is just its own name to the
+        //   configured room (via getLocationForActivity).
+        let _name;
+        if (entry._partLabel) _name = entry._partLabel;
+        else if (entry._partNumber && entry._totalParts && activity) _name = `${activity} ${entry._partNumber}/${entry._totalParts}`;
+        else _name = activity || sport || field || entry.event || '';
+        let _facility = (typeof window.getActivityFacilityName === 'function')
+            ? window.getActivityFacilityName(entry) : '';
+        _facility = fieldLabel(_facility) || _facility || '';
+        if (_facility && _facility !== _name) return `${_name} – ${_facility}`;
+        return _name || field || '';
+    }
 
     function getEntryBackground(entry, blockEvent) {
         if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
