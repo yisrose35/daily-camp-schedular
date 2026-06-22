@@ -708,8 +708,10 @@ function formatEntry(entry) {
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
-    var special = pcHasSpecialLoc(entry);
-    if (act && field && act !== field && (special || (field.indexOf(act) === -1 && act.indexOf(field) === -1))) {
+    // Always show "Activity \u2013 Location" (activity name first), for sports AND
+    // specials. Location is dropped only when it's empty or identical to the name
+    // (pcResolveLocation already returns '' when there's no meaningful room).
+    if (act && field && act.toLowerCase() !== field.toLowerCase()) {
         parts.push(label); parts.push(field);
     } else if (field) { parts.push(entry._partLabel ? label : field); }
     else if (act) { parts.push(label); }
@@ -2286,14 +2288,14 @@ function renderAutoDivisionTable(divName, bunks) {
 
             var actText = a.entry._activity || a.entry.sport || '';
             var locText = pcResolveLocation(a.entry);
-            if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
+            if (actText && locText && actText.toLowerCase() === locText.toLowerCase()) locText = '';
             if (!actText && locText) { actText = locText; locText = ''; }
             var nameTxt = actText || '—';
 
             var sharers = '';
             if (a.slotIdx != null && !_hideLocations) {
                 var sh = pcFindFieldSharers(bunk, a.slotIdx, divName);
-                if (sh.length) sharers = ' vs ' + sh.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; }).join(', ');
+                if (sh.length) sharers = ' – vs ' + sh.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; }).join(', ');
             }
             var subTxt = (!_hideLocations && locText) ? locText : '';
 
@@ -2315,8 +2317,10 @@ function renderAutoDivisionTable(divName, bunks) {
             html += '<div class="pc3-tl-block cell-' + a.type + '" style="left:' + pctL(a.startMin).toFixed(2) + '%;width:calc(' + pctW(dur).toFixed(2) + '% - 4px);border-left-color:' + accent + ';" title="' + escHtml(exportTxt + ' (' + dur + ' min)') + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + a.slotIdx + '" data-div="' + escHtml(divName) + '" data-cell-text="' + escHtml(exportTxt) + '">';
             if (splitPre > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPre / dur * 100).toFixed(2) + '%;">Chg</div>';
             html += '<div class="pc3-tl-block-in">';
-            html += '<span class="pc3-tl-name">' + escHtml(nameTxt + sharers) + '</span>';
-            if (subTxt) html += '<span class="pc3-tl-sub">' + escHtml(subTxt) + '</span>';
+            // Location lives on the sub-line; attach the "vs Bunk X" sharers there so
+            // it reads "Court 1 – vs Bunk 2". With no location, sharers ride the name.
+            html += '<span class="pc3-tl-name">' + escHtml(subTxt ? nameTxt : (nameTxt + sharers)) + '</span>';
+            if (subTxt) html += '<span class="pc3-tl-sub">' + escHtml(subTxt + sharers) + '</span>';
             if (dur > inc) html += '<span class="pc3-tl-dur pc3-dur">' + dur + 'm</span>';
             html += '</div>';
             if (splitPost > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPost / dur * 100).toFixed(2) + '%;">Chg</div>';
@@ -2374,7 +2378,7 @@ function renderManualBunksTop(divName, bunks, blocks) {
                     var _sh = pcFindFieldSharers(b, si, divName);
                     if (_sh.length) {
                         var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                        text += ' vs ' + _names.join(', ');
+                        text += ' – vs ' + _names.join(', ');
                     }
                 }
                 if (!text && type === 'free') text = '\u2014';
@@ -3786,7 +3790,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                             var _liveSh = pcFindFieldSharers(bunk, mAct.slotIdx, divName);
                             if (_liveSh.length) {
                                 var _liveNames = _liveSh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                                txt += ' vs ' + _liveNames.join(', ');
+                                txt += ' – vs ' + _liveNames.join(', ');
                             }
                         }
                     }
@@ -3858,7 +3862,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
                     if (_sh.length) {
                         var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                        text += ' vs ' + _names.join(', ');
+                        text += ' – vs ' + _names.join(', ');
                     }
                 }
                 var cls = 'cell-' + type;
@@ -4448,15 +4452,11 @@ function getExportActivityLocation(bunk, slotIdx) {
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
-    var special = pcHasSpecialLoc(entry);
 
-    // If act and field are identical, don't duplicate. For NON-special entries
-    // also collapse when one contains the other; specials keep both (Baking →
-    // Baking Shop) so the location prints.
-    if (act && field && act === field) {
-        return { activity: label, location: '' };
-    }
-    if (!special && act && field && (field.indexOf(act) >= 0 || act.indexOf(field) >= 0)) {
+    // If act and field are identical, don't duplicate. Otherwise always keep both
+    // the activity name and the location (separate export columns), for sports AND
+    // specials (e.g. Basketball → Court 1, Baking → Baking Shop).
+    if (act && field && act.toLowerCase() === field.toLowerCase()) {
         return { activity: label, location: '' };
     }
     // If there's a field but it looks like "Activity – Location", split it

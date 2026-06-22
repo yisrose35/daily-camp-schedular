@@ -1252,6 +1252,27 @@ function shouldHighlightBunk(bunkName) {
         return sharers;
     }
 
+    // ★ Resolve the location/room to DISPLAY next to an activity name. Sports keep
+    //   it in `field`; specials keep it in `_specialLocation`/`_customField`/
+    //   `_location`/`_partLocation` (and `field` may hold the special's NAME). Falls
+    //   back to the special's configured room via getLocationForActivity. Returns ''
+    //   when there's nothing meaningful to show.
+    function resolveEntryLocation(entry) {
+        if (!entry) return '';
+        const name = entry._activity || entry.sport || '';
+        let loc = entry._specialLocation || entry._customField || entry._location || entry._partLocation || '';
+        if (!loc) {
+            const f = fieldLabel(entry.field);
+            if (f && f !== 'Free') loc = f;
+        }
+        // Manual specials store field = the activity name; resolve the configured room.
+        if ((!loc || loc.toLowerCase() === name.toLowerCase()) && name && typeof window.getLocationForActivity === 'function') {
+            try { const cfg = window.getLocationForActivity(name); if (cfg) loc = fieldLabel(cfg) || cfg; } catch (_e) { /* ignore */ }
+        }
+        if (!loc || loc === 'Free') return '';
+        return loc;
+    }
+
     function formatEntry(entry) {
         if (!entry) return '';
         if (entry._isDismissal) return 'Dismissal';
@@ -1266,32 +1287,18 @@ function shouldHighlightBunk(bunkName) {
             const filtered = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== poolLc; });
             return ['Swim'].concat(filtered).join(', ');
         }
-        const activity = entry._activity || '';
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
-       if (entry._h2h) return entry._gameLabel || sport || 'League Game';
-        // ★ Resolve the real facility for an activity whose `field` is just its own
-        //   name (e.g. a Special placed by name) so every cell shows Name – Facility.
-        //   Sports already carry a real field below; this fills the gap for specials.
-        const _facility = function () {
-            let loc = entry._specialLocation || '';
-            if (!loc && typeof window.getLocationForActivity === 'function') {
-                try { loc = window.getLocationForActivity(activity) || ''; } catch (_e) { loc = ''; }
-            }
-            loc = fieldLabel(loc) || loc || '';
-            return (loc && loc !== activity && loc !== field) ? loc : '';
-        };
-// * FIX: Bunk overrides set _fixed but also have a meaningful field — show both
-if (entry._fixed) {
-    if (field && activity && field !== activity) return `${field} – ${activity}`;
-    if (field && sport && field !== sport) return `${field} – ${sport}`;
-    const _loc = _facility();
-    return _loc ? `${activity || field} – ${_loc}` : (activity || field);
-}
-if (field && sport && field !== sport) return `${field} – ${sport}`;
-const _loc2 = _facility();
-if (_loc2) return `${activity || field} – ${_loc2}`;
-return activity || field || '';    }
+        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+        // ★ Every cell shows "Activity – Location" (activity name FIRST), for sports
+        //   AND specials. Manual specials store field = the activity name, so the real
+        //   room is resolved via resolveEntryLocation (special location / configured
+        //   room). Location is dropped only when it's empty or identical to the name.
+        const name = entry._partLabel || entry._activity || sport || field || '';
+        const loc = resolveEntryLocation(entry);
+        if (name && loc && loc.toLowerCase() !== name.toLowerCase()) return `${name} – ${loc}`;
+        return name || loc || '';
+    }
 
     function getEntryBackground(entry, blockEvent) {
         if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
@@ -3657,11 +3664,11 @@ divBlocks.forEach((block, blockIdx) => {
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             // ★ Sports only: if other bunks share this field at this time, show
-            //   "vs Bunk 2, Bunk 3" (no extra dash).
+            //   "Activity – Location – vs Bunk 2, Bunk 3".
             const _sharers = findFieldSharers(bunk, slotIdx, divName);
             if (_sharers.length) {
                 const _names = _sharers.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
-                displayText += ' vs ' + _names.join(', ');
+                displayText += ' – vs ' + _names.join(', ');
             }
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed
