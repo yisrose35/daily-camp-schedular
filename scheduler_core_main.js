@@ -874,6 +874,20 @@
             _specialClaims[lower].push({ startMin, endMin, divName });
         }
 
+        // ★ SAME-DAY SPECIAL TRACKER (per bunk, accumulates across windows in
+        //   processing order). Two purposes, both of which the budget lacked:
+        //   (1) NO DOUBLES — a bunk is never handed a special it already has
+        //       today (the budget ranks every window by UNCHANGING historical
+        //       counts, so the same least-used special was re-picked window
+        //       after window). (2) RESTORE THE A/B SWAP — ranking bunks with
+        //       fewer specials-so-far first means a bunk that already got a
+        //       special this day yields the next window to a bunk that got the
+        //       open activity, so each bunk alternates special↔sport instead of
+        //       the same "deserving" bunks hogging specials in every window.
+        //   Keyed by bunk (globally unique, same as historicalCounts).
+        const _bunkSpecialsToday = {};
+        const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
+
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
 
@@ -929,14 +943,17 @@
             // ★ Higher-priority grades first (no-op unless a special uses priority),
             //   then fairness, then random jitter.
             _bunkRankings.sort((a, b) =>
+                (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
                 (a.score - b.score) || (Math.random() - 0.5));
             _bunkRankings.forEach(entry => {
                 const bk = `${entry.divName}|${entry.bunk}|${startMin}|${endMin}`;
                 const hist = historicalCounts[entry.bunk] || {};
                 const divSpecials = _divSpecialMap.get(entry.divName) || [];
+                const _today = _bunkSpecialsToday[entry.bunk];
                 const candidates = [..._specialPool.entries()]
-                    .filter(([name, rem]) => rem > 0 && divSpecials.includes(name))
+                    .filter(([name, rem]) => rem > 0 && divSpecials.includes(name)
+                        && !(_today && _today.has(name.toLowerCase())))
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
                let _assigned = false;
                for (const [candidateName] of candidates) {
@@ -945,6 +962,8 @@
                     _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
                     _registerClaim(candidateName, startMin, endMin, entry.divName);
                     smartTileBudget[bk] = candidateName;
+                    (_bunkSpecialsToday[entry.bunk] = _bunkSpecialsToday[entry.bunk] || new Set())
+                        .add(candidateName.toLowerCase());
                     _assigned = true;
                     break;
                 }
