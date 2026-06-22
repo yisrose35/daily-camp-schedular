@@ -5346,7 +5346,17 @@
                         if (_wmMin > 0) {
                             const _wmPer = props.minFrequencyPeriod || (_wmCfg && _wmCfg.minFrequencyPeriod) || 'week';
                             const _wmPerN = (_wmPer === 'week') ? '1week' : _wmPer;
-                            _wmOwes = ((getPeriodCount(bunk, s.name, _wmPerN) || 0) < _wmMin);
+                            // AIM-FOR-MAX: protect a scarce must-have from COHORT thinning up to its weekly
+                            // TARGET (= maxUsage when set as a weekly ceiling), not just its min. Otherwise a
+                            // special you want REPEATED (shiur 3×/wk) is stripped from the fill pool after its
+                            // 1st by the lifetime-count cohort rule, so the aim-up layout tile is laid but fails
+                            // 'no-activity-in-subcat' and the climb stalls at 1. Falls back to the min when no
+                            // weekly max is set. (The weekly-MAX ceiling still hard-stops at maxUsage, so this
+                            // only widens pool ELIGIBILITY, never over-places.)
+                            const _wmMaxRaw = parseInt((props.maxUsagePerGrade || {})[grade]) || parseInt(props.maxUsage) || parseInt(_wmCfg && _wmCfg.maxUsage) || 0;
+                            const _wmMaxPer = props.maxUsagePeriod || (_wmCfg && _wmCfg.maxUsagePeriod) || 'half';
+                            const _wmTarget = (_wmMaxRaw > 0 && (_wmMaxPer === 'week' || _wmMaxPer === '1week')) ? Math.max(_wmMin, _wmMaxRaw) : _wmMin;
+                            _wmOwes = ((getPeriodCount(bunk, s.name, _wmPerN) || 0) < _wmTarget);
                         }
                     }
                 } catch (_wmErr) { _wmOwes = false; }
