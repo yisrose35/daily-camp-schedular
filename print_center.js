@@ -4178,10 +4178,12 @@ function buildPolishedWorkbook(sel) {
 
     sheetSpecs.forEach(function (spec) {
         var srcRows = spec.rows || [];
-        // Metadata for the increment two-tier grid (attached by buildExcelRows).
+        // Metadata for the increment grid (attached by buildExcelRows).
         var extraMerges = srcRows._merges || null;
-        var headerRowsSet = srcRows._headerRows || null;   // [periodRowIdx, incRowIdx]
+        var headerRowsSet = srcRows._headerRows || null;
         var freezeRowOverride = srcRows._freezeRow;         // ySplit
+        var freezeColOverride = srcRows._freezeCol;         // xSplit
+        var vertIncrement = !!srcRows._vertIncrement;       // time-on-Y increment layout
         var rows = sanitizeRows(srcRows);
         if (!rows.length) return;
 
@@ -4212,17 +4214,14 @@ function buildPolishedWorkbook(sel) {
 
         // Column widths — size each column to its widest cell so names
         // (incl. non-Latin/Hebrew) are never clipped. Clamp to a sane range.
-        // In increment-grid mode, only the bunk axis (col 0) auto-sizes; the
-        // increment sub-columns stay compact and even (period/activity text
-        // flows across the merged span).
+        // Vertical increment layout: keep the "Time" column (col 1) compact;
+        // auto-size the Period column (0) and every bunk column.
         var cols = [];
         for (var c = 0; c < numCols; c++) {
-            if (headerRowsSet && c > 0) { cols.push({ wch: 8 }); continue; }
+            if (vertIncrement && c === 1) { cols.push({ wch: 9 }); continue; }
             var maxLen = 0;
             for (var rw = 0; rw < rows.length; rw++) {
                 if (rw <= 1) continue; // skip merged title/subtitle rows
-                // In increment mode, ignore the merged header rows for col 0 sizing.
-                if (headerRowsSet && isHeaderRow(rw)) continue;
                 var cellv = rows[rw] && rows[rw][c] != null ? String(rows[rw][c]) : '';
                 if (cellv.length > maxLen) maxLen = cellv.length;
             }
@@ -4249,10 +4248,11 @@ function buildPolishedWorkbook(sel) {
         ];
         if (extraMerges && extraMerges.length) ws['!merges'] = ws['!merges'].concat(extraMerges);
 
-        // Freeze header(s) + time column
+        // Freeze header(s) + the left time/label column(s)
         var ySplit = (freezeRowOverride != null) ? freezeRowOverride : (headerRowIdx >= 0 ? headerRowIdx + 1 : -1);
+        var xSplit = (freezeColOverride != null) ? freezeColOverride : 1;
         if (ySplit >= 0) {
-            ws['!views'] = [{ state: 'frozen', ySplit: ySplit, xSplit: 1 }];
+            ws['!views'] = [{ state: 'frozen', ySplit: ySplit, xSplit: xSplit }];
         }
 
         // Styled cells (only takes effect with xlsx-js-style)
@@ -4277,7 +4277,7 @@ function buildPolishedWorkbook(sel) {
                     }
                     if (isHeader) {
                         ws[addr].s = STY.header;
-                    } else if (cc === 0) {
+                    } else if (cc === 0 || (vertIncrement && cc === 1)) {
                         ws[addr].s = STY.timeCol;
                     } else {
                         var v = (rowVals[cc] || '').toString();
@@ -4526,81 +4526,57 @@ function buildExcelRows(item) {
             });
         }
 
-        // ─── Transpose: time on the X axis, bunks on the Y axis ───
-        // The Excel sheet always breaks each period into the selected time
-        // increment: a merged period super-header on top, the increment times
-        // beneath it, and each activity merged across the increments it spans.
-        // Driven purely by the increment picker (independent of the on-screen
-        // card layout). Falls back to one-column-per-period only if a period is
-        // no longer than a single increment.
+        // ─── Layout: bunks across the top (X), time down the rows (Y) ───
+        // When increments are on, each period is split into increment ROWS:
+        // a "Period" column (the range, merged down its rows) + a "Time" column
+        // (the increment ticks) on the left, then one column per bunk with each
+        // activity merged down the increment rows it spans. Periods anchor to
+        // their own start time (12:20 → 12:20, 12:30…). Falls back to one row
+        // per period when nothing is longer than a single increment.
         var incOn = _timeIncrement > 0 &&
                     slotMeta.some(function (s) { return (s.endMin - s.startMin) > _timeIncrement; });
         if (grid.length > 1 && incOn) {
             var inc = _timeIncrement;
-            // Compact HH:MM (no AM/PM — the period header carries the full range).
             var incLabel = function (min) {
                 var h = Math.floor(min / 60), m = min % 60;
                 var h12 = ((h + 11) % 12) + 1;
                 return h12 + ':' + (m < 10 ? '0' + m : m);
             };
             var merges = [];
-            var periodRowIdx = rows.length;      // tier-1 (period super-header)
-            var incRowIdx = periodRowIdx + 1;    // tier-2 (increment labels)
-            var firstBunkRow = incRowIdx + 1;
+            var headerRowIdx = rows.length;
+            rows.push(['Period', 'Time'].concat(bunks));
 
-            var periodRow = ['Bunk'];
-            var incRow = [''];
-
-            // Each period's increment cadence is anchored to its OWN start time
-            // and steps by `inc`, clamped to the period end. So a period that
-            // starts at 12:20 reads 12:20, 12:30, 12:40… (it does not continue a
-            // previous period's off-grid 12:15 cadence). The activity is merged
-            // across all of its period's increment columns.
-            var slotCols = []; // per slot: { colStart, colEnd, count }
-            var colCursor = 1;
-            slotMeta.forEach(function (sm) {
+            slotMeta.forEach(function (sm, si2) {
                 var times = [];
                 for (var t = sm.startMin; t < sm.endMin; t += inc) times.push(t);
                 if (!times.length) times.push(sm.startMin);
-                var colStart = colCursor;
+                var rowStart = rows.length;
                 times.forEach(function (tk, k) {
-                    periodRow.push(k === 0 ? sm.label : '');
-                    incRow.push(incLabel(tk));
+                    var line = [k === 0 ? sm.label : '', incLabel(tk)];
+                    bunks.forEach(function (bk, bi) {
+                        line.push(k === 0 ? (grid[si2 + 1][bi + 1] || '') : '');
+                    });
+                    rows.push(line);
                 });
-                var colEnd = colStart + times.length - 1;
-                slotCols.push({ colStart: colStart, colEnd: colEnd, count: times.length });
-                if (times.length > 1) merges.push({ s: { r: periodRowIdx, c: colStart }, e: { r: periodRowIdx, c: colEnd } });
-                colCursor = colEnd + 1;
-            });
-            // Vertical merge for the 'Bunk' corner across both header rows.
-            merges.push({ s: { r: periodRowIdx, c: 0 }, e: { r: incRowIdx, c: 0 } });
-
-            rows.push(periodRow);
-            rows.push(incRow);
-
-            bunks.forEach(function (bk, bi) {
-                var rowAbs = rows.length;
-                var line = [bk];
-                slotMeta.forEach(function (sm, si2) {
-                    var val = grid[si2 + 1][bi + 1] || '';
-                    var sc = slotCols[si2];
-                    for (var k = 0; k < sc.count; k++) line.push(k === 0 ? val : '');
-                    if (sc.count > 1) merges.push({ s: { r: rowAbs, c: sc.colStart }, e: { r: rowAbs, c: sc.colEnd } });
-                });
-                rows.push(line);
+                var rowEnd = rows.length - 1;
+                if (times.length > 1) {
+                    // Period label merged down its increment rows.
+                    merges.push({ s: { r: rowStart, c: 0 }, e: { r: rowEnd, c: 0 } });
+                    // Each bunk's activity merged down its increment rows.
+                    bunks.forEach(function (bk, bi) {
+                        merges.push({ s: { r: rowStart, c: 2 + bi }, e: { r: rowEnd, c: 2 + bi } });
+                    });
+                }
             });
 
             rows._merges = merges;
-            rows._headerRows = [periodRowIdx, incRowIdx];
-            rows._freezeRow = firstBunkRow;
+            rows._headerRows = [headerRowIdx];
+            rows._freezeRow = headerRowIdx + 1;
+            rows._freezeCol = 2;
+            rows._vertIncrement = true;
         } else if (grid.length > 1) {
-            var timeLabels = grid.slice(1).map(function (r) { return r[0]; });
-            rows.push(['Bunk'].concat(timeLabels));
-            bunks.forEach(function (bk, bi) {
-                var line = [bk];
-                for (var ri = 1; ri < grid.length; ri++) line.push(grid[ri][bi + 1] || '');
-                rows.push(line);
-            });
+            // Simple: bunks across the top, one row per period (Time | Bunk1 | …).
+            grid.forEach(function (r) { rows.push(r); });
         }
 
     } else if (_activeView === 'bunk') {
