@@ -165,6 +165,28 @@ function _daSmartSwapPostRender(overlay, defaultOn) {
   _gsSync();
 }
 
+// ★ Delete button for the Smart Tile EDIT dialog in Daily Adjustments (matches the
+//   skeleton builder). Removes the tile from the daily override skeleton, saves,
+//   re-renders, and closes the dialog.
+function _daInjectDeleteButton(overlay, tileId) {
+  if (!overlay || !tileId) return;
+  const footer = overlay.querySelector('.da-modal-footer');
+  if (!footer || footer.querySelector('.da-modal-delete')) return;
+  const btn = document.createElement('button');
+  btn.className = 'da-btn da-modal-delete';
+  btn.textContent = '🗑 Delete';
+  btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
+  btn.onclick = function () {
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return x.id !== tileId; });
+    selectedTileId = null;
+    saveDailySkeleton();
+    renderGrid();
+    const c = overlay.querySelector('.da-modal-cancel-x');
+    if (c) c.click(); else overlay.remove();
+  };
+  footer.insertBefore(btn, footer.firstChild);
+}
+
 function daShowModal(config) {
   return new Promise((resolve) => {
     const existing = document.getElementById('da-modal-input-overlay');
@@ -2599,6 +2621,12 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
     style = 'background:#5eead4;color:#115e59;border:2px solid #14b8a6;';
   }
+  // ★ Connected smart tiles (same pairGroup) get a matching colored glow so you can
+  //   see at a glance which two tiles swap together.
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.pairGroup) {
+    const _gc = { '1': '#f59e0b', '2': '#3b82f6', '3': '#10b981', '4': '#a855f7' }[String(ev.smartData.pairGroup)] || '#f59e0b';
+    style += ';box-shadow:0 0 0 3px ' + _gc + ', 0 0 9px ' + _gc + ';';
+  }
   const adjustedHeight = Math.max(height - 2, 24); // ★ v14.0: raised minimum from 18→24
   
   // Night activity styling
@@ -3089,7 +3117,8 @@ function addDropListeners(gridEl) {
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
             { name: 'main1', label: 'Main Activity 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
             { name: 'main2', label: 'Main Activity 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
-            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+            { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
           ],
           postRender: (overlay) => _daSmartSwapPostRender(overlay, false)
         });
@@ -3102,7 +3131,7 @@ function addDropListeners(gridEl) {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: "smart", event: result.main1 + " / " + result.main2, division: divName,
           startTime: result.startTime, endTime: result.endTime,
-          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn },
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null },
           isNightActivity: isNightActivity
         };
       }
@@ -3930,15 +3959,16 @@ async function editTile(id) {
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
         { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
         { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
-        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+        { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: ev.smartData?.pairGroup || '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
       ],
-      postRender: (overlay) => _daSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap))
+      postRender: (overlay) => { _daSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap)); _daInjectDeleteButton(overlay, id); }
     });
     if (!result || !result.main1 || !result.main2) return;
     const _gsOn = result.guaranteeSwap === 'true';
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
-    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn };
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null };
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');

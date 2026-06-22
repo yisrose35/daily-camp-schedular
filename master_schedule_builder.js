@@ -490,6 +490,25 @@ function _mbSmartSwapPostRender(overlay, defaultOn) {
   _gsSync();
 }
 
+// ★ Delete button for the Smart Tile EDIT dialog — it previously had none (you had
+//   to cancel and use the tile's action bar). Injected into the modal footer;
+//   deletes the tile via the existing deleteTile() and closes the dialog.
+function _mbInjectDeleteButton(overlay, tileId) {
+  if (!overlay || !tileId) return;
+  const footer = overlay.querySelector('.ms-modal-footer');
+  if (!footer || footer.querySelector('.ms-modal-delete')) return;
+  const btn = document.createElement('button');
+  btn.className = 'ms-btn ms-modal-delete';
+  btn.textContent = '🗑 Delete';
+  btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
+  btn.onclick = function () {
+    if (typeof deleteTile === 'function') deleteTile(tileId);
+    const c = overlay.querySelector('.ms-modal-cancel');
+    if (c) c.click(); else overlay.remove();
+  };
+  footer.insertBefore(btn, footer.firstChild);
+}
+
 function showConfirm(message) {
   return new Promise((resolve) => {
     const existing = document.getElementById('ms-modal-overlay');
@@ -1088,7 +1107,7 @@ async function editTile(id) {
         { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
         { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: ev.smartData?.pairGroup || '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
       ],
-      postRender: (overlay) => _mbSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap))
+      postRender: (overlay) => { _mbSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap)); _mbInjectDeleteButton(overlay, ev.id); }
     });
     if (!result || !result.main1 || !result.main2) return;
     const _gsOn = result.guaranteeSwap === 'true';
