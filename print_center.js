@@ -1640,7 +1640,6 @@ function buildMainUI() {
                 '<div class="pcx-menu" id="pc3-output-menu">' +
                     '<div class="pcx-menu-label">Download</div>' +
                     '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
-                    '<button onclick="window._pc3ExportCSV && window._pc3ExportCSV();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'CSV</button>' +
                     '<div class="pcx-menu-label">Print</div>' +
                     '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
@@ -4383,22 +4382,20 @@ function exportExcel() {
     var dateStr = window.currentScheduleDate || new Date().toISOString().split('T')[0];
     readDesignValues();
 
-    var csvFallback = function () {
-        var csv = buildCSV(sel);
-        downloadFile(csv, 'schedule_' + dateStr + '.csv', 'text/csv');
-    };
-
-    // ALWAYS try to load SheetJS first — the Print Center page does not include
-    // it statically, so checking `typeof XLSX` before loading would force every
-    // export down the CSV path (and never produce a styled .xlsx).
+    // ALWAYS load SheetJS first — the Print Center page doesn't include it
+    // statically, so checking `typeof XLSX` before loading would never produce
+    // an .xlsx. No CSV fallback: if SheetJS can't load, tell the user.
     loadStyledXLSX().then(function () {
-        if (typeof XLSX === 'undefined') { csvFallback(); return; } // CDN unreachable
+        if (typeof XLSX === 'undefined') {
+            alert('Could not load the Excel library (network blocked). Please check your connection and try again.');
+            return;
+        }
         try {
             var wb = buildPolishedWorkbook(sel);
             XLSX.writeFile(wb, 'schedule_' + dateStr + '.xlsx');
         } catch (e) {
-            try { console.error('[PrintCenter] Excel export failed, falling back to CSV:', e); } catch (_e) {}
-            csvFallback();
+            try { console.error('[PrintCenter] Excel export failed:', e); } catch (_e) {}
+            alert('Excel export failed: ' + (e && e.message ? e.message : e));
         }
     });
 }
@@ -5583,16 +5580,6 @@ window._pc3ApplyPreset = function (presetId) {
     var drawerScroll = el('pc3-drawer-scroll');
     if (drawerScroll) drawerScroll.innerHTML = buildAdvancedSections();
     liveRefresh();
-};
-
-window._pc3ExportCSV = function () {
-    try {
-        var sel = (typeof getSelectedItems === 'function') ? getSelectedItems() : [];
-        if (!sel || !sel.length) { alert('Select at least one item to export.'); return; }
-        var csv = buildCSV(sel);
-        var stamp = (window.currentScheduleDate || new Date().toISOString().slice(0, 10));
-        downloadFile(csv, 'schedule-' + stamp + '.csv', 'text/csv;charset=utf-8;');
-    } catch (e) { console.error('[PrintCenter] CSV export failed', e); alert('CSV export failed: ' + e.message); }
 };
 window._pc3ToggleFullscreen = function () {
     _isFullscreen = !_isFullscreen;
