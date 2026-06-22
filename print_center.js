@@ -4757,16 +4757,9 @@ function buildCombinedSheetSpecs(divNames) {
         return h12 + ':' + (m < 10 ? '0' + m : m);
     };
 
-    // Chunk grade blocks into sheets (~12 bunks each; a grade is never split
-    // unless it alone exceeds the chunk size).
-    var CHUNK = 12;
-    var chunks = [], cur = [];
-    gradeBlocks.forEach(function (gb) {
-        var curCount = cur.reduce(function (n, g) { return n + g.cols.length; }, 0);
-        if (cur.length && curCount + gb.cols.length > CHUNK) { chunks.push(cur); cur = []; }
-        cur.push(gb);
-    });
-    if (cur.length) chunks.push(cur);
+    // Every bunk in the camp on ONE sheet, in a single long row across the top
+    // (col B = first bunk, col C = second, … to the last bunk).
+    var chunks = [gradeBlocks];
 
     var specs = [];
     chunks.forEach(function (chunkBlocks, ci) {
