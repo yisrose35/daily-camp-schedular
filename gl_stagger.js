@@ -28,7 +28,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '0.3.0';
+    const VERSION = '0.3.1';
 
     // Does interval [s,e) fit inside tile t's layer window? (no window ⇒ unconstrained)
     function inWindow(t, s, e) {
@@ -532,8 +532,16 @@
         var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
         var label = (ctx && ctx.sportLabel) || 'Sport';
         var canConvert = (ctx && typeof ctx.canConvert === 'function') ? ctx.canConvert : function () { return true; };
+        // optional capacity fns — when present, the blocker may ALSO be relocated by swapping with a
+        // FILLED special (its concrete activity's seat is re-validated at the slot it moves INTO, and the
+        // ledger entry is moved), which gives the pass real partners even after every special is filled.
+        // Without them, only an already-dead generic special is a partner (no ledger to keep balanced).
+        var capFits = (ctx && typeof ctx.capFits === 'function') ? ctx.capFits : null;
+        var recordUse = (ctx && typeof ctx.recordUse === 'function') ? ctx.recordUse : null;
+        var removeUse = (ctx && typeof ctx.removeUse === 'function') ? ctx.removeUse : null;
+        var canMoveFilled = !!(capFits && recordUse && removeUse);
         if (!gate) return { converted: 0, relocations: 0, attempts: 0, bunks: bunks.length };
-        var converted = 0, relocations = 0, attempts = 0;
+        var converted = 0, relocations = 0, attempts = 0, filledMoves = 0;
 
         function tmplExcept(tiles, a, b) {
             var out = [];
@@ -576,20 +584,34 @@
                             var P = tiles[pk];
                             if (!P || P === B || P === W) continue;
                             if (P.kind !== 'special') continue;                                         // a sport partner would re-block W
-                            if (!(P.generic === true && !P._concrete)) continue;                        // movable, unfilled (already dead)
                             if (P.durationMin !== B.durationMin) continue;                              // equal-dur ⇒ wall-to-wall safe
                             if (!inWindow(B, P.startMin, P.endMin) || !inWindow(P, B.startMin, B.endMin)) continue;
+                            var pFilled = !!P._concrete;
+                            var pDead = (P.generic === true && !P._concrete);
+                            if (!pDead && !(pFilled && canMoveFilled)) continue;                        // dead-generic always; filled only with a capacity ledger
                             attempts++;
-                            swapTimes(B, P);                                                            // simulate B↔P
+                            // a FILLED partner carries a concrete activity with a live seat claim — moving it
+                            // means re-validating that seat at the slot it moves INTO (B's old slot) and moving
+                            // the ledger entry. Build a minimal candidate from the tile.
+                            var pCand = null, pOldS = P.startMin, pOldE = P.endMin;
+                            if (pFilled) {
+                                pCand = { name: P._concrete, location: (P._fillLoc != null ? P._fillLoc : null), subcategory: P.subcat };
+                                try { removeUse(pCand, bunk.grade, pOldS, pOldE); } catch (_e) {}
+                                var okCap = false; try { okCap = capFits(pCand, bunk.grade, B.startMin, B.endMin); } catch (_e) { okCap = false; }
+                                if (!okCap) { try { recordUse(pCand, bunk.grade, pOldS, pOldE); } catch (_e) {} continue; }  // can't re-seat → restore + skip
+                            }
+                            swapTimes(B, P);                                                            // simulate B↔P (P now at B's old slot)
                             var okBnew = sportLegalAt(tiles, B.startMin, B.endMin, B, null);            // blocker legal at its new slot
                             var okW = sportLegalAt(tiles, W.startMin, W.endMin, W, null);               // a Sport now legal at W
                             if (okBnew && okW) {
-                                B._origin = 'reorder-relocate'; P._origin = 'reorder-partner';
+                                if (pFilled) { try { recordUse(pCand, bunk.grade, P.startMin, P.endMin); } catch (_e) {} filledMoves++; }  // P's seat at its NEW slot
+                                B._origin = 'reorder-relocate'; P._origin = pFilled ? 'reorder-partner-filled' : 'reorder-partner';
                                 toSport(W);
                                 converted++; relocations++; passConverts++; doneW = true;
                                 break;
                             }
-                            swapTimes(B, P);                                                            // restore
+                            swapTimes(B, P);                                                            // restore times
+                            if (pFilled) { try { recordUse(pCand, bunk.grade, pOldS, pOldE); } catch (_e) {} }              // restore P's seat at its old slot
                         }
                     }
                 }
@@ -597,7 +619,7 @@
             }
             tiles.sort(function (a, b) { return a.startMin - b.startMin; });
         }
-        return { converted: converted, relocations: relocations, attempts: attempts, bunks: bunks.length };
+        return { converted: converted, relocations: relocations, filledMoves: filledMoves, attempts: attempts, bunks: bunks.length };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport };

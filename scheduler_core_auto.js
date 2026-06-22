@@ -19015,10 +19015,12 @@
                                         var _noSport = _rcNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
                                         _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
                                     });
-                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
+                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
                                     if (_rcRes && _rcRes.converted) {
                                         _glFill.reorderConverted = _rcRes.converted;
-                                        log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s), ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
+                                        log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s)' + ((_rcRes.filledMoves || 0) ? ', ' + _rcRes.filledMoves + ' by moving a filled special into the freed slot' : '') + ', ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
+                                    } else if (_rcRes && _rcRes.attempts) {
+                                        log('[GENERIC-REORDER-CONVERT] 0 rescued — examined ' + _rcRes.attempts + ' blocker-swap candidate(s), none freed a spacing-legal window (the blocker or the freed slot would be mis-spaced, or the displaced activity had no seat at its new slot)');
                                     }
                                 }
                             } catch (_glRcErr) { try { warn('[GENERIC-REORDER-CONVERT] error — left as-is: ' + (_glRcErr && _glRcErr.message)); } catch (_e) {} }

@@ -137,3 +137,60 @@ test('stress: many dead specials + blockers — terminates, dead count drops, no
     assert.ok(after < before, 'dead-special count dropped (' + before + '→' + after + ')');
     bunks.forEach(bk => assert.ok(noOverlap(bk.tiles), 'no overlap'));
 });
+
+// a seat ledger: capFits returns a fixed result; record/remove are tracked so we can assert balance
+function makeLedger(capResult) {
+    const removed = [], recorded = [];
+    return {
+        removed, recorded,
+        capFits: () => capResult,
+        recordUse: (cand, grade, s, e) => recorded.push([cand.name, s, e]),
+        removeUse: (cand, grade, s, e) => removed.push([cand.name, s, e]),
+    };
+}
+
+test('FILLED partner: relocate the blocker by swapping a filled special (seat re-validated + ledger moved)', () => {
+    const B = tile('sport', null, 40, 60, 100);
+    const W = tile('special', 'food', 10, 110, 120);
+    const P = tile('special', 'uncategorized', 40, 200, 240, { _concrete: 'Baking', generic: false, name: 'Baking' });
+    const tiles = [B, W, P];
+    const L = makeLedger(true);
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon, capFits: L.capFits, recordUse: L.recordUse, removeUse: L.removeUse });
+    assert.strictEqual(r.converted, 1);
+    assert.strictEqual(r.filledMoves, 1, 'one filled special moved');
+    assert.strictEqual(W.kind, 'sport');
+    assert.strictEqual(B.startMin, 200, 'blocker took the partner slot');
+    assert.strictEqual(P.startMin, 60, 'filled partner took the blocker slot');
+    assert.strictEqual(P._concrete, 'Baking', 'partner keeps its activity');
+    assert.strictEqual(P.kind, 'special');
+    assert.deepStrictEqual(L.removed, [['Baking', 200, 240]], 'old seat removed once');
+    assert.deepStrictEqual(L.recorded, [['Baking', 60, 100]], 'seat recorded at the new slot');
+    assert.ok(noOverlap(tiles));
+});
+
+test('FILLED partner: seat re-validation fails → no move, ledger restored exactly', () => {
+    const B = tile('sport', null, 40, 60, 100);
+    const W = tile('special', 'food', 10, 110, 120);
+    const P = tile('special', 'uncategorized', 40, 200, 240, { _concrete: 'Baking', generic: false, name: 'Baking' });
+    const tiles = [B, W, P];
+    const L = makeLedger(false);                 // no seat for Baking at the slot it would move into
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon, capFits: L.capFits, recordUse: L.recordUse, removeUse: L.removeUse });
+    assert.strictEqual(r.converted, 0, 'no seat → no rescue');
+    assert.strictEqual(W.kind, 'special');
+    assert.strictEqual(B.startMin, 60, 'blocker unmoved');
+    assert.strictEqual(P.startMin, 200, 'partner unmoved');
+    assert.strictEqual(P._concrete, 'Baking');
+    assert.deepStrictEqual(L.removed, [['Baking', 200, 240]], 'removed once during the trial');
+    assert.deepStrictEqual(L.recorded, [['Baking', 200, 240]], 'restored to the SAME slot (balanced)');
+});
+
+test('FILLED partner is ignored when no capacity ledger is supplied (back-compat)', () => {
+    const B = tile('sport', null, 40, 60, 100);
+    const W = tile('special', 'food', 10, 110, 120);
+    const P = tile('special', 'uncategorized', 40, 200, 240, { _concrete: 'Baking', generic: false, name: 'Baking' });
+    const tiles = [B, W, P];
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon }); // no capFits/recordUse/removeUse
+    assert.strictEqual(r.converted, 0, 'a filled partner needs a ledger; none here');
+    assert.strictEqual(W.kind, 'special');
+    assert.strictEqual(P.startMin, 200);
+});
