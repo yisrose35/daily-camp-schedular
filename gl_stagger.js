@@ -28,7 +28,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '0.3.2';
+    const VERSION = '0.4.0';
 
     // Does interval [s,e) fit inside tile t's layer window? (no window ⇒ unconstrained)
     function inWindow(t, s, e) {
@@ -540,8 +540,12 @@
         var recordUse = (ctx && typeof ctx.recordUse === 'function') ? ctx.recordUse : null;
         var removeUse = (ctx && typeof ctx.removeUse === 'function') ? ctx.removeUse : null;
         var canMoveFilled = !!(capFits && recordUse && removeUse);
+        // ctx.maxBlockers (default 1 = single-hop only). When >1, a dead window blocked by SEVERAL
+        // movable sports (single-hop can't free it — moving one leaves another in the 40-min shadow)
+        // is freed by relocating the WHOLE set at once, atomically. Capped at 4 so it can't blow up.
+        var maxBlockers = (ctx && +ctx.maxBlockers > 1) ? Math.min(4, +ctx.maxBlockers | 0) : 1;
         if (!gate) return { converted: 0, relocations: 0, attempts: 0, bunks: bunks.length };
-        var converted = 0, relocations = 0, attempts = 0, filledMoves = 0;
+        var converted = 0, relocations = 0, attempts = 0, filledMoves = 0, multiHops = 0;
 
         function tmplExcept(tiles, a, b) {
             var out = [];
@@ -550,6 +554,16 @@
         }
         function sportLegalAt(tiles, s, e, exclA, exclB) {
             try { return gate({ type: 'sport', event: label, startMin: s, endMin: e }, tmplExcept(tiles, exclA, exclB)); } catch (_e) { return false; }
+        }
+        // sport-at-[s,e] legal with a SET of tiles excluded (multi-blocker validation)
+        function sportLegalAtSet(tiles, s, e, exclArr) {
+            var out = [];
+            for (var i = 0; i < tiles.length; i++) { if (exclArr.indexOf(tiles[i]) >= 0) continue; out.push(_toBlk(tiles[i])); }
+            try { return gate({ type: 'sport', event: label, startMin: s, endMin: e }, out); } catch (_e) { return false; }
+        }
+        // does sport B alone make a Sport-at-W illegal? (B is in W's spacing radius) — pairwise probe
+        function conflictsW(B, W) {
+            try { return !gate({ type: 'sport', event: label, startMin: W.startMin, endMin: W.endMin }, [_toBlk(B)]); } catch (_e) { return true; }
         }
         function toSport(W) { W.kind = 'sport'; W.subcat = null; W.name = label; W.generic = true; W._fillLoc = null; W._origin = 'reorder-tosport'; }
 
@@ -614,12 +628,79 @@
                             if (pFilled) { try { recordUse(pCand, bunk.grade, pOldS, pOldE); } catch (_e) {} }              // restore P's seat at its old slot
                         }
                     }
+                    // (C) MULTI-BLOCKER (bounded, opt-in via maxBlockers>1): when ≥2 movable sports sit
+                    // in W's radius, single-hop can't free it (moving one leaves another in the shadow).
+                    // Relocate the WHOLE set at once — each via a distinct equal-dur special partner —
+                    // TRANSACTIONALLY: apply every swap + ledger move, validate the FINAL arrangement (a
+                    // Sport legal at W AND every relocated sport legal at its new slot), then commit or
+                    // FULLY roll back (reverse order). All-or-nothing ⇒ never a partial chain.
+                    if (!doneW && maxBlockers > 1) {
+                        var mBlockers = [], mWall = false;
+                        for (var ci = 0; ci < tiles.length; ci++) {
+                            var Bc = tiles[ci];
+                            if (!Bc || Bc === W || Bc.kind !== 'sport') continue;
+                            if (!conflictsW(Bc, W)) continue;                                            // not in W's radius
+                            if (Bc.generic === true && !Bc._concrete) mBlockers.push(Bc);                // movable
+                            else { mWall = true; break; }                                                // a wall/concrete sport blocks W → unmovable
+                        }
+                        if (!mWall && mBlockers.length >= 2 && mBlockers.length <= maxBlockers) {
+                            var chosen = [], usedP = [], okChain = true;
+                            for (var mb = 0; mb < mBlockers.length && okChain; mb++) {
+                                var Bx = mBlockers[mb], gotP = false;
+                                for (var pp = 0; pp < tiles.length; pp++) {
+                                    var Pc = tiles[pp];
+                                    if (!Pc || Pc === W || Pc === Bx) continue;
+                                    if (usedP.indexOf(Pc) >= 0 || mBlockers.indexOf(Pc) >= 0) continue;  // a partner is used once; never a blocker
+                                    if (Pc.kind !== 'special') continue;                                // a sport partner would re-block
+                                    if (Pc.durationMin !== Bx.durationMin) continue;                    // equal-dur ⇒ wall-to-wall safe
+                                    if (!inWindow(Bx, Pc.startMin, Pc.endMin) || !inWindow(Pc, Bx.startMin, Bx.endMin)) continue;
+                                    var f = !!Pc._concrete, dead2 = (Pc.generic === true && !Pc._concrete);
+                                    if (!dead2 && !(f && canMoveFilled)) continue;
+                                    var cand = null, oS = Pc.startMin, oE = Pc.endMin;
+                                    if (f) {                                                            // re-seat the filled partner's activity at the slot it moves INTO
+                                        cand = { name: Pc._concrete, location: (Pc._fillLoc != null ? Pc._fillLoc : null), subcategory: Pc.subcat };
+                                        try { removeUse(cand, bunk.grade, oS, oE); } catch (_e) {}
+                                        var okc = false; try { okc = capFits(cand, bunk.grade, Bx.startMin, Bx.endMin); } catch (_e) { okc = false; }
+                                        if (!okc) { try { recordUse(cand, bunk.grade, oS, oE); } catch (_e) {} continue; }
+                                    }
+                                    swapTimes(Bx, Pc);                                                  // Pc → Bx's old slot, Bx → Pc's old slot
+                                    if (f) { try { recordUse(cand, bunk.grade, Pc.startMin, Pc.endMin); } catch (_e) {} }
+                                    chosen.push({ B: Bx, P: Pc, f: f, cand: cand, oS: oS, oE: oE });
+                                    usedP.push(Pc); gotP = true; break;
+                                }
+                                if (!gotP) okChain = false;                                             // this blocker has no partner → abort the chain
+                            }
+                            var committed = false;
+                            if (okChain && chosen.length === mBlockers.length) {
+                                attempts++;
+                                var okWm = sportLegalAtSet(tiles, W.startMin, W.endMin, [W]);            // a Sport now fits W (all blockers moved off)
+                                var okAll = true;
+                                for (var vk = 0; vk < chosen.length && okAll; vk++) {
+                                    var Bv = chosen[vk].B;
+                                    if (!sportLegalAt(tiles, Bv.startMin, Bv.endMin, Bv, null)) okAll = false;   // each relocated sport legal where it landed
+                                }
+                                if (okWm && okAll) {
+                                    chosen.forEach(function (c) { c.B._origin = 'reorder-relocate-multi'; c.P._origin = c.f ? 'reorder-partner-filled' : 'reorder-partner'; if (c.f) filledMoves++; });
+                                    toSport(W);
+                                    converted++; relocations += chosen.length; multiHops++; passConverts++; doneW = true; committed = true;
+                                }
+                            }
+                            if (!committed) {                                                           // roll everything back, reverse order
+                                for (var uk = chosen.length - 1; uk >= 0; uk--) {
+                                    var cc = chosen[uk];
+                                    if (cc.f) { try { removeUse(cc.cand, bunk.grade, cc.P.startMin, cc.P.endMin); } catch (_e) {} }
+                                    swapTimes(cc.B, cc.P);
+                                    if (cc.f) { try { recordUse(cc.cand, bunk.grade, cc.oS, cc.oE); } catch (_e) {} }
+                                }
+                            }
+                        }
+                    }
                 }
                 if (!passConverts) break;
             }
             tiles.sort(function (a, b) { return a.startMin - b.startMin; });
         }
-        return { converted: converted, relocations: relocations, filledMoves: filledMoves, attempts: attempts, bunks: bunks.length };
+        return { converted: converted, relocations: relocations, filledMoves: filledMoves, multiHops: multiHops, attempts: attempts, bunks: bunks.length };
     }
 
     // A weekly-must RESERVATION (e.g. a shiur placeholder for "≥1/week") is RELEASABLE today —

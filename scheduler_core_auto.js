@@ -19015,10 +19015,11 @@
                                         var _noSport = _rcNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
                                         _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
                                     });
-                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
+                                    var _rcMaxBlk = (typeof window !== 'undefined' && +window.__reorderMaxBlockers > 1) ? +window.__reorderMaxBlockers : 3;
+                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rcMaxBlk, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
                                     if (_rcRes && _rcRes.converted) {
                                         _glFill.reorderConverted = _rcRes.converted;
-                                        log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s)' + ((_rcRes.filledMoves || 0) ? ', ' + _rcRes.filledMoves + ' by moving a filled special into the freed slot' : '') + ', ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
+                                        log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s)' + ((_rcRes.multiHops || 0) ? ', ' + _rcRes.multiHops + ' via multi-blocker reorder' : '') + ((_rcRes.filledMoves || 0) ? ', ' + _rcRes.filledMoves + ' by moving a filled special into the freed slot' : '') + ', ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
                                     } else if (_rcRes && _rcRes.attempts) {
                                         log('[GENERIC-REORDER-CONVERT] 0 rescued — examined ' + _rcRes.attempts + ' blocker-swap candidate(s), none freed a spacing-legal window (the blocker or the freed slot would be mis-spaced, or the displaced activity had no seat at its new slot)');
                                     }
@@ -19163,7 +19164,8 @@
                                             var _ns = _rwNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
                                             _rwBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _ns });
                                         });
-                                        var _rwSp = window.GLStagger.reorderDeadToSport({ bunks: _rwBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, canConvert: function (t) { return t._releasable === true; } });
+                                        var _rwMaxBlk = (typeof window !== 'undefined' && +window.__reorderMaxBlockers > 1) ? +window.__reorderMaxBlockers : 3;
+                                        var _rwSp = window.GLStagger.reorderDeadToSport({ bunks: _rwBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rwMaxBlk, canConvert: function (t) { return t._releasable === true; } });
                                         _rwSported = (_rwSp && _rwSp.converted) || 0;
                                     }
                                     if (_rwFilled || _rwMarked) {

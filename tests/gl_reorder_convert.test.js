@@ -194,3 +194,84 @@ test('FILLED partner is ignored when no capacity ledger is supplied (back-compat
     assert.strictEqual(W.kind, 'special');
     assert.strictEqual(P.startMin, 200);
 });
+
+// ── MULTI-BLOCKER (maxBlockers > 1) ───────────────────────────────────────────
+// W is boxed by TWO sports both inside its 40-min radius; single-hop can't free it.
+// Partners are FILLED specials (realistic: at the crush every special is filled — and a
+// FILLED partner isn't itself an independently-convertible dead window, so the test isolates
+// exactly the multi-blocker behavior).
+
+test('MULTI-BLOCKER: two sports box a dead window → relocate BOTH (filled partners), window becomes a Sport', () => {
+    const W = tile('special', 'food', 10, 110, 120);
+    const B1 = tile('sport', null, 40, 60, 100);     // gap to W = 10 < 40
+    const B2 = tile('sport', null, 40, 130, 170);    // gap to W = 10 < 40
+    const P1 = tile('special', 'uncategorized', 40, 300, 340, { _concrete: 'Baking', generic: false, name: 'Baking' });
+    const P2 = tile('special', 'uncategorized', 40, 400, 440, { _concrete: 'Gymnastics', generic: false, name: 'Gymnastics' });
+    const tiles = [W, B1, B2, P1, P2];
+    const L = makeLedger(true);
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon, maxBlockers: 3, capFits: L.capFits, recordUse: L.recordUse, removeUse: L.removeUse });
+    assert.strictEqual(r.converted, 1, 'W freed');
+    assert.strictEqual(r.multiHops, 1, 'one multi-blocker rescue');
+    assert.strictEqual(r.relocations, 2, 'both blockers relocated');
+    assert.strictEqual(r.filledMoves, 2, 'both filled partners re-seated');
+    assert.strictEqual(W.kind, 'sport');
+    assert.strictEqual(B1.startMin, 300); assert.strictEqual(B2.startMin, 400);
+    assert.strictEqual(P1.startMin, 60); assert.strictEqual(P2.startMin, 130);
+    assert.strictEqual(P1._concrete, 'Baking'); assert.strictEqual(P2._concrete, 'Gymnastics');
+    // ledger net-balanced: each removed slot has a matching recorded slot
+    assert.deepStrictEqual(L.removed.slice().sort(), [['Baking', 300, 340], ['Gymnastics', 400, 440]].sort());
+    assert.deepStrictEqual(L.recorded.slice().sort(), [['Baking', 60, 100], ['Gymnastics', 130, 170]].sort());
+    assert.ok(noOverlap(tiles));
+    const g = makeGate(40);
+    [W, B1, B2].forEach(S => assert.ok(g({ type: 'sport', startMin: S.startMin, endMin: S.endMin },
+        tiles.filter(t => t !== S && t.kind === 'sport').map(t => ({ type: 'sport', startMin: t.startMin, endMin: t.endMin }))),
+        'every sport stays ≥40 apart'));
+});
+
+test('MULTI-BLOCKER is OFF by default (maxBlockers=1) — a two-sport box is left alone', () => {
+    const W = tile('special', 'food', 10, 110, 120);
+    const B1 = tile('sport', null, 40, 60, 100);
+    const B2 = tile('sport', null, 40, 130, 170);
+    const P1 = tile('special', 'uncategorized', 40, 300, 340, { _concrete: 'Baking', generic: false, name: 'Baking' });
+    const P2 = tile('special', 'uncategorized', 40, 400, 440, { _concrete: 'Gymnastics', generic: false, name: 'Gymnastics' });
+    const tiles = [W, B1, B2, P1, P2];
+    const L = makeLedger(true);
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon, capFits: L.capFits, recordUse: L.recordUse, removeUse: L.removeUse }); // no maxBlockers
+    assert.strictEqual(r.converted, 0, 'single-hop cannot free a two-sport box');
+    assert.strictEqual(W.kind, 'special');
+    assert.strictEqual(B1.startMin, 60); assert.strictEqual(B2.startMin, 130);
+    assert.strictEqual(L.removed.length, 0, 'multi-blocker never ran → no ledger churn');
+});
+
+test('MULTI-BLOCKER: a NON-movable sport in the radius blocks the whole thing', () => {
+    const W = tile('special', 'food', 10, 110, 120);
+    const B1 = tile('sport', null, 40, 60, 100);
+    const B2 = tile('sport', null, 40, 130, 170, { generic: false, name: 'Soccer Game' }); // concrete/pinned → unmovable
+    const P1 = tile('special', 'uncategorized', 40, 300, 340, { _concrete: 'Baking', generic: false, name: 'Baking' });
+    const P2 = tile('special', 'uncategorized', 40, 400, 440, { _concrete: 'Gymnastics', generic: false, name: 'Gymnastics' });
+    const tiles = [W, B1, B2, P1, P2];
+    const L = makeLedger(true);
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon, maxBlockers: 3, capFits: L.capFits, recordUse: L.recordUse, removeUse: L.removeUse });
+    assert.strictEqual(r.converted, 0, 'cannot move a concrete sport out of the radius');
+    assert.strictEqual(W.kind, 'special');
+    assert.strictEqual(B1.startMin, 60, 'movable blocker not left displaced');
+    assert.strictEqual(L.removed.length, 0, 'aborted at the scan → no ledger churn');
+});
+
+test('MULTI-BLOCKER: not enough partners → ATOMIC rollback (tiles restored, ledger net-balanced)', () => {
+    const W = tile('special', 'food', 10, 110, 120);
+    const B1 = tile('sport', null, 40, 60, 100);
+    const B2 = tile('sport', null, 40, 130, 170);
+    const P1 = tile('special', 'uncategorized', 40, 300, 340, { _concrete: 'Baking', generic: false, name: 'Baking' }); // only ONE partner for TWO blockers
+    const tiles = [W, B1, B2, P1];
+    const L = makeLedger(true);
+    const r = GLStagger.reorderDeadToSport({ bunks: [{ tiles, grade: 'Majors' }], gate: makeGate(40), canon, maxBlockers: 3, capFits: L.capFits, recordUse: L.recordUse, removeUse: L.removeUse });
+    assert.strictEqual(r.converted, 0, 'cannot relocate both → abort');
+    assert.strictEqual(W.kind, 'special');
+    assert.strictEqual(B1.startMin, 60, 'blocker restored');
+    assert.strictEqual(P1.startMin, 300, 'partner restored to its slot');
+    assert.strictEqual(P1._concrete, 'Baking');
+    // every removeUse during the trial was matched by a restoring recordUse → ledger net-unchanged
+    assert.deepStrictEqual(L.removed.slice().sort(), L.recorded.slice().sort(), 'ledger net-balanced after rollback');
+    assert.ok(noOverlap(tiles));
+});
