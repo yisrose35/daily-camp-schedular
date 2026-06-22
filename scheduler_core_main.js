@@ -1236,12 +1236,16 @@
                         if (needsGeneration(opt)) {
                             if (optNorm.includes('special')) {
                                 // Category SPECIAL → this bunk's least-done claimable special
+                                // it hasn't already had TODAY (day-wide, across all groups).
                                 const _avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(_rStart, _rEnd, divName, activityProperties, dailyFieldAvailability) || [];
                                 const _h = historicalCounts[bunk] || {};
+                                const _had = _bunkSpecialsToday[bunk];
                                 _avail.sort((a, b) => (_h[a.name] || 0) - (_h[b.name] || 0));
                                 for (const sp of _avail) {
+                                    if (_had && _had.has(sp.name.toLowerCase())) continue; // already had this special today
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
+                                    (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(sp.name.toLowerCase());
                                     console.log(`[SmartTile] ${bunk} -> ROTATION special: ${sp.name}`);
                                     window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                     _placed = true; break;
@@ -1253,12 +1257,16 @@
                                 _placed = true;
                             }
                         } else if (knownSpecialNames.has(optNorm)) {
-                            const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
-                            if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
-                                _registerClaim(opt, _rStart, _rEnd, divName);
-                                console.log(`[SmartTile] ${bunk} -> ROTATION specific special: ${opt}`);
-                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                                _placed = true;
+                            const _had2 = _bunkSpecialsToday[bunk];
+                            if (!(_had2 && _had2.has(optNorm))) { // skip if already had this special today
+                                const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
+                                if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
+                                    _registerClaim(opt, _rStart, _rEnd, divName);
+                                    (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(optNorm);
+                                    console.log(`[SmartTile] ${bunk} -> ROTATION specific special: ${opt}`);
+                                    window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                    _placed = true;
+                                }
                             }
                         } else if (knownSportNames.has(optNorm) && !optNorm.includes('swim')) {
                             console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
