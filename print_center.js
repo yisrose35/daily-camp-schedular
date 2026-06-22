@@ -4175,11 +4175,20 @@ function buildPolishedWorkbook(sel) {
     // "Combine all bunks" (division view) → ONE sheet with every bunk across
     // all selected grades as columns and a unified time axis down the rows.
     var combinedAllBunks = (_activeView === 'division' && _currentTemplate.layoutMode === 'all-bunks');
-    var sheetSpecs = (_activeView === 'week')
-        ? [{ name: 'Week', rows: buildWeekExcelRows(sel) }]
-        : combinedAllBunks
-            ? [{ name: 'All Bunks', rows: buildCombinedExcelRows(sel) }]
+    try { console.log('[PrintCenter] Excel export → view=' + _activeView + ' layoutMode=' + _currentTemplate.layoutMode + ' combinedAllBunks=' + combinedAllBunks + ' sel=' + JSON.stringify(sel)); } catch (e) {}
+    var sheetSpecs;
+    if (_activeView === 'week') {
+        sheetSpecs = [{ name: 'Week', rows: buildWeekExcelRows(sel) }];
+    } else if (combinedAllBunks) {
+        var combinedRows = buildCombinedExcelRows(sel);
+        // If the combined builder found nothing (no resolvable bunks/activities),
+        // fall back to per-division sheets so the export is never empty.
+        sheetSpecs = (combinedRows && combinedRows.length)
+            ? [{ name: 'All Bunks', rows: combinedRows }]
             : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
+    } else {
+        sheetSpecs = sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
+    }
 
     sheetSpecs.forEach(function (spec) {
         var srcRows = spec.rows || [];
@@ -4699,6 +4708,10 @@ function buildCombinedExcelRows(divNames) {
 
     var orderedDivs = (typeof window.getUserDivisionOrder === 'function')
         ? window.getUserDivisionOrder(divNames) : divNames.slice();
+    // Keep only names that resolve to a real division with bunks; if the order
+    // helper returned nothing usable, fall back to the raw selection.
+    orderedDivs = (orderedDivs || []).filter(function (d) { return divs[d] && divs[d].bunks && divs[d].bunks.length; });
+    if (!orderedDivs.length) orderedDivs = (divNames || []).filter(function (d) { return divs[d] && divs[d].bunks && divs[d].bunks.length; });
 
     // Columns: bunks grouped by division.
     var colDefs = [];                 // { bunk, div }
