@@ -1270,13 +1270,27 @@ function shouldHighlightBunk(bunkName) {
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+        // ★ Resolve the real facility for an activity whose `field` is just its own
+        //   name (e.g. a Special placed by name) so every cell shows Name – Facility.
+        //   Sports already carry a real field below; this fills the gap for specials.
+        const _facility = function () {
+            let loc = entry._specialLocation || '';
+            if (!loc && typeof window.getLocationForActivity === 'function') {
+                try { loc = window.getLocationForActivity(activity) || ''; } catch (_e) { loc = ''; }
+            }
+            loc = fieldLabel(loc) || loc || '';
+            return (loc && loc !== activity && loc !== field) ? loc : '';
+        };
 // * FIX: Bunk overrides set _fixed but also have a meaningful field — show both
 if (entry._fixed) {
     if (field && activity && field !== activity) return `${field} – ${activity}`;
     if (field && sport && field !== sport) return `${field} – ${sport}`;
-    return activity || field;
+    const _loc = _facility();
+    return _loc ? `${activity || field} – ${_loc}` : (activity || field);
 }
 if (field && sport && field !== sport) return `${field} – ${sport}`;
+const _loc2 = _facility();
+if (_loc2) return `${activity || field} – ${_loc2}`;
 return activity || field || '';    }
 
     function getEntryBackground(entry, blockEvent) {

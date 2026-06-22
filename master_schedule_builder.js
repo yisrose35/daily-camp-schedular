@@ -4093,9 +4093,10 @@ function renderEventTile(ev, top, height) {
     else tile = TILES.find(t => t.type === 'custom');
   }
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
-  // ★ Guaranteed-swap Smart tiles get a distinct purple so the mode is visible at a glance.
+  // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
+  //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
-    style = 'background:#c4b5fd;color:#3b0764;border:2px solid #7c3aed;';
+    style = 'background:#5eead4;color:#115e59;border:2px solid #14b8a6;';
   }
   
   // Add 1px gap at bottom to prevent overlap with next tile
