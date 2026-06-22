@@ -93,6 +93,120 @@
             }).join('') + `</div>`;
     }
 
+    // =============================================================
+    // ★ LEAGUE RESOLUTION — works across MANUAL + AUTO modes
+    //
+    // The two builders store league data with DIFFERENT shapes:
+    //   • scheduleAssignments entry:
+    //       MANUAL → { _h2h:true,   _allMatchups:[...], _gameLabel, sport }
+    //       AUTO   → { _league:true, matchups:[...],     _gameLabel, sport, _leagueName }
+    //   • leagueAssignments[division] keying:
+    //       MANUAL → keyed by SLOT INDEX  (e.g. la[3])
+    //       AUTO   → keyed by START-MIN   (e.g. la[540])
+    // The locator must normalize both so the same lookup code reports the
+    // right field + matchup regardless of which builder produced the day.
+    // =============================================================
+
+    /** True if a scheduleAssignments entry is a league game (either mode). */
+    function isLeagueAssignment(a) {
+        if (!a) return false;
+        return !!(a._h2h || a._league ||
+            String(a.field || '').toLowerCase().includes('league'));
+    }
+
+    /** Pull league matchup data straight off a bunk's schedule entry,
+     *  handling MANUAL (_allMatchups) and AUTO (matchups) field names. */
+    function leagueDataFromAssignment(a) {
+        if (!a) return null;
+        const matchups = a._allMatchups || a.matchups || null;
+        if (!matchups && !a._gameLabel && !a._leagueName) return null;
+        return {
+            matchups: matchups || [],
+            gameLabel: a._gameLabel || null,
+            sport: a.sport || null,
+            leagueName: a._leagueName || null
+        };
+    }
+
+    /** Resolve the leagueAssignments entry for a division at a given slot/time,
+     *  tolerating BOTH the slot-index keying (manual) and the start-min keying
+     *  (auto). Returns the matchup bundle or null. */
+    function resolveLeagueData(division, slotIdx, targetTimeMin) {
+        const la = window.leagueAssignments?.[division];
+        if (!la) return null;
+        const divSlots = window.divisionTimes?.[division] || [];
+
+        // 1) Direct slot-index key (manual mode)
+        if (slotIdx >= 0 && la[slotIdx]) return la[slotIdx];
+
+        // 2) Direct start-min key (auto mode) — for the target slot
+        if (slotIdx >= 0 && divSlots[slotIdx]) {
+            const sm = divSlots[slotIdx].startMin;
+            if (la[sm] != null) return la[sm];
+        }
+
+        // 3) Time-based scan — each key is EITHER a slot index OR a start-min.
+        //    Compute the time window for the key both ways and test the target.
+        for (const key of Object.keys(la)) {
+            const keyNum = Number(key);
+            if (isNaN(keyNum)) continue;
+
+            let winStart = null, winEnd = null;
+            const byStart = divSlots.find(s => s.startMin === keyNum);
+            if (byStart) {                       // key interpreted as start-min (auto)
+                winStart = byStart.startMin;
+                winEnd = byStart.endMin;
+            } else if (divSlots[keyNum]) {       // key interpreted as slot index (manual)
+                winStart = divSlots[keyNum].startMin;
+                winEnd = divSlots[keyNum].endMin;
+            }
+            if (winStart == null) continue;
+
+            if (winStart <= targetTimeMin && targetTimeMin < winEnd) return la[key];
+        }
+        return null;
+    }
+
+    /** Best-effort league bundle for the current camper/slot/time, merging the
+     *  per-bunk schedule entry and the division-level leagueAssignments table.
+     *  Prefers whichever source actually carries matchups. */
+    function getEffectiveLeagueData(division, slotIdx, targetTimeMin, assignment) {
+        const fromTable = resolveLeagueData(division, slotIdx, targetTimeMin);
+        const fromEntry = leagueDataFromAssignment(assignment);
+        const primary = fromTable?.matchups?.length ? fromTable
+                      : (fromEntry?.matchups?.length ? fromEntry
+                      : (fromTable || fromEntry));
+        if (!primary) return null;
+        return {
+            matchups: primary.matchups || [],
+            gameLabel: primary.gameLabel || fromEntry?.gameLabel || fromTable?.gameLabel || null,
+            sport:     primary.sport     || fromEntry?.sport     || fromTable?.sport     || null,
+            leagueName: primary.leagueName || fromEntry?.leagueName || fromTable?.leagueName || null
+        };
+    }
+
+    /** Resolve which TEAM the camper is on for the league being played now.
+     *  Campers store teams per-league: { teams: { "<league>": "<team>" }, team: "<first>" }.
+     *  During a league game we know the league, so prefer the team for THAT
+     *  league; fall back to the legacy single `team`, then any assigned team. */
+    function resolveCamperTeam(camper, leagueName) {
+        if (!camper) return '';
+        const teams = (camper.teams && typeof camper.teams === 'object') ? camper.teams : null;
+        if (leagueName && teams) {
+            if (teams[leagueName]) return teams[leagueName];      // exact league match
+            const lnLow = String(leagueName).toLowerCase().trim(); // case-insensitive match
+            for (const [lg, tm] of Object.entries(teams)) {
+                if (tm && String(lg).toLowerCase().trim() === lnLow) return tm;
+            }
+        }
+        if (camper.team) return camper.team;                       // legacy single team
+        if (teams) {
+            const vals = Object.values(teams).filter(Boolean);
+            if (vals.length) return vals[0];                       // any assigned team
+        }
+        return '';
+    }
+
     /**
      * Get current time in minutes since midnight.
      */
@@ -579,67 +693,38 @@
                                      slotType === 'h2h' ||
                                      slotType === 'specialty_league';
 
-                // Check leagueAssignments directly for this division + slot
-                let leagueData = null;
-                const la = window.leagueAssignments?.[division] || {};
+                // Resolve league data robustly across manual (slot-index keyed)
+                // and auto (start-min keyed) leagueAssignments tables.
+                let leagueData = resolveLeagueData(division, slotIdx, targetTimeMin);
 
-                // First: exact slot index match
-                if (la[slotIdx]) {
-                    leagueData = la[slotIdx];
-                }
-
-                // Second: scan all league entries, match by TIME not by slot index
-                if (!leagueData) {
-                    for (const key of Object.keys(la)) {
-                        const keyNum = parseInt(key);
-                        if (isNaN(keyNum)) continue;
-
-                        const keySlot = divSlots[keyNum];
-                        if (!keySlot) continue;
-
-                        if (keySlot.startMin <= targetTimeMin && targetTimeMin < keySlot.endMin) {
-                            leagueData = la[key];
-                            break;
-                        }
-
-                        // For multi-slot league blocks: check if the block SPANS our target time
-                        let blockEndMin = keySlot.endMin;
-                        for (let j = keyNum + 1; j < divSlots.length; j++) {
-                            const nextEntry = bunkAssignments?.[j];
-                            if (nextEntry && (nextEntry.continuation || nextEntry._h2h ||
-                                String(nextEntry.field || '').toLowerCase().includes('league'))) {
-                                blockEndMin = divSlots[j]?.endMin || blockEndMin;
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if (keySlot.startMin <= targetTimeMin && targetTimeMin < blockEndMin) {
-                            leagueData = la[key];
-                            break;
-                        }
-                    }
-                }
-
-                // Also scan bunkAssignments for ANY slot in this time range that has _h2h
+                // Also scan bunkAssignments for ANY entry covering this time that
+                // is a league game. Match by each entry's OWN time geometry (not by
+                // divSlots index) so per-bunk staggering / auto _league flags work.
                 let foundLeagueAssignment = null;
-                if (!leagueData && bunkAssignments) {
-                    for (let i = 0; i < divSlots.length; i++) {
-                        const ds = divSlots[i];
-                        if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
-                            const a = bunkAssignments[i];
-                            if (a && (a._h2h || String(a.field || '').toLowerCase().includes('league'))) {
-                                foundLeagueAssignment = a;
-                                slotIdx = i;
-                                break;
+                if (bunkAssignments) {
+                    for (let i = 0; i < bunkAssignments.length; i++) {
+                        const a = bunkAssignments[i];
+                        if (!a) continue;
+                        const aStart = a._startMin ?? a._blockStart;
+                        const aEnd = a._endMin;
+                        if (aStart != null && aEnd != null &&
+                            aStart <= targetTimeMin && targetTimeMin < aEnd &&
+                            isLeagueAssignment(a)) {
+                            foundLeagueAssignment = a;
+                            slotIdx = i;
+                            if (!leagueData?.matchups?.length) {
+                                leagueData = getEffectiveLeagueData(division, i, targetTimeMin, a);
                             }
+                            break;
                         }
                     }
                 }
 
                 if (isLeagueSlot || leagueData || foundLeagueAssignment) {
-                    // This IS a league slot
-                    const team = camper.team;
+                    // This IS a league slot — find the team THIS camper plays on
+                    // for the specific league being played, then their matchup.
+                    const leagueName = leagueData?.leagueName || foundLeagueAssignment?._leagueName;
+                    const team = resolveCamperTeam(camper, leagueName);
 
                     if (!team) {
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
@@ -650,7 +735,7 @@
                                            <strong>${escapeHtml(camperName)}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
                         }
                     } else {
-                        console.log(`[CamperLocator] League lookup — team: "${team}", leagueData:`, leagueData);
+                        console.log(`[CamperLocator] League lookup — team: "${team}", league: "${leagueName}", leagueData:`, leagueData);
                         const match = findTeamMatchup(leagueData, team);
 
                         if (match) {
@@ -673,30 +758,22 @@
                 }
             }
         } else {
-            // Is it a League Game?
-            const isLeague = assignment._h2h || (assignment.field && String(assignment.field).toLowerCase().includes("league"));
+            // Is it a League Game? (handles manual _h2h + auto _league + "League Game" field)
+            const isLeague = isLeagueAssignment(assignment);
 
             if (isLeague) {
-                const team = camper.team;
+                // Merge the per-bunk entry (carries matchups in both modes) with the
+                // division leagueAssignments table (handles both keying schemes).
+                const effectiveLeagueData = getEffectiveLeagueData(division, slotIdx, targetTimeMin, assignment);
+                const leagueName = effectiveLeagueData?.leagueName || assignment._leagueName;
+                const team = resolveCamperTeam(camper, leagueName);
 
                 if (!team) {
                     locationHtml = `<span style="color:#d97706;">Playing Leagues (Team Unknown)</span>`;
                     detailsHtml = `We know ${escapeHtml(bunk)} is playing leagues, but <strong>${escapeHtml(camperName)}</strong> has no team assigned.<br>
                                    Assign a team in <strong>Campistry Me</strong> to see the exact field.`;
                 } else {
-                    const leagueData = division
-                        ? window.leagueAssignments?.[division]?.[slotIdx]
-                        : null;
-
-                    let effectiveLeagueData = leagueData;
-                    if (!effectiveLeagueData?.matchups && assignment._allMatchups) {
-                        effectiveLeagueData = {
-                            matchups: assignment._allMatchups,
-                            gameLabel: assignment._gameLabel,
-                            sport: assignment.sport
-                        };
-                    }
-
+                    console.log(`[CamperLocator] League lookup — team: "${team}", league: "${leagueName}", leagueData:`, effectiveLeagueData);
                     const match = findTeamMatchup(effectiveLeagueData, team);
 
                     if (match) {
