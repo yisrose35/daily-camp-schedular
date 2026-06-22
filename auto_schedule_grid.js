@@ -904,7 +904,7 @@
 
                 var style = blockStyle(act.entry, bunk);
                 var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
-                var fieldName = act.entry?.field || '';
+                var fieldName = (window.getActivityFacilityName ? window.getActivityFacilityName(act.entry) : (typeof act.entry?.field === 'string' ? act.entry.field : ''));
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 
                 var blk = document.createElement('div');
@@ -936,10 +936,13 @@
                 nameEl.style.fontSize = nameFontPx + 'px';
                 nameEl.textContent = name;
                 blk.appendChild(nameEl);
-                if (blockW >= 60 && sub && sub !== name) {
+                // Always show the facility on its own line so every block reads
+                // "Activity / Facility" (e.g. Basketball / Basketball Court 1).
+                if (sub && sub !== name) {
                     var subEl = document.createElement('div');
                     subEl.className = 'asg-tx-block-sub';
                     subEl.style.color = style.text;
+                    if (blockW < 60) subEl.style.fontSize = (blockW < 28 ? 7 : 8) + 'px';
                     subEl.textContent = sub;
                     blk.appendChild(subEl);
                 }
@@ -949,7 +952,7 @@
                 } else if (blockW < 60) {
                     blk.style.padding = '3px 4px';
                 }
-                blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
+                blk.title = name + (sub && sub !== name ? ' – ' + sub : '') + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
 
                 if (isEditable) {
                     (function (bunkName, dName, sMin, eMin, entryRef) {
@@ -1361,7 +1364,7 @@
 
                 var style = blockStyle(act.entry, bunk);
                 var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
-                var fieldName = act.entry?.field || '';
+                var fieldName = (window.getActivityFacilityName ? window.getActivityFacilityName(act.entry) : (typeof act.entry?.field === 'string' ? act.entry.field : ''));
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 
                 var blk = document.createElement('div');
@@ -1419,11 +1422,20 @@
                     nameEl2.style.fontSize = '0.63rem';
                     nameEl2.textContent = name;
                     blk.appendChild(nameEl2);
+                    // Keep the facility visible even in compact blocks.
+                    if (sub && sub !== name) {
+                        var subEl2 = document.createElement('div');
+                        subEl2.className = 'asg-block-sub';
+                        subEl2.style.color = style.text;
+                        subEl2.style.fontSize = '0.55rem';
+                        subEl2.textContent = sub;
+                        blk.appendChild(subEl2);
+                    }
                 } else {
                     blk.title = name;
                 }
 
-                blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
+                blk.title = name + (sub && sub !== name ? ' – ' + sub : '') + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
 
                 // Travel strips (pre/post) for off-campus blocks — stamped value first, else live zone lookup
                 var _tPre = parseInt(act.entry?._travelPre) || 0;

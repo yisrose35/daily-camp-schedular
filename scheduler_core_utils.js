@@ -49,6 +49,42 @@
         window.getActivityDisplayName = Utils.getActivityDisplayName;
     }
 
+    // ★ Facility/field resolver — companion to getActivityDisplayName.
+    // Returns the FACILITY (room/field/court) a slot is using, so render code
+    // can always show "Activity – Facility" (e.g. Basketball – Basketball Court 1,
+    // Baking – Baking Room). Mirrors print_center's pcResolveLocation so the
+    // grid, print, and adjustments stay consistent no matter the activity source
+    // (smart tile, split, general, sport, special).
+    //   - Sports keep the field in `field` (string) or `field.name` (object).
+    //   - Specials may store the special's NAME in `field`; the real room lives
+    //     in `_specialLocation` / `_customField` / `_location`, else the special
+    //     config via getLocationForActivity.
+    // Returns '' when there is no real, distinct facility (e.g. "Free").
+    Utils.getActivityFacilityName = function (slot) {
+        if (!slot) return '';
+        var act = slot._activity || slot.sport || '';
+        var loc = slot._specialLocation || slot._customField || slot._location || '';
+        if (!loc) {
+            var f = (typeof slot.field === 'string') ? slot.field
+                  : (slot.field && slot.field.name ? slot.field.name : '');
+            if (f && f !== 'Free') loc = f;
+        }
+        // No location, or it just echoes the activity name (manual specials):
+        // fall back to the special's configured room.
+        if ((!loc || loc === act) && act && typeof window !== 'undefined'
+            && typeof window.getLocationForActivity === 'function') {
+            try {
+                var cfg = window.getLocationForActivity(act);
+                if (cfg && typeof cfg === 'string') loc = cfg;
+            } catch (e) { /* ignore */ }
+        }
+        if (!loc || loc === 'Free') return '';
+        return loc;
+    };
+    if (typeof window !== 'undefined') {
+        window.getActivityFacilityName = Utils.getActivityFacilityName;
+    }
+
     Utils.parseTimeToMinutes = function (str) {
         if (str == null) return null;
         if (typeof str === "number") return str;
