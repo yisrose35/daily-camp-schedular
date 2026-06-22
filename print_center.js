@@ -1234,11 +1234,11 @@ function getStyles() {
     /* ── Auto TIMELINE (brick model): each bunk = one track, cards sized to duration ── */
     '.pc3-tl{font-family:"Segoe UI",Calibri,Helvetica,Arial,sans-serif;background:#fff;width:100%;user-select:none;-webkit-font-smoothing:antialiased;}' +
     '.pc3-tl-row{display:flex;align-items:stretch;}' +
-    '.pc3-tl-row:not(:last-child){border-bottom:1px solid #eef1f4;}' +
-    '.pc3-tl-bodyrow.pc3-tl-alt .pc3-tl-track{background:#fbfcfd;}' +
+    '.pc3-tl-row:not(:last-child){border-bottom:1px solid #f1f4f7;}' +
+    '.pc3-tl-bodyrow.pc3-tl-alt .pc3-tl-track{background:#fcfdfe;}' +
     '.pc3-tl-bodyrow:hover .pc3-tl-track{background:#f5f9ff;}' +
-    '.pc3-tl-headrow{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #dfe3e8;box-shadow:0 1px 0 rgba(15,23,42,.04);}' +
-    '.pc3-tl-periodrow{background:linear-gradient(#fafbfc,#f4f6f8);border-bottom:1px solid #e4e8ec;}' +
+    '.pc3-tl-headrow{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #e6eaee;box-shadow:0 1px 0 rgba(15,23,42,.03);}' +
+    '.pc3-tl-periodrow{background:linear-gradient(#fafbfc,#f4f6f8);border-bottom:1px solid #eaeef2;}' +
     '.pc3-tl-corner,.pc3-tl-bunk{width:132px;min-width:132px;flex-shrink:0;display:flex;align-items:center;padding:6px 14px;font-size:13px;color:#1e293b;border-right:1px solid #e2e8f0;background:#f8fafc;position:sticky;left:0;z-index:2;box-sizing:border-box;letter-spacing:.01em;}' +
     '.pc3-tl-corner{font-weight:700;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.06em;}' +
     '.pc3-tl-bunk{font-weight:600;}' +
@@ -1246,12 +1246,11 @@ function getStyles() {
     '.pc3-tl-track{position:relative;flex:1;min-width:0;height:54px;transition:background .12s;}' +
     '.pc3-tl-headrow .pc3-tl-track{height:32px;}' +
     '.pc3-tl-periodrow .pc3-tl-track{height:28px;}' +
-    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #f1f3f5;}' +
-    '.pc3-tl-tick.major{border-left-color:#dde2e7;}' +
-    '.pc3-tl-tick span{position:absolute;top:9px;left:4px;font-size:10px;font-weight:500;color:#94a3b8;white-space:nowrap;letter-spacing:.01em;}' +
+    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #eef1f4;}' +
+    '.pc3-tl-tick.major{border-left-color:#e2e6ea;}' +
+    '.pc3-tl-tick span{position:absolute;top:9px;left:5px;font-size:10px;font-weight:500;color:#9aa5b1;white-space:nowrap;letter-spacing:.01em;}' +
     '.pc3-tl-tick.major span{color:#64748b;font-weight:600;}' +
-    '.pc3-tl-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f4f6f8;}' +
-    '.pc3-tl-vline.major{border-left-color:#e6eaee;}' +
+    '.pc3-tl-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f4f6f9;}' +
     '.pc3-tl-period{position:absolute;top:4px;bottom:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#475569;background:#eef2f6;border:1px solid #dde3ea;border-radius:6px;overflow:hidden;white-space:nowrap;padding:0 8px;box-sizing:border-box;letter-spacing:.02em;}' +
     '.pc3-tl-block{position:absolute;top:5px;bottom:5px;border:1px solid #e3e8ee;border-left:3px solid #cbd5e1;border-radius:8px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.06),0 1px 1px rgba(15,23,42,.04);display:flex;box-sizing:border-box;transition:box-shadow .12s,transform .12s;}' +
     '.pc3-tl-block:hover{box-shadow:0 4px 10px rgba(15,23,42,.12);transform:translateY(-1px);z-index:3;}' +
@@ -2105,7 +2104,10 @@ function renderAutoDivisionTable(divName, bunks) {
     html += '<div class="pc3-tl-row pc3-tl-headrow">';
     html += '<div class="pc3-tl-corner">Bunk</div>';
     html += '<div class="pc3-tl-track pc3-tl-ruler">';
-    for (var tm = gridStart; tm <= dayEnd; tm += inc) {
+    // Clean ruler: one label roughly every 30 min (or per increment if coarser),
+    // hour marks emphasized. Avoids a label at every fine sub-period.
+    var labelStep = inc >= 30 ? inc : 30;
+    for (var tm = gridStart; tm <= dayEnd; tm += labelStep) {
         var isMajor = tm % 60 === 0;
         html += '<div class="pc3-tl-tick' + (isMajor ? ' major' : '') + '" style="left:' + pctL(tm).toFixed(2) + '%;"><span>' + escHtml(minutesToTimeLabel(tm)) + '</span></div>';
     }
@@ -2117,9 +2119,9 @@ function renderAutoDivisionTable(divName, bunks) {
         html += '<div class="pc3-tl-bunk">' + escHtml(bunk) + '</div>';
         html += '<div class="pc3-tl-track">';
 
-        // Sub-period mold lines (shared across every row — the same vertical grid)
-        for (var gm = gridStart; gm < dayEnd; gm += inc) {
-            html += '<div class="pc3-tl-vline' + (gm % 60 === 0 ? ' major' : '') + '" style="left:' + pctL(gm).toFixed(2) + '%;"></div>';
+        // Faint hour guides only — keeps the track clean (no dense sub-period grid)
+        for (var gm = Math.ceil(dayStart / 60) * 60; gm < dayEnd; gm += 60) {
+            html += '<div class="pc3-tl-vline" style="left:' + pctL(gm).toFixed(2) + '%;"></div>';
         }
 
         (bunkActs[bunk] || []).forEach(function (a) {
