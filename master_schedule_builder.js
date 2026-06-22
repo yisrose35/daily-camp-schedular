@@ -1085,7 +1085,8 @@ async function editTile(id) {
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
         { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
         { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
-        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+        { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: ev.smartData?.pairGroup || '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
       ],
       postRender: (overlay) => _mbSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap))
     });
@@ -1093,7 +1094,7 @@ async function editTile(id) {
     const _gsOn = result.guaranteeSwap === 'true';
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
-    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn };
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null };
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
@@ -4098,6 +4099,12 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
     style = 'background:#5eead4;color:#115e59;border:2px solid #14b8a6;';
   }
+  // ★ Connected smart tiles (same pairGroup) get a matching colored glow so you can
+  //   see at a glance which two tiles swap together.
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.pairGroup) {
+    const _gc = { '1': '#f59e0b', '2': '#3b82f6', '3': '#10b981', '4': '#a855f7' }[String(ev.smartData.pairGroup)] || '#f59e0b';
+    style += ';box-shadow:0 0 0 3px ' + _gc + ', 0 0 9px ' + _gc + ';';
+  }
   
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
@@ -4273,7 +4280,8 @@ function addDropListeners(selector) {
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
             { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
-            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+            { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
           ],
           postRender: (overlay) => _mbSmartSwapPostRender(overlay, false)
         });
@@ -4287,7 +4295,7 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn }
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null }
         };
       }
       // ★ v2.5: SPLIT TILE - Fixed to match daily adjustments (Main 1/Main 2 + mapEventNameForOptimizer)

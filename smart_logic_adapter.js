@@ -599,10 +599,32 @@
 
             Object.keys(byDiv).forEach(div => {
                 const tiles = byDiv[div].sort((a, b) => parseTime(a.startTime) - parseTime(b.startTime));
-                
-                for (let i = 0; i < tiles.length; i += 2) {
-                    const A = tiles[i];
-                    const B = tiles[i + 1];
+
+                // ★ CONNECTED TILES: tiles the user linked into the same "pair group"
+                //   (smartData.pairGroup) pair with EACH OTHER regardless of time
+                //   order — so a camp can run several smart-tile pairs in one day and
+                //   control which two periods swap together. Ungrouped tiles keep the
+                //   classic adjacent (i, i+1) pairing, so existing skeletons are
+                //   unchanged.
+                const groups = {};   // pairGroup -> [tiles] (already time-sorted)
+                const auto = [];     // ungrouped tiles
+                tiles.forEach(t => {
+                    const g = t.smartData && t.smartData.pairGroup;
+                    if (g != null && String(g).trim() !== '' && String(g).toLowerCase() !== 'auto') {
+                        (groups[g] = groups[g] || []).push(t);
+                    } else {
+                        auto.push(t);
+                    }
+                });
+                const pairs = [];    // [A, B|null]
+                Object.keys(groups).forEach(g => {
+                    const gt = groups[g];
+                    for (let i = 0; i < gt.length; i += 2) pairs.push([gt[i], gt[i + 1] || null]);
+                });
+                for (let i = 0; i < auto.length; i += 2) pairs.push([auto[i], auto[i + 1] || null]);
+
+                pairs.forEach(arr => {
+                    const A = arr[0], B = arr[1];
                     const sd = A.smartData || {};
 
                     const job = {
@@ -612,6 +634,7 @@
                         fallbackFor: sd.fallbackFor,
                         fallbackActivity: sd.fallbackActivity,
                         guaranteeSwap: !!sd.guaranteeSwap,
+                        pairGroup: sd.pairGroup || null,
                         blockA: {
                             startMin: parseTime(A.startTime),
                             endMin: parseTime(A.endTime),
@@ -625,8 +648,8 @@
                     };
 
                     jobs.push(job);
-                    log(`Created job for ${div}: ${sd.main1}/${sd.main2} (fallback: ${sd.fallbackActivity} for ${sd.fallbackFor})`);
-                }
+                    log(`Created job for ${div} [group ${sd.pairGroup || 'auto'}]: ${sd.main1}/${sd.main2}`);
+                });
             });
 
             return jobs;

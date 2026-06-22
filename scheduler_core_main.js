@@ -239,6 +239,23 @@
         return special?.location || null;
     }
 
+    // ★ Canonical category normalizer — collapses the fuzzy label variants a user
+    //   might type so "sport"/"sports", "special"/"specials"/"special activity"/
+    //   "special activities", and "activity"/"activities"/"general activity"/
+    //   "general" each map to ONE category. Returns 'special' | 'sport' | 'general',
+    //   or null for a SPECIFIC named activity (e.g. "Pickleball", "Lake"). Anchored
+    //   to the whole label so a real activity that merely contains the word (e.g.
+    //   "Special Olympics") is NOT swallowed.
+    function normalizeCategoryLabel(v) {
+        if (!v) return null;
+        const s = String(v).toLowerCase().trim().replace(/\s+/g, ' ').replace(/\s+slot$/, '').trim();
+        if (/^special(s)?( activit(y|ies))?$/.test(s)) return 'special';
+        if (/^sport(s)?$/.test(s)) return 'sport';
+        if (s === 'general' || /^(general )?activit(y|ies)$/.test(s)) return 'general';
+        return null;
+    }
+    window.normalizeCategoryLabel = normalizeCategoryLabel;
+
     function getLocationForPinnedEvent(skeletonEvent) {
         // 1. Direct location on skeleton item
         if (skeletonEvent.location && typeof skeletonEvent.location === 'string') {
@@ -1264,21 +1281,15 @@
             } = result;
 
             function needsGeneration(activityLabel) {
-                if (!activityLabel) return false;
-                const lower = activityLabel.toLowerCase().trim();
-                const genericSlots = [
-                    "sports slot", "general activity slot", "general activity",
-                    "activity slot", "activity",
-                    "special", "special activity", "special activity slot"
-                ];
-
-                if (genericSlots.includes(lower)) return true;
-
-                if (lower === "sports") {
-                    const isSportsConfigured = activityProperties?.["Sports"] || activityProperties?.["sports"];
-                    if (!isSportsConfigured) return true;
-                }
-                return false;
+                // ★ Fuzzy: any category variant (sport/sports, special/specials/
+                //   special activity/…, activity/activities/general activity) is a
+                //   generic slot the solver fills; a specific name (null) is not.
+                const cat = normalizeCategoryLabel(activityLabel);
+                if (!cat) return false;
+                // Preserve the legacy guard: a camp that literally configured a
+                // "Sports" activity means THAT activity, not the sport category.
+                if (cat === 'sport' && (activityProperties?.["Sports"] || activityProperties?.["sports"])) return false;
+                return true;
             }
 
          function routeActivity(bunk, activityLabel, blockInfo) {
