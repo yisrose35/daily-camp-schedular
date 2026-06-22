@@ -195,11 +195,23 @@ function ensurePerBunkSlotForRange(bunkName, divName, targetStart, targetEnd) {
 // does NOT open.
 // =====================================================================
 function resolveSlotsForEdit(bunk, divName, startMin, endMin) {
-    let slots = findSlotsForRange(startMin, endMin, divName, bunk);
-
-    if (slots.length === 0 && startMin != null && endMin != null &&
-        window.divisionTimes?.[divName]?._perBunkSlots) {
-        slots = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin) || [];
+    // Mirrors the fixed enhancedEditCell: in auto mode resolve STRICTLY against
+    // per-bunk slots (the indices openIntegratedEditModal/scheduleAssignments use),
+    // and materialize the exact range for an uncovered gap. Never fall through to
+    // division-level indices (which point at the wrong per-bunk slot).
+    const perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+    let slots;
+    if (perBunkSlots && startMin != null && endMin != null) {
+        slots = [];
+        for (let i = 0; i < perBunkSlots.length; i++) {
+            const s = perBunkSlots[i];
+            if (!(s.endMin <= startMin || s.startMin >= endMin)) slots.push(i);
+        }
+        if (slots.length === 0) {
+            slots = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin) || [];
+        }
+    } else {
+        slots = findSlotsForRange(startMin, endMin, divName, bunk);
     }
     return slots;
 }
@@ -306,5 +318,71 @@ describe('manual-mode is left untouched', () => {
         assert.equal(slots.length, 0, 'manual path unchanged (no _perBunkSlots reshape)');
         // The materializer itself refuses without per-bunk slots.
         assert.deepEqual(ensurePerBunkSlotForRange('Majors1', 'Majors', 700, 800), []);
+    });
+});
+
+// =====================================================================
+// REGRESSION: division-level fallthrough returned a WRONG index.
+// Live bug (Quartets ד): clicking the 11:30-12:00 gap opened/saved the
+// 12:15 swim slot. findSlotsForRange found no per-bunk overlap for the gap,
+// fell through to DIVISION-level slots, and returned a division index that
+// openIntegratedEditModal then applied to the per-bunk array → wrong slot.
+// =====================================================================
+describe('auto-mode gap does not resolve to a division-level index', () => {
+    beforeEach(() => {
+        // Quartets ד per-bunk slots: 650-690, [gap 690-720], 720-735 change,
+        // 735-775 swim. The division-level timeline is a DIFFERENT array whose
+        // index 0 (650-720) overlaps the 690-720 gap — the old fallthrough trap.
+        const divArr = [
+            { startMin: 650, endMin: 720 },   // division idx 0 overlaps the gap
+            { startMin: 720, endMin: 775 },
+            { startMin: 775, endMin: 810 }
+        ];
+        divArr._perBunkSlots = {
+            'Quartets ד': [
+                { startMin: 650, endMin: 690, slotIndex: 0 },
+                { startMin: 720, endMin: 735, slotIndex: 1 },
+                { startMin: 735, endMin: 775, slotIndex: 2 }   // ← swim (the wrong target)
+            ]
+        };
+        window.divisions = { Quartets: { bunks: ['Quartets ד'] } };
+        window.divisionTimes = { Quartets: divArr };
+        window.scheduleAssignments = {
+            'Quartets ד': [
+                { _activity: 'Arts', _startMin: 650, _endMin: 690 },
+                { _activity: 'Change', _startMin: 720, _endMin: 735 },
+                { _activity: 'Swim', _startMin: 735, _endMin: 775 }
+            ]
+        };
+    });
+
+    it('OLD behavior trap: findSlotsForRange falls through to a division index', () => {
+        // Demonstrates why the naive fix failed: a non-empty result whose index
+        // is a DIVISION index, not a per-bunk index.
+        const bad = findSlotsForRange(690, 720, 'Quartets', 'Quartets ד');
+        assert.ok(bad.length > 0, 'fallthrough returns a (division-level) hit');
+        // Interpreted as a per-bunk index, that points at the WRONG slot.
+        const wrong = window.divisionTimes.Quartets._perBunkSlots['Quartets ד'][bad[0]];
+        assert.notEqual(wrong.startMin, 690, 'division index ≠ the clicked gap');
+    });
+
+    it('FIX: resolves the gap to a materialized 690-720 per-bunk slot', () => {
+        const slots = resolveSlotsForEdit('Quartets ד', 'Quartets', 690, 720);
+        assert.equal(slots.length, 1);
+        const resolved = window.divisionTimes.Quartets._perBunkSlots['Quartets ד'][slots[0]];
+        assert.equal(resolved.startMin, 690, 'opens the clicked gap, not the swim');
+        assert.equal(resolved.endMin, 720);
+        // The swim slot is untouched and still present.
+        const swim = window.divisionTimes.Quartets._perBunkSlots['Quartets ד']
+            .find(s => s.startMin === 735 && s.endMin === 775);
+        assert.ok(swim, 'swim slot 735-775 preserved');
+    });
+
+    it('FIX: an existing per-bunk slot still resolves to itself (no division drift)', () => {
+        const slots = resolveSlotsForEdit('Quartets ד', 'Quartets', 735, 775);
+        assert.equal(slots.length, 1);
+        const resolved = window.divisionTimes.Quartets._perBunkSlots['Quartets ד'][slots[0]];
+        assert.equal(resolved.startMin, 735);
+        assert.equal(resolved.endMin, 775);
     });
 });
