@@ -866,8 +866,11 @@ function pcLeagueInfoAt(divName, startMin) {
     return { label: label, matchups: matchups };
 }
 
-function buildLeagueMatchups(eventBlock, divName) {
-    var matchups = [];
+// Returns matchup lines for a manual league block, formatted as
+// "Football - Football Field 1 - Bunk 1 vs 2". When `bunk` is given and the
+// teams are bunk-like, returns only that bunk's game; otherwise all games.
+function buildLeagueMatchups(eventBlock, divName, bunk) {
+    var raw = [];
     var la = window.leagueAssignments || {};
     var divLA = la[divName] || {};
 
@@ -882,51 +885,56 @@ function buildLeagueMatchups(eventBlock, divName) {
             allSlotEntries.push({ key: k, data: slotData, dist: dist });
         }
     });
-    allSlotEntries.sort(function(a, b) { return a.dist - b.dist; });
+    allSlotEntries.sort(function (a, b) { return a.dist - b.dist; });
 
-    if (allSlotEntries.length > 0) {
-        var bestEntry = allSlotEntries[0].data;
-        if (bestEntry && bestEntry.matchups) {
-            bestEntry.matchups.forEach(function (m) {
-                var desc = '';
-                if (typeof m === 'string') { desc = m; }
-                else if (m.display) { desc = m.display; }
-                else {
-                    var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
-                    if (tA && tB) {
-                        desc = tA + ' vs ' + tB;
-                        if (m.sport || m.field) desc += ' \u2013 ';
-                        if (m.sport) desc += m.sport.charAt(0).toUpperCase() + m.sport.slice(1);
-                        if (m.field) desc += ' (' + m.field + ')';
-                    } else if (m.matchup) { desc = m.matchup; }
-                }
-                if (desc) matchups.push(desc);
-            });
-        }
+    var slotSport = '', slotField = '';
+    if (allSlotEntries.length > 0 && allSlotEntries[0].data) {
+        var best = allSlotEntries[0].data;
+        if (best.matchups) raw = best.matchups;
+        slotSport = (best.sport || '').toString().trim();
+        slotField = (best.field || '').toString().trim();
     }
-
-    // Fallback: lastLeagueMatchups
-    if (!matchups.length) {
+    if (!raw.length) {
         var llm = window.lastLeagueMatchups;
-        if (llm && llm[divName] && llm[divName].matchups) {
-            llm[divName].matchups.forEach(function (m5) {
-                var d5 = '';
-                if (typeof m5 === 'string') d5 = m5;
-                else d5 = m5.display || ((m5.teamA || '') + ' vs ' + (m5.teamB || ''));
-                if (d5) matchups.push(d5);
-            });
-        }
+        if (llm && llm[divName] && llm[divName].matchups) raw = llm[divName].matchups;
     }
-    return matchups;
+
+    var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
+    // Backfill sport/field from the slot record when the matchup lacks them.
+    parsed.forEach(function (p) {
+        if (!p.sport && slotSport) p.sport = slotSport;
+        if (!p.field && slotField) p.field = slotField;
+    });
+
+    if (bunk != null) {
+        var bn = String(bunk).replace(/^bunk\s*/i, '').trim();
+        var mine = parsed.filter(function (p) {
+            return String(p.a).replace(/^bunk\s*/i, '').trim() === bn ||
+                   String(p.b).replace(/^bunk\s*/i, '').trim() === bn;
+        });
+        if (mine.length) parsed = mine;
+    }
+
+    return parsed.map(pcFormatMatchupLine);
 }
 
 // Parse one matchup (object or string) into { a, b, sport, field }.
 // Handles "1 vs 2 @ Football Field 1 (football)", "Bunk 1 vs Bunk 2 – Football", etc.
 function pcParseMatchup(m) {
     if (m && typeof m === 'object') {
+        var oa = String(m.teamA || m.team1 || '').trim();
+        var ob = String(m.teamB || m.team2 || '').trim();
+        if ((!oa || !ob) && (m.display || m.matchup)) {
+            // No structured teams — parse the human string, but keep any
+            // structured sport/field the object already carries.
+            var p = pcParseMatchup(String(m.display || m.matchup));
+            if (m.sport) p.sport = String(m.sport).trim();
+            if (m.field) p.field = String(m.field).trim();
+            return p;
+        }
         return {
-            a: String(m.teamA || m.team1 || '').trim(),
-            b: String(m.teamB || m.team2 || '').trim(),
+            a: oa,
+            b: ob,
             sport: (m.sport || '').toString().trim(),
             field: (m.field || '').toString().trim()
         };
@@ -945,6 +953,25 @@ function pcParseMatchup(m) {
     return { a: a, b: b, sport: sport, field: field };
 }
 
+// Format one parsed matchup as "Football - Football Field 1 - Bunk 1 vs 2".
+function pcFormatMatchupLine(p) {
+    var sport = p.sport ? (p.sport.charAt(0).toUpperCase() + p.sport.slice(1)) : '';
+    var a = /^\d+$/.test(String(p.a).trim()) ? 'Bunk ' + p.a : p.a;
+    return [sport, p.field, a + ' vs ' + p.b].filter(Boolean).join(' - ');
+}
+
+// Pull the raw leagueAssignments slot record for a division/time (sport, field, matchups).
+function pcLeagueSlotRecord(divName, startMin) {
+    if (divName == null || startMin == null) return null;
+    var la = window.leagueAssignments || {};
+    var divLA = la[divName] || {};
+    var sIdx = findFirstSlotForTime(startMin, divName);
+    var keys = [sIdx, String(sIdx), startMin, String(startMin)];
+    for (var i = 0; i < keys.length; i++) { if (keys[i] != null && divLA[keys[i]]) return divLA[keys[i]]; }
+    if (sIdx >= 0) { for (var off = 1; off <= 2; off++) { if (divLA[sIdx + off]) return divLA[sIdx + off]; if (divLA[sIdx - off]) return divLA[sIdx - off]; } }
+    return null;
+}
+
 // Build a rich league label for a bunk's game: "Football - Football Field 1 - Bunk 1 vs 2".
 // Returns { sport, field, matchup, full }. Picks the matchup involving `bunk` when the
 // teams are bunk-like; otherwise lists all matchups for the game.
@@ -954,10 +981,11 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
     var field = typeof entry.field === 'string' ? entry.field
               : (entry.field && entry.field.name ? entry.field.name : '');
     var raw = entry._matchups || entry.matchups || entry._allMatchups || [];
-    if ((!raw || !raw.length) && divName != null && startMin != null) {
-        var info = pcLeagueInfoAt(divName, startMin);
-        if (info && info.matchups) raw = info.matchups;
-    }
+    var rec = pcLeagueSlotRecord(divName, startMin);
+    if ((!raw || !raw.length) && rec && rec.matchups) raw = rec.matchups;
+    // Sport/field fallback from the league slot record (entry often lacks them).
+    if (!sport && rec && rec.sport) sport = String(rec.sport).trim();
+    if (!field && rec && rec.field) field = String(rec.field).trim();
     var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
 
     var mine = null;
@@ -2352,10 +2380,10 @@ function renderManualTimeTop(divName, bunks, blocks) {
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) {
                 type = 'league';
-                text = eb.event;
+                text = eb.event || 'League Game';
                 if (!_currentTemplate.hideLeagueMatchups) {
-                    var matchups = buildLeagueMatchups(eb, divName);
-                    if (matchups.length) text += ' | ' + matchups.join(', ');
+                    var matchups = buildLeagueMatchups(eb, divName, b);
+                    if (matchups.length) text = matchups.join(', ');
                 }
                 html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
             } else {
@@ -4480,13 +4508,12 @@ function buildExcelRows(item) {
             blocks.forEach(function (eb) {
                 var row = [eb.label];
                 if (eb.isLeague) {
-                    // League row: put the event name + matchups in each bunk cell
-                    var matchups = buildLeagueMatchups(eb, item);
-                    var leagueText = eb.event;
-                    if (matchups.length && !_currentTemplate.hideLeagueMatchups) {
-                        leagueText += ' | ' + matchups.join(', ');
-                    }
-                    bunks.forEach(function () { row.push(leagueText); });
+                    // Each bunk shows its own matchup: "Football - Field 1 - Bunk 1 vs 2".
+                    bunks.forEach(function (b) {
+                        if (_currentTemplate.hideLeagueMatchups) { row.push(eb.event || 'League Game'); return; }
+                        var ml = buildLeagueMatchups(eb, item, b);
+                        row.push(ml.length ? ml.join(', ') : (eb.event || 'League Game'));
+                    });
                 } else {
                     bunks.forEach(function (b) {
                         var si = findFirstSlotForTime(eb.startMin, item);
@@ -4609,9 +4636,9 @@ function buildExcelRows(item) {
             blocks2.forEach(function (slot) {
                 var si = findFirstSlotForTime(slot.startMin, dn);
                 if (slot.isLeague) {
-                    var matchups = buildLeagueMatchups(slot, dn);
-                    var leagueText = slot.event;
-                    if (matchups.length && !_currentTemplate.hideLeagueMatchups) leagueText += ' | ' + matchups.join(', ');
+                    // Activity = "Football - Field 1 - Bunk 1 vs 2" (this bunk's game).
+                    var ml = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(slot, dn, item);
+                    var leagueText = ml.length ? ml.join(', ') : (slot.event || 'League Game');
                     rows.push([slot.label, leagueText, '']);
                 } else {
                     var al2 = si >= 0 ? getExportActivityLocation(item, si) : { activity: '', location: '' };
