@@ -6485,31 +6485,39 @@
                     globalSpecialUsage[sName].slice().forEach(function (slot) {
                         var grade = slot.grade;
                         var Ts = slot.startMin, Te = slot.endMin;
+                        // CROSS-GRADE SHARE (window.__crossGradeShareFormer, default ON): for a cross_division
+                        // special, pool bunks from ANY allowedPairs-eligible grade into this session, and count
+                        // occupancy GLOBALLY (all grades overlapping) — mirroring canAssignSpecialToGrade's global
+                        // cross_division cap (:5679) so the loop bound + the "shared occ/cap" log are in the SAME
+                        // frame as the gate (never over-seats). For other share types this is byte-identical
+                        // (per-grade) to before. shiur/not_sharable never reach here (cap>1 guard above).
+                        var _xGrade = ((typeof window === 'undefined') || (window.__crossGradeShareFormer !== false)) && (info.shareType === 'cross_division');
                         var occ = globalSpecialUsage[sName].filter(function (e) {
-                            return e.grade === grade && e.startMin < Te && e.endMin > Ts;
+                            return (_xGrade || e.grade === grade) && e.startMin < Te && e.endMin > Ts;
                         }).length;
                         if (occ >= info.capacity) return; // already full at this slot
                         var _why = '';
                         for (var bi = 0; bi < allBunkList.length && occ < info.capacity; bi++) {
                             var cand = allBunkList[bi];
-                            if (cand.grade !== grade) continue;
+                            if (!_xGrade && cand.grade !== grade) continue;   // cross_division: admit any grade (gate enforces pairs + global cap)
+                            var cg = cand.grade;
                             var b = cand.bunk, r = draftResults[b], sl = shoppingLists[b];
                             if (!r || !sl) continue;
                             var cap = (sl.specials && sl.specials.cap != null) ? sl.specials.cap : ((sl.specials && sl.specials.required) || 0);
                             if (r.specials.length >= cap) continue;
                             if (r.usedActivities.has(sName)) continue;
-                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, grade, b, globalSettings)) { _why = 'availability/cooldown'; continue; } } catch (e) {}
-                            if (!canAssignSpecialToGrade(sName, grade, Ts, Te)) { _why = 'pair/capacity rule'; continue; }
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, cg, b, globalSettings)) { _why = 'availability/cooldown'; continue; } } catch (e) {}
+                            if (!canAssignSpecialToGrade(sName, cg, Ts, Te)) { _why = 'pair/capacity rule'; continue; }
                             var item = (sl.specials && sl.specials.priorityList || []).find(function (s) { return s.name === sName; });
                             var loc = (item && item.location) || slot.location || sName;
-                            if (loc && !isFieldStillAvailableGP(loc, Ts, Te, b, grade, sName)) { _why = 'field "' + loc + '" full (capacity)'; continue; }
+                            if (loc && !isFieldStillAvailableGP(loc, Ts, Te, b, cg, sName)) { _why = 'field "' + loc + '" full (capacity)'; continue; }
                             if (!_canPickSpecialBySubcategory(item || { subcategory: '' }, sl, r)) { _why = 'subcategory cap'; continue; }
                             // bunk must be free across the existing occupant's slot
                             var fw = getUpdatedFreeWindowsForBunk(b, sl, r);
                             if (!fw.some(function (w) { return w.start <= Ts && w.end >= Te; })) { _why = 'no free window at slot'; continue; }
                             // seat it — share the existing occupant's exact slot
-                            if (loc) claimFieldGlobal(loc, Ts, Te, b, grade, sName);
-                            registerSpecialAssignment(sName, grade, Ts, Te);
+                            if (loc) claimFieldGlobal(loc, Ts, Te, b, cg, sName);
+                            registerSpecialAssignment(sName, cg, Ts, Te);
                             r.specials.push({
                                 name: sName, type: (item && item.type) || 'special',
                                 rotationScore: item && item.rotationScore, duration: item && item.duration,
@@ -6563,8 +6571,15 @@
                 });
                 Object.keys(_sharable).forEach(function (sName) {
                     var capN = _sharable[sName];
-                    // group eligible candidates by grade
-                    var byGrade = {};
+                    // CROSS-GRADE SHARE (window.__crossGradeShareFormer, default ON): a cross_division special
+                    // pools bunks from ALL allowedPairs-eligible grades into ONE session (vs one session per
+                    // grade), seated at a single aligned start. canAssignSpecialToGrade enforces allowedPairs +
+                    // the global cap PER SEAT (:5674-5679) and isFieldStillAvailableGP guards the physical field,
+                    // so it can never over-seat. Other share types keep the original per-grade grouping
+                    // (byte-identical). not_sharable/shiur never reach here (cap>1 guard above).
+                    var _info6 = getSpecialSharingInfo(sName, activityProperties, globalSettings);
+                    var _xGrade6 = ((typeof window === 'undefined') || (window.__crossGradeShareFormer !== false)) && _info6 && _info6.shareType === 'cross_division';
+                    var _allC = [];
                     allBunkList.forEach(function (c) {
                         var b = c.bunk, g = c.grade, r = draftResults[b], sl = shoppingLists[b];
                         if (!r || !sl) return;
@@ -6574,10 +6589,17 @@
                         try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, g, b, globalSettings)) return; } catch (e) {}
                         var item = (sl.specials && sl.specials.priorityList || []).find(function (s) { return s.name === sName; });
                         if (!item) return;
-                        (byGrade[g] = byGrade[g] || []).push({ b: b, g: g, r: r, sl: sl, item: item });
+                        _allC.push({ b: b, g: g, r: r, sl: sl, item: item });
                     });
-                    Object.keys(byGrade).forEach(function (g) {
-                        var cands = byGrade[g];
+                    var _groups;
+                    if (_xGrade6) {
+                        _groups = _allC.length ? [_allC] : [];   // ONE cross-grade pool
+                    } else {
+                        var byGrade = {};
+                        _allC.forEach(function (x) { (byGrade[x.g] = byGrade[x.g] || []).push(x); });
+                        _groups = Object.keys(byGrade).map(function (k) { return byGrade[k]; });
+                    }
+                    _groups.forEach(function (cands) {
                         if (cands.length < 2) return; // need ≥2 to share
                         var D = (cands[0].item.totalDuration || cands[0].item.duration || cands[0].item.dMin || 0);
                         if (!D || D <= 0) return;
@@ -6589,13 +6611,13 @@
                             });
                         });
                         var Ts = Object.keys(Tset).map(Number).sort(function (a, b) { return a - b; });
-                        // pick the time that the most candidates can attend
+                        // pick the time that the most candidates can attend (each gated by its OWN grade c.g)
                         var bestT = null, bestList = [];
                         Ts.forEach(function (T) {
                             var Te = T + D;
                             var ok = [];
                             cands.forEach(function (c) {
-                                if (!canAssignSpecialToGrade(sName, g, T, Te)) return;
+                                if (!canAssignSpecialToGrade(sName, c.g, T, Te)) return;
                                 var loc = (c.item && c.item.location) || sName;
                                 var fw = getUpdatedFreeWindowsForBunk(c.b, c.sl, c.r);
                                 if (!fw.some(function (w) { return w.start <= T && w.end >= Te; })) return;
@@ -6609,11 +6631,11 @@
                         var seated = 0;
                         for (var k = 0; k < bestList.length && seated < capN; k++) {
                             var c = bestList[k], loc = (c.item && c.item.location) || sName;
-                            // final field-room guard (updates as we seat)
-                            if (loc && !isFieldStillAvailableGP(loc, bestT, Te, c.b, g, sName)) continue;
-                            if (!canAssignSpecialToGrade(sName, g, bestT, Te)) continue;
-                            if (loc) claimFieldGlobal(loc, bestT, Te, c.b, g, sName);
-                            registerSpecialAssignment(sName, g, bestT, Te);
+                            // final field-room guard + capacity gate (re-checked GLOBALLY as we seat → no over-seat)
+                            if (loc && !isFieldStillAvailableGP(loc, bestT, Te, c.b, c.g, sName)) continue;
+                            if (!canAssignSpecialToGrade(sName, c.g, bestT, Te)) continue;
+                            if (loc) claimFieldGlobal(loc, bestT, Te, c.b, c.g, sName);
+                            registerSpecialAssignment(sName, c.g, bestT, Te);
                             c.r.specials.push({
                                 name: sName, type: (c.item && c.item.type) || 'special',
                                 rotationScore: c.item && c.item.rotationScore, duration: c.item && c.item.duration,
