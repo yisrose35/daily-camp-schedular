@@ -2672,9 +2672,10 @@ function summarySpecialAccess(s) {
         if (list.length === 0) parts.push(g);
         else { parts.push(g + ' (' + list.length + ')'); totalBunks += list.length; hasBunkFilter = true; }
     });
-    return hasBunkFilter
+    const priSuffix = s.accessRestrictions.usePriority ? ' · prioritized' : '';
+    return (hasBunkFilter
         ? parts.join(', ')
-        : `${gradeKeys.length} grade${gradeKeys.length !== 1 ? 's' : ''} allowed`;
+        : `${gradeKeys.length} grade${gradeKeys.length !== 1 ? 's' : ''} allowed`) + priSuffix;
 }
 function summarySpecialTime(s) { return s.timeRules?.length ? `${s.timeRules.length} rule(s)` : "Available all day"; }
 function summarySpecialDays(s) {
@@ -2885,10 +2886,12 @@ function renderSpecialAccess(saData) {
     };
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = saData.accessRestrictions || { enabled: false, divisions: {}, priorityList: [] };
+        const rules = saData.accessRestrictions || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
         if (!rules.divisions || typeof rules.divisions !== 'object' || Array.isArray(rules.divisions)) {
             rules.divisions = {};
         }
+        if (!Array.isArray(rules.priorityList)) rules.priorityList = Object.keys(rules.divisions || {});
+        if (rules.usePriority === undefined) rules.usePriority = false;
 
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
@@ -2907,14 +2910,10 @@ function renderSpecialAccess(saData) {
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        if (!rules.enabled) {
-            renderContent._done = true;
-            return;
-        }
-
         const divisions = window.divisions || window.getGlobalDivisions?.() || {};
         const allDivs = _getOrderedGrades();
 
+        if (rules.enabled) {
         const help = document.createElement("div");
         help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
         help.innerHTML = 'Click a <strong>grade</strong> to allow/disallow it. Once a grade is allowed, click "All bunks" to switch to per-bunk picking and choose specific bunks (e.g., for a teacher-tied class).';
@@ -2938,8 +2937,14 @@ function renderSpecialAccess(saData) {
             gChip.textContent = divName;
             gChip.style.cursor = 'pointer';
             gChip.onclick = () => {
-                if (isAllowed) delete rules.divisions[divName];
-                else rules.divisions[divName] = [];
+                if (isAllowed) {
+                    delete rules.divisions[divName];
+                    rules.priorityList = (rules.priorityList || []).filter(d => d !== divName);
+                } else {
+                    rules.divisions[divName] = [];
+                    if (!Array.isArray(rules.priorityList)) rules.priorityList = [];
+                    if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName);
+                }
                 saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
             };
             headRow.appendChild(gChip);
@@ -2994,6 +2999,85 @@ function renderSpecialAccess(saData) {
 
             container.appendChild(gradeRow);
         });
+        } // end if (rules.enabled) — grade/bunk chips only show when restricted
+
+        // Priority Order — rank the grades that can use this special. When the
+        // activity is capacity-limited and contested, higher-priority grades are
+        // processed first and claim it first. Same data model + auto-solver
+        // mechanism as sport/field access priority (scheduler_core_auto.js reads
+        // accessRestrictions.usePriority/priorityList for both fields and specials).
+        const availableGrades = rules.enabled ? Object.keys(rules.divisions) : allDivs;
+        if (availableGrades.length >= 2) {
+            const prioritySection = document.createElement("div");
+            prioritySection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-top:12px;";
+
+            const priToggleRow = document.createElement("div");
+            priToggleRow.style.cssText = "display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;";
+
+            const priLabel = document.createElement("span");
+            priLabel.style.cssText = "font-weight:600; font-size:0.9rem;";
+            priLabel.textContent = "Priority Order";
+
+            const priTog = document.createElement("label"); priTog.className = "switch";
+            const priCb = document.createElement("input"); priCb.type = "checkbox"; priCb.checked = rules.usePriority === true;
+            priCb.onchange = () => {
+                rules.usePriority = priCb.checked;
+                if (priCb.checked && rules.priorityList.length === 0) rules.priorityList = [...availableGrades];
+                saData.accessRestrictions = rules;
+                saveSpecialData(saData); renderContent(); updateSummary();
+            };
+            const priSl = document.createElement("span"); priSl.className = "slider";
+            priTog.appendChild(priCb); priTog.appendChild(priSl);
+
+            priToggleRow.appendChild(priLabel); priToggleRow.appendChild(priTog);
+            prioritySection.appendChild(priToggleRow);
+
+            const priDesc = document.createElement("div");
+            priDesc.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:10px;";
+            priDesc.textContent = rules.usePriority ? "Higher = first access when this activity is contested." : "No preference — grades treated equally.";
+            prioritySection.appendChild(priDesc);
+
+            if (rules.usePriority) {
+                const validPriority = rules.priorityList.filter(d => availableGrades.includes(d));
+                const missing = availableGrades.filter(d => !validPriority.includes(d));
+                rules.priorityList = [...validPriority, ...missing];
+
+                const listEl = document.createElement("div");
+                listEl.style.cssText = "display:flex; flex-direction:column; gap:4px;";
+
+                rules.priorityList.forEach((divName, idx) => {
+                    const row = document.createElement("div");
+                    row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#fff; border:1px solid #E5E7EB; border-radius:6px;";
+                    row.innerHTML = `<span style="width:20px; text-align:center; font-weight:600; color:#147D91; font-size:0.85rem;">${idx + 1}</span>
+                        <span style="flex:1; font-size:0.85rem;">${escapeHtml(divName)}</span>`;
+
+                    const btnUp = document.createElement("button");
+                    btnUp.textContent = "↑";
+                    btnUp.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer;";
+                    btnUp.disabled = idx === 0;
+                    if (idx === 0) btnUp.style.opacity = "0.3";
+                    btnUp.onclick = () => {
+                        [rules.priorityList[idx - 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx - 1]];
+                        saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    };
+
+                    const btnDown = document.createElement("button");
+                    btnDown.textContent = "↓";
+                    btnDown.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer;";
+                    btnDown.disabled = idx === rules.priorityList.length - 1;
+                    if (idx === rules.priorityList.length - 1) btnDown.style.opacity = "0.3";
+                    btnDown.onclick = () => {
+                        [rules.priorityList[idx], rules.priorityList[idx + 1]] = [rules.priorityList[idx + 1], rules.priorityList[idx]];
+                        saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    };
+
+                    row.appendChild(btnUp); row.appendChild(btnDown);
+                    listEl.appendChild(row);
+                });
+                prioritySection.appendChild(listEl);
+            }
+            container.appendChild(prioritySection);
+        }
     };
     renderContent();
     return container;

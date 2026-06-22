@@ -803,6 +803,41 @@
         const _globalPriority = window.loadGlobalSettings?.()?.smartTilePriority || {};
         const _allSpecialNames = (window.getGlobalSpecialActivities?.() || []).map(s => s.name);
 
+        // ★ GRADE ACCESS PRIORITY (manual parity with the auto solver).
+        //   Each special whose Access & Restrictions enable a Priority Order
+        //   contributes per-grade rank votes (priorityList index). Under capacity
+        //   contention, bunks of higher-priority grades are ranked first in the
+        //   pre-allocation below, so they claim the limited special before
+        //   lower-priority grades — the same effect as the grade-processing order
+        //   in scheduler_core_auto.js. STRICT NO-OP when no special uses priority
+        //   (comparator returns 0 → bunk ranking is byte-identical to before).
+        const _specialGradePriority = (() => {
+            const score = {}, count = {};
+            const _specials = (window.getGlobalSpecialActivities?.() || window.getAllSpecialActivities?.() || []);
+            _specials.forEach(s => {
+                const ar = s && s.accessRestrictions;
+                if (ar && ar.usePriority && Array.isArray(ar.priorityList) && ar.priorityList.length > 0) {
+                    ar.priorityList.forEach((g, idx) => {
+                        score[g] = (score[g] || 0) + idx;
+                        count[g] = (count[g] || 0) + 1;
+                    });
+                }
+            });
+            return { score, count, active: Object.keys(score).length > 0 };
+        })();
+        // Compare two divisions by grade priority: lower average vote rank = higher
+        // priority; grades with no votes sort AFTER ranked grades (mirrors auto's
+        // tie-break at scheduler_core_auto.js). Returns 0 when priority is inactive.
+        function _gradePriorityCmp(divA, divB) {
+            if (!_specialGradePriority.active) return 0;
+            const cA = _specialGradePriority.count[divA] || 0;
+            const cB = _specialGradePriority.count[divB] || 0;
+            if (cA === 0 && cB === 0) return 0;
+            if (cA === 0) return 1;
+            if (cB === 0) return -1;
+            return (_specialGradePriority.score[divA] / cA) - (_specialGradePriority.score[divB] / cB);
+        }
+
       // Overlap-based claim tracker — division-aware, respects cross-division shareability
         const _specialClaims = {}; // specialName.lower → [{startMin, endMin, divName}]
         function _getSharableWith(name) {
@@ -890,8 +925,12 @@
             const _specialPool = new Map();
             _uniqueSpecials.forEach((cap, name) => _specialPool.set(name, cap));
 
-            // Sort most deserving first, assign specific specials top-down
-            _bunkRankings.sort((a, b) => a.score - b.score || Math.random() - 0.5);
+            // Sort most deserving first, assign specific specials top-down.
+            // ★ Higher-priority grades first (no-op unless a special uses priority),
+            //   then fairness, then random jitter.
+            _bunkRankings.sort((a, b) =>
+                _gradePriorityCmp(a.divName, b.divName) ||
+                (a.score - b.score) || (Math.random() - 0.5));
             _bunkRankings.forEach(entry => {
                 const bk = `${entry.divName}|${entry.bunk}|${startMin}|${endMin}`;
                 const hist = historicalCounts[entry.bunk] || {};
@@ -998,7 +1037,11 @@
             });
 
             // B3: Sort most deserving first
-            allBunkEntries.sort((a, b) => a.score - b.score || Math.random() - 0.5);
+            // ★ Higher-priority grades first (no-op unless a special uses priority),
+            //   then fairness, then random jitter.
+            allBunkEntries.sort((a, b) =>
+                _gradePriorityCmp(a.divName, b.divName) ||
+                (a.score - b.score) || (Math.random() - 0.5));
 
             console.log(`[PreAlloc]   Bunks: ${allBunkEntries.length}, Total slots: ${totalSpecialSlots}`);
 
