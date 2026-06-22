@@ -4180,14 +4180,12 @@ function buildPolishedWorkbook(sel) {
     if (_activeView === 'week') {
         sheetSpecs = [{ name: 'Week', rows: buildWeekExcelRows(sel) }];
     } else if (combinedAllBunks) {
-        // "Combine all bunks" = the WHOLE camp on one sheet, regardless of which
-        // divisions happen to be selected in the sidebar.
+        // "Combine all bunks" = the WHOLE camp, split across sheet tabs (bunks on
+        // top, time on Y), regardless of which divisions are selected.
         var allCampDivs = Object.keys(getDivisions());
-        var combinedRows = buildCombinedExcelRows(allCampDivs);
-        // If the combined builder found nothing (no resolvable bunks/activities),
-        // fall back to per-division sheets so the export is never empty.
-        sheetSpecs = (combinedRows && combinedRows.length)
-            ? [{ name: 'All Bunks', rows: combinedRows }]
+        var combinedSpecs = buildCombinedSheetSpecs(allCampDivs);
+        sheetSpecs = (combinedSpecs && combinedSpecs.length)
+            ? combinedSpecs
             : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
     } else {
         sheetSpecs = sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
@@ -4698,12 +4696,13 @@ function pcBunkActivityList(bunk, div) {
     return out;
 }
 
-// Combined ALL-BUNKS export: every bunk (across all selected grades) as a
-// column, a UNIFIED time axis down the rows. Because grades run on different
-// clocks, the row axis is the union of every activity boundary plus the
-// increment ticks; each activity is merged down the rows it spans.
-function buildCombinedExcelRows(divNames) {
-    var rows = [];
+// Combined ALL-BUNKS export. Every bunk in the camp is a column with a UNIFIED
+// time axis down the rows (built from every activity boundary plus the increment
+// ticks, so grades on different clocks all line up). Because the whole camp is
+// a lot of columns, the result is split across multiple sheet tabs — each tab
+// holds a chunk of bunks (kept grade-aligned where possible) with bunks on top
+// and time on Y. Returns an array of { name, rows } sheet specs.
+function buildCombinedSheetSpecs(divNames) {
     var dateStr = window.currentScheduleDate || '';
     var mode = isAutoMode() ? 'Auto' : 'Manual';
     var inc = _timeIncrement > 0 ? _timeIncrement : 15;
@@ -4711,46 +4710,43 @@ function buildCombinedExcelRows(divNames) {
 
     var orderedDivs = (typeof window.getUserDivisionOrder === 'function')
         ? window.getUserDivisionOrder(divNames) : divNames.slice();
-    // Keep only names that resolve to a real division with bunks; if the order
-    // helper returned nothing usable, fall back to the raw selection.
     orderedDivs = (orderedDivs || []).filter(function (d) { return divs[d] && divs[d].bunks && divs[d].bunks.length; });
     if (!orderedDivs.length) orderedDivs = (divNames || []).filter(function (d) { return divs[d] && divs[d].bunks && divs[d].bunks.length; });
 
-    // Columns: bunks grouped by division.
-    var colDefs = [];                 // { bunk, div }
-    var divGroups = [];               // { div, startCol, endCol }
+    // Grade blocks (each keeps its bunks together).
+    var gradeBlocks = [];
     orderedDivs.forEach(function (d) {
         var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
         if (!bunks.length) return;
-        var startCol = 1 + colDefs.length;
-        bunks.forEach(function (b) { colDefs.push({ bunk: b, div: d }); });
-        divGroups.push({ div: d, startCol: startCol, endCol: colDefs.length });
+        gradeBlocks.push({ div: d, cols: bunks.map(function (b) { return { bunk: b, div: d }; }) });
     });
-    if (!colDefs.length) return rows;
+    if (!gradeBlocks.length) return [];
 
     // Per-bunk activity lists + global time span.
+    var listMap = {};
     var globalStart = Infinity, globalEnd = -Infinity;
-    var lists = colDefs.map(function (c) {
-        var l = pcBunkActivityList(c.bunk, c.div);
-        l.forEach(function (a) {
-            if (a.startMin < globalStart) globalStart = a.startMin;
-            if (a.endMin > globalEnd) globalEnd = a.endMin;
+    gradeBlocks.forEach(function (gb) {
+        gb.cols.forEach(function (c) {
+            var l = pcBunkActivityList(c.bunk, c.div);
+            listMap[c.div + '|' + c.bunk] = l;
+            l.forEach(function (a) {
+                if (a.startMin < globalStart) globalStart = a.startMin;
+                if (a.endMin > globalEnd) globalEnd = a.endMin;
+            });
         });
-        return l;
     });
-    if (globalStart === Infinity) return rows;
+    if (globalStart === Infinity) return [];
 
-    // Row axis = increment ticks ∪ every activity edge (so different grade
-    // clocks all land on a shared set of row boundaries).
+    // Unified row axis = increment ticks ∪ every activity edge.
     var bset = {};
     bset[globalStart] = true; bset[globalEnd] = true;
     for (var t = Math.ceil(globalStart / inc) * inc; t < globalEnd; t += inc) bset[t] = true;
-    lists.forEach(function (l) {
-        l.forEach(function (a) {
+    gradeBlocks.forEach(function (gb) { gb.cols.forEach(function (c) {
+        listMap[c.div + '|' + c.bunk].forEach(function (a) {
             if (a.startMin >= globalStart && a.startMin <= globalEnd) bset[a.startMin] = true;
             if (a.endMin >= globalStart && a.endMin <= globalEnd) bset[a.endMin] = true;
         });
-    });
+    }); });
     var bounds = Object.keys(bset).map(Number).sort(function (a, b) { return a - b; });
     var rowDefs = [];
     for (var bi = 0; bi < bounds.length - 1; bi++) rowDefs.push({ start: bounds[bi], end: bounds[bi + 1] });
@@ -4761,61 +4757,82 @@ function buildCombinedExcelRows(divNames) {
         return h12 + ':' + (m < 10 ? '0' + m : m);
     };
 
-    rows.push(['All Bunks']);
-    rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
-    rows.push([]);
-    var divHeaderRow = rows.length;       // grade super-headers
-    var bunkHeaderRow = divHeaderRow + 1; // bunk names
-    var firstDataRow = bunkHeaderRow + 1;
-
-    var merges = [];
-    var divRow = new Array(1 + colDefs.length).fill('');
-    divRow[0] = '';
-    divGroups.forEach(function (g) {
-        divRow[g.startCol] = g.div;
-        if (g.endCol > g.startCol) merges.push({ s: { r: divHeaderRow, c: g.startCol }, e: { r: divHeaderRow, c: g.endCol } });
+    // Chunk grade blocks into sheets (~12 bunks each; a grade is never split
+    // unless it alone exceeds the chunk size).
+    var CHUNK = 12;
+    var chunks = [], cur = [];
+    gradeBlocks.forEach(function (gb) {
+        var curCount = cur.reduce(function (n, g) { return n + g.cols.length; }, 0);
+        if (cur.length && curCount + gb.cols.length > CHUNK) { chunks.push(cur); cur = []; }
+        cur.push(gb);
     });
-    rows.push(divRow);
-    rows.push(['Time'].concat(colDefs.map(function (c) { return c.bunk; })));
-    merges.push({ s: { r: divHeaderRow, c: 0 }, e: { r: bunkHeaderRow, c: 0 } });
+    if (cur.length) chunks.push(cur);
 
-    rowDefs.forEach(function (rd) {
-        var line = [incLabel(rd.start)];
-        colDefs.forEach(function () { line.push(''); });
-        rows.push(line);
-    });
+    var specs = [];
+    chunks.forEach(function (chunkBlocks, ci) {
+        var colDefs = [];
+        chunkBlocks.forEach(function (gb) { gb.cols.forEach(function (c) { colDefs.push(c); }); });
 
-    // Fill each bunk column; merge consecutive rows belonging to the same activity.
-    colDefs.forEach(function (c, ci) {
-        var col = 1 + ci;
-        var list = lists[ci];
-        var runStart = -1, runKey = null, runValue = '';
-        for (var ri = 0; ri <= rowDefs.length; ri++) {
-            var act = null;
-            if (ri < rowDefs.length) {
-                var rs = rowDefs[ri].start;
-                for (var ai = 0; ai < list.length; ai++) {
-                    if (list[ai].startMin <= rs && list[ai].endMin > rs) { act = list[ai]; break; }
+        var rows = [];
+        var suffix = chunks.length > 1 ? ' (' + (ci + 1) + ' of ' + chunks.length + ')' : '';
+        rows.push(['All Bunks' + suffix]);
+        rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
+        rows.push([]);
+        var divHeaderRow = rows.length;
+        var bunkHeaderRow = divHeaderRow + 1;
+        var firstDataRow = bunkHeaderRow + 1;
+
+        var merges = [];
+        var divRow = new Array(1 + colDefs.length).fill('');
+        var cursor = 1;
+        chunkBlocks.forEach(function (gb) {
+            var startCol = cursor, endCol = cursor + gb.cols.length - 1;
+            divRow[startCol] = gb.div;
+            if (endCol > startCol) merges.push({ s: { r: divHeaderRow, c: startCol }, e: { r: divHeaderRow, c: endCol } });
+            cursor = endCol + 1;
+        });
+        rows.push(divRow);
+        rows.push(['Time'].concat(colDefs.map(function (c) { return c.bunk; })));
+        merges.push({ s: { r: divHeaderRow, c: 0 }, e: { r: bunkHeaderRow, c: 0 } });
+
+        rowDefs.forEach(function (rd) {
+            var line = [incLabel(rd.start)];
+            colDefs.forEach(function () { line.push(''); });
+            rows.push(line);
+        });
+
+        colDefs.forEach(function (c, cidx) {
+            var col = 1 + cidx;
+            var list = listMap[c.div + '|' + c.bunk] || [];
+            var runStart = -1, runKey = null, runValue = '';
+            for (var ri = 0; ri <= rowDefs.length; ri++) {
+                var act = null;
+                if (ri < rowDefs.length) {
+                    var rs = rowDefs[ri].start;
+                    for (var ai = 0; ai < list.length; ai++) {
+                        if (list[ai].startMin <= rs && list[ai].endMin > rs) { act = list[ai]; break; }
+                    }
+                }
+                var key = act ? (act.startMin + '-' + act.endMin) : null;
+                if (key !== runKey) {
+                    if (runStart >= 0 && runValue) {
+                        var rStart = firstDataRow + runStart;
+                        var rEnd = firstDataRow + ri - 1;
+                        rows[rStart][col] = runValue;
+                        if (rEnd > rStart) merges.push({ s: { r: rStart, c: col }, e: { r: rEnd, c: col } });
+                    }
+                    runStart = ri; runKey = key; runValue = act ? act.value : '';
                 }
             }
-            var key = act ? (act.startMin + '-' + act.endMin) : null;
-            if (key !== runKey) {
-                if (runStart >= 0 && runValue) {
-                    var rStart = firstDataRow + runStart;
-                    var rEnd = firstDataRow + ri - 1;
-                    rows[rStart][col] = runValue;
-                    if (rEnd > rStart) merges.push({ s: { r: rStart, c: col }, e: { r: rEnd, c: col } });
-                }
-                runStart = ri; runKey = key; runValue = act ? act.value : '';
-            }
-        }
-    });
+        });
 
-    rows._merges = merges;
-    rows._headerRows = [divHeaderRow, bunkHeaderRow];
-    rows._freezeRow = firstDataRow;
-    rows._freezeCol = 1;
-    return rows;
+        rows._merges = merges;
+        rows._headerRows = [divHeaderRow, bunkHeaderRow];
+        rows._freezeRow = firstDataRow;
+        rows._freezeCol = 1;
+        specs.push({ name: chunks.length > 1 ? ('Bunks ' + (ci + 1)) : 'All Bunks', rows: rows });
+    });
+    return specs;
 }
 
 // ★ #V2-18: neutralize CSV / spreadsheet formula injection. A cell whose value
