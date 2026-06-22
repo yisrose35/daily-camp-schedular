@@ -4445,11 +4445,13 @@ function buildExcelRows(item) {
         }
 
         // ─── Transpose: time on the X axis, bunks on the Y axis ───
-        // When increments are ON (fixed-increment mode, not activity-aligned),
-        // each period is split into sub-columns: a merged period super-header on
-        // top, the increment times beneath, and each activity merged across the
-        // increments it spans — mirroring the on-screen grid.
-        var incOn = !_activityAligned && _timeIncrement > 0 &&
+        // The Excel sheet always breaks each period into the selected time
+        // increment: a merged period super-header on top, the increment times
+        // beneath it, and each activity merged across the increments it spans.
+        // Driven purely by the increment picker (independent of the on-screen
+        // card layout). Falls back to one-column-per-period only if a period is
+        // no longer than a single increment.
+        var incOn = _timeIncrement > 0 &&
                     slotMeta.some(function (s) { return (s.endMin - s.startMin) > _timeIncrement; });
         if (grid.length > 1 && incOn) {
             var inc = _timeIncrement;
