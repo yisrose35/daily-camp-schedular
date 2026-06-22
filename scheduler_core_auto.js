@@ -18751,6 +18751,48 @@
                                     }
                                 }
                             } catch (_spShErr) { try { warn('[GENERIC-SPREAD shadow] error: ' + (_spShErr && _spShErr.message)); } catch (_e) {} }
+                            // ── SHARABLE-SPECIAL ALIGNMENT (cluster cross_division specials onto common bands) ──
+                            // PeriodLayout packs each bunk independently, so a uniformly cross_division special
+                            // (e.g. Theme Activity cap 15) scatters across starts → many under-filled sessions,
+                            // and the staggered-sharing guard (_glCapFits / __alignShared) then blocks a same-
+                            // grade bunk from joining a session at an OFFSET start. This clusters such tiles onto
+                            // a shared band — swapping a bunk's off-band special with its OWN equal-duration sport
+                            // sitting on that band — so one session serves many bunks and the vacated slots become
+                            // fillable Sports. SHADOW by default; set window.__glAlign=true to APPLY. Per-bunk
+                            // counts + wall-to-wall + each special's cap are preserved; runs BEFORE fill so the
+                            // fill seats the (now aligned) shared session.
+                            try {
+                                if (window.GLAlign && typeof window.GLAlign.align === 'function') {
+                                    // a subcat qualifies only if EVERY activity in it is cross_division (cap>1) —
+                                    // then a generic tile of that subcat is guaranteed to fill with a sharable
+                                    // activity, so clustering can never strand a not_sharable one.
+                                    var _alSubs = {};
+                                    Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                        var names = _glNamesBySub[sub] || [];
+                                        if (!names.length) return;
+                                        var allX = true, minCap = Infinity;
+                                        names.forEach(function (nm) {
+                                            var sh = _glSpecShare[String(nm).toLowerCase().trim()] || { type: 'not_sharable', cap: 1 };
+                                            if (sh.type !== 'cross_division' || !(sh.cap > 1)) allX = false;
+                                            if (sh.cap < minCap) minCap = sh.cap;
+                                        });
+                                        if (allX && isFinite(minCap) && minCap > 1) _alSubs[sub] = minCap;
+                                    });
+                                    if (Object.keys(_alSubs).length) {
+                                        var _alBunks = [];
+                                        _glOrder.forEach(function (b) { var r = _glOut.layoutByBunk[b]; if (r && r.tiles) _alBunks.push({ tiles: r.tiles }); });
+                                        var _alApply = (typeof window !== 'undefined' && window.__glAlign === true);
+                                        var _alRes = window.GLAlign.align({ bunks: _alBunks, sharableSubcats: _alSubs, canon: _glCanon, apply: _alApply });
+                                        var _alStr = (_alRes.plan.subcats || []).filter(function (s) { return s.sessionsAfter < s.sessionsBefore; })
+                                            .map(function (s) { return s.key + ' ' + s.sessionsBefore + '→' + s.sessionsAfter; }).join(', ');
+                                        if (_alRes.plan.totalSwaps > 0) {
+                                            log('[GENERIC-ALIGN] ' + (_alApply ? 'APPLIED' : 'shadow') + ' — clustered sharable specials onto common bands: ' + _alRes.plan.totalSwaps + ' swap(s)' + (_alStr ? ' (' + _alStr + ')' : '') + (_alApply ? '' : ' — set window.__glAlign=true to apply'));
+                                        } else {
+                                            log('[GENERIC-ALIGN] ' + (_alApply ? 'on' : 'shadow') + ' — no cross_division special needs clustering (already aligned, or no free swap target)');
+                                        }
+                                    }
+                                }
+                            } catch (_alErr) { try { warn('[GENERIC-ALIGN] error — left as-is: ' + (_alErr && _alErr.message)); } catch (_e) {} }
                             _glOrder.forEach(function (bunk) {
                                 var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
                                 var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
