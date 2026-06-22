@@ -4798,6 +4798,24 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.9: FINAL FREQUENCY BACKSTOP
+        // =========================================================================
+        // Guarantee no max/exact ceiling or frequencyDays cooldown the user set
+        // survives the manual build — fillBlock trusts the upstream pick, so this
+        // DEMOTE-ONLY sweep is the manual analog of auto's STEP 6.88. Runs BEFORE
+        // the history/count update below so demoted slots aren't counted.
+        try {
+            if (window.SchedulerCoreUtils?.enforceFrequencyLimitsSweep) {
+                const _freqSweep = window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({
+                    date: window.currentScheduleDate || new Date().toISOString().split('T')[0]
+                });
+                if (_freqSweep && _freqSweep.count > 0) {
+                    console.warn('[STEP 7.9 FREQ-SWEEP] demoted ' + _freqSweep.count + ' over-limit/cooldown placement(s) → Free');
+                }
+            }
+        } catch (_eFreqSweep) { console.warn('[STEP 7.9 FREQ-SWEEP] error:', _eFreqSweep && _eFreqSweep.message); }
+
+        // =========================================================================
         // STEP 8: Update History
         // =========================================================================
 

@@ -152,3 +152,97 @@ describe('checkFrequencyLimits — frequencyDays cooldown', () => {
         assert.equal(f('B1', 'TripDay', 'G1').ok, true);
     });
 });
+
+describe('enforceFrequencyLimitsSweep — final backstop', () => {
+    function withGrid(sb, bunk, grade, entries) {
+        sb.window.divisions = { [grade]: { bunks: [bunk] } };
+        sb.window.scheduleAssignments = { [bunk]: entries };
+    }
+
+    it('frees the EXCESS over a max cap, keeping the first N', () => {
+        const sb = setup();
+        sb.window.activityProperties = { Pottery: { maxUsage: 2, maxUsagePeriod: 'half' } };
+        withGrid(sb, 'B1', 'G1', [
+            { _activity: 'Pottery', continuation: false },
+            { _activity: 'Pottery', continuation: false },
+            { _activity: 'Pottery', continuation: false }, // 3rd — excess
+        ]);
+        const r = sb.window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: '2026-06-22' });
+        assert.equal(r.count, 1);
+        const arr = sb.window.scheduleAssignments.B1;
+        assert.equal(arr[0]._activity, 'Pottery'); // kept
+        assert.equal(arr[1]._activity, 'Pottery'); // kept
+        assert.equal(arr[2]._activity, 'Free');     // demoted
+        assert.equal(arr[2]._constraintDemoted, true);
+    });
+
+    it('clears trailing continuation slots of a demoted multi-period block', () => {
+        const sb = setup();
+        sb.window.activityProperties = { Swim: { maxUsage: 1, maxUsagePeriod: 'half' } };
+        withGrid(sb, 'B1', 'G1', [
+            { _activity: 'Swim', continuation: false },
+            { _activity: 'Swim', continuation: false }, // 2nd lead — excess
+            { _activity: 'Swim', continuation: true },  // its continuation
+        ]);
+        const r = sb.window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: '2026-06-22' });
+        assert.equal(r.count, 1);
+        const arr = sb.window.scheduleAssignments.B1;
+        assert.equal(arr[0]._activity, 'Swim');
+        assert.equal(arr[1]._activity, 'Free');
+        assert.equal(arr[2]._activity, 'Free'); // continuation cleared
+    });
+
+    it('never demotes protected entries (pins, league, trips, overrides, post-edit)', () => {
+        const sb = setup();
+        sb.window.activityProperties = { Pottery: { maxUsage: 1, maxUsagePeriod: 'half' } };
+        withGrid(sb, 'B1', 'G1', [
+            { _activity: 'Pottery', continuation: false },                 // 1st kept
+            { _activity: 'Pottery', continuation: false, _pinned: true },  // protected
+            { _activity: 'Pottery', continuation: false, _postEdit: true },// protected
+        ]);
+        const r = sb.window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: '2026-06-22' });
+        assert.equal(r.count, 0);
+        assert.equal(sb.window.scheduleAssignments.B1[1]._activity, 'Pottery');
+        assert.equal(sb.window.scheduleAssignments.B1[2]._activity, 'Pottery');
+    });
+
+    it('leaves activities WITHOUT a configured limit untouched', () => {
+        const sb = setup();
+        sb.window.activityProperties = { Basketball: {} };
+        withGrid(sb, 'B1', 'G1', [
+            { _activity: 'Basketball', continuation: false },
+            { _activity: 'Basketball', continuation: false },
+            { _activity: 'Basketball', continuation: false },
+        ]);
+        const r = sb.window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: '2026-06-22' });
+        assert.equal(r.count, 0);
+    });
+
+    it('frees ALL today occurrences when a prior saved day is within cooldown', () => {
+        const sb = setup();
+        sb.window.activityProperties = { TripDay: { frequencyDays: 3 } };
+        // Prior saved day 1 day before → within the 3-day cooldown.
+        sb.window.loadAllDailyData = () => ({
+            '2026-06-21': { scheduleAssignments: { B1: [{ _activity: 'TripDay', continuation: false }] } }
+        });
+        withGrid(sb, 'B1', 'G1', [
+            { _activity: 'TripDay', continuation: false },
+            { _activity: 'TripDay', continuation: false },
+        ]);
+        const r = sb.window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: '2026-06-22' });
+        assert.equal(r.count, 2); // both freed — can't be here at all today
+        assert.equal(sb.window.scheduleAssignments.B1[0]._activity, 'Free');
+        assert.equal(sb.window.scheduleAssignments.B1[1]._activity, 'Free');
+    });
+
+    it('respects per-grade max override', () => {
+        const sb = setup();
+        sb.window.activityProperties = { Pottery: { maxUsage: 5, maxUsagePerGrade: { G1: 1 }, maxUsagePeriod: 'half' } };
+        withGrid(sb, 'B1', 'G1', [
+            { _activity: 'Pottery', continuation: false },
+            { _activity: 'Pottery', continuation: false }, // excess for grade cap of 1
+        ]);
+        const r = sb.window.SchedulerCoreUtils.enforceFrequencyLimitsSweep({ date: '2026-06-22' });
+        assert.equal(r.count, 1);
+    });
+});
