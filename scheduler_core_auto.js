@@ -17590,9 +17590,12 @@
             //   Iteration 0 only. Fully fail-safe: ANY error falls through to normal gen.
             if (totalIters < 1) {
               try {
-                var _genOn = true;   // default ON — disable with window.__useGenericLayout=false (or globalSettings.app1.useGenericLayout=false)
-                try { var _wGen = (typeof window !== 'undefined') ? window.__useGenericLayout : undefined; var _aGen = (globalSettings && globalSettings.app1) ? globalSettings.app1.useGenericLayout : undefined; _genOn = (_wGen === false || _aGen === false) ? false : true; } catch (_e) {}
-                if (_genOn && window.PeriodLayout && window.PeriodPacker && window.DivisionTimesSystem) {
+                var _genOn = true;   // default ON — disable ONLY with window.__useGenericLayout=false (app1 config can no longer silently disable it)
+                try { _genOn = (typeof window === 'undefined') || (window.__useGenericLayout !== false); } catch (_e) {}
+                var _glReady = (typeof window !== 'undefined') && !!(window.PeriodLayout && window.PeriodPacker && window.DivisionTimesSystem);
+                // ALWAYS log the gate decision so a legacy fallback is never silent (stale bundle / missing module / flag off)
+                try { log('[GENERIC-LAYOUT] gate → genOn=' + _genOn + ', modules ' + (_glReady ? 'present' : ('MISSING (PeriodLayout=' + !!(typeof window !== 'undefined' && window.PeriodLayout) + ' PeriodPacker=' + !!(typeof window !== 'undefined' && window.PeriodPacker) + ' DivisionTimesSystem=' + !!(typeof window !== 'undefined' && window.DivisionTimesSystem) + ')')) + ' → ' + ((_genOn && _glReady) ? 'GENERIC-LAYOUT' : 'LEGACY solver')); } catch (_e) {}
+                if (_genOn && _glReady) {
                     log('═══════════════════════════════════════════════════════════');
                     log('[GENERIC-LAYOUT] ★ ACTIVE — laying generic kind tiles, NOT activities. (disable: window.__useGenericLayout=false)');
 
