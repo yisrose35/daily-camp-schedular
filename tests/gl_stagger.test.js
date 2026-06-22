@@ -296,6 +296,127 @@ test('absorb SPORTLESS repeat-fill: scarce specials repeat instead of going dead
     assert.strictEqual(on.filter(t => t.kind === 'special' && t._concrete === 'OnlySpecial').length, 2, 'both open blocks are the real special');
 });
 
+// ── reorderDeadWindows: EXECUTE the swap the absorb probe only measured ──
+// A "dead window" is a generic special the absorb pass couldn't fill (no seat at its time) and
+// couldn't convert to a Sport (a MOVABLE generic sport sits within the spacing radius). Reorder
+// swaps the two when it's a STRICT WIN: the displaced special lands a concrete free-seat fill at
+// the sport's vacated slot AND a Sport is spacing-legal in the freed window.
+function sportSpacingGate(block, template) {
+    if (block.type !== 'sport') return true;             // only Sports are spacing-constrained
+    return !template.some(function (t) {                 // no Sport within 40 min of another Sport
+        return t.type === 'sport' && t.startMin < block.endMin + 40 && t.endMin > block.startMin - 40;
+    });
+}
+
+test('reorder: dead special swaps with a blocking movable sport — freed window becomes a spaced Sport, displaced special fills', () => {
+    const W = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 200] } };
+    const B = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [0, 200] } };
+    const bunks = [{ grade: 'G', tiles: [W, B], pool: [{ name: 'X', subcategory: 'Regular' }] }];
+    const ctx = makeCtx(bunks, { durs: { X: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    let fills = 0; ctx.onReorder = () => { fills++; };
+    seed(ctx, 'X', 'other', 0, 40);                          // X saturated at the dead window, free at the sport slot
+    const before = intervals(bunks[0].tiles);
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 1);
+    assert.strictEqual(r.attempts, 1);
+    assert.strictEqual(fills, 1);                            // onReorder fired once
+    // W (the special) moved onto the sport's vacated slot and is now a concrete fill
+    assert.strictEqual(W._concrete, 'X'); assert.strictEqual(W.generic, false);
+    assert.strictEqual(W.startMin, 50); assert.strictEqual(W.endMin, 90);
+    assert.strictEqual(W._origin, 'reorder-fill');
+    // B (the sport) took the freed dead window and stays GENERIC for GENERIC-SPORT-FILL to concretize
+    assert.strictEqual(B.startMin, 0); assert.strictEqual(B.endMin, 40);
+    assert.strictEqual(B.kind, 'sport'); assert.ok(!B._concrete); assert.strictEqual(B.generic, true);
+    assert.strictEqual(B._origin, 'reorder-sport');
+    // wall-to-wall preserved; X is recorded at its NEW [50,90] slot (not the old dead [0,40])
+    assert.deepStrictEqual(intervals(bunks[0].tiles), before);
+    assert.ok((ctx._usage['x'] || []).some(u => u.s === 50 && u.e === 90));
+});
+
+test('reorder: declines when the displaced special has no free seat at the sport slot (never worse)', () => {
+    const W = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 200] } };
+    const B = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [0, 200] } };
+    const bunks = [{ grade: 'G', tiles: [W, B], pool: [{ name: 'X', subcategory: 'Regular' }] }];
+    const ctx = makeCtx(bunks, { durs: { X: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    seed(ctx, 'X', 'other', 0, 40); seed(ctx, 'X', 'other', 50, 90);     // X saturated EVERYWHERE
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 0);
+    assert.strictEqual(r.attempts, 1);                                   // it tried the candidate, then bailed
+    assert.ok(!W._concrete); assert.strictEqual(W.startMin, 0);          // untouched
+    assert.strictEqual(B.startMin, 50);                                  // untouched
+});
+
+test('reorder: declines when a Sport would be mis-spaced in the freed window (another sport still blocks)', () => {
+    const W = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 100, endMin: 140, _ref: { window: [0, 400] } };
+    const C = { kind: 'sport', generic: false, _concrete: 'Soccer', durationMin: 40, startMin: 150, endMin: 190, _ref: { window: [0, 400] } }; // FIXED sport near W
+    const B = { kind: 'sport', generic: true, durationMin: 40, startMin: 250, endMin: 290, _ref: { window: [0, 400] } };                        // the movable sport, far away
+    const bunks = [{ grade: 'G', tiles: [W, C, B], pool: [{ name: 'X', subcategory: 'Regular' }] }];
+    const ctx = makeCtx(bunks, { durs: { X: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    seed(ctx, 'X', 'other', 100, 140);                                   // X free at B's slot, so the FILL would succeed
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 0);                                  // moving B doesn't help: C still blocks a sport at W
+    assert.strictEqual(r.attempts, 1);
+    assert.ok(!W._concrete); assert.strictEqual(W.startMin, 100);
+    assert.strictEqual(B.startMin, 250);                                 // the concrete sport C was never a swap candidate
+});
+
+test('reorder: respects layer windows — no swap (and no attempt counted) if either tile would leave its window', () => {
+    const W = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 40] } };   // pinned window
+    const B = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [50, 90] } };
+    const bunks = [{ grade: 'G', tiles: [W, B], pool: [{ name: 'X', subcategory: 'Regular' }] }];
+    const ctx = makeCtx(bunks, { durs: { X: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    seed(ctx, 'X', 'other', 0, 40);
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 0);
+    assert.strictEqual(r.attempts, 0);                                   // window gate rejects before counting an attempt
+    assert.ok(!W._concrete);
+});
+
+test('reorder: a sportless bunk (noSport) is skipped — no sport exists to relocate', () => {
+    const W = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 200] } };
+    const B = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [0, 200] } };
+    const bunks = [{ grade: 'G', tiles: [W, B], pool: [{ name: 'X', subcategory: 'Regular' }], noSport: true }];
+    const ctx = makeCtx(bunks, { durs: { X: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    seed(ctx, 'X', 'other', 0, 40);
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 0);
+    assert.ok(!W._concrete); assert.strictEqual(W.startMin, 0);          // untouched
+});
+
+test('reorder: two dead windows each with a movable sport and a distinct special → both rescued', () => {
+    const W1 = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 400] } };
+    const B1 = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [0, 400] } };
+    const W2 = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 200, endMin: 240, _ref: { window: [0, 400] } };
+    const B2 = { kind: 'sport', generic: true, durationMin: 40, startMin: 250, endMin: 290, _ref: { window: [0, 400] } };
+    const bunks = [{ grade: 'G', tiles: [W1, B1, W2, B2], pool: [{ name: 'X', subcategory: 'Regular' }, { name: 'Y', subcategory: 'Regular' }] }];
+    const ctx = makeCtx(bunks, { durs: { X: [40], Y: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    seed(ctx, 'X', 'other', 0, 40); seed(ctx, 'Y', 'other', 0, 40);              // both specials taken at the dead windows…
+    seed(ctx, 'X', 'other', 200, 240); seed(ctx, 'Y', 'other', 200, 240);       // …free at the sport slots
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 2);
+    assert.ok(W1._concrete && W2._concrete);
+    assert.notStrictEqual(W1._concrete, W2._concrete);                          // distinct specials, no same-day repeat
+});
+
+test('reorder: never same-day-repeats — with only one special, just one of two dead windows is rescued', () => {
+    const W1 = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 400] } };
+    const B1 = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [0, 400] } };
+    const W2 = { kind: 'special', generic: true, subcat: 'Regular', durationMin: 40, startMin: 200, endMin: 240, _ref: { window: [0, 400] } };
+    const B2 = { kind: 'sport', generic: true, durationMin: 40, startMin: 250, endMin: 290, _ref: { window: [0, 400] } };
+    const bunks = [{ grade: 'G', tiles: [W1, B1, W2, B2], pool: [{ name: 'X', subcategory: 'Regular' }] }];
+    const ctx = makeCtx(bunks, { caps: { x: 9 }, durs: { X: [40] } });          // plenty of X seats — the ONLY limit is no same-day repeat
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 1);                                         // X fills one window; the other can't repeat X → stays dead
+    assert.strictEqual([W1, W2].filter(t => t._concrete === 'X').length, 1);
+});
+
 test('stress: 40 bunks × 8 tiles — terminates, invariants hold (no stack/cap/overlap/repeat issues)', () => {
     const bunks = [];
     const durs = {};

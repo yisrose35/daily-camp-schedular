@@ -18886,6 +18886,38 @@
                                     }
                                 }
                             } catch (_glAbsErr) { try { warn('[GENERIC-ABSORB] error — left as-is: ' + (_glAbsErr && _glAbsErr.message)); } catch (_e) {} }
+                            // ── REORDER (engine, default ON — kill with window.__reorderApply=false): the
+                            // absorb probe above only MEASURES which dead windows are RELOCATABLE. This pass
+                            // ACTS on them. For each dead generic special whose only blocker is a MOVABLE
+                            // generic sport sitting in its spacing radius, SWAP the two (equal duration, both
+                            // stay inside their layer windows) — but only as a STRICT WIN: the displaced
+                            // special must land a concrete free-seat fill at the sport's vacated slot AND a
+                            // Sport must be spacing-legal in the freed window (gated against the bunk's FULL
+                            // tile set minus the moved sport). Net per rescue: one dead tile → a real filled
+                            // special; the sport merely relocates (the later GENERIC-SPORT-FILL concretizes it
+                            // on a field). capFits gates the fill, the gate gates the sport — every
+                            // sharing/cap/spacing rule stays strict. Fail-soft: any error leaves tiles as-is.
+                            try {
+                                if ((typeof window === 'undefined' || window.__reorderApply !== false) && window.GLStagger && typeof window.GLStagger.reorderDeadWindows === 'function') {
+                                    var _reoBunks = [];
+                                    var _reoNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        var _noSport = _reoNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                        _reoBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
+                                    });
+                                    var _reoRes = window.GLStagger.reorderDeadWindows({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
+                                    if (_reoRes && _reoRes.reordered) {
+                                        _glFill.reordered = _reoRes.reordered;
+                                        log('[GENERIC-REORDER] rescued ' + _reoRes.reordered + ' dead window(s): swapped a blocking movable sport out → the freed window becomes a properly-spaced Sport and the displaced special is filled concretely (' + _reoRes.attempts + ' swap attempt(s))');
+                                    } else if (_reoRes && _reoRes.attempts) {
+                                        log('[GENERIC-REORDER] no strict-win swaps among ' + _reoRes.attempts + ' candidate(s) — dead windows left as-is (the displaced special found no free seat, or a Sport would be mis-spaced in the freed window)');
+                                    }
+                                }
+                            } catch (_glReoErr) { try { warn('[GENERIC-REORDER] error — left as-is: ' + (_glReoErr && _glReoErr.message)); } catch (_e) {} }
                             // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,
                             // no matter which pass laid a tile. Any UNFILLED generic special over its
                             // seats (camp-wide OR per-grade) is pulled down to a category with room (sport

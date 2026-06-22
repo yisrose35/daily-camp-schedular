@@ -413,7 +413,98 @@
         return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, toSplitFilled: toSplitFilled, toRepeatFilled: toRepeatFilled, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport };
+    // reorderDeadWindows(ctx) — EXECUTE the swap the absorb probe only measured. After absorb,
+    // some windows are dead generic "Special: Uncategorized" placeholders: at their time no
+    // special seat is free, AND a Sport can't go there because a MOVABLE generic sport sits
+    // within the spacing-cooldown radius. The probe flags those RELOCATABLE; this pass acts on
+    // them by SWAPPING the dead special with that blocking sport — but ONLY when the swap is a
+    // STRICT WIN:
+    //   (1) after the swap the displaced special lands on the sport's vacated slot AND a
+    //       free-seat concrete activity exists there (so a dead tile becomes a real special), and
+    //   (2) a Sport is spacing-legal in the now-freed dead window (tested against the bunk's FULL
+    //       fixed+sport set minus the moved sport — not the partial left-to-right template the
+    //       probe used), so the relocated sport is properly spaced.
+    // Equal duration keeps the day wall-to-wall (two equal disjoint intervals exchange slots);
+    // both tiles stay inside their layer windows. The freed dead window becomes a GENERIC sport
+    // that the later GENERIC-SPORT-FILL concretizes on a real field. Net: one fewer dead tile,
+    // sport count unchanged (the sport merely relocated), filled-special count +1. PURE: only
+    // TIME position + the one new concrete fill change; every sharing/cap/spacing rule stays
+    // strict (capFits gates the fill, the gate gates the sport). Non-recursive, bounded loops.
+    //   ctx: { bunks:[{tiles, grade, pool, noSport}], gate(block,template)->bool,
+    //          capFits, recordUse, specialDurs, canon, sportLabel='Sport',
+    //          onReorder() (optional; called once per dead window rescued) }
+    //   Returns { reordered, attempts, bunks }.
+    function reorderDeadWindows(ctx) {
+        var bunks = (ctx && ctx.bunks) || [];
+        var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
+        var label = (ctx && ctx.sportLabel) || 'Sport';
+        var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
+        var canFill = !!(ctx && typeof ctx.capFits === 'function' && typeof ctx.recordUse === 'function');
+        if (!gate || !canFill) return { reordered: 0, attempts: 0, bunks: bunks.length };
+        var reordered = 0, attempts = 0;
+        for (var bi = 0; bi < bunks.length; bi++) {
+            var bunk = bunks[bi] || {};
+            if (bunk.noSport) continue;                       // sportless grade → no sport to relocate
+            var tiles = bunk.tiles || [];
+            if (!tiles.length) continue;
+            var grade = bunk.grade;
+            // ITERATE to a fixed point: a swap can free capacity/spacing that unlocks the next
+            // dead window. Bounded (≤6 passes); stop as soon as a pass rescues nothing. Each
+            // rescue strictly converts a dead tile → a filled special, so this always terminates.
+            for (var pass = 0; pass < 6; pass++) {
+                var passReorders = 0;
+                // names already concrete on this bunk's special tiles (no same-day repeat)
+                var used = Object.create(null);
+                for (var u = 0; u < tiles.length; u++) { var ut = tiles[u]; if (ut && ut.kind === 'special' && ut._concrete) used[String(ut._concrete).toLowerCase()] = 1; }
+                // dead windows = generic, unfilled special placeholders (recomputed each pass)
+                var dead = [];
+                for (var di = 0; di < tiles.length; di++) { var dt = tiles[di]; if (dt && dt.kind === 'special' && dt.generic === true && !dt._concrete) dead.push(dt); }
+                if (!dead.length) break;
+                for (var mi = 0; mi < dead.length; mi++) {
+                    var W = dead[mi];
+                    if (W._concrete) continue;                // rescued earlier this pass
+                    var d = W.durationMin;
+                    for (var pj = 0; pj < tiles.length; pj++) {
+                        var B = tiles[pj];
+                        if (!B || B === W) continue;
+                        if (!(B.kind === 'sport' && B.generic === true && !B._concrete)) continue; // only MOVABLE generic sports
+                        if (B.durationMin !== d) continue;                                          // equal dur ⇒ wall-to-wall safe
+                        if (!inWindow(W, B.startMin, B.endMin) || !inWindow(B, W.startMin, W.endMin)) continue; // both stay in window
+                        attempts++;
+                        // (1) STRICT WIN: the displaced special must FILL at the sport's vacated slot
+                        var fillPick = pickAnyFillable(ctx, bunk, d, B.startMin, B.endMin, used, false);
+                        if (!fillPick) continue;
+                        // (2) a Sport must be spacing-legal in the freed dead window. Build the FULL
+                        //     template = every fixed/sport/filled tile EXCEPT the sport being moved
+                        //     (B is the candidate sport itself, leaving its old slot). Specials don't
+                        //     constrain sport spacing, so including/excluding them is harmless.
+                        var tmpl = [];
+                        for (var ti = 0; ti < tiles.length; ti++) { var T = tiles[ti]; if (!T || T === B) continue; tmpl.push(_toBlk(T)); }
+                        var sportAtW = { type: 'sport', event: label, startMin: W.startMin, endMin: W.endMin };
+                        var ok = true; try { ok = gate(sportAtW, tmpl); } catch (_e) { ok = true; }
+                        if (!ok) continue;
+                        // COMMIT: swap time slots, fill the (formerly dead) special, leave B a generic
+                        // sport in the freed window for GENERIC-SPORT-FILL to concretize on a field.
+                        var wKey = String(fillPick.name).toLowerCase();
+                        swapTimes(W, B);
+                        W._concrete = fillPick.name; W.name = fillPick.name; W.generic = false;
+                        W.subcat = canon(fillPick.subcategory); W._fillLoc = fillPick.location || null; W._origin = 'reorder-fill';
+                        used[wKey] = 1;
+                        try { ctx.recordUse(fillPick, grade, W.startMin, W.endMin); } catch (_e) {}
+                        B._origin = 'reorder-sport';
+                        reordered++; passReorders++;
+                        if (ctx.onReorder) ctx.onReorder();
+                        break;
+                    }
+                }
+                if (!passReorders) break;
+            }
+            tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+        }
+        return { reordered: reordered, attempts: attempts, bunks: bunks.length };
+    }
+
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;
