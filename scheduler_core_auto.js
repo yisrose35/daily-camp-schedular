@@ -15298,7 +15298,7 @@
             // naturally works around them, just like it does for fullGrade swim.
             {
                 var _p23Count = 0;
-                // ── INTERLEAVE SWIM (opt-in: window.__interleaveSwim, default OFF) ──────
+                // ── INTERLEAVE SWIM (window.__interleaveSwim, default ON — disable with =false) ──────
                 // Match the human Neranina reference: instead of dumping a whole grade into one
                 // swim band, spread bunks so each pool slot holds a MIX of grades (~1-2 per
                 // grade). The de-congestion that kills the dead "Special: Uncategorized" tiles
@@ -15309,7 +15309,7 @@
                 // starts → grades mix on each slot → each grade's free time spreads → the
                 // downstream special demand stops piling on one band. Window-flag only (no
                 // persisted setting), fail-soft; OFF reproduces today's exact clustered output.
-                var _p23Interleave = false; try { _p23Interleave = (typeof window !== 'undefined' && window.__interleaveSwim === true); } catch (_eIL) {}
+                var _p23Interleave = true; try { _p23Interleave = (typeof window === 'undefined') || (window.__interleaveSwim !== false); } catch (_eIL) {}
                 var _p23SameGradeSoftCap = 2;
                 var _p23SlotLoad = {};        // startMin -> total bunks placed there (ALL grades)
                 var _p23SlotGradeLoad = {};   // startMin -> { grade -> count }  (same-grade soft cap)
@@ -15321,7 +15321,7 @@
                 // flattens concurrent land demand so no period outruns the fields. Same hard caps (pool
                 // ≤8 via canUsePoolAtTime, ≤2 same-grade) so the cross-grade reference mix is preserved.
                 var _p23LandLoad = {};        // startMin -> running count of placed bunks on land there
-                // ── CONTENTION CURVE (window.__swimContention, default OFF) ─────────────
+                // ── CONTENTION CURVE (window.__swimContention, default ON — disable with =false) ─────────────
                 // The user's principle: swim is a RELEASE VALVE — place it where the day is
                 // most CONTENDED (most bunks free, all competing for fields/specials), so it
                 // pulls bunks out of the scramble exactly when the scramble is worst. The
@@ -15331,7 +15331,7 @@
                 // mirror image automatically — no hardcoded times. STATIC pre-swim snapshot
                 // (taken once, before any swim is placed) so every bunk steers to the same
                 // base-contention peaks; pool cap 8 + same-grade cap 2 then bound the pile-up.
-                var _p23ContentionOn = false; try { _p23ContentionOn = (typeof window !== 'undefined' && window.__swimContention === true); } catch (_eC0) {}
+                var _p23ContentionOn = true; try { _p23ContentionOn = (typeof window === 'undefined') || (window.__swimContention !== false); } catch (_eC0) {}
                 var _p23ConSnap = [];   // per swimming bunk: { s:dayStart, e:dayEnd, walls:[[ws,we]...] } from pinned/_fixed walls (excl pre/post-change)
                 if (_p23ContentionOn) {
                     try {
@@ -17590,8 +17590,8 @@
             //   Iteration 0 only. Fully fail-safe: ANY error falls through to normal gen.
             if (totalIters < 1) {
               try {
-                var _genOn = false;
-                try { _genOn = (typeof window !== 'undefined' && window.__useGenericLayout) || (globalSettings && globalSettings.app1 && globalSettings.app1.useGenericLayout) || false; } catch (_e) {}
+                var _genOn = true;   // default ON — disable with window.__useGenericLayout=false (or globalSettings.app1.useGenericLayout=false)
+                try { var _wGen = (typeof window !== 'undefined') ? window.__useGenericLayout : undefined; var _aGen = (globalSettings && globalSettings.app1) ? globalSettings.app1.useGenericLayout : undefined; _genOn = (_wGen === false || _aGen === false) ? false : true; } catch (_e) {}
                 if (_genOn && window.PeriodLayout && window.PeriodPacker && window.DivisionTimesSystem) {
                     log('═══════════════════════════════════════════════════════════');
                     log('[GENERIC-LAYOUT] ★ ACTIVE — laying generic kind tiles, NOT activities. (disable: window.__useGenericLayout=false)');
