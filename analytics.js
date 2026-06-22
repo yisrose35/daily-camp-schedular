@@ -1557,7 +1557,19 @@
                 const offset = manualOffsets[bunk]?.[act.name] || 0;
                 const total = Math.max(0, hist + offset);
                 const limit = act.max > 0 ? act.max : '∞';
-                const lastDate = lastDone[bunk]?.[act.name] || '';
+                // Only surface a "Last Done" date when the bunk actually has a
+                // recorded occurrence (Count > 0). The lastDone map merges an
+                // extra source — the cumulative rotation-history blob
+                // (window.loadRotationHistory) — which is a flat
+                // bunk→activity→timestamp map with NO date attribution and is
+                // NEVER pruned when a day is regenerated. So after a regen drops
+                // an activity from a bunk, rotation_counts (the Count source) is
+                // correctly re-cleared to 0 but the stale rotation-history
+                // timestamp lingers, producing a contradictory "Count 0 but Last
+                // Done <date>" row (the bunk that "didn't get the activity" still
+                // showing "last played on xyz"). Gating on hist keeps the two
+                // columns consistent: no count ⇒ no last-done.
+                const lastDate = hist > 0 ? (lastDone[bunk]?.[act.name] || '') : '';
                 const lastDateFormatted = lastDate ? formatDateDisplay(lastDate) : '—';
                 let daysSince = '';
                 if (lastDate) {
