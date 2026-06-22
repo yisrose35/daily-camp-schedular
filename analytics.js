@@ -1515,7 +1515,24 @@
             return;
         }
 
-        // Merge rotation history as a secondary source for lastDone
+        // Merge rotation history as a LAST-RESORT, gap-filling source for lastDone.
+        //
+        // The rotation-history blob (window.loadRotationHistory) is a flat
+        // bunk→activity→timestamp map that is written append-only on every
+        // generation (scheduler_core_main.js STEP 8, integration_hooks.js) and
+        // is NEVER pruned. So when a regenerate drops an activity from a bunk,
+        // its timestamp lingers — and worse, that lingering timestamp can be
+        // MORE RECENT than the activity's true last-done date (it was stamped by
+        // the gen that was later regenerated away). The authoritative, regen-safe
+        // sources are cloud rotation_counts (seeded above) and the allDaily
+        // schedule scan (Step 3) — both already populated into lastDone by now.
+        //
+        // Therefore the blob may ONLY fill a (bunk, activity) gap that the
+        // authoritative sources left empty; it must never OVERRIDE an existing
+        // authoritative date with its own (possibly stale-recent) value. That
+        // would otherwise show a too-recent "Last Done" after a regen.
+        // (Combined with the hist>0 gate at render time, a stale blob entry for
+        // an activity the bunk no longer has any count for is hidden entirely.)
         const rotHist = window.loadRotationHistory?.() || { bunks: {} };
         bunks.forEach(bunk => {
             const bunkRotHist = rotHist.bunks?.[bunk] || {};
@@ -1526,7 +1543,8 @@
                     const d = new Date(ts).toISOString().split('T')[0];
                     const canon = _canonName(act);
                     lastDone[bunk] = lastDone[bunk] || {};
-                    if (!lastDone[bunk][canon] || d > lastDone[bunk][canon]) lastDone[bunk][canon] = d;
+                    // Fill-if-absent only — never override an authoritative date.
+                    if (!lastDone[bunk][canon]) lastDone[bunk][canon] = d;
                 } catch (_) {}
             });
         });
