@@ -889,10 +889,10 @@
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
         // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
-        //   For a clean TWO-period pair whose mains are a Special category + a
-        //   generic open activity (Sports/Activity) — the canonical "special here,
-        //   sport next" tile — make Period B the exact per-bunk INVERSE of Period A
-        //   (special↔sport). Deterministic → every bunk gets exactly one special and
+        //   For a TWO-period Smart pair the user ticked "Guarantee each bunk gets
+        //   both" on (smartData.guaranteeSwap) — Main 1 = the limited/special side,
+        //   Main 2 = the open side — make Period B the exact per-bunk INVERSE of
+        //   Period A (special↔sport). Deterministic → every bunk gets exactly one special and
         //   one sport, never a double, regardless of capacity luck. The Period-A
         //   special count k is chosen so NEITHER period runs short: k ∈ [N−C_B, C_A]
         //   aimed at the capacity-proportional split, so the ratio FLEXES to the two
@@ -903,15 +903,11 @@
         //   (routeActivity applies smartTileBudget: a name → that special, false →
         //   the fallback sport).
         const _gsEnabled = (window.__smartTileGuaranteeSwap !== false);
-        const _GENERIC_OPEN = new Set(['sports', 'sport', 'sports slot', 'activity', 'general activity', 'general activity slot', 'activity slot']);
-        const _isGenericOpen = v => _GENERIC_OPEN.has(String(v || '').toLowerCase().trim());
+        // Triggered by the per-tile "Guarantee each bunk gets both" checkbox in the
+        // Smart Tile dialog (smartData.guaranteeSwap → job.guaranteeSwap). Gated by
+        // the global kill-switch and limited to real two-period pairs.
         function _isGuaranteedSwapPair(job) {
-            if (!_gsEnabled || !job || !job.blockB || _rotationOptions(job)) return false;
-            const m1 = String(job.main1 || '').toLowerCase().trim();
-            const m2 = String(job.main2 || '').toLowerCase().trim();
-            const sp1 = m1.includes('special'), sp2 = m2.includes('special');
-            if (sp1 === sp2) return false;            // exactly one side is the Special category
-            return _isGenericOpen(sp1 ? m2 : m1);     // ...and the other is a generic open (Sports/Activity)
+            return !!(_gsEnabled && job && job.guaranteeSwap && job.blockB && !_rotationOptions(job));
         }
         // Seat each bunk (in fairness order) into the least-historical claimable
         // special in a window; returns { bunk: specialName } for those seated. Uses

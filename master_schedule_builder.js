@@ -451,6 +451,45 @@ function showModal(config) {
   });
 }
 
+// ★ Smart Tile "Guarantee swap" control (shared by the create + edit dialogs).
+//   Injects a checkbox; when ticked it HIDES the Fallback field (in swap mode
+//   Main 2 IS the open side, so no separate fallback) and shows an explanation of
+//   the switch. Carries the flag out of the modal via a hidden [data-field] input
+//   that showModal's value collector reads (same pattern as the split bunk picker).
+function _mbSmartSwapPostRender(overlay, defaultOn) {
+  if (!overlay) return;
+  const fields = overlay.querySelector('.ms-modal-fields');
+  if (!fields) return;
+  const fbInput = overlay.querySelector('[data-field="fallbackActivity"]');
+  const fbRow = fbInput ? fbInput.closest('.ms-modal-field') : null;
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'guaranteeSwap');
+  hidden.value = defaultOn ? 'true' : 'false';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;';
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#5b21b6;">'
+    + '<input type="checkbox" class="mb-gs-cb"' + (defaultOn ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;flex:none;">'
+    + 'Guarantee each bunk gets both (swap)</label>'
+    + '<div class="mb-gs-explain" style="' + (defaultOn ? '' : 'display:none;') + 'font-size:11px;color:#6d28d9;margin-top:8px;line-height:1.5;">'
+    + 'The division splits into two groups across the two periods. One group does <b>Main 1</b> first, then switches to <b>Main 2</b>; the other does <b>Main 2</b> first, then <b>Main 1</b>. <b>Every bunk gets one of each.</b> Main 2 covers everyone not on Main 1, so no separate Fallback is needed, and the split adjusts to capacity so neither period runs short.'
+    + '</div>';
+  if (fbRow && fbRow.parentNode === fields) fields.insertBefore(wrap, fbRow);
+  else fields.appendChild(wrap);
+  fields.appendChild(hidden);
+  const cb = wrap.querySelector('.mb-gs-cb');
+  const explain = wrap.querySelector('.mb-gs-explain');
+  function _gsSync() {
+    const on = !!cb.checked;
+    hidden.value = on ? 'true' : 'false';
+    if (explain) explain.style.display = on ? 'block' : 'none';
+    if (fbRow) fbRow.style.display = on ? 'none' : '';
+  }
+  cb.addEventListener('change', _gsSync);
+  _gsSync();
+}
+
 function showConfirm(message) {
   return new Promise((resolve) => {
     const existing = document.getElementById('ms-modal-overlay');
@@ -1047,12 +1086,14 @@ async function editTile(id) {
         { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
         { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
         { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
-      ]
+      ],
+      postRender: (overlay) => _mbSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap))
     });
     if (!result || !result.main1 || !result.main2) return;
+    const _gsOn = result.guaranteeSwap === 'true';
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
-    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn };
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
@@ -4015,7 +4056,11 @@ function renderEventTile(ev, top, height) {
     else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
     else tile = TILES.find(t => t.type === 'custom');
   }
-  const style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ Guaranteed-swap Smart tiles get a distinct purple so the mode is visible at a glance.
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
+    style = 'background:#c4b5fd;color:#3b0764;border:2px solid #7c3aed;';
+  }
   
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
@@ -4070,7 +4115,11 @@ function renderEventTile(ev, top, height) {
   }
 
   if (ev.type === 'smart' && ev.smartData) {
-    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${_mbEsc(ev.smartData.fallbackActivity)}</div>`;
+    if (ev.smartData.guaranteeSwap) {
+      innerHtml += `<div style="font-size:9px;font-weight:700;margin-top:2px;">⇄ ${_mbEsc(ev.smartData.main1)} ↔ ${_mbEsc(ev.smartData.main2)} · all get both</div>`;
+    } else {
+      innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${_mbEsc(ev.smartData.fallbackActivity)}</div>`;
+    }
   }
   
   // ★ v2.5: Show split tile sub-events
@@ -4188,10 +4237,12 @@ function addDropListeners(selector) {
             { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
             { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
             { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
-          ]
+          ],
+          postRender: (overlay) => _mbSmartSwapPostRender(overlay, false)
         });
         if (!result || !result.main1 || !result.main2) return;
-        
+        const _gsOn = result.guaranteeSwap === 'true';
+
         newEvent = {
           id: Date.now().toString(),
           type: 'smart',
@@ -4199,7 +4250,7 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' }
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn }
         };
       }
       // ★ v2.5: SPLIT TILE - Fixed to match daily adjustments (Main 1/Main 2 + mapEventNameForOptimizer)

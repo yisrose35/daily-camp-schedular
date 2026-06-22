@@ -611,6 +611,7 @@
                         main2: sd.main2,
                         fallbackFor: sd.fallbackFor,
                         fallbackActivity: sd.fallbackActivity,
+                        guaranteeSwap: !!sd.guaranteeSwap,
                         blockA: {
                             startMin: parseTime(A.startTime),
                             endMin: parseTime(A.endTime),
