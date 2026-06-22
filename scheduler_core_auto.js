@@ -17706,7 +17706,7 @@
                             //                being throttled to the floor (the live "Soloists/Duetos can't close
                             //                the day" + the "utilize the >2 specials of dur 20-40" asks). One
                             //                Regular subcat with 11 distinct activities can fill ~11 slots.
-                            var subDur = {}, subFloor = {}, subCap = {}, subAvail = {};
+                            var subDur = {}, subFloor = {}, subCap = {}, subAvail = {}, _wqScarce = {};
                             var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
                             var capFloors = (sl && sl.specials && sl.specials.subcategoryFloor) || {};
                             // HONOR THE OPERATOR (window.__capOnlyNoFloor, default ON): a subcat the user set
@@ -17833,7 +17833,26 @@
                                         if (X !== Infinity && wtd >= X) { subFloor[key] = 0; subCap[key] = 0; return; }
                                         if (!hasMin || M <= 0) return; // ceiling-only config (no min to force)
                                         var need = M - wtd;
-                                        if (need <= 0) { subFloor[key] = 0; return; } // weekly min already met → optional (cap-only)
+                                        // ── AIM-FOR-MAX (window.__aimForMax, default ON) ──────────────────────────
+                                        // For a SCARCE min-freq must-have (shiur: small pool + cap-tight + weekly
+                                        // min), give it a BOUNDED scarcity priority so it climbs toward the weekly
+                                        // TARGET (= maxUsage, e.g. 3) by WINNING its ONE daily window over abundant
+                                        // fillers on days the bunk is still under target — across DISTINCT days. We
+                                        // do NOT raise the day cap (so no same-day repeat) and do NOT add a qty floor
+                                        // for the extras (so an unfillable 2nd/3rd is never a placeholder — when the
+                                        // cap-1 seat is busy the candidate is simply ineligible and a filler takes the
+                                        // window). Deficit-weighted: a bunk at 0/3 outranks one at 2/3, so the scarce
+                                        // seat spreads across bunks toward 3×. Bounded far below floorBonus (1000) so
+                                        // it can NEVER displace a still-owed hard floor of any layer. Read in
+                                        // period_layout _mkScoreFn via the demand's `_scarce`. General + fail-soft.
+                                        try {
+                                            var _afmOn = (typeof window === 'undefined') || (window.__aimForMax !== false);
+                                            var _afmAvail = subAvail[key] ? Object.keys(subAvail[key]).length : 0;
+                                            if (_afmOn && hasMin && X !== Infinity && X > M && _afmAvail > 0 && _afmAvail <= Math.max(M, 3) && wtd < X) {
+                                                _wqScarce[key] = 25 * Math.max(1, X - wtd);   // << floorBonus(1000); spreads by deficit
+                                            }
+                                        } catch (_e) {}
+                                        if (need <= 0) { subFloor[key] = 0; return; } // weekly min already met → optional (cap-only); aim-up still drives the climb via _scarce
                                         // period camp-day geometry: D = camp-days in period, e = 1-based camp-day of today
                                         var D = 5, e = 1;
                                         try {
@@ -17946,8 +17965,8 @@
                                 var _cap = _hasFiniteCfg ? Math.max(subCap[key], subFloor[key]) : Math.max(_avail, subFloor[key]);
                                 // score 1 (was 0): an over-floor special outranks the generic placeholder
                                 // filler below, so the day fills with REAL specials, not "Activity" tiles.
-                                floating.push({ kind: 'special', subcat: key, durations: durs, window: (_glBand || [gStart, gEnd]), qty: subFloor[key], cap: _cap, score: 1 });
-                                _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + ', durs=[' + durs.join(',') + '])');
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: (_glBand || [gStart, gEnd]), qty: subFloor[key], cap: _cap, score: 1, _scarce: (_wqScarce[key] || 0) });
+                                _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + (_wqScarce[key] ? ', AIM-UP scarce+' + _wqScarce[key] : '') + ', durs=[' + durs.join(',') + '])');
                             });
                             // One cap-diagnostic line per grade (first bunk) so a throttled subcat is visible.
                             if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _glBandWhy); }

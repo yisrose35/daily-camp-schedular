@@ -222,6 +222,7 @@
                 // count so the floor is honored exactly once and the over-floor tiles are
                 // ranked on their own merits (content score + duration²).
                 var granted = {};
+                var scarceGranted = {};   // AIM-FOR-MAX: cap the scarcity bonus once-per-key (mirror floorBonus granted)
                 for (var i = 0; i < packing.segments.length; i++) {
                     var s = packing.segments[i];
                     var fb = floorBonus(s, remView);
@@ -249,7 +250,18 @@
                     // over-produce specials — uncat peaked at 32 across 38 bunks vs supply 17.)
                     if (s.kind === 'activity') total -= 0.01 * s.durationMin;
                     else if (s.kind === 'sport') total += 0.003 * s.durationMin * s.durationMin;
-                    else total += 0.002 * s.durationMin * s.durationMin;
+                    else {
+                        total += 0.002 * s.durationMin * s.durationMin;
+                        // AIM-FOR-MAX: a SCARCE under-target must-have (shiur) carries a bounded
+                        // scarcity bonus on its demand (_ref._scarce, ~25×deficit) so it WINS this
+                        // leftover window over an abundant uncat/sport filler — letting it climb
+                        // toward its weekly target on this day. Far below floorBonus (1000/100000)
+                        // so it can NEVER displace a still-owed floor; 0 for non-scarce specials so
+                        // the tuned sport(0.003)>special(0.002) even-day balance is byte-identical.
+                        // Once-per-_key (like floorBonus granted) so the packer can't stack to farm it.
+                        var _sb = (s._ref && s._ref._scarce > 0) ? s._ref._scarce : 0;
+                        if (_sb > 0 && !scarceGranted[s._key]) { scarceGranted[s._key] = 1; total += _sb; }
+                    }
                 }
                 total -= 0.01 * packing.segments.length; // mild extra nudge toward fewer tiles
                 return total;
