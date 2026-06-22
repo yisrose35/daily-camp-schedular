@@ -4598,23 +4598,19 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             else console.log('[STEP 7.6] Empty-field free-fill: no fillable Free slots');
 
             // ─────────────────────────────────────────────────────────────
-            // STEP 7.65: Share-fill + special-slot backfill. The empty-field
-            // pass only seats a Free bunk on a COMPLETELY EMPTY sport field, so a
-            // bunk whose only options were a same-day repeat or sharing a
-            // grade-mate's half-full room was left Free — even though the share
-            // is legal (under the room's cap, same grade). Seat every still-Free
-            // bunk by SHARING a grade-mate's under-capacity location (sport OR
-            // special, kind-matched to the slot); for a Special-Activity slot
-            // that has run dry, open/repeat a special the grade can demonstrably
-            // do; and for a sport/general slot, repeat a sport on an empty field.
-            // Runs after the capacity/validator sweeps (7.55/7.56), so it
-            // self-guarantees a legal placement (under the location's cap, same
-            // grade, co-started, never not_sharable, access + time-rules pass)
-            // and a share inherits the grade-mate's eligibility. Leniency
-            // escalates so a clean fill is tried first: (0) non-repeat share,
-            // (1) repeat share, (2) special slot → grade-accessible special on a
-            // free location (non-repeat first), (3) sport slot → any sport on an
-            // empty field. Fill-only — never displaces an existing placement.
+            // STEP 7.65: No-repeat fill. The empty-field pass only seats a Free
+            // bunk on a COMPLETELY EMPTY sport field, so a bunk whose only
+            // remaining fresh option was sharing a grade-mate's half-full room —
+            // or opening a fresh special room — was left Free. Seat every
+            // still-Free bunk with an activity it has NOT done today: (0) share
+            // an under-capacity SAME-GRADE location (sport OR special, matched to
+            // the slot kind); (2) for a Special-Activity slot, open a
+            // grade-accessible special on a free location. NEVER repeats an
+            // activity and never displaces an existing placement. A bunk with no
+            // fresh option left stays Free here rather than repeat (covering it
+            // would require moving another bunk's activity). Every placement is
+            // legal by construction (under the location's cap, same grade,
+            // co-started, never not_sharable, access + time-rules pass).
             const _norm65 = (sw) => {
                 let ty = (sw && sw.type) || 'not_sharable';
                 const dv = (sw && Array.isArray(sw.divisions)) ? sw.divisions : [];
@@ -4663,8 +4659,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
             };
             let _shared65 = 0, _backfilled65 = 0;
-            // Rounds 0/1 — share into an under-capacity same-grade location (kind-matched).
-            for (let _round65 = 0; _round65 < 2; _round65++) {
+            // Round 0 — share into an under-capacity same-grade location (kind-matched), fresh only.
+            for (let _round65 = 0; _round65 < 1; _round65++) {
                 Object.keys(_sa76).forEach(b => {
                     if (_allowed76 && !_allowed76.has(String(b))) return;
                     const g = _b2g76[String(b)] || '?';
@@ -4701,7 +4697,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     const done = _done76[String(b)] || {};
                     const pool = Object.keys(_gradeSpecials65[g] || {});
-                    const ordered = pool.filter(an => !done[an]).concat(pool.filter(an => done[an])); // non-repeat first
+                    const ordered = pool.filter(an => !done[an]); // fresh only — never a same-day repeat
                     for (const an of ordered) {
                         const sp = _specByName65[an]; if (!sp) continue;
                         const cfg = _loc65[sp.loc] || { type: 'same_division', cap: 2 };
@@ -4713,26 +4709,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     }
                 });
             });
-            // Round 3 — sport/general slot: if still Free, repeat a sport on an
-            // empty field (the last-resort twin of STEP 7.6, repeat allowed).
-            Object.keys(_sa76).forEach(b => {
-                if (_allowed76 && !_allowed76.has(String(b))) return;
-                const g = _b2g76[String(b)] || '?';
-                (_sa76[b] || []).forEach((e, idx) => {
-                    if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree65(e)) return;
-                    if (_kindOf65(b, g, idx, e) === 'special') return;     // special slots handled above
-                    const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                    for (let fi = 0; fi < _sportFields76.length; fi++) {
-                        const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (_skip76[fl] || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
-                        if (_occAt65(fl, t.s, t.e, String(b)).length > 0) continue;  // empty fields only
-                        const act = (f.activities || [])[0]; if (!act) continue;     // any activity (repeat OK)
-                        _seat65(b, idx, f.name, act, t.s, t.e); _backfilled65++; break;
-                    }
-                });
-            });
-            if (_shared65 + _backfilled65 > 0) console.log('[STEP 7.65] share-fill: seated ' + _shared65 + ' by sharing + ' + _backfilled65 + ' backfill(s)');
-            else console.log('[STEP 7.65] share-fill: no fillable Free slots');
+            if (_shared65 + _backfilled65 > 0) console.log('[STEP 7.65] no-repeat fill: seated ' + _shared65 + ' by sharing + ' + _backfilled65 + ' fresh-room backfill(s)');
+            else console.log('[STEP 7.65] no-repeat fill: nothing fillable without a repeat');
         } catch (_e76) {
             console.warn('[STEP 7.6] Empty-field free-fill failed:', _e76);
         }
