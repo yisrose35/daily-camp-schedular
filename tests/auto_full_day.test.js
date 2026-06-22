@@ -289,6 +289,13 @@ function campConfig(opts) {
     //   to reclaim a sport/Free slot elsewhere for the 2nd snack. This exercises
     //   the enforcer's placement path directly (asserted via its "placed" log).
     subFloorTight: !!opts.subFloorTight,
+    // oversub: DEMAND↔CAPACITY RECONCILIATION repro. Override one special ("VR")
+    //   to a not_sharable, capacity-1 seat tagged subcategory 'shiur', and attach
+    //   a subcategory FLOOR of 1 to the special layer so EVERY one of the 14 bunks
+    //   demands that one cap-1 chair. Total floor (14) far exceeds what one seat can
+    //   deliver in the day → the pre-layout reconciliation must clamp the aggregate
+    //   floor and demote the surplus to opportunistic (asserted via its log line).
+    oversub: !!opts.oversub,
   };
 }
 
@@ -391,17 +398,21 @@ function smoothSpecialConfig(s) {
 
 // Special activity config objects (globalSettings.app1.specialActivities).
 // Each is sharable enough not to starve, ~20 min, available all days.
-function specialConfig(s, specialDur) {
+function specialConfig(s, specialDur, oversub) {
   const dur = specialDur || PERIOD;
+  // oversub: make "VR" the single not_sharable, cap-1 'shiur' seat (see campConfig).
+  const _cap1Seat = oversub && String(s.name).toLowerCase() === 'vr';
   return {
     name: s.name,
     location: s.location,
     type: 'Special',
-    subcategory: SUBCAT_BY_NAME[String(s.name).toLowerCase()] || '',
+    subcategory: _cap1Seat ? 'shiur' : (SUBCAT_BY_NAME[String(s.name).toLowerCase()] || ''),
     duration: dur,
     durationMin: dur,
-    sharableWith: { type: 'cross_division', divisions: [], capacity: 20,
-      allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } },
+    sharableWith: _cap1Seat
+      ? { type: 'not_sharable', divisions: [], capacity: 1, allowedPairs: {} }
+      : { type: 'cross_division', divisions: [], capacity: 20,
+          allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } },
     // available every day, all hours
     timeRules: [],
     availableDays: null,
@@ -718,6 +729,9 @@ function buildLayers(cfg) {
       //   by reclaiming Free/filler/sport slots.
       if (cfg.subFloor || cfg.subFloorTight) { _specLayer.subQuantities = { snack: 2 }; _specLayer.subOps = { snack: '=' }; }
       if (cfg.subFloorTight) { _specLayer.startMin = HM(10, 0); _specLayer.endMin = HM(10, 20); }
+      // oversub: every bunk demands the single cap-1 'shiur' seat (floor = 1) →
+      //   14 floors against 1 seat, which the reconciliation pass must clamp.
+      if (cfg.oversub) { _specLayer.subQuantities = { shiur: 1 }; _specLayer.subOps = { shiur: '=' }; }
       layers.push(_specLayer);
     }
 
@@ -965,7 +979,7 @@ function buildSandbox(opts) {
   if (cfg.smooth) {
     SMOOTH_SPECIALS.forEach(s => { activityProperties[s.name] = smoothSpecialConfig(s); });
   } else {
-    SPECIALS.forEach(s => { activityProperties[s.name] = specialConfig(s, specialDur); });
+    SPECIALS.forEach(s => { activityProperties[s.name] = specialConfig(s, specialDur, cfg.oversub); });
   }
   // SLIVER-RESIDUAL: make every sport FIELD genuinely Unavailable before 10:30, so
   // NO sport field is free in the 9:45-10:10 gap window — faithfully reproducing the
@@ -1021,13 +1035,16 @@ function buildSandbox(opts) {
   const globalSettings = {
     app1: {
       fields: fieldList.slice(),
-      specialActivities: cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur)),
+      specialActivities: cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub)),
       sportMetaData,
       disabledFields,
       divisions,
       // opt-in: let STEP 6.865 tier-2 stretch a bounding special over a sub-floor
       //   sliver (default off — see the "no stretch" tests for the locked default).
       sliverStretchSpecial: opts.stretchSpecial === true,
+      // oversub: drive the GENERIC-LAYOUT planner (the demand→capacity path the
+      //   reconciliation lives in); classic CSP scenarios leave this off.
+      useGenericLayout: cfg.oversub === true,
     },
     campPeriods,
   };
@@ -1119,8 +1136,8 @@ function buildSandbox(opts) {
   sandbox.getAllGlobalSports = () => sportList.slice().sort();
   sandbox.getSportMetaData = () => sportMetaData;
   sandbox.getBunkMetaData = () => bunkMetaData;
-  sandbox.getGlobalSpecialActivities = () => cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur));
-  sandbox.getAllSpecialActivities = () => cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur));
+  sandbox.getGlobalSpecialActivities = () => cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub));
+  sandbox.getAllSpecialActivities = () => cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub));
   sandbox.getFacilities = () => [];
 
   vm.createContext(sandbox);
@@ -1135,6 +1152,7 @@ function loadModules(sandbox) {
     'campistry_utils.js',
     'rotation_events.js', 'rules.js', 'auto_segment_model.js', 'period_packer.js',
     'auto_solver_engine.js', 'feasibility_oracle.js', 'period_tiler.js', 'day_packer.js',
+    'period_layout.js', 'gl_stagger.js',
     'division_times_system.js', 'scheduler_core_utils.js', 'rotation_engine.js',
     'total_solver_engine.js', 'scheduler_core_auto.js',
   ];
@@ -1889,4 +1907,52 @@ test('auto scheduler enforces a subcategory floor the distributor under-delivers
     if ((r.subFloorCount || 0) < 2) short.push(`${bunk}: ${r.subFloorCount || 0} snack specials (want 2)`);
   }
   assert.deepEqual(short, [], 'every bunk must reach the snack floor of 2 after enforcement:\n  ' + short.join('\n  '));
+});
+
+// ---------------------------------------------------------------------------
+// TEST — DEMAND ↔ CAPACITY RECONCILIATION. One special ("VR") is a not_sharable,
+// capacity-1 seat tagged subcategory 'shiur', and the special layer floors that
+// subcat at 1 for every bunk → all 14 bunks demand the single chair (the live
+// "Shiur given to 13 bunks but only one Rabbi" over-subscription). The pre-layout
+// reconciliation pass must clamp the AGGREGATE floor to what one seat can deliver
+// in the day and demote the surplus to opportunistic (cap kept, floor dropped),
+// instead of committing 14 must-place tiles into 1 seat and thrashing the recovery
+// passes. We assert (1) the reconciliation fired and demoted surplus floors, and
+// (2) the engine never seats more than one 'VR' concurrently (the cap-1 invariant).
+// ---------------------------------------------------------------------------
+test('auto scheduler reconciles over-subscribed demand against capacity (cap-1 shiur, 14 bunks)', async (t) => {
+  const opts = { oversub: true };
+  const cfg = campConfig(opts);
+  const sandbox = buildSandbox(opts);
+  loadModules(sandbox);
+  const layers = buildLayers(cfg);
+  const ranOk = await sandbox.runAutoScheduler(layers, { allowedDivisions: null });
+  assert.notEqual(ranOk, false, 'runAutoScheduler returned false (generation aborted)');
+
+  const logs = sandbox.__logs || [];
+  // (1) Reconciliation fired for the cap-1 'shiur' seat and demoted surplus floors.
+  const rec = logs.find(l => /\[GENERIC-RECONCILE\].*specialact:VR/.test(l));
+  assert.ok(rec, 'expected a [GENERIC-RECONCILE] line for the cap-1 shiur seat (specialact:VR). ' +
+    'Reconcile lines seen: ' + (logs.filter(l => /GENERIC-RECONCILE/.test(l)).join(' | ') || 'NONE'));
+  const dem = /demoted (\d+)/.exec(rec);
+  assert.ok(dem && parseInt(dem[1], 10) > 0,
+    'reconciliation must demote at least one surplus floor (line: ' + rec + ')');
+
+  // (2) Cap-1 invariant: no two 'VR' assignments overlap in time across all bunks.
+  const vr = [];
+  for (const bunk of [...AUTO_BUNKS, ...CHAIR_BUNKS]) {
+    (sandbox.scheduleAssignments[bunk] || []).forEach(s => {
+      if (s && String(s._activity || '').toLowerCase() === 'vr' &&
+          s._startMin != null && s._endMin != null && !s.continuation) {
+        vr.push({ bunk, s: s._startMin, e: s._endMin });
+      }
+    });
+  }
+  for (let i = 0; i < vr.length; i++) {
+    for (let j = i + 1; j < vr.length; j++) {
+      const a = vr[i], b = vr[j];
+      assert.ok(!(a.s < b.e && b.s < a.e),
+        `cap-1 'VR' double-booked: ${a.bunk} ${fmt(a.s)}-${fmt(a.e)} overlaps ${b.bunk} ${fmt(b.s)}-${fmt(b.e)}`);
+    }
+  }
 });

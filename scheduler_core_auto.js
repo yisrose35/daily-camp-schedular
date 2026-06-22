@@ -18430,6 +18430,96 @@
                         } catch (_e) {}
                     };
 
+                    // ── DEMAND ↔ CAPACITY RECONCILIATION (window.__demandReconcile, default ON) ──
+                    // The per-bunk demand loop above pushes a FLOOR (qty) for every special subcat
+                    // and the required sport WITHOUT checking whether the SUM of those floors across
+                    // all bunks can physically be SERVED by the category's SEATS in the day. When it
+                    // can't — the classic case: 13 bunks each floored for a Shiur that is ONE cap-1
+                    // chair ⇒ 13 must-place tiles into 1 seat — the seat gate below rejects the floors
+                    // it can't seat, PeriodLayout fights to honor impossible must-place bonuses, the
+                    // unplaceable specials get ABSORBED → "Sport", and the weekly-MUST pass re-demands
+                    // the shortfall tomorrow. That cascade is the "gives out more than it can chew"
+                    // thrash (over-PROMISING, not over-placing — the gate never literally double-books).
+                    //
+                    // This pass clamps each seat category's AGGREGATE floor to what the day can deliver
+                    // (seats × sessions-that-fit-in-the-band), KEEPING the floor for the bunks that are
+                    // MOST OWED (lowest week-to-date count for the category) and DEMOTING the rest to
+                    // OPPORTUNISTIC — qty 0 (no must-place guarantee) but cap kept, so the activity still
+                    // fills when a seat is genuinely free, and is simply never PROMISED beyond capacity.
+                    // Floors are only ever REDUCED, never raised. Reuses the gate's own _glCatOf bucketing
+                    // so the categories match exactly. Fail-soft: any error leaves demand byte-identical.
+                    try {
+                        if ((typeof window === 'undefined') || (window.__demandReconcile !== false)) {
+                            (function () {
+                                var _rcToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate
+                                             : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                                var _rcU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                // owed score = week-to-date count across a category's activities (lower = more owed)
+                                var _rcOwedCache = {};
+                                var _rcOwed = function (bunk, names) {
+                                    var ck = String(bunk) + '|' + names.join(',');
+                                    if (_rcOwedCache[ck] != null) return _rcOwedCache[ck];
+                                    var c = 0;
+                                    if (_rcU && typeof _rcU.getPeriodActivityCount === 'function' && _rcToday) {
+                                        for (var i = 0; i < names.length; i++) { try { c += _rcU.getPeriodActivityCount(bunk, names[i], '1week', _rcToday) || 0; } catch (_e) {} }
+                                    }
+                                    _rcOwedCache[ck] = c; return c;
+                                };
+                                // deterministic, day-rotating tiebreak (so the demoted bunks aren't the same daily)
+                                var _rcHash = function (s) { var h = 0; s = String(s); for (var i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return Math.abs(h); };
+                                var _rcDaySeed = _rcHash(String(_rcToday || ''));
+                                // Group every FLOORED seat-counted demand by the category key the gate uses.
+                                //   group: { seats, repDur, win:[lo,hi], entries:[{bunk, dem, names}] }
+                                var _rcGroups = {};
+                                _glOrder.forEach(function (bunk) {
+                                    var pb = _glPerBunk[bunk]; if (!pb) return;
+                                    var grade = pb.grade;
+                                    (pb.floating || []).forEach(function (dem) {
+                                        if (!dem || !(dem.qty > 0)) return;                       // only a FLOOR can over-promise
+                                        var kind = String(dem.kind || '').toLowerCase();
+                                        if (kind !== 'special' && kind !== 'sport') return;       // only seat-counted categories
+                                        var durs = (dem.durations && dem.durations.length) ? dem.durations.slice() : [];
+                                        if (!durs.length) { if (dem.dMin) durs.push(dem.dMin); if (dem.dMax) durs.push(dem.dMax); }
+                                        durs = durs.map(Number).filter(function (x) { return x > 0; });
+                                        var repDur = durs.length ? Math.min.apply(null, durs) : 30; // shortest ⇒ most sessions fit ⇒ conservative (under-clamp)
+                                        var cat = _glCatOf(kind, dem, 0, repDur, grade);
+                                        if (!cat) return;
+                                        var seats = _glSeats[cat];
+                                        if (!(seats > 0) || seats === Infinity) return;           // uncapped ⇒ can't over-subscribe
+                                        var g = _rcGroups[cat] || (_rcGroups[cat] = { seats: seats, repDur: repDur, win: [Infinity, -Infinity], entries: [] });
+                                        if (repDur < g.repDur) g.repDur = repDur;
+                                        var w = dem.window || [0, 1440];
+                                        if (w[0] < g.win[0]) g.win[0] = w[0];
+                                        if (w[1] > g.win[1]) g.win[1] = w[1];
+                                        var names = (cat.indexOf('specialact:') === 0) ? [cat.slice(11)] : ((_glNamesBySub[_glCanon(dem.subcat)] || []).slice());
+                                        g.entries.push({ bunk: bunk, dem: dem, names: names });
+                                    });
+                                });
+                                Object.keys(_rcGroups).forEach(function (cat) {
+                                    var g = _rcGroups[cat];
+                                    var totalFloor = g.entries.reduce(function (a, e) { return a + (e.dem.qty || 0); }, 0);
+                                    var bandMin = (g.win[1] > g.win[0]) ? (g.win[1] - g.win[0]) : 0;
+                                    var slots = Math.max(1, Math.floor(bandMin / Math.max(10, g.repDur)));
+                                    var deliverable = g.seats * slots;
+                                    if (totalFloor <= deliverable) return;                         // the day can serve it → leave as-is
+                                    // Rank: most-owed (fewest week-to-date) keep the floor; ties broken day-rotated.
+                                    var ranked = g.entries.slice().sort(function (a, b) {
+                                        var oa = _rcOwed(a.bunk, a.names), ob = _rcOwed(b.bunk, b.names);
+                                        if (oa !== ob) return oa - ob;
+                                        return ((_rcHash(a.bunk) + _rcDaySeed) % 1000003) - ((_rcHash(b.bunk) + _rcDaySeed) % 1000003);
+                                    });
+                                    var kept = 0, demoted = 0;
+                                    for (var i = 0; i < ranked.length; i++) {
+                                        var dem = ranked[i].dem, q = (dem.qty || 0);
+                                        if (kept + q <= deliverable) { kept += q; continue; }      // still within capacity → keep its floor
+                                        dem.qty = 0; demoted++;                                    // demote: drop the GUARANTEE, keep the cap (opportunistic)
+                                    }
+                                    try { log('[GENERIC-RECONCILE] ' + cat + ': demand floor ' + totalFloor + ' > deliverable ' + deliverable + ' (' + g.seats + ' seat' + (g.seats === 1 ? '' : 's') + ' × ' + slots + ' session' + (slots === 1 ? '' : 's') + '/day @' + g.repDur + 'min) → kept floors for ' + (g.entries.length - demoted) + ' most-owed bunk(s), demoted ' + demoted + ' to opportunistic (cap kept)'); } catch (_e) {}
+                                });
+                            })();
+                        }
+                    } catch (_rcErr) { try { warn('[GENERIC-RECONCILE] error — reconciliation skipped (demand unchanged): ' + (_rcErr && _rcErr.message)); } catch (_e) {} }
+
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
                     var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
