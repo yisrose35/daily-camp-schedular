@@ -4237,13 +4237,26 @@ if (bypassStatus.highlight) {
         }
         
         const divName = getDivisionForBunk(bunk);
-       const slots = findSlotsForRange(startMin, endMin, divName, bunk);
-        
+        let slots = findSlotsForRange(startMin, endMin, divName, bunk);
+
+        // ★ GAP ADD: In auto mode, mid-day "gaps" are uncovered TIME with no
+        //   underlying _perBunkSlots slot (see the auto gap model). The "+ Add"
+        //   gap indicator calls here with that empty range, so findSlotsForRange
+        //   returns nothing and the editor used to bail with an error instead of
+        //   opening. Materialize a slot for the clicked range first (the same
+        //   primitive the save flow uses below), so the editor opens and the new
+        //   activity lands in the gap. Auto mode only (_perBunkSlots present);
+        //   manual division slots already cover the day.
+        if (slots.length === 0 && startMin != null && endMin != null &&
+            window.divisionTimes?.[divName]?._perBunkSlots) {
+            slots = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin) || [];
+        }
+
         if (slots.length === 0) {
             alert('Error: Could not find time slots for this block.');
             return;
         }
-        
+
         const slotIdx = slots[0];
         const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
         
