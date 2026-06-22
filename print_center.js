@@ -640,6 +640,24 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
     return sharers;
 }
 
+// Resolve the location/field to DISPLAY. Sports keep it in `field`; specials
+// keep it in `_specialLocation` / `_customField` (and `field` may hold the
+// special's NAME, not its room). Prefer the real special location so e.g.
+// Baking shows its "Baking Shop".
+function pcResolveLocation(entry) {
+    if (!entry) return '';
+    var loc = entry._specialLocation || entry._customField || entry._location || '';
+    if (!loc) loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    if (!loc || loc === 'Free') return '';
+    return loc;
+}
+// A special's location lives in _specialLocation/_customField. For those we
+// always show "Activity - Location" (even when the room name contains the
+// activity, e.g. Baking → Baking Shop); sports keep the substring dedup.
+function pcHasSpecialLoc(entry) {
+    return !!(entry && (entry._specialLocation || entry._customField || entry._location));
+}
+
 function formatEntry(entry) {
     if (!entry) return '';
     if (entry.continuation) return '';
@@ -656,8 +674,9 @@ function formatEntry(entry) {
     var parts = [];
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
-    var field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
-    if (act && field && act !== field && field.indexOf(act) === -1 && act.indexOf(field) === -1) {
+    var field = pcResolveLocation(entry);
+    var special = pcHasSpecialLoc(entry);
+    if (act && field && act !== field && (special || (field.indexOf(act) === -1 && act.indexOf(field) === -1))) {
         parts.push(label); parts.push(field);
     } else if (field) { parts.push(entry._partLabel ? label : field); }
     else if (act) { parts.push(label); }
@@ -2234,7 +2253,7 @@ function renderAutoDivisionTable(divName, bunks) {
             if (dur < 1) return;
 
             var actText = a.entry._activity || a.entry.sport || '';
-            var locText = typeof a.entry.field === 'string' ? a.entry.field : (a.entry.field && a.entry.field.name ? a.entry.field.name : '');
+            var locText = pcResolveLocation(a.entry);
             if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
             if (!actText && locText) { actText = locText; locText = ''; }
             var nameTxt = actText || '—';
@@ -4398,13 +4417,16 @@ function getExportActivityLocation(bunk, slotIdx) {
 
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
-    var field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    var field = pcResolveLocation(entry);
+    var special = pcHasSpecialLoc(entry);
 
-    // If act and field are the same, don't duplicate
-    if (act && field && (act === field || field.indexOf(act) >= 0)) {
+    // If act and field are identical, don't duplicate. For NON-special entries
+    // also collapse when one contains the other; specials keep both (Baking →
+    // Baking Shop) so the location prints.
+    if (act && field && act === field) {
         return { activity: label, location: '' };
     }
-    if (act && field && act.indexOf(field) >= 0) {
+    if (!special && act && field && (field.indexOf(act) >= 0 || act.indexOf(field) >= 0)) {
         return { activity: label, location: '' };
     }
     // If there's a field but it looks like "Activity – Location", split it
