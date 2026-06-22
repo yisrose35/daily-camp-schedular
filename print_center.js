@@ -287,12 +287,14 @@ var _liveWindow = null;
 var _livePageIndex = 0;
 var _numLivePages = 1;
 var _livePageTimer = null;
+var _livePrevPageCount = -1; // page count when the rotation timer was last (re)started
+var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
 var _LIVE_PAGE_MS = 20000; // ms between page rotations
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
 //   page reloads. Defaults bias toward "looks good on paper out-of-the-box".
-var _activityAligned = true;   // true → columns sized by activity duration (no fixed grid)
+var _activityAligned = true;   // true → columns sized by activity duration (default); false → uniform fixed increments
 var _hideDurations = false;    // hide the "50m" duration line under activity titles
 var _hideLocations = false;    // hide "vs Bunk Name" / "(Location)" supplementary text
 var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
@@ -716,18 +718,18 @@ function pcCellInnerHtml(text, type, opts) {
     opts = opts || {};
     var preMin = opts.preChange || 0;
     var postMin = opts.postChange || 0;
-    var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
-    var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+    var pillBg = '#ffffff';
+    var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
     if (preMin > 0 || postMin > 0) {
-        var html = '<div style="border-radius:5px;overflow:hidden;display:flex;flex-direction:column;">';
+        var html = '<div style="overflow:hidden;display:flex;flex-direction:column;">';
         if (preMin > 0) {
-            html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-bottom:1px solid #F59E0B;">Change ' + preMin + 'm</div>';
+            html += '<div style="background:#fce4d6;color:#833c00;padding:2px 6px;text-align:center;font-size:10px;font-weight:400;border-bottom:1px solid #c6c6c6;">Change ' + preMin + 'm</div>';
         }
         html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;text-align:center;flex:1;">';
         html += '<span style="font-size:11px;font-weight:500;">' + escHtml(text) + '</span>';
         html += '</div>';
         if (postMin > 0) {
-            html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-top:1px solid #F59E0B;">Change ' + postMin + 'm</div>';
+            html += '<div style="background:#fce4d6;color:#833c00;padding:2px 6px;text-align:center;font-size:10px;font-weight:400;border-top:1px solid #c6c6c6;">Change ' + postMin + 'm</div>';
         }
         html += '</div>';
         return html;
@@ -918,8 +920,84 @@ function buildLeagueMatchups(eventBlock, divName) {
     return matchups;
 }
 
-// =========================================================================
-// TEMPLATE PERSISTENCE
+// Parse one matchup (object or string) into { a, b, sport, field }.
+// Handles "1 vs 2 @ Football Field 1 (football)", "Bunk 1 vs Bunk 2 – Football", etc.
+function pcParseMatchup(m) {
+    if (m && typeof m === 'object') {
+        return {
+            a: String(m.teamA || m.team1 || '').trim(),
+            b: String(m.teamB || m.team2 || '').trim(),
+            sport: (m.sport || '').toString().trim(),
+            field: (m.field || '').toString().trim()
+        };
+    }
+    var s = String(m == null ? '' : m).trim();
+    var sport = '', field = '';
+    var pm = s.match(/\(([^)]+)\)\s*$/);            // "(football)" at the end
+    if (pm) { sport = pm[1].trim(); s = s.slice(0, pm.index).trim(); }
+    var am = s.match(/@\s*(.+)$/);                   // "@ Football Field 1"
+    if (am) { field = am[1].trim(); s = s.slice(0, am.index).trim(); }
+    var vm = s.split(/\s+vs\.?\s+/i);
+    var a = (vm[0] || '').trim();
+    var b = (vm[1] || '').trim();
+    var dm = b.match(/\s+[–-]\s+(.+)$/);        // trailing " – Football" on team B
+    if (dm && !sport) { sport = dm[1].trim(); b = b.slice(0, dm.index).trim(); }
+    return { a: a, b: b, sport: sport, field: field };
+}
+
+// Build a rich league label for a bunk's game: "Football - Football Field 1 - Bunk 1 vs 2".
+// Returns { sport, field, matchup, full }. Picks the matchup involving `bunk` when the
+// teams are bunk-like; otherwise lists all matchups for the game.
+function pcLeagueLabel(entry, bunk, divName, startMin) {
+    entry = entry || {};
+    var sport = (entry._leagueSport || entry.sport || '').toString().trim();
+    var field = typeof entry.field === 'string' ? entry.field
+              : (entry.field && entry.field.name ? entry.field.name : '');
+    var raw = entry._matchups || entry.matchups || entry._allMatchups || [];
+    if ((!raw || !raw.length) && divName != null && startMin != null) {
+        var info = pcLeagueInfoAt(divName, startMin);
+        if (info && info.matchups) raw = info.matchups;
+    }
+    var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
+
+    var mine = null;
+    if (bunk != null) {
+        var bn = String(bunk).replace(/^bunk\s*/i, '').trim();
+        mine = parsed.filter(function (p) {
+            var na = String(p.a).replace(/^bunk\s*/i, '').trim();
+            var nb = String(p.b).replace(/^bunk\s*/i, '').trim();
+            return na === bn || nb === bn;
+        });
+    }
+    var chosen = (mine && mine.length) ? mine : parsed;
+
+    var fmtPair = function (p) {
+        var a = /^\d+$/.test(String(p.a).trim()) ? 'Bunk ' + p.a : p.a;
+        return a + ' vs ' + p.b;
+    };
+    var matchStrs = chosen.map(fmtPair);
+
+    if (chosen.length === 1) {
+        if (chosen[0].sport) sport = chosen[0].sport;
+        if (chosen[0].field) field = chosen[0].field;
+    }
+    if (sport) sport = sport.charAt(0).toUpperCase() + sport.slice(1);
+
+    var parts = [];
+    if (sport) parts.push(sport);
+    if (field && field !== sport) parts.push(field);
+    if (matchStrs.length) parts.push(matchStrs.join(', '));
+    if (!parts.length) parts.push(entry._gameLabel || entry._leagueName || 'League Game');
+
+    return {
+        sport: sport,
+        field: (field && field !== sport) ? field : '',
+        matchup: matchStrs.join(', '),
+        full: parts.join(' - ')
+    };
+}
+
+
 // =========================================================================
 function loadTemplates() {
     try {
@@ -1176,7 +1254,7 @@ function getStyles() {
     '.pc3-grid-area{flex:1;overflow:auto;background:#f5f5f4;padding:14px 14px 70px;min-height:0;position:relative;background-image:radial-gradient(rgba(168,162,158,.18) 1px, transparent 1px);background-size:18px 18px;background-position:0 0;}' +
     '.pc3-grid-area.live-bg{background:#111827;padding:0;background-image:none;}' +
     /* Paper-like sheet card — fills available width, no artificial cap */
-    '.pc3-sheet{background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 6px 18px -6px rgba(15,23,42,.08),0 0 0 1px rgba(15,23,42,.04);margin:0 0 14px;overflow:hidden;position:relative;width:100%;}' +
+    '.pc3-sheet{background:#fff;border-radius:0;box-shadow:0 1px 4px rgba(0,0,0,.12);border:1px solid #b0b0b0;margin:0 0 20px;overflow:hidden;position:relative;width:100%;}' +
     /* Sticky sheet header at the top of each card */
     '.pc3-sheet-head{position:sticky;top:0;z-index:4;background:rgba(255,255,255,.94);backdrop-filter:saturate(140%) blur(8px);-webkit-backdrop-filter:saturate(140%) blur(8px);}' +
     /* Floating zoom dock */
@@ -1198,71 +1276,108 @@ function getStyles() {
     '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;border-left:1px solid #e7e5e4;border-radius:0 6px 6px 0;}' +
     '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
-    /* ── Spreadsheet Table ── */
-    '.pc3-tbl{border-collapse:separate;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
-    '.pc3-tbl th,.pc3-tbl td{border-right:1px solid #f1f5f9;border-bottom:1px solid #f1f5f9;padding:5px 8px;text-align:left;white-space:nowrap;position:relative;transition:background .1s;font-size:12px;}' +
-    '.pc3-tbl tr:last-child td,.pc3-tbl tr:last-child th{border-bottom:none;}' +
-    '.pc3-tbl th:last-child,.pc3-tbl td:last-child{border-right:none;}' +
-    '.pc3-tbl th{background:#fafaf9;font-weight:600;position:sticky;z-index:2;font-size:11px;color:#44403c;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #e7e5e4;}' +
+    /* ── Schedule Table — Excel look ── */
+    '.pc3-tbl{border-collapse:collapse;border-spacing:0;width:100%;table-layout:auto;user-select:none;font-family:Calibri,"Segoe UI",Arial,sans-serif;}' +
+    '.pc3-tbl th,.pc3-tbl td{border:1px solid #c6c6c6;padding:5px 9px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;line-height:1.25;}' +
+    /* Column headers (period / bunk names) — Excel gray header bar */
+    '.pc3-tbl th{background:#f2f2f2;color:#1f1f1f;font-weight:600;position:sticky;z-index:2;font-size:12px;text-transform:none;letter-spacing:0;border-color:#b0b0b0;}' +
     '.pc3-tbl thead th{top:0;}' +
-    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#fafaf9;}' +
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fafaf9;font-weight:600;text-transform:none;letter-spacing:0;color:#1c1917;font-size:12px;}' +
-    '.pc3-tbl tr:nth-child(even) td{background:#fdfdfc;}' +
-    '.pc3-tbl .cell-free{color:#a8a29e;font-style:italic;}' +
-    '.pc3-tbl .cell-pinned{background:#fff8e1;color:#92400e;font-weight:500;}' +
-    '.pc3-tbl .cell-league{background:#eff6ff;color:#1e40af;font-weight:500;}' +
-    '.pc3-tbl .cell-transition{background:#f5f3ff;color:#6d28d9;font-size:10px;font-style:italic;}' +
+    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#e6e6e6;}' +
+    /* Row header column (time / bunk) — Excel gray, like the row-number gutter */
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f2f2f2;color:#1f1f1f;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;border-color:#b0b0b0;}' +
+    /* Data cells — plain white, black text */
+    '.pc3-tbl td{font-weight:400;color:#000;background:#fff;}' +
+    /* Empty slots */
+    '.pc3-tbl .cell-free{color:#bdbdbd;font-weight:400;}' +
+    /* Standard Excel fill colors for categories */
+    '.pc3-tbl .cell-pinned{background:#fff2cc;color:#000;}' +
+    '.pc3-tbl .cell-league{background:#ddebf7;color:#000;}' +
+    '.pc3-tbl .cell-transition{background:#f2f2f2;color:#000;font-size:11px;font-weight:400;font-style:italic;}' +
 
-    /* ── Excel-style coordinate headers ── */
-    '.pc3-tbl tr.pc3-coord-row th{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #94a3b8;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#94a3b8!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
-    '.pc3-tbl th.pc3-row-num{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #94a3b8;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
-    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#dbe2ea!important;}' +
-    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:rgba(20,125,145,.18)!important;}' +
-    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #147D91!important;outline-offset:-2px;background:rgba(20,125,145,.28)!important;z-index:2;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
-    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
+    /* ── Excel-style coordinate headers (A B C / 1 2 3) ── */
+    '.pc3-tbl tr.pc3-coord-row th{background:#e6e6e6!important;color:#5f6368;font-size:10px;font-weight:600;text-align:center!important;padding:2px 6px;border:1px solid #b0b0b0;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#d4d4d4!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
+    '.pc3-tbl th.pc3-row-num{background:#e6e6e6!important;color:#5f6368;font-size:10px;font-weight:600;text-align:center!important;padding:2px 4px;border:1px solid #b0b0b0;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
+    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#e6e6e6!important;}' +
+    /* Excel green selection */
+    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:rgba(16,124,65,.12)!important;}' +
+    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #107c41!important;outline-offset:-2px;background:rgba(16,124,65,.18)!important;z-index:2;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#107c41!important;color:#fff!important;}' +
+    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#107c41!important;color:#fff!important;}' +
     '.pc3-tbl td,.pc3-tbl th{cursor:cell;}' +
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
-    /* ── Sheet Header ── */
-    '.pc3-sheet-head{padding:8px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e7e5e4;}' +
-    '.pc3-sheet-title{font-size:14px;font-weight:700;color:#1c1917;letter-spacing:-.005em;}' +
-    '.pc3-sheet-subtitle{font-size:11px;color:#78716c;font-weight:500;}' +
-    '.pc3-sheet-badge{font-size:10px;font-weight:600;padding:3px 9px;border-radius:99px;background:#ecfeff;color:#147D91;text-transform:uppercase;letter-spacing:.4px;}' +
+    /* ── Auto TIMELINE (brick model): each bunk = one track, cards sized to duration ── */
+    '.pc3-tl{font-family:"Segoe UI",Calibri,Helvetica,Arial,sans-serif;background:#fff;width:100%;user-select:none;-webkit-font-smoothing:antialiased;}' +
+    '.pc3-tl-row{display:flex;align-items:stretch;}' +
+    '.pc3-tl-row:not(:last-child){border-bottom:1px solid #f1f4f7;}' +
+    '.pc3-tl-bodyrow.pc3-tl-alt .pc3-tl-track{background:#fcfdfe;}' +
+    '.pc3-tl-bodyrow:hover .pc3-tl-track{background:#f5f9ff;}' +
+    '.pc3-tl-headrow{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #e6eaee;box-shadow:0 1px 0 rgba(15,23,42,.03);}' +
+    '.pc3-tl-periodrow{background:linear-gradient(#fafbfc,#f4f6f8);border-bottom:1px solid #eaeef2;}' +
+    '.pc3-tl-corner,.pc3-tl-bunk{width:132px;min-width:132px;flex-shrink:0;display:flex;align-items:center;padding:6px 14px;font-size:13px;color:#1e293b;border-right:1px solid #e2e8f0;background:#f8fafc;position:sticky;left:0;z-index:2;box-sizing:border-box;letter-spacing:.01em;}' +
+    '.pc3-tl-corner{font-weight:700;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.06em;}' +
+    '.pc3-tl-bunk{font-weight:600;}' +
+    '.pc3-tl-bodyrow.pc3-tl-alt .pc3-tl-bunk{background:#f4f7fa;}' +
+    '.pc3-tl-track{position:relative;flex:1;min-width:0;height:54px;transition:background .12s;}' +
+    '.pc3-tl-headrow .pc3-tl-track{height:32px;}' +
+    '.pc3-tl-periodrow .pc3-tl-track{height:28px;}' +
+    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #eef1f4;}' +
+    '.pc3-tl-tick.major{border-left-color:#e2e6ea;}' +
+    '.pc3-tl-tick span{position:absolute;top:9px;left:5px;font-size:10px;font-weight:500;color:#9aa5b1;white-space:nowrap;letter-spacing:.01em;}' +
+    '.pc3-tl-tick.major span{color:#64748b;font-weight:600;}' +
+    '.pc3-tl-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f4f6f9;}' +
+    '.pc3-tl-period{position:absolute;top:4px;bottom:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#475569;background:#eef2f6;border:1px solid #dde3ea;border-radius:6px;overflow:hidden;white-space:nowrap;padding:0 8px;box-sizing:border-box;letter-spacing:.02em;}' +
+    '.pc3-tl-block{position:absolute;top:5px;bottom:5px;border:1px solid #e3e8ee;border-left:3px solid #cbd5e1;border-radius:8px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.06),0 1px 1px rgba(15,23,42,.04);display:flex;box-sizing:border-box;transition:box-shadow .12s,transform .12s;}' +
+    '.pc3-tl-block:hover{box-shadow:0 4px 10px rgba(15,23,42,.12);transform:translateY(-1px);z-index:3;}' +
+    '.pc3-tl-block-in{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;padding:4px 10px;}' +
+    '.pc3-tl-name{font-size:12.5px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;}' +
+    '.pc3-tl-sub{font-size:10.5px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}' +
+    '.pc3-tl-dur{font-size:9px;font-weight:500;color:#aab4c0;margin-top:2px;letter-spacing:.03em;}' +
+    '.pc3-tl-chg{flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#fff4ec;color:#b45309;font-size:8.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;min-width:16px;border-right:1px solid #f3e3d4;}' +
+    '@media print{.pc3-tl-block{box-shadow:none;}.pc3-tl-headrow{box-shadow:none;}.pc3-tl-bodyrow:hover .pc3-tl-track{background:transparent;}}' +
+
+    /* ── Sheet Header — Excel sheet-tab feel ── */
+    '.pc3-sheet-head{padding:10px 14px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #c6c6c6;background:#f7f7f7;}' +
+    '.pc3-sheet-title{font-family:Calibri,"Segoe UI",Arial,sans-serif;font-size:16px;font-weight:700;color:#1f1f1f;letter-spacing:0;}' +
+    '.pc3-sheet-subtitle{font-size:12px;color:#5f6368;font-weight:500;}' +
+    '.pc3-sheet-badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:3px;background:#107c41;color:#fff;text-transform:uppercase;letter-spacing:.5px;margin-left:auto;}' +
 
     /* ── League Matchups ── */
-    '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:rgba(30,64,175,.06);border:1px solid rgba(30,64,175,.1);border-radius:3px;font-size:10px;white-space:nowrap;}' +
+    '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 7px;background:#ddebf7;border:1px solid #9bc2e6;border-radius:2px;font-size:10px;white-space:nowrap;color:#1f3864;}' +
 
-    /* ── Live Mode ── */
-    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#111827;display:flex;flex-direction:column;overflow:hidden;}' +
-    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;background:rgba(0,0,0,.3);flex-shrink:0;}' +
-    '.pc3-live-title{font-size:24px;font-weight:800;color:#fff;}' +
-    '.pc3-live-clock{font-size:36px;font-weight:300;color:#fbbf24;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.2);border-radius:8px;background:rgba(255,255,255,.1);color:#fff;font-size:13px;cursor:pointer;}' +
+    /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
+    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:#060a16;border-bottom:1px solid #1e293b;flex-shrink:0;}' +
+    '.pc3-live-headleft{display:flex;align-items:baseline;gap:14px;min-width:0;}' +
+    '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:#ffffff;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.pc3-live-date{font-size:16px;font-weight:600;color:#fcd34d;white-space:nowrap;}' +
+    '.pc3-live-headright{display:flex;align-items:center;gap:18px;flex-shrink:0;}' +
+    '.pc3-live-clock{font-size:34px;font-weight:300;color:#e2e8f0;font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
+    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
+    '.pc3-live-loading{color:#94a3b8;padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
     '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
     '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
-    '.pc3-live-page-inner{padding:16px 24px;}' +
-    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.55);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
+    '.pc3-live-page-inner{padding:18px 28px;}' +
+    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
     '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
-    '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:auto;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #374151;padding:8px 12px;text-align:left;white-space:nowrap;font-size:14px;}' +
-    '.pc3-live-tbl th{background:#1f2937;color:#e5e7eb;font-weight:600;position:sticky;top:0;z-index:2;}' +
-    '.pc3-live-tbl th.corner{z-index:3;left:0;top:0;}' +
-    '.pc3-live-tbl th.row-head{position:sticky;left:0;z-index:2;background:#1f2937;}' +
-    '.pc3-live-tbl td{color:#e5e7eb;background:#111827;}' +
-    '.pc3-live-tbl tr:nth-child(even) td{background:#0f172a;}' +
-    '.pc3-live-tbl .cell-current{background:#164e63 !important;box-shadow:inset 0 0 0 2px #06b6d4;}' +
-    '.pc3-live-tbl .cell-past{opacity:.4;}' +
-    '.pc3-live-tbl .cell-pinned{background:#422006 !important;color:#fbbf24;}' +
-    '.pc3-live-tbl .cell-league{background:#1e1b4b !important;color:#818cf8;}' +
-    '.pc3-live-cursor-v{position:absolute;top:0;bottom:0;width:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:left .8s linear;}' +
-    '.pc3-live-cursor-h{position:absolute;left:0;right:0;height:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:top .8s linear;}' +
-    '.pc3-live-now-tag{position:absolute;background:#fbbf24;color:#111;font-size:11px;font-weight:800;padding:3px 8px;border-radius:4px;font-variant-numeric:tabular-nums;z-index:51;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4);}' +
-    '.pc3-live-now-tag.tag-v{top:-2px;transform:translateX(-50%);}' +
-    '.pc3-live-now-tag.tag-h{left:8px;transform:translateY(-50%);}' +
-    '.pc3-live-section{position:relative;}' +
+    '.pc3-live-section{margin-bottom:22px;}' +
+    '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
+    '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
+    '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:10px 12px;text-align:center;white-space:normal;word-break:break-word;font-size:16px;}' +
+    '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
+    '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
+    '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:600;}' +
+    '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
+    '.pc3-live-tbl .cell-free{color:#42536c !important;font-style:normal;background:#131f33 !important;font-weight:400;}' +
+    '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee,0 0 18px rgba(34,211,238,.35);color:#ffffff !important;font-weight:800 !important;}' +
+    '.pc3-live-tbl .cell-past{opacity:.42;}' +
+    '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
+    '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
 
     /* ── Advanced Drawer ── */
     '.pc3-drawer{position:absolute;top:0;right:0;width:300px;height:100%;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:20;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;}' +
@@ -1324,6 +1439,11 @@ function getStyles() {
     '.pc3-filter-specials td:not(.cell-pinned):not([colspan]){opacity:.12;}' +
     '.pc3-filter-general td:not(.cell-general):not([colspan]){opacity:.12;}' +
     '.pc3-filter-free td:not(.cell-free):not([colspan]){opacity:.12;}' +
+    /* Timeline parity: dim non-matching activity cards under the same filters */
+    '.pc3-filter-leagues .pc3-tl-block:not(.cell-league){opacity:.12;}' +
+    '.pc3-filter-specials .pc3-tl-block:not(.cell-pinned){opacity:.12;}' +
+    '.pc3-filter-general .pc3-tl-block:not(.cell-general){opacity:.12;}' +
+    '.pc3-filter-free .pc3-tl-block{opacity:.12;}' +
     /* Make tables fully visible during print regardless of overflow scrolling */
     '@media print{' +
         '.pc3-sheet-table-wrap{overflow:visible !important;width:100% !important;}' +
@@ -1347,226 +1467,175 @@ function buildMainUI() {
     var mode = isAutoMode() ? 'auto' : 'manual';
     var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
     var liveOpen = !!(_liveWindow && !_liveWindow.closed);
-    return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + (_highlightGaps ? ' pc3-highlight-gaps' : '') + (_colorByCategory ? ' pc3-color-cat' : '') + (_quickFilter && _quickFilter !== 'all' ? ' pc3-filter-' + _quickFilter : '') + '" id="pc3-root">' +
 
-    /* ── Hero header ── */
-    '<div class="pc3-hero no-print">' +
-        '<div class="pc3-hero-title-block">' +
-            '<h1>' + escHtml(t.campName || 'Camp Schedule') + '</h1>' +
-            '<div class="pc3-hero-meta">' +
-                (dateLabel ? '<span>' + escHtml(dateLabel) + '</span><span class="pc3-hero-meta-dot"></span>' : '') +
-                '<span class="pc3-hero-mode ' + mode + '">' + mode + ' builder</span>' +
-            '</div>' +
+    // Fresh, minimal chrome — one top bar + one control rail + the preview canvas.
+    // Reuses the proven sheet/table/live renderers and the .pc3-item list styling
+    // from getStyles(); everything below is new and self-contained (pcx-* classes).
+    var chrome = '<style id="pcx-styles">' +
+        '#pc3-root.pc3{background:#f4f4f4;font-family:"DM Sans",system-ui,sans-serif;}' +
+        /* TOP BAR — branded deep-teal */
+        '.pcx-bar{display:flex;align-items:center;gap:16px;padding:16px 24px;background:linear-gradient(180deg,#147D91,#0F5F6E);flex-shrink:0;box-shadow:0 6px 20px -12px rgba(15,95,110,.65);}' +
+        '.pcx-brand{flex:1;min-width:0;}' +
+        '.pcx-title{font-family:"Fraunces",Georgia,serif;font-size:27px;font-weight:700;letter-spacing:-.01em;color:#fff;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.pcx-sub{font-size:12.5px;color:rgba(255,255,255,.8);margin-top:3px;font-weight:500;text-transform:capitalize;letter-spacing:.2px;}' +
+        '.pcx-actions{display:flex;align-items:center;gap:9px;flex-shrink:0;}' +
+        '.pcx-btn{display:inline-flex;align-items:center;gap:7px;height:42px;padding:0 18px;border:1px solid rgba(255,255,255,.3);border-radius:12px;background:rgba(255,255,255,.13);color:#fff;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .14s,border-color .14s,transform .04s;}' +
+        '.pcx-btn:hover{background:rgba(255,255,255,.24);border-color:rgba(255,255,255,.5);}' +
+        '.pcx-btn:active{transform:translateY(1px);}' +
+        '.pcx-btn svg{width:16px;height:16px;}' +
+        '.pcx-primary{background:#F59E0B;border-color:#F59E0B;color:#3a2606;box-shadow:0 3px 14px -3px rgba(245,158,11,.6);}' +
+        '.pcx-primary:hover{background:#ea920a;border-color:#ea920a;color:#3a2606;}' +
+        '#pc3-live-btn.live-on{background:#dc2626;border-color:#dc2626;color:#fff;}' +
+        '#pc3-live-btn.live-on:hover{background:#be1c1c;}' +
+        '#pc3-live-btn .pc3-live-dot{width:8px;height:8px;border-radius:50%;background:#fff;animation:pcx-pulse 1.6s infinite;}' +
+        '@keyframes pcx-pulse{0%,100%{opacity:1}50%{opacity:.45}}' +
+        '.pcx-iconbtn{width:42px;height:42px;display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.3);border-radius:12px;background:rgba(255,255,255,.13);color:#fff;cursor:pointer;}' +
+        '.pcx-iconbtn:hover{background:rgba(255,255,255,.24);}' +
+        '.pcx-menuwrap{position:relative;}' +
+        '.pcx-menu{display:none;position:absolute;top:calc(100% + 8px);right:0;min-width:222px;background:#fff;border:1px solid #e7e3da;border-radius:14px;box-shadow:0 18px 44px rgba(15,23,42,.2);padding:7px;z-index:120;}' +
+        '.pcx-menu.open{display:block;}' +
+        '.pcx-menu button{display:flex;align-items:center;gap:11px;width:100%;padding:11px 12px;border:none;background:transparent;border-radius:10px;font-family:inherit;font-size:13.5px;font-weight:500;color:#23252a;cursor:pointer;text-align:left;}' +
+        '.pcx-menu button:hover{background:#f4f1ea;}' +
+        '.pcx-menu button svg{width:17px;height:17px;color:#0F5F6E;}' +
+        '.pcx-menu .pcx-menu-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#b3ab9c;padding:7px 11px 3px;}' +
+        '.pcx-body{flex:1;display:flex;min-height:0;overflow:hidden;}' +
+        /* RAIL — warm cream */
+        '.pcx-rail{width:290px;flex-shrink:0;background:#faf8f3;border-right:1px solid #e7e2d6;display:flex;flex-direction:column;overflow-y:auto;}' +
+        '.pcx-section{padding:17px 18px;border-bottom:1px solid #efe9dd;}' +
+        '.pcx-grow{flex:1 0 auto;min-height:0;display:flex;flex-direction:column;}' +
+        '.pcx-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#a79f8e;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;}' +
+        '.pcx-count{font-size:10px;font-weight:700;color:#0F5F6E;background:#dff1f4;padding:2px 9px;border-radius:99px;text-transform:none;letter-spacing:0;}' +
+        '.pcx-seg{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
+        '.pcx-seg button{height:46px;border:1px solid #e2dccf;border-radius:13px;background:#fff;font-family:inherit;font-size:13.5px;font-weight:600;color:#5b5446;cursor:pointer;transition:all .14s;}' +
+        '.pcx-seg button:hover{border-color:#147D91;color:#0F5F6E;}' +
+        '.pcx-seg button.active{background:#147D91;border-color:#147D91;color:#fff;box-shadow:0 4px 12px -4px rgba(20,125,145,.65);}' +
+        '.pcx-search{width:100%;height:38px;padding:0 13px;border:1px solid #e2dccf;border-radius:12px;font-size:13px;font-family:inherit;background:#fff;color:#23252a;margin-bottom:9px;}' +
+        '.pcx-search:focus{outline:none;border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.14);}' +
+        '.pcx-search::placeholder{color:#b3ab9c;}' +
+        '.pcx-list{flex:1;min-height:260px;overflow-y:auto;margin:0 -6px;padding:0 6px;}' +
+        '.pcx-rowbtns{display:flex;gap:8px;margin-top:11px;}' +
+        '.pcx-rowbtns button{flex:1;height:36px;border:1px solid #e2dccf;border-radius:11px;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#5b5446;cursor:pointer;}' +
+        '.pcx-rowbtns button:hover{border-color:#147D91;color:#0F5F6E;}' +
+        '.pcx-opt{display:flex;align-items:center;gap:11px;padding:8px 2px;font-size:13.5px;color:#3a382f;cursor:pointer;font-weight:500;}' +
+        '.pcx-opt input{width:17px;height:17px;accent-color:#147D91;cursor:pointer;}' +
+        '.pcx-paper{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px;}' +
+        '.pcx-paper select{width:100%;height:36px;padding:0 9px;border:1px solid #e2dccf;border-radius:11px;font-size:12.5px;font-family:inherit;background:#fff;color:#23252a;cursor:pointer;}' +
+        /* CANVAS — warm stone; paper sheets float */
+        '.pcx-canvas{flex:1;overflow:auto;background:#e8e8e8;padding:24px 24px 90px;position:relative;min-height:0;}' +
+        '.pcx-empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;color:#9a917f;}' +
+        /* sidebar items — more breathing room for the cream rail */
+        '#pc3-sidebar .pc3-sidebar-scroll{padding:0 10px 14px;}' +
+        '#pc3-sidebar .pc3-sidebar-group{margin-bottom:10px;}' +
+        '#pc3-sidebar .pc3-sidebar-group-head{padding:8px 6px 4px;font-size:10.5px;}' +
+        '#pc3-sidebar .pc3-item{padding:11px 14px;border-radius:10px;color:#3a382f;font-size:13.5px;gap:12px;margin-bottom:4px;}' +
+        '#pc3-sidebar .pc3-item:hover{background:#f1ece1;}' +
+        '#pc3-sidebar .pc3-item.selected{background:#dff1f4;border-color:rgba(20,125,145,.25);}' +
+        '#pc3-sidebar .pc3-item input[type="checkbox"]{width:16px;height:16px;}' +
+        '#pc3-sidebar .pc3-item-label{font-size:13.5px;font-weight:600;}' +
+        '#pc3-sidebar .pc3-item-count{font-size:11px;background:rgba(0,0,0,.06);color:#6b6254;padding:2px 7px;border-radius:20px;font-weight:700;}' +
+        '#pc3-sidebar .pc3-item.selected .pc3-item-count{background:rgba(20,125,145,.12);color:#0f6678;}' +
+        /* ── Focus mode: hide all chrome, just the grid ── */
+        '.pc3-focus-exit{display:none;position:fixed;top:16px;right:16px;z-index:60;align-items:center;gap:7px;padding:8px 14px;border:1px solid #000;border-radius:0;background:#000;color:#fff;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);}' +
+        '.pc3-focus-exit:hover{background:#222;}' +
+        '.pc3.pc3-focus .pcx-bar,.pc3.pc3-focus .pcx-rail,.pc3.pc3-focus .pc3-zoom-dock,.pc3.pc3-focus .pc3-sidebar-toggle{display:none!important;}' +
+        '.pc3.pc3-focus .pcx-canvas{padding:0;background:#fff;}' +
+        '.pc3.pc3-focus .pc3-focus-exit{display:inline-flex;}' +
+    '</style>';
+
+    return getStyles() + chrome +
+    '<div class="pc3" id="pc3-root">' +
+
+    /* -- Top bar: brand on the left, the actions on the right -- */
+    '<div class="pcx-bar no-print">' +
+        '<div class="pcx-brand">' +
+            '<div class="pcx-title">' + escHtml(t.campName || 'Camp Schedule') + '</div>' +
+            '<div class="pcx-sub">' + (dateLabel ? escHtml(dateLabel) + ' · ' : '') + mode + ' builder</div>' +
         '</div>' +
-        '<div class="pc3-hero-actions">' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-hero-btn" id="pc3-packs-btn" title="Print packs — opinionated one-click setups">' + ICO.grid + ' Packs <span style="opacity:.6;font-size:9px;">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-packs-menu" style="min-width:340px;left:0;right:auto;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">One-click setups</div>' +
-                        '<div class="pc3-packs-list">' +
-                            PRINT_PACKS.map(function (p) {
-                                var active = _activePack === p.id;
-                                return '<button class="pc3-pack-row' + (active ? ' active' : '') + '" data-pack="' + p.id + '">' +
-                                    '<span class="pc3-pack-icon">' + (ICO[p.icon] || ICO.grid) + '</span>' +
-                                    '<div class="pc3-pack-row-text">' +
-                                        '<div class="pc3-pack-row-name">' + escHtml(p.name) + '</div>' +
-                                        '<div class="pc3-pack-row-tagline">' + escHtml(p.tagline) + '</div>' +
-                                    '</div>' +
-                                    (active ? '<span class="pc3-popover-icon" style="color:#147D91;">' + ICO.check + '</span>' : '') +
-                                '</button>';
-                            }).join('') +
-                        '</div>' +
-                    '</div>' +
-                '</div>' +
-            '</div>' +
-            '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View in a new window') + '">' +
+        '<div class="pcx-actions">' +
+            '<button class="pcx-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="Open Live View on a screen">' +
                 (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
             '</button>' +
-            '<button class="pc3-hero-btn" id="pc3-design-btn" onclick="window._pc3ToggleAdvanced()" title="Open full design settings — colors, fonts, header, footer, watermark">' + ICO.gear + ' Design</button>' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-hero-btn primary" id="pc3-output-btn">' + ICO.print + ' Output <span style="opacity:.7;font-size:9px;">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-output-menu" style="min-width:260px;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Print</div>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3Print()"><span class="pc3-popover-icon">' + ICO.print + '</span>Print this view</button>' +
-                        '<button class="pc3-popover-item" onclick="window.printAllDivisions()"><span class="pc3-popover-icon">' + ICO.grid + '</span>Print every division</button>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Export</div>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ExportExcel()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Export to Excel</button>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ExportCSV && window._pc3ExportCSV()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Export to CSV</button>' +
-                    '</div>' +
+            '<div class="pcx-menuwrap">' +
+                '<button class="pcx-btn" id="pc3-output-btn">' + ICO.download + ' Download <span style="opacity:.6;font-size:9px;">▼</span></button>' +
+                '<div class="pcx-menu" id="pc3-output-menu">' +
+                    '<div class="pcx-menu-label">Download</div>' +
+                    '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
+                    '<button onclick="window._pc3ExportCSV && window._pc3ExportCSV();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'CSV</button>' +
+                    '<div class="pcx-menu-label">Print</div>' +
+                    '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
             '</div>' +
-            '<button class="pc3-hero-icon-btn" onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
+            '<button class="pcx-btn pcx-primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
+            '<button class="pcx-iconbtn" onclick="window._pc3ToggleFocus()" title="Focus mode — just the schedule">' + ICO.expand + '</button>' +
         '</div>' +
     '</div>' +
 
-    /* ── Tab bar ── */
-    '<div class="pc3-tabbar no-print">' +
-        '<div class="pc3-tabs">' +
-            '<button class="pc3-tab' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">Divisions</button>' +
-            '<button class="pc3-tab' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">Bunks</button>' +
-            '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Facilities</button>' +
-            '<button class="pc3-tab' + (_activeView === 'week' ? ' active' : '') + '" data-view="week" title="Mon–Sun at-a-glance">Week</button>' +
-        '</div>' +
-        '<div class="pc3-tab-actions">' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-tab-btn" id="pc3-style-btn">Style <span class="caret">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-style-menu" style="min-width:280px;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Presets</div>' +
-                        STYLE_PRESETS.map(function (p) {
-                            var active = _activePreset === p.id;
-                            var sw = '<div class="pc3-preset-swatch">' +
-                                p.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') +
-                            '</div>';
-                            return '<button class="pc3-preset-item' + (active ? ' active' : '') + '" data-preset="' + p.id + '">' +
-                                sw +
-                                '<div class="pc3-preset-text">' +
-                                    '<div class="pc3-preset-name">' + escHtml(p.name) + '</div>' +
-                                    '<div class="pc3-preset-desc">' + escHtml(p.description) + '</div>' +
-                                '</div>' +
-                                (active ? '<span class="pc3-preset-check">' + (ICO.check || '✓') + '</span>' : '') +
-                            '</button>';
+    /* -- Body: control rail + preview canvas -- */
+    '<div class="pcx-body">' +
+        '<aside class="pcx-rail no-print" id="pc3-sidebar">' +
+            /* View */
+            '<div class="pcx-section">' +
+                '<div class="pcx-label">View</div>' +
+                '<div class="pcx-seg">' +
+                    '<button data-view="division"' + (_activeView === 'division' ? ' class="active"' : '') + '>Divisions</button>' +
+                    '<button data-view="bunk"' + (_activeView === 'bunk' ? ' class="active"' : '') + '>Bunks</button>' +
+                    '<button data-view="location"' + (_activeView === 'location' ? ' class="active"' : '') + '>Facilities</button>' +
+                    '<button data-view="week"' + (_activeView === 'week' ? ' class="active"' : '') + '>Week</button>' +
+                '</div>' +
+            '</div>' +
+            /* Items to include */
+            '<div class="pcx-section pcx-grow">' +
+                '<div class="pcx-label"><span id="pc3-sidebar-title">Divisions</span><span class="pcx-count" id="pc3-sidebar-count">0 selected</span></div>' +
+                '<input type="text" id="pc3-sidebar-search" class="pcx-search" placeholder="Search...">' +
+                '<div class="pcx-list" id="pc3-sidebar-scroll"></div>' +
+                '<div class="pcx-rowbtns"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
+            '</div>' +
+            /* Options */
+            '<div class="pcx-section">' +
+                '<div class="pcx-label">Options</div>' +
+                '<label class="pcx-opt"><input type="checkbox" id="pc3-show-date"' + (t.showDate !== false ? ' checked' : '') + '>Show date</label>' +
+                '<label class="pcx-opt"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks</label>' +
+                '<label class="pcx-opt"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
+                '<div class="pcx-paper" style="margin-top:8px;">' +
+                    '<label class="pcx-label" style="margin:0 0 4px;display:block;">Time increment</label>' +
+                    '<select id="pc3-time-increment">' +
+                        [10, 15, 20, 25, 30, 40, 45, 60].map(function (n) {
+                            return '<option value="' + n + '"' + (_timeIncrement === n ? ' selected' : '') + '>' + n + ' min</option>';
                         }).join('') +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Header</div>' +
-                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Camp name</span><input type="text" id="pc3-hero-camp-name" value="' + escHtml(_currentTemplate.campName || '') + '" placeholder="Your Camp"></label>' +
-                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Subtitle</span><input type="text" id="pc3-hero-subtitle" value="' + escHtml(_currentTemplate.customSubtitle || '') + '" placeholder="Daily Schedule"></label>' +
-                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Footer</span><input type="text" id="pc3-hero-footer" value="' + escHtml(_currentTemplate.footerText || '') + '" placeholder="Generated by Campistry"></label>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Saved layouts</div>' +
-                        '<div id="pc3-layouts-list" class="pc3-layouts-list"></div>' +
-                        '<button class="pc3-save-layout-btn" id="pc3-save-layout-btn">+ Save current as layout</button>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        /* Customize is a local style editor — every user can tweak how their own print output looks. Saving as a shared template stays gated separately inside the drawer. */
-                        '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ShowShortcuts && window._pc3ShowShortcuts()"><span class="pc3-popover-icon">⌘</span>Keyboard shortcuts<span class="pc3-popover-hint">?</span></button>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-inspect-mode"' + (_inspectMode ? ' checked' : '') + '>Inspect mode<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Excel-like</span></label>' +
-                    '</div>' +
+                    '</select>' +
+                '</div>' +
+                '<div class="pcx-paper">' +
+                    '<select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select>' +
+                    '<select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select>' +
                 '</div>' +
             '</div>' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-tab-btn" id="pc3-layout-btn">Layout <span class="caret">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-layout-menu" style="min-width:280px;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-transpose"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Time across the top<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Transpose</span></label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks into one sheet</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Time axis</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-activity-aligned"' + (_activityAligned ? ' checked' : '') + '>Activity-aligned columns<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Recommended</span></label>' +
-                        '<div class="pc3-popover-row" id="pc3-subseg-row" style="' + (_activityAligned ? 'display:none;' : '') + '"><span>Sub-segment</span>' +
-                            '<select id="pc3-time-increment" class="pc3-popover-select" style="max-width:110px;">' +
-                                (function () {
-                                    var opts = '';
-                                    for (var iv = 5; iv <= 60; iv += 5) {
-                                        opts += '<option value="' + iv + '"' + (_timeIncrement === iv ? ' selected' : '') + '>' + iv + ' min</option>';
-                                    }
-                                    return opts;
-                                })() +
-                            '</select>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Content</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-durations"' + (_hideDurations ? ' checked' : '') + '>Hide activity durations (50m)</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-locations"' + (_hideLocations ? ' checked' : '') + '>Hide locations &amp; sharing notes</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-highlight-gaps"' + (_highlightGaps ? ' checked' : '') + '>Highlight coverage gaps (Free cells)</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-color-cat"' + (_colorByCategory ? ' checked' : '') + '>Color cells by category</label>' +
-                        '<div class="pc3-popover-field" style="margin-top:6px;"><span class="pc3-popover-field-lbl">Show only</span>' +
-                            '<select id="pc3-quick-filter">' +
-                                '<option value="all"' + (_quickFilter === 'all' ? ' selected' : '') + '>Everything</option>' +
-                                '<option value="leagues"' + (_quickFilter === 'leagues' ? ' selected' : '') + '>Leagues</option>' +
-                                '<option value="specials"' + (_quickFilter === 'specials' ? ' selected' : '') + '>Specials (pinned)</option>' +
-                                '<option value="general"' + (_quickFilter === 'general' ? ' selected' : '') + '>General activities</option>' +
-                                '<option value="free"' + (_quickFilter === 'free' ? ' selected' : '') + '>Free / gaps</option>' +
-                            '</select>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Print</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-page-break-bunk"' + (_pageBreakPerBunk ? ' checked' : '') + '>One bunk per page (Bunks view)</label>' +
-                    '</div>' +
-                '</div>' +
-            '</div>' +
-            /* Hidden controls preserved for legacy JS bindings (zoom dock + cell selection) */
-            '<select id="pc3-template-select" style="display:none;"><option value="default">Default Template</option></select>' +
-            '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range" style="display:none;">' +
-            '<span id="pc3-zoom-label" style="display:none;">' + _zoomLevel + '%</span>' +
-        '</div>' +
-    '</div>' +
+        '</aside>' +
 
-    /* ── Formula Bar ── */
-    '<div class="pc3-formula no-print">' +
-        '<span class="pc3-formula-cell" id="pc3-fx-cell">\u2014</span>' +
-        '<span class="pc3-formula-val" id="pc3-fx-val">Select a cell to see details</span>' +
-        '<span class="pc3-formula-mode ' + mode + '" id="pc3-fx-mode">' + mode + ' builder</span>' +
-    '</div>' +
-
-    /* ── Workspace ── */
-    '<div class="pc3-workspace">' +
-        /* Sidebar */
-        '<div class="pc3-sidebar' + (_sidebarCollapsed ? ' collapsed' : '') + '" id="pc3-sidebar">' +
-            '<div class="pc3-sidebar-header"><span id="pc3-sidebar-title">Divisions</span><span class="pc3-sidebar-count" id="pc3-sidebar-count">0 selected</span></div>' +
-            '<div class="pc3-sidebar-search">' +
-                '<input type="text" id="pc3-sidebar-search" class="pc3-sidebar-search-input" placeholder="Search…">' +
-            '</div>' +
-            '<div class="pc3-sidebar-scroll" id="pc3-sidebar-scroll"></div>' +
-            '<div class="pc3-sidebar-actions"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
-        '</div>' +
-        /* ★ Day 22.5+: collapse/expand sidebar toggle — small tab on the
-           border between sidebar and grid area. Lets users maximize the
-           preview area when they want to focus on the schedule. */
-        '<button class="pc3-sidebar-toggle no-print" id="pc3-sidebar-toggle" onclick="window._pc3ToggleSidebar()" title="' + (_sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + '" aria-label="Toggle sidebar">' +
-            '<span class="pc3-sidebar-toggle-arrow">' + (_sidebarCollapsed ? '›' : '‹') + '</span>' +
-        '</button>' +
-
-        /* Grid Area */
-        '<div class="pc3-grid-area" id="pc3-grid-area">' +
-            '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;padding:40px 28px;">' +
-                '<div style="text-align:center;max-width:760px;width:100%;">' +
-                    '<div style="font-size:36px;margin-bottom:10px;opacity:.35;color:#a8a29e;">' + ICO.grid + '</div>' +
-                    '<p style="margin:0 0 6px;font-size:18px;font-weight:700;color:#1c1917;letter-spacing:-.005em;">Print Packs</p>' +
-                    '<p style="margin:0 0 8px;font-size:13px;color:#78716c;line-height:1.5;max-width:480px;margin-left:auto;margin-right:auto;">Pick a pack and the print center configures itself for that workflow. Style, layout, and selection — set in one click.</p>' +
-                    '<div class="pc3-packs-grid">' +
-                        PRINT_PACKS.map(function (p) {
-                            return '<button class="pc3-pack-card" data-pack="' + p.id + '">' +
-                                '<span class="pc3-pack-icon">' + (ICO[p.icon] || ICO.grid) + '</span>' +
-                                '<span class="pc3-pack-name">' + escHtml(p.name) + '</span>' +
-                                '<span class="pc3-pack-tagline">' + escHtml(p.tagline) + '</span>' +
-                            '</button>';
-                        }).join('') +
-                    '</div>' +
+        /* Preview canvas */
+        '<main class="pcx-canvas" id="pc3-grid-area">' +
+            '<div id="pc3-preview-empty" class="pcx-empty">' +
+                '<div style="max-width:340px;">' +
+                    '<div style="font-size:30px;margin-bottom:12px;opacity:.3;">' + ICO.grid + '</div>' +
+                    '<div style="font-size:16px;font-weight:700;color:#3a3a34;margin-bottom:5px;">Pick what to print</div>' +
+                    '<div style="font-size:13px;line-height:1.5;">Choose a view and check the items on the left. Your printout previews here.</div>' +
                 '</div>' +
             '</div>' +
             '<div id="pc3-preview-content" style="display:none;"></div>' +
-            /* Floating zoom dock — bottom-right of preview */
             '<div class="pc3-zoom-dock no-print" id="pc3-zoom-dock">' +
-                /* ★ Day 22.5+: explicit + / − glyphs alongside icons so the
-                   buttons are unmistakably zoom controls at a glance */
-                '<button onclick="window._pc3Zoom(-10)" title="Zoom out" aria-label="Zoom out"><span class="pc3-zoom-glyph">−</span></button>' +
+                '<button onclick="window._pc3Zoom(-10)" title="Zoom out"><span class="pc3-zoom-glyph">−</span></button>' +
                 '<span class="pc3-zoom-dock-label" id="pc3-zoom-dock-label" onclick="window._pc3ZoomReset && window._pc3ZoomReset()" title="Reset to 100%">' + _zoomLevel + '%</span>' +
-                '<button onclick="window._pc3Zoom(10)" title="Zoom in" aria-label="Zoom in"><span class="pc3-zoom-glyph">+</span></button>' +
-                '<span class="pc3-zoom-dock-sep"></span>' +
-                '<button onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
+                '<button onclick="window._pc3Zoom(10)" title="Zoom in"><span class="pc3-zoom-glyph">+</span></button>' +
             '</div>' +
-        '</div>' +
-
-        /* Advanced Drawer */
-        '<div class="pc3-drawer' + (_advancedOpen ? ' open' : '') + '" id="pc3-drawer">' +
-            '<div class="pc3-drawer-header"><span>' + ICO.gear + ' Design Settings</span><button class="pc3-hero-icon-btn" onclick="window._pc3ToggleAdvanced()" style="width:28px;height:28px;">' + ICO.x + '</button></div>' +
-            '<div class="pc3-drawer-scroll" id="pc3-drawer-scroll">' + buildAdvancedSections() + '</div>' +
-        '</div>' +
+        '</main>' +
     '</div>' +
 
+    /* Exit-focus pill — only visible while in focus mode */
+    '<button class="pc3-focus-exit no-print" id="pc3-focus-exit" onclick="window._pc3ToggleFocus()" title="Exit focus (Esc)">' + ICO.expand + ' Exit focus</button>' +
+
+    /* Hidden legacy controls (zoom + template state) */
+    '<select id="pc3-template-select" style="display:none;"><option value="default">Default Template</option></select>' +
+    '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range" style="display:none;">' +
+    '<span id="pc3-zoom-label" style="display:none;">' + _zoomLevel + '%</span>' +
     '<div id="printable-area" style="display:none;"></div>' +
     '</div>';
 }
@@ -1889,6 +1958,42 @@ function renderDivisionSheet(divName) {
     return html;
 }
 
+// Returns absolutely-positioned vertical tick lines at each _timeIncrement boundary that
+// falls inside an activity cell. The parent div must have position:relative.
+//
+// Bricks-in-a-mold: each bunk's activities are different "bricks", but they all sit in
+// the SAME time mold. Columns are uniform PIXEL width (not time-proportional), so a line
+// must be positioned in column-space, not raw-time-space — that way the same clock minute
+// lands at the same x for every bunk, and the sub-period lines stack into one mold.
+function pcInnerDividers(timeCols, colIdx, span) {
+    var inc = _timeIncrement;
+    if (!inc || span < 1) return '';
+    var startMin = timeCols[colIdx].startMin;
+    var endMin = timeCols[colIdx + span - 1].endMin;
+    if (endMin - startMin <= inc) return '';
+    var first = (Math.floor(startMin / inc) + 1) * inc;
+    if (first >= endMin) return '';
+    var lines = '';
+    for (var m = first; m < endMin; m += inc) {
+        // Locate the sub-column (within this cell's span) that contains minute m,
+        // then express m as a fraction of the uniform column width.
+        var jLocal = -1, frac = 0;
+        for (var k = 0; k < span; k++) {
+            var c = timeCols[colIdx + k];
+            if (m >= c.startMin && m < c.endMin) {
+                jLocal = k;
+                frac = (m - c.startMin) / (c.endMin - c.startMin);
+                break;
+            }
+            if (m === c.startMin) { jLocal = k; frac = 0; break; }
+        }
+        if (jLocal < 0) continue;
+        var pct = ((jLocal + frac) / span * 100).toFixed(2);
+        lines += '<div style="position:absolute;top:0;bottom:0;left:' + pct + '%;width:1px;background:rgba(198,198,198,0.9);pointer-events:none;"></div>';
+    }
+    return lines;
+}
+
 // ── AUTO MODE: Spreadsheet grid — bunks on Y, time increments on X ──
 // Two-row header: top row = period sections (merged), bottom row = sub-time increments.
 // Activities spanning multiple increment columns get merged cells (colspan).
@@ -2035,200 +2140,114 @@ function renderAutoDivisionTable(divName, bunks) {
 
     try { console.log('[PrintCenter] div=' + divName + ' periods=' + activityRanges.length + ' hasReal=' + hasRealPeriods, activityRanges.map(function(r){return r.name||'?';})); } catch(e){}
 
-    // ─── 3. Build the time-column array ─────
-    // Two modes:
-    //   (a) Activity-aligned (NEW default): columns are sized by activity
-    //       boundaries — every unique activity start/end across all bunks
-    //       becomes a column boundary. Activities never span an awkward
-    //       number of "15-min subcolumns" because there are no subcolumns.
-    //   (b) Fixed-increment (legacy): every _timeIncrement minutes is a
-    //       column. Activities of varying durations span uneven colspans.
-    var timeCols = []; // [ { startMin, endMin, label, periodIdx (-1 if not in a period) } ]
-    var t, colEnd, pIdx, ri;
-    if (_activityAligned) {
-        // Collect unique boundaries across all bunks' activities
-        var boundarySet = {};
-        boundarySet[dayStart] = true;
-        boundarySet[dayEnd] = true;
-        Object.keys(bunkActs).forEach(function (bk) {
-            (bunkActs[bk] || []).forEach(function (a) {
-                if (a.startMin >= dayStart && a.startMin <= dayEnd) boundarySet[a.startMin] = true;
-                if (a.endMin >= dayStart && a.endMin <= dayEnd) boundarySet[a.endMin] = true;
-            });
-        });
-        var boundaries = Object.keys(boundarySet).map(Number).sort(function (a, b) { return a - b; });
-        for (var bi = 0; bi < boundaries.length - 1; bi++) {
-            t = boundaries[bi];
-            colEnd = boundaries[bi + 1];
-            pIdx = -1;
-            for (ri = 0; ri < activityRanges.length; ri++) {
-                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
-            }
-            timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
-        }
-    } else {
-        for (t = dayStart; t < dayEnd; t += inc) {
-            colEnd = Math.min(t + inc, dayEnd);
-            pIdx = -1;
-            for (ri = 0; ri < activityRanges.length; ri++) {
-                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
-            }
-            timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
-        }
-    }
-    var numCols = timeCols.length;
+    // ─── 3. Time-proportional TIMELINE layout (brick model) ─────
+    // Each bunk row is an independent track. Activities are cards sized to
+    // their true duration on a SHARED time axis, so equal durations read as
+    // equal widths and every row keeps its own break pattern (bricks in one
+    // mold). Free time is left as a blank gap between cards.
+    var totalMin = Math.max(1, dayEnd - dayStart);
+    function pctL(min) { return ((min - dayStart) / totalMin) * 100; }
+    function pctW(min) { return (min / totalMin) * 100; }
+    // Subtle left-edge accent per activity type — keeps cards clean white while
+    // letting a head counselor scan swim vs sports vs league at a glance.
+    var TL_ACCENT = {
+        swim: '#0ea5e9', sport: '#16a34a', sports: '#16a34a', league: '#8b5cf6',
+        specialty_league: '#8b5cf6', special: '#f59e0b', pinned: '#f59e0b',
+        elective: '#6366f1', swim_elective: '#06b6d4', activity: '#0d9488',
+        transition: '#cbd5e1', free: '#e2e8f0'
+    };
 
-    // ─── 4. Render table ─────
-    // Total visible data columns = 1 (bunk) + numCols (time)
-    var totalDataCols = 1 + numCols;
     var sheetId = pcNextSheetId();
+    var minW = Math.max(720, Math.round(totalMin * 4));
     var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
-    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto" data-day-start="' + dayStart + '" data-day-end="' + dayEnd + '" style="table-layout:fixed;">';
-    html += '<thead>';
+    html += '<div class="pc3-tl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto-timeline" data-day-start="' + dayStart + '" data-day-end="' + dayEnd + '" style="min-width:' + minW + 'px;">';
 
-    // ── HEADER ROW 1 (data row 1): Period labels (only over variable-activity columns) ──
-    // ★ Day 22.5+: only render the period header row when REAL periods exist.
+    var gridStart = Math.ceil(dayStart / inc) * inc;
+
+    // ── Period band (only when a REAL Bell Schedule defines numbered periods) ──
     if (hasRealPeriods) {
-    html += '<tr>';
-    html += '<th class="corner" rowspan="2" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
-
-    var ci = 0;
-    while (ci < numCols) {
-        var col = timeCols[ci];
-        if (col.periodIdx >= 0) {
-            // Count consecutive columns in this period
-            var pStart = ci;
-            var pId = col.periodIdx;
-            while (ci < numCols && timeCols[ci].periodIdx === pId) ci++;
-            var pSpan = ci - pStart;
-            var periodNum = pId + 1;
-            var range = activityRanges[pId];
-            var periodName = range.name || ('Period ' + periodNum);
-            var periodTxt = periodName + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
-            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border-bottom:none;border-right:2px solid #0e6b7e;">';
-            html += escHtml(periodName);
-            html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
-            html += '</th>';
-        } else {
-            // Non-period column — just an empty top header cell
-            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#f1f5f9;border-bottom:none;padding:2px;"></th>';
-            ci++;
-        }
+        html += '<div class="pc3-tl-row pc3-tl-periodrow">';
+        html += '<div class="pc3-tl-corner"></div>';
+        html += '<div class="pc3-tl-track">';
+        activityRanges.forEach(function (r, ri) {
+            var pname = r.name || ('Period ' + (ri + 1));
+            html += '<div class="pc3-tl-period" style="left:' + pctL(r.startMin).toFixed(2) + '%;width:calc(' + pctW(r.endMin - r.startMin).toFixed(2) + '% - 2px);">' + escHtml(pname) + '</div>';
+        });
+        html += '</div></div>';
     }
-    html += '</tr>';
-    }  // end if (hasRealPeriods)
 
-    // ── HEADER ROW 2 (time-label row) — the ONLY header row when no periods ──
-    html += '<tr>';
-    if (!hasRealPeriods) {
-        html += '<th class="corner" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
+    // ── Header row: corner + time ruler ──
+    html += '<div class="pc3-tl-row pc3-tl-headrow">';
+    html += '<div class="pc3-tl-corner">Bunk</div>';
+    html += '<div class="pc3-tl-track pc3-tl-ruler">';
+    // Clean ruler: one label roughly every 30 min (or per increment if coarser),
+    // hour marks emphasized. Avoids a label at every fine sub-period.
+    var labelStep = inc >= 30 ? inc : 30;
+    for (var tm = gridStart; tm <= dayEnd; tm += labelStep) {
+        var isMajor = tm % 60 === 0;
+        html += '<div class="pc3-tl-tick' + (isMajor ? ' major' : '') + '" style="left:' + pctL(tm).toFixed(2) + '%;"><span>' + escHtml(minutesToTimeLabel(tm)) + '</span></div>';
     }
-    var colW = _activityAligned
-        ? Math.max(70, Math.min(140, 900 / Math.max(1, numCols)))
-        : Math.max(36, Math.min(80, 700 / numCols));
-    var hdrRowAttr = hasRealPeriods ? '1' : '0';
-    timeCols.forEach(function (col, idx) {
-        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f8fafc;';
-        // Activity-aligned mode: show end time so each column header is self-documenting
-        var labelTxt = _activityAligned
-            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : col.label;
-        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + labelTxt + '</th>';
-    });
-    html += '</tr>';
-    html += '</thead><tbody>';
+    html += '</div></div>';
 
-    // ─── 5. Bunk rows ─────
+    // ── Bunk rows ──
     bunks.forEach(function (bunk, bunkIdx) {
-        var rowR = 2 + bunkIdx;
-        html += '<tr>';
-        html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(bunk) + '" style="min-width:80px;">' + escHtml(bunk) + '</th>';
+        html += '<div class="pc3-tl-row pc3-tl-bodyrow' + (bunkIdx % 2 ? ' pc3-tl-alt' : '') + '">';
+        html += '<div class="pc3-tl-bunk">' + escHtml(bunk) + '</div>';
+        html += '<div class="pc3-tl-track">';
 
-        var acts = bunkActs[bunk] || [];
-        var colIdx = 0;
-
-        while (colIdx < numCols) {
-            var colStart = timeCols[colIdx].startMin;
-            var colEnd = timeCols[colIdx].endMin;
-
-            // Find which bunk activity covers this time column
-            var matchAct = null;
-            for (var ai = 0; ai < acts.length; ai++) {
-                if (acts[ai].startMin < colEnd && acts[ai].endMin > colStart) { matchAct = acts[ai]; break; }
-            }
-
-            if (matchAct) {
-                // Calculate colspan: how many consecutive columns this activity spans
-                var span = 1;
-                var nextCol = colIdx + 1;
-                while (nextCol < numCols && timeCols[nextCol].startMin < matchAct.endMin) {
-                    span++;
-                    nextCol++;
-                }
-
-                var type = matchAct.type;
-                var actText = '', locText = '';
-                if (matchAct.entry) {
-                    actText = matchAct.entry._activity || matchAct.entry.sport || '';
-                    locText = typeof matchAct.entry.field === 'string' ? matchAct.entry.field : (matchAct.entry.field && matchAct.entry.field.name ? matchAct.entry.field.name : '');
-                    if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
-                    if (!actText && locText) { actText = locText; locText = ''; }
-                }
-                var displayText = actText || '\u2014';
-                // \u2605 Day 22.5+: respect _hideLocations toggle
-                if (locText && !_hideLocations) displayText += ' \u2013 ' + locText;
-                if (matchAct.entry && matchAct.slotIdx != null && displayText !== '\u2014' && !_hideLocations) {
-                    var _autoSh = pcFindFieldSharers(bunk, matchAct.slotIdx, divName);
-                    if (_autoSh.length) {
-                        var _autoNames = _autoSh.map(function(b){ return /^\d/.test(String(b)) ? 'Bunk ' + b : b; });
-                        displayText += ' vs ' + _autoNames.join(', ');
-                    }
-                }
-                var durMin = matchAct.endMin - matchAct.startMin;
-
-                html += '<td';
-                if (span > 1) html += ' colspan="' + span + '"';
-                html += ' class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + matchAct.slotIdx + '" data-div="' + escHtml(divName) + '"';
-                html += ' title="' + escHtml(displayText + ' (' + durMin + ' min)') + '"';
-                var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
-                var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
-                html += ' style="padding:3px;vertical-align:middle;">';
-                // ★ Split-swim change: show Change → Swim → Change subdivisions
-                var splitPre = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
-                var splitPost = matchAct.entry ? (matchAct.entry._splitPostChange || 0) : 0;
-                if (splitPre > 0 || splitPost > 0) {
-                    var swimMin = durMin - splitPre - splitPost;
-                    html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
-                    if (splitPre > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #F59E0B;">Change</div>';
-                    }
-                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
-                    html += '</div>';
-                    if (splitPost > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #F59E0B;">Change</div>';
-                    }
-                    html += '</div></td>';
-                } else {
-                    html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
-                    // ★ Day 22.5+: duration line tagged with .pc3-dur so CSS toggle can hide it without re-render
-                    if (durMin > inc) html += '<span class="pc3-dur" style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
-                    html += '</div></td>';
-                }
-
-                colIdx = nextCol;
-            } else {
-                html += '<td class="cell-free" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="\u2014" style="text-align:center;font-size:9px;">\u2014</td>';
-                colIdx++;
-            }
+        // Faint hour guides only — keeps the track clean (no dense sub-period grid)
+        for (var gm = Math.ceil(dayStart / 60) * 60; gm < dayEnd; gm += 60) {
+            html += '<div class="pc3-tl-vline" style="left:' + pctL(gm).toFixed(2) + '%;"></div>';
         }
 
-        html += '</tr>';
+        (bunkActs[bunk] || []).forEach(function (a) {
+            if (a.type === 'free' || !a.entry) return; // blank gap
+            var dur = a.endMin - a.startMin;
+            if (dur < 1) return;
+
+            var actText = a.entry._activity || a.entry.sport || '';
+            var locText = typeof a.entry.field === 'string' ? a.entry.field : (a.entry.field && a.entry.field.name ? a.entry.field.name : '');
+            if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
+            if (!actText && locText) { actText = locText; locText = ''; }
+            var nameTxt = actText || '—';
+
+            var sharers = '';
+            if (a.slotIdx != null && !_hideLocations) {
+                var sh = pcFindFieldSharers(bunk, a.slotIdx, divName);
+                if (sh.length) sharers = ' vs ' + sh.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; }).join(', ');
+            }
+            var subTxt = (!_hideLocations && locText) ? locText : '';
+
+            // League game: show "Football - Bunk 1 vs 2" with the field on the
+            // sub-line, instead of the generic "League Game" activity name.
+            if (a.type === 'league') {
+                var lg = pcLeagueLabel(a.entry, bunk, divName, a.startMin);
+                nameTxt = [lg.sport, lg.matchup].filter(Boolean).join(' - ') || (a.entry._gameLabel || 'League Game');
+                subTxt = (!_hideLocations && lg.field) ? lg.field : '';
+                sharers = '';
+            }
+
+            var exportTxt = nameTxt + (subTxt ? ' – ' + subTxt : '') + sharers;
+
+            var splitPre = a.entry._splitPreChange || 0;
+            var splitPost = a.entry._splitPostChange || 0;
+
+            var accent = TL_ACCENT[a.type] || '#cbd5e1';
+            html += '<div class="pc3-tl-block cell-' + a.type + '" style="left:' + pctL(a.startMin).toFixed(2) + '%;width:calc(' + pctW(dur).toFixed(2) + '% - 4px);border-left-color:' + accent + ';" title="' + escHtml(exportTxt + ' (' + dur + ' min)') + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + a.slotIdx + '" data-div="' + escHtml(divName) + '" data-cell-text="' + escHtml(exportTxt) + '">';
+            if (splitPre > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPre / dur * 100).toFixed(2) + '%;">Chg</div>';
+            html += '<div class="pc3-tl-block-in">';
+            html += '<span class="pc3-tl-name">' + escHtml(nameTxt + sharers) + '</span>';
+            if (subTxt) html += '<span class="pc3-tl-sub">' + escHtml(subTxt) + '</span>';
+            if (dur > inc) html += '<span class="pc3-tl-dur pc3-dur">' + dur + 'm</span>';
+            html += '</div>';
+            if (splitPost > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPost / dur * 100).toFixed(2) + '%;">Chg</div>';
+            html += '</div>';
+        });
+
+        html += '</div></div>';
     });
 
-    html += '</tbody></table></div>';
+    html += '</div></div>';
     return html;
 }
 
@@ -2460,7 +2479,7 @@ function renderBunkSheet(bunk) {
             html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#b45309;font-style:italic;background:repeating-linear-gradient(45deg,#FEF3C7,#FEF3C7 6px,#FDE68A 6px,#FDE68A 12px);">🚶 Travel</td>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#1f1f1f;font-style:italic;background:#e2efda;">🚶 Travel</td>';
             html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
             html += '</tr>';
             return;
@@ -2471,9 +2490,9 @@ function renderBunkSheet(bunk) {
             html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#7c3aed;font-style:italic;background:repeating-linear-gradient(45deg,#EDE9FE,#EDE9FE 6px,#DDD6FE 6px,#DDD6FE 12px);">' + escHtml(_prepTxt) + '</td>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#1f1f1f;font-style:italic;background:#e2efda;">' + escHtml(_prepTxt) + '</td>';
             var _prepLoc = slot._prepLocation || '';
-            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#7c3aed;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
+            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#1f1f1f;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
             html += '</tr>';
             return;
         }
@@ -2861,7 +2880,7 @@ function renderCombinedAutoTable(divBunks) {
     // ★ Period header row — ONLY when real Bell Schedule defined
     if (hasRealPeriodsC) {
         html += '<tr>';
-        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
+        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
         var ci = 0;
         while (ci < numCols) {
             var col = timeCols[ci];
@@ -2871,32 +2890,37 @@ function renderCombinedAutoTable(divBunks) {
                 var pSpan = ci - pStart;
                 var range = activityRanges[pId];
                 var periodName = range.name || ('Period ' + (pId + 1));
-                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #0e6b7e;border-bottom:none;">';
+                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#e6e6e6;color:#1f1f1f;font-size:12px;font-weight:700;padding:5px 4px;border:1px solid #b0b0b0;border-bottom:none;">';
                 html += escHtml(periodName);
                 html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' – ' + minutesToTimeLabel(range.endMin) + '</div>';
                 html += '</th>';
             } else {
-                html += '<th style="background:#f1f5f9;border:1px solid #e2e8f0;border-bottom:none;padding:2px;"></th>';
+                html += '<th style="background:#f2f2f2;border:1px solid #b0b0b0;border-bottom:none;padding:2px;"></th>';
                 ci++;
             }
         }
         html += '</tr>';
     }
 
-    // Time label row (the ONLY header row when no Bell Schedule)
-    html += '<tr>';
-    if (!hasRealPeriodsC) {
-        html += '<th class="corner" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
-    }
-    timeCols.forEach(function (col) {
-        var bg = col.periodIdx >= 0 ? '#f0f9ff' : '#f8fafc';
-        var labelTxt = _activityAligned
-            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : col.label;
+    // Reusable time-ruler row — shown once in the header.
+    function rulerRowHtml(withLeadCell) {
+        var s = '<tr>';
+        if (withLeadCell) {
+            s += '<th style="position:sticky;left:0;z-index:2;min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
+        }
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:3px 4px;color:#64748b;background:' + bg + ';border:1px solid #e2e8f0;font-weight:500;white-space:nowrap;">' + labelTxt + '</th>';
-    });
-    html += '</tr></thead><tbody>';
+        timeCols.forEach(function (col) {
+            var labelTxt = _activityAligned
+                ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
+                : col.label;
+            s += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:4px 4px;color:#1f1f1f;background:#f2f2f2;border:1px solid #b0b0b0;font-weight:600;white-space:nowrap;">' + labelTxt + '</th>';
+        });
+        return s + '</tr>';
+    }
+
+    // Time label row (the ONLY header row when no Bell Schedule)
+    html += rulerRowHtml(!hasRealPeriodsC);
+    html += '</thead><tbody>';
 
     // One row per bunk, with division label injected between divisions
     var lastDiv = null;
@@ -2906,11 +2930,11 @@ function renderCombinedAutoTable(divBunks) {
         // Division separator row
         if (divName !== lastDiv) {
             lastDiv = divName;
-            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#f1f5f9;padding:4px 12px;font-size:11px;font-weight:700;color:#147D91;border:1px solid #e2e8f0;border-top:2px solid #147D91;">' + escHtml(divName) + '</th></tr>';
+            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#d9e1f2;padding:5px 12px;font-size:12px;font-weight:700;color:#1f3864;border:1px solid #b0b0b0;text-transform:none;letter-spacing:0;">' + escHtml(divName) + '</th></tr>';
         }
 
         html += '<tr>';
-        html += '<th style="position:sticky;left:0;z-index:2;background:#fff;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #e2e8f0;white-space:nowrap;color:#1e293b;">' + escHtml(bunk) + '</th>';
+        html += '<th style="position:sticky;left:0;z-index:2;background:#f2f2f2;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #b0b0b0;white-space:nowrap;color:#1f1f1f;">' + escHtml(bunk) + '</th>';
 
         var acts = bunkActs[bunk] || [];
         var colIdx = 0;
@@ -2933,34 +2957,35 @@ function renderCombinedAutoTable(divBunks) {
                     if (actText && locText && actText === locText) locText = '';
                 }
                 var durMin = matchAct.endMin - matchAct.startMin;
-                var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
-                var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+                var pillBg = '#ffffff';
+                var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
                 var displayText = actText || '—';
-                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #e2e8f0;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
+                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #c6c6c6;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
                 // ★ Split-swim change: show Change → Swim → Change subdivisions
                 var splitPre2 = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
                 var splitPost2 = matchAct.entry ? (matchAct.entry._splitPostChange || 0) : 0;
                 if (splitPre2 > 0 || splitPost2 > 0) {
-                    html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
+                    html += '<div style="overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
                     if (splitPre2 > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #F59E0B;">Change</div>';
+                        html += '<div style="background:#fce4d6;color:#833c00;padding:2px 6px;text-align:center;font-size:10px;font-weight:400;border-bottom:1px solid #c6c6c6;">Change</div>';
                     }
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(displayText) + '</span>';
                     html += '</div>';
                     if (splitPost2 > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #F59E0B;">Change</div>';
+                        html += '<div style="background:#fce4d6;color:#833c00;padding:2px 6px;text-align:center;font-size:10px;font-weight:400;border-top:1px solid #c6c6c6;">Change</div>';
                     }
                     html += '</div></td>';
                 } else {
-                    html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(displayText) + '</span>';
-                    if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;position:relative;">';
+                    html += pcInnerDividers(timeCols, colIdx, span);
+                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;position:relative;">' + escHtml(displayText) + '</span>';
+                    if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;position:relative;">' + durMin + 'm</span>';
                     html += '</div></td>';
                 }
                 colIdx = nextCol;
             } else {
-                html += '<td style="padding:3px;border:1px solid #e2e8f0;background:#fafafa;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
+                html += '<td style="padding:3px;border:1px solid #c6c6c6;background:#fff;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
                 colIdx++;
             }
         }
@@ -3000,15 +3025,18 @@ function liveRefresh() {
             if (allDivBunks.length) html += renderCombinedAutoTable(allDivBunks);
             html += '</div>';
         } else if (_currentTemplate.layoutMode === 'all-bunks') {
-            // Manual combined
-            html += '<div class="pc3-sheet">';
+            // Manual combined — each division gets its own clean, titled card
+            // (was all stacked into one card with repeated headers and no labels).
             sel.forEach(function (d) {
                 var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
                 if (!bunks.length) return;
                 var blocks = buildDivisionBlocks(d);
-                html += renderManualBunksTop(d, bunks, blocks);
+                html += '<div class="pc3-sheet"><div class="pc3-sheet-head">' +
+                    '<span class="pc3-sheet-title">' + escHtml(d) + '</span>' +
+                    (_currentTemplate.showDate ? '<span class="pc3-sheet-subtitle">' + formatDisplayDate(window.currentScheduleDate) + '</span>' : '') +
+                    '<span class="pc3-sheet-badge">' + (isAutoMode() ? 'Auto' : 'Manual') + '</span>' +
+                '</div>' + renderManualBunksTop(d, bunks, blocks) + '</div>';
             });
-            html += '</div>';
         } else {
             sel.forEach(function (d) { html += renderDivisionSheet(d); });
         }
@@ -3134,7 +3162,7 @@ function attachCellInteractivity(pc) {
     var tip = _pcCellTipEl();
     var hideTimer = null;
 
-    pc.querySelectorAll('td[data-bunk][data-slot]').forEach(function (td) {
+    pc.querySelectorAll('td[data-bunk][data-slot], .pc3-tl-block[data-bunk][data-slot]').forEach(function (td) {
         var bunk = td.getAttribute('data-bunk');
         var slotIdx = parseInt(td.getAttribute('data-slot'));
         var divName = td.getAttribute('data-div');
@@ -3437,6 +3465,26 @@ function runLiveStandalone() {
     document.documentElement.classList.add('pc3-live-standalone');
     document.body.classList.add('pc3-live-standalone-body');
 
+    // This kiosk window is dedicated to ONE day. Capture it from the URL up
+    // front. flow.html also set window.currentScheduleDate, but calendar.js's
+    // initCalendar() clobbers it back to "today" during boot — which is exactly
+    // why the Live View kept showing the wrong day. enforceDate() re-asserts it.
+    var _desiredDate = '';
+    try { _desiredDate = new URLSearchParams(window.location.search).get('date') || ''; } catch (e) {}
+    if (!_desiredDate) _desiredDate = window.currentScheduleDate || '';
+    if (_desiredDate) window.currentScheduleDate = _desiredDate;
+
+    function enforceDate() {
+        if (!_desiredDate) return false;
+        if (window.currentScheduleDate !== _desiredDate) {
+            window.currentScheduleDate = _desiredDate;
+            try { if (window.loadScheduleForDate) window.loadScheduleForDate(_desiredDate); } catch (e) {}
+            _liveRenderSig = '';
+            return true;
+        }
+        return false;
+    }
+
     // Strip the app shell — keep only #print
     var roots = document.querySelectorAll('body > *');
     roots.forEach(function (n) {
@@ -3445,7 +3493,6 @@ function runLiveStandalone() {
         n.style.display = 'none';
     });
 
-    // Force the print tab visible if the harness uses tab-content visibility
     var printTab = document.getElementById('print');
     if (printTab) {
         printTab.classList.add('active');
@@ -3462,24 +3509,23 @@ function runLiveStandalone() {
         return d;
     })();
 
-    // Inject styles (reuses pc3-live-* classes)
     container.innerHTML = getStyles() +
         '<div class="pc3-live-overlay" id="pc3-live-overlay" style="position:fixed;inset:0;">' +
         '<div class="pc3-live-header">' +
-            '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
-            '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:6px;"></div>' +
-            '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
-            '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
+            '<div class="pc3-live-headleft">' +
+                '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
+                '<div class="pc3-live-date" id="pc3-live-date"></div>' +
+            '</div>' +
+            '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:8px;"></div>' +
+            '<div class="pc3-live-headright">' +
+                '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
+                '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
+            '</div>' +
         '</div>' +
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
         '</div>';
 
-    // Set the title once data is loaded (fall back to "Camp Schedule").
-    // ★ Prefer the authoritative camp name — the DB camp record exposed via
-    //   AccessControl.getCampName(), the same source the dashboard shows — over
-    //   the stored settings copy, which goes stale on rename (it kept showing
-    //   the old "Camp Awesome" test name). Then app1.campName, then the legacy
-    //   top-level fields (a stale one there could shadow the real name).
+    // Camp name (authoritative DB name first; settings copy goes stale on rename).
     function refreshTitle() {
         try {
             var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
@@ -3493,7 +3539,9 @@ function runLiveStandalone() {
             nm = nm || (g.app1 ? g.app1.campName : '') || g.campName || g.camp_name || 'Camp Schedule';
             var titleEl = document.getElementById('pc3-live-title');
             if (titleEl) titleEl.textContent = nm;
-            document.title = nm + ' — Live';
+            var dateEl = document.getElementById('pc3-live-date');
+            if (dateEl) dateEl.textContent = formatDisplayDate(window.currentScheduleDate) || '';
+            document.title = nm + ' Live';
         } catch (e) {}
     }
 
@@ -3503,33 +3551,50 @@ function runLiveStandalone() {
         var now = new Date();
         var h = now.getHours() % 12 || 12;
         var m = String(now.getMinutes()).padStart(2, '0');
-        var s = String(now.getSeconds()).padStart(2, '0');
         var ap = now.getHours() >= 12 ? 'PM' : 'AM';
-        clockEl.textContent = h + ':' + m + ':' + s + ' ' + ap;
+        clockEl.textContent = h + ':' + m + ' ' + ap;
     }
 
     function tickAll() {
+        enforceDate();
         refreshTitle();
         renderLiveContent();
-        positionAllLiveCursors();
     }
 
-    // Trigger normal app initialization so divisions + schedule data load.
-    // (initApp1 loads global settings; initDailyAdjustments loads per-date schedule data.)
+    var liveBodyEl = document.getElementById('pc3-live-body');
+    if (liveBodyEl) liveBodyEl.innerHTML = '<div class="pc3-live-loading">Loading schedule&hellip;</div>';
+
+    // Cloud-fresh tracking — the popup re-runs the full app boot (integration
+    // hooks), which fires these once Supabase has delivered the day's schedule.
+    var _cloudFresh = false;
+    var _liveBooted = false;
+    function _markCloudFresh() {
+        _cloudFresh = true;
+        if (_liveBooted) { _liveRenderSig = ''; try { tickAll(); } catch (e) {} }
+    }
+    window.addEventListener('campistry-cloud-hydrated', _markCloudFresh);
+    window.addEventListener('campistry-schedule-refreshed', _markCloudFresh);
+
+    // Boot the app so divisions + schedule load. Re-assert the date around the
+    // daily-adjustments load so it reads the requested day, not "today".
     setTimeout(function () {
         try { window.initApp1 && window.initApp1(); } catch (e) {}
+        enforceDate();
         try { window.initDailyAdjustments && window.initDailyAdjustments(); } catch (e) {}
+        enforceDate();
     }, 100);
 
-    // Wait until divisions/scheduling data are populated, then start.
     function whenReady(cb) {
         var attempts = 0;
         var iv = setInterval(function () {
             attempts++;
+            enforceDate();
             var hasDivs = window.divisions && Object.keys(window.divisions).length > 0;
             var hasSched = (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0)
                 || (window.divisionTimes && Object.keys(window.divisionTimes).length > 0);
-            if ((hasDivs && hasSched) || attempts > 80) {
+            var dateOk = !_desiredDate || window.currentScheduleDate === _desiredDate;
+            var freshEnough = _cloudFresh || attempts > 28; // ~7s grace for the cloud
+            if ((hasDivs && hasSched && dateOk && freshEnough) || attempts > 80) {
                 clearInterval(iv);
                 cb();
             }
@@ -3537,85 +3602,15 @@ function runLiveStandalone() {
     }
 
     whenReady(function () {
+        _liveBooted = true;
         tickAll();
-        // Re-render content every 30s, reposition cursor every 15s, clock every 1s
+        // Cheap 5s tick (renderLiveContent is signature-gated) keeps the "now"
+        // highlight punctual and lets the view fill in as soon as data lands.
         if (_liveInterval) clearInterval(_liveInterval);
-        if (_liveCursorInterval) clearInterval(_liveCursorInterval);
-        _liveInterval = setInterval(tickAll, 30000);
-        _liveCursorInterval = setInterval(positionAllLiveCursors, 15000);
+        _liveInterval = setInterval(tickAll, 5000);
         tickClock();
         setInterval(tickClock, 1000);
     });
-}
-
-// Compute the [dayStart, dayEnd] of the activity range visible in a live
-// section, and position its cursor element along the time axis.
-function positionLiveCursor(sectionEl) {
-    if (!sectionEl) return;
-    var nowMin = getNowMinutes();
-    var dayStart = parseInt(sectionEl.getAttribute('data-day-start')) || 0;
-    var dayEnd   = parseInt(sectionEl.getAttribute('data-day-end'))   || 0;
-    var mode     = sectionEl.getAttribute('data-cursor-mode') || 'auto';
-    var cursor   = sectionEl.querySelector('.pc3-live-cursor-v,.pc3-live-cursor-h');
-    var tag      = sectionEl.querySelector('.pc3-live-now-tag');
-    if (!cursor || !tag) return;
-
-    if (dayEnd <= dayStart || nowMin < dayStart || nowMin > dayEnd) {
-        cursor.style.display = 'none';
-        tag.style.display = 'none';
-        return;
-    }
-    cursor.style.display = '';
-    tag.style.display = '';
-    var fraction = (nowMin - dayStart) / (dayEnd - dayStart);
-
-    // Find the time-axis bounding rect to convert fraction -> px
-    var table = sectionEl.querySelector('table');
-    if (!table) return;
-    var tableRect = table.getBoundingClientRect();
-    var sectionRect = sectionEl.getBoundingClientRect();
-
-    if (mode === 'auto') {
-        // Vertical cursor: spans table height, X interpolated across time-axis cells
-        var timeCells = table.querySelectorAll('thead th[data-time-start]');
-        if (timeCells.length === 0) return;
-        var firstCell = timeCells[0];
-        var lastCell = timeCells[timeCells.length - 1];
-        var fr = firstCell.getBoundingClientRect();
-        var lr = lastCell.getBoundingClientRect();
-        var leftEdge = fr.left - sectionRect.left;
-        var rightEdge = lr.right - sectionRect.left;
-        var x = leftEdge + (rightEdge - leftEdge) * fraction;
-        cursor.style.left = x + 'px';
-        cursor.style.top = (tableRect.top - sectionRect.top) + 'px';
-        cursor.style.height = tableRect.height + 'px';
-        tag.style.left = x + 'px';
-        tag.style.top = (tableRect.top - sectionRect.top - 2) + 'px';
-        tag.textContent = minutesToTimeLabel(nowMin);
-    } else {
-        // Horizontal cursor: spans table width, Y interpolated across time-block rows
-        var rows = table.querySelectorAll('tbody tr[data-block-start]');
-        if (rows.length === 0) return;
-        var firstRow = rows[0];
-        var lastRow = rows[rows.length - 1];
-        var fr2 = firstRow.getBoundingClientRect();
-        var lr2 = lastRow.getBoundingClientRect();
-        var topEdge = fr2.top - sectionRect.top;
-        var botEdge = lr2.bottom - sectionRect.top;
-        var y = topEdge + (botEdge - topEdge) * fraction;
-        cursor.style.top = y + 'px';
-        cursor.style.left = (tableRect.left - sectionRect.left) + 'px';
-        cursor.style.width = tableRect.width + 'px';
-        tag.style.top = y + 'px';
-        tag.style.left = (tableRect.left - sectionRect.left + 8) + 'px';
-        tag.textContent = minutesToTimeLabel(nowMin);
-    }
-}
-
-function positionAllLiveCursors() {
-    var activePage = document.getElementById('lp-' + _livePageIndex);
-    var container = activePage || document;
-    container.querySelectorAll('.pc3-live-section').forEach(function (s) { positionLiveCursor(s); });
 }
 
 // —— Build HTML for a single division section (auto or manual mode) ——————————————
@@ -3637,10 +3632,15 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     if (sectionStart === Infinity) sectionStart = 480;
     if (sectionEnd === -Infinity) sectionEnd = 960;
 
-    html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:20px;position:relative;">';
-    html += '<div style="font-size:18px;font-weight:700;color:#fbbf24;margin-bottom:8px;padding-left:4px;">' + escHtml(divName) + '</div>';
-    html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
-    html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
+    // Show the full day span beside the division name so the real end time is
+    // explicit — the column grid labels only show each slot's START, so the last
+    // header reading "3:30" made the day look like it stopped there.
+    var dayRange = minutesToTimeLabel(sectionStart) + ' – ' + minutesToTimeLabel(sectionEnd);
+    html += '<div class="pc3-live-section">';
+    html += '<div class="pc3-live-divhead">' +
+        '<span class="pc3-live-divname">' + escHtml(divName) + '</span>' +
+        '<span class="pc3-live-divrange">' + dayRange + '</span>' +
+    '</div>';
 
     if (isAutoMode()) {
         var inc = _timeIncrement;
@@ -3669,10 +3669,10 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
         }
 
         html += '<div style="overflow-x:hidden;"><table class="pc3-live-tbl" style="table-layout:fixed;width:100%;">';
-        html += '<thead><tr><th class="corner" style="min-width:80px;">Bunk</th>';
+        html += '<thead><tr><th class="corner">Bunk</th>';
         lTimeCols.forEach(function (tc) {
             var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="font-size:12px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#0e7490;color:#a5f3fc;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
         });
         html += '</tr></thead><tbody>';
 
@@ -3714,7 +3714,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
                     if (isCur) cls += ' cell-current';
                     if (isPast) cls += ' cell-past';
-                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
+                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
                     ci = nextCi;
                 } else {
                     var emptyLeague = pcLeagueInfoAt(divName, cStart);
@@ -3732,7 +3732,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                         }
                         var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
                         var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
-                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
                         ci = lnext;
                     } else {
                         html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">—</td>';
@@ -3796,6 +3796,53 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     return html;
 }
 
+// Cheap fingerprint of everything the live view renders. Captures the schedule
+// data AND the time-dependent state (which activity/column is "now"/"past") so
+// the heavy DOM rebuild only fires when the picture actually changes — not on a
+// blind 30-second timer. This is what kills the periodic flash/lag on a kiosk.
+function _liveContentSignature(nowMin) {
+    var divs = getDivisions();
+    var available = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(getAvailableDivisions())
+        : getAvailableDivisions().sort(naturalSort);
+    var inc = _timeIncrement || 15;
+    // tphase changes every increment → keeps the header "current column" highlight live.
+    var parts = [
+        window.currentScheduleDate || '', String(inc), isAutoMode() ? 'A' : 'M',
+        _currentTemplate.hideLeagueMatchups ? '1' : '0',
+        'T' + Math.floor(nowMin / inc)
+    ];
+    available.forEach(function (divName) {
+        var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
+        if (!bunks.length) return;
+        parts.push('§' + divName + '#' + bunks.join(','));
+        if (isAutoMode()) {
+            bunks.forEach(function (bunk) {
+                var slots = getPerBunkSchedule(bunk, divName);
+                for (var i = 0; i < slots.length; i++) {
+                    var s = slots[i], e = getEntry(bunk, i);
+                    var label = e ? (e._partLabel || e._activity || e.sport || (e.continuation ? '~' : '')) : '';
+                    // start/end relative to now → flips exactly when a cell turns current/past
+                    parts.push(s.startMin + '-' + s.endMin + ':' + label +
+                        (nowMin >= s.startMin ? 's' : '') + (nowMin >= s.endMin ? 'e' : ''));
+                }
+            });
+        } else {
+            var blocks = buildDivisionBlocks(divName);
+            blocks.forEach(function (b) {
+                parts.push(b.startMin + '-' + b.endMin + ':' + (b.event || '') + (b.isLeague ? 'L' : '') +
+                    (nowMin >= b.startMin ? 's' : '') + (nowMin >= b.endMin ? 'e' : ''));
+                bunks.forEach(function (bunk) {
+                    var si = findFirstSlotForTime(b.startMin, divName);
+                    var e = si >= 0 ? getEntry(bunk, si) : null;
+                    parts.push(e ? (e._activity || e.sport || '') : '');
+                });
+            });
+        }
+    });
+    return parts.join('|');
+}
+
 // —— Paginated live view renderer ————————————————————————————————————————————
 function renderLiveContent() {
     var body = el('pc3-live-body');
@@ -3803,6 +3850,17 @@ function renderLiveContent() {
     var nowMin = getNowMinutes();
     var divs = getDivisions();
     var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
+
+    // Skip the (expensive) rebuild when nothing the viewer can see has changed.
+    // The page-rotation timer drives "showing different parts of the schedule"
+    // on its own via livePageNav() without touching the DOM here, so a no-op
+    // tick costs only this signature walk — no flash, no jank.
+    var sig = _liveContentSignature(nowMin);
+    var hasPages = !!body.querySelector('[id^="lp-"]');
+    if (sig === _liveRenderSig && hasPages) {
+        return;
+    }
+    _liveRenderSig = sig;
 
     // 1. Render all section wraps into body so we can measure their heights
     var sectHtml = '';
@@ -3812,9 +3870,14 @@ function renderLiveContent() {
         sectHtml += '<div class="pc3-live-section-wrap">' + buildLiveSectionHTML(divName, bunks, nowMin) + '</div>';
     });
     if (!sectHtml) {
-        body.innerHTML = '<div style="color:#6b7280;padding:40px;text-align:center;font-size:18px;">No schedule data available.</div>';
+        body.style.visibility = '';
+        body.innerHTML = '<div class="pc3-live-loading">No schedule for this day yet.</div>';
+        _liveRenderSig = ''; // force a real render once data arrives
         return;
     }
+    // Hide while we measure + bin-pack so the viewer never sees the brief
+    // "all sections stacked" flash before pagination collapses them.
+    body.style.visibility = 'hidden';
     body.innerHTML = sectHtml;
 
     // Defer measure + paginate until after the browser has computed layout.
@@ -3822,6 +3885,7 @@ function renderLiveContent() {
     // offsetHeight values are real (not 0) when we bin-pack into pages.
     requestAnimationFrame(function () {
         requestAnimationFrame(function () {
+        try {
 
     // 2. Measure available height and each section rendered height
     var availH = body.offsetHeight || (window.innerHeight - 80);
@@ -3866,11 +3930,18 @@ function renderLiveContent() {
         body.appendChild(pageDiv);
     });
 
-    // 5. Update indicator, start rotation timer (only once), position cursors
+    // 5. Update indicator + (re)start rotation only when the page COUNT changed,
+    //    so the 5s content refresh never disturbs the 20s rotation cadence.
     updateLivePageIndicator();
-    if (!_livePageTimer) startLivePageTimer();
-    positionAllLiveCursors();
-
+    if (_numLivePages !== _livePrevPageCount) {
+        _livePrevPageCount = _numLivePages;
+        startLivePageTimer();
+    }
+        } catch (e) {
+            console.error('[LiveView] render failed', e);
+        } finally {
+            body.style.visibility = ''; // ALWAYS reveal — never strand the screen on hidden
+        }
         }); // end inner rAF
     }); // end outer rAF
 }
@@ -3894,6 +3965,7 @@ function updateLivePageIndicator() {
 }
 
 function livePageNav(dir) {
+    if (_numLivePages < 1) return;
     _livePageIndex = ((_livePageIndex + dir) % _numLivePages + _numLivePages) % _numLivePages;
     for (var i = 0; i < _numLivePages; i++) {
         var p = document.getElementById('lp-' + i);
@@ -3903,7 +3975,6 @@ function livePageNav(dir) {
         p.style.pointerEvents = active ? 'auto' : 'none';
     }
     updateLivePageIndicator();
-    setTimeout(positionAllLiveCursors, 100);
     startLivePageTimer();
 }
 
@@ -3996,7 +4067,7 @@ function buildPrintHTML(sel) {
         }
 
         // Content
-        if (_activeView === 'division') { html += renderDivisionSheet(item).replace(/class="pc3-sheet-head"[^>]*>.*?<\/div>/s, ''); }
+        if (_activeView === 'division') { html += renderDivisionSheet(item).replace(/<div class="pc3-sheet-head"[^>]*>[\s\S]*?<\/div>/, ''); }
         else if (_activeView === 'bunk') { html += renderBunkSheet(item); }
         else if (_activeView === 'location') { html += renderLocationSheet(item); }
         else if (_activeView === 'week') {
@@ -4043,7 +4114,7 @@ function sanitizeForExcel(s) {
         .replace(/[–—]/g, '-')   // – — → -
         .replace(/[‘’]/g, "'")   // ‘ ’ → '
         .replace(/[“”]/g, '"')   // “ ” → "
-        .replace(/·/g, '*')           // · → *
+        .replace(/·/g, '-')           // · → -  (plain separator; '*' read like a stray footnote)
         .replace(/…/g, '...');        // … → ...
 }
 function sanitizeRows(rows) {
@@ -4068,28 +4139,42 @@ function buildPolishedWorkbook(sel) {
         free:     { font: { sz: 10, italic: true, color: { rgb: '94A3B8' } }, alignment: { vertical: 'center', horizontal: 'center' } }
     };
 
-    sel.forEach(function (item) {
-        var rows = sanitizeRows(buildExcelRows(item));
+    // Week view is a single combined sheet; every other view is one sheet per
+    // selected item. Building a uniform spec list keeps the styling pass below
+    // identical for both and lets week-view export actually produce a file
+    // (buildExcelRows has no 'week' branch → used to yield a 0-sheet workbook
+    // and XLSX.writeFile would throw).
+    var sheetSpecs = (_activeView === 'week')
+        ? [{ name: 'Week', rows: buildWeekExcelRows(sel) }]
+        : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
+
+    sheetSpecs.forEach(function (spec) {
+        var srcRows = spec.rows || [];
+        // Metadata for the increment two-tier grid (attached by buildExcelRows).
+        var extraMerges = srcRows._merges || null;
+        var headerRowsSet = srcRows._headerRows || null;   // [periodRowIdx, incRowIdx]
+        var freezeRowOverride = srcRows._freezeRow;         // ySplit
+        var rows = sanitizeRows(srcRows);
         if (!rows.length) return;
 
-        // Find the column-header row (where first cell is 'Time')
+        // Find the column-header row (first cell is the axis label).
+        // Division/bunk/location grids lead with 'Time'; the week grid leads
+        // with 'Bunk'. Detecting either keeps freeze-panes + header styling.
         var headerRowIdx = -1;
-        for (var ri = 0; ri < rows.length; ri++) {
-            if (rows[ri] && rows[ri][0] === 'Time') { headerRowIdx = ri; break; }
-        }
-        // BACKFILL empty data cells with a thin em-dash placeholder so rows
-        // don't visually disappear when a bunk has no assignment for a slot
-        // that another bunk does. Cosmetic only — keeps the grid scannable.
-        if (headerRowIdx >= 0) {
-            for (var br = headerRowIdx + 1; br < rows.length; br++) {
-                var rr = rows[br];
-                if (!rr || !rr.length) continue;
-                // From column 1 onward (skip Time col), if cell is null/'', stamp '-'
-                for (var bc = 1; bc < rr.length; bc++) {
-                    if (rr[bc] == null || rr[bc] === '') rr[bc] = '-';
-                }
+        if (headerRowsSet && headerRowsSet.length) {
+            headerRowIdx = headerRowsSet[headerRowsSet.length - 1]; // last header row (increment labels)
+        } else {
+            for (var ri = 0; ri < rows.length; ri++) {
+                if (rows[ri] && (rows[ri][0] === 'Time' || rows[ri][0] === 'Bunk')) { headerRowIdx = ri; break; }
             }
         }
+        var isHeaderRow = function (idx) {
+            return headerRowsSet ? headerRowsSet.indexOf(idx) >= 0 : (idx === headerRowIdx);
+        };
+        // NOTE: deliberately NO empty-cell backfill. A blank slot in the
+        // schedule must export as a blank cell — stamping a '-' placeholder
+        // injected characters the schedule never had (camps reported the
+        // export wasn't "true" to the grid).
         var ws = XLSX.utils.aoa_to_sheet(rows);
         var numCols = 0;
         rows.forEach(function (r) { if (r && r.length > numCols) numCols = r.length; });
@@ -4097,9 +4182,25 @@ function buildPolishedWorkbook(sel) {
         // for merges to span correctly.
         if (numCols < 2) numCols = 2;
 
-        // Column widths — Time col 14, every data col ~22 chars
+        // Column widths — size each column to its widest cell so names
+        // (incl. non-Latin/Hebrew) are never clipped. Clamp to a sane range.
+        // In increment-grid mode, only the bunk axis (col 0) auto-sizes; the
+        // increment sub-columns stay compact and even (period/activity text
+        // flows across the merged span).
         var cols = [];
-        for (var c = 0; c < numCols; c++) cols.push({ wch: c === 0 ? 14 : 22 });
+        for (var c = 0; c < numCols; c++) {
+            if (headerRowsSet && c > 0) { cols.push({ wch: 8 }); continue; }
+            var maxLen = 0;
+            for (var rw = 0; rw < rows.length; rw++) {
+                if (rw <= 1) continue; // skip merged title/subtitle rows
+                // In increment mode, ignore the merged header rows for col 0 sizing.
+                if (headerRowsSet && isHeaderRow(rw)) continue;
+                var cellv = rows[rw] && rows[rw][c] != null ? String(rows[rw][c]) : '';
+                if (cellv.length > maxLen) maxLen = cellv.length;
+            }
+            // +2 padding; min 12 so short bunk names still read, max 40 to avoid runaway.
+            cols.push({ wch: Math.max(12, Math.min(40, maxLen + 2)) });
+        }
         ws['!cols'] = cols;
 
         // Row heights
@@ -4107,20 +4208,23 @@ function buildPolishedWorkbook(sel) {
         for (var rIdx = 0; rIdx < rows.length; rIdx++) {
             if (rIdx === 0) rowsMeta.push({ hpt: 28 });
             else if (rIdx === 1) rowsMeta.push({ hpt: 18 });
-            else if (rIdx === headerRowIdx) rowsMeta.push({ hpt: 22 });
+            else if (isHeaderRow(rIdx)) rowsMeta.push({ hpt: 22 });
             else rowsMeta.push({ hpt: 20 });
         }
         ws['!rows'] = rowsMeta;
 
-        // Merge title AND subtitle across all columns
+        // Merge title AND subtitle across all columns, plus any period/activity
+        // merges from the increment two-tier grid.
         ws['!merges'] = [
             { s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } },
             { s: { r: 1, c: 0 }, e: { r: 1, c: numCols - 1 } }
         ];
+        if (extraMerges && extraMerges.length) ws['!merges'] = ws['!merges'].concat(extraMerges);
 
-        // Freeze header + time column
-        if (headerRowIdx >= 0) {
-            ws['!views'] = [{ state: 'frozen', ySplit: headerRowIdx + 1, xSplit: 1 }];
+        // Freeze header(s) + time column
+        var ySplit = (freezeRowOverride != null) ? freezeRowOverride : (headerRowIdx >= 0 ? headerRowIdx + 1 : -1);
+        if (ySplit >= 0) {
+            ws['!views'] = [{ state: 'frozen', ySplit: ySplit, xSplit: 1 }];
         }
 
         // Styled cells (only takes effect with xlsx-js-style)
@@ -4131,7 +4235,7 @@ function buildPolishedWorkbook(sel) {
             if (ws[subtitleAddr]) ws[subtitleAddr].s = STY.subtitle;
             for (var rr = 2; rr < rows.length; rr++) {
                 var rowVals = rows[rr] || [];
-                var isHeader = (rr === headerRowIdx);
+                var isHeader = isHeaderRow(rr);
                 for (var cc = 0; cc < numCols; cc++) {
                     var addr = XLSX.utils.encode_cell({ r: rr, c: cc });
                     if (!ws[addr]) {
@@ -4157,10 +4261,17 @@ function buildPolishedWorkbook(sel) {
             }
         }
 
-        var name = String(item).replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 31) || 'Sheet';
+        var name = String(spec.name).replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 31) || 'Sheet';
         try { XLSX.utils.book_append_sheet(wb, ws, name); }
         catch (e) { XLSX.utils.book_append_sheet(wb, ws, name + '_' + Math.random().toString(36).slice(2, 5)); }
     });
+
+    // Guard: never hand XLSX.writeFile an empty workbook (it throws). Happens
+    // when the selection has no schedule data for the active view.
+    if (!wb.SheetNames.length) {
+        var wsEmpty = XLSX.utils.aoa_to_sheet([['No schedule data to export for this selection.']]);
+        XLSX.utils.book_append_sheet(wb, wsEmpty, 'Schedule');
+    }
 
     wb.Props = {
         Title: 'Camp Schedule — ' + (formatDisplayDate(dateStr) || dateStr),
@@ -4252,6 +4363,49 @@ function getExportActivityLocation(bunk, slotIdx) {
     return { activity: label || field, location: (act && field) ? field : '' };
 }
 
+// Combined 7-day grid for the Week view: Bunk × weekday, grouped by division.
+// Mirrors renderWeekSheet so the export matches what the user sees on screen.
+function buildWeekExcelRows(sel) {
+    var rows = [];
+    var keys = getWeekDateKeys(window.currentScheduleDate);
+    if (!keys.length) return rows;
+
+    var divs = getDivisions();
+    var bunkToDiv = {};
+    Object.keys(divs).forEach(function (d) {
+        ((divs[d] && divs[d].bunks) ? divs[d].bunks : []).forEach(function (b) { bunkToDiv[b] = d; });
+    });
+    var bunks = (sel || []).filter(function (b) { return bunkToDiv[b]; });
+    if (!bunks.length) bunks = Object.keys(bunkToDiv);
+
+    rows.push(['Week at a Glance']);
+    rows.push([formatWeekDayLabel(keys[0]) + ' - ' + formatWeekDayLabel(keys[keys.length - 1])]);
+    rows.push([]); // spacer
+    rows.push(['Bunk'].concat(keys.map(function (k) { return formatWeekDayLabel(k); })));
+
+    var byDiv = {};
+    bunks.forEach(function (b) { var d = bunkToDiv[b] || ''; if (!byDiv[d]) byDiv[d] = []; byDiv[d].push(b); });
+    var divOrder = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(Object.keys(byDiv))
+        : Object.keys(byDiv);
+
+    divOrder.forEach(function (d) {
+        if (!byDiv[d]) return;
+        rows.push([d]); // division separator row
+        byDiv[d].forEach(function (b) {
+            var row = [b];
+            keys.forEach(function (k) {
+                var day = _weekData[k];
+                if (!day) { row.push(''); return; }
+                var labels = summarizeBunkDay(day.scheduleAssignments || {}, b);
+                row.push(labels.join(', '));
+            });
+            rows.push(row);
+        });
+    });
+    return rows;
+}
+
 function buildExcelRows(item) {
     var divs = getDivisions();
     var rows = [];
@@ -4268,6 +4422,10 @@ function buildExcelRows(item) {
         rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
         rows.push([]); // spacer
 
+        // Build the schedule in time-row orientation, then transpose so the
+        // sheet matches the website: time across the top (X), bunks down (Y).
+        var grid = [];
+        var slotMeta = []; // aligned 1:1 with grid data rows — { startMin, endMin, label }
         if (isAutoMode()) {
             // ★★★ AUTO MODE: Per-bunk schedule with unified time axis ★★★
             // Build unified time axis from all bunks' slots
@@ -4281,73 +4439,43 @@ function buildExcelRows(item) {
             var timeSlots = Object.values(timeSet).sort(function (a, b) { return a.startMin - b.startMin; });
 
             // Header row
-            rows.push(['Time'].concat(bunks));
+            grid.push(['Time'].concat(bunks));
 
             // Data rows
             timeSlots.forEach(function (ts) {
-                // ★ Check if this time slot is a league row for this division
-                // In auto mode, league entries are written per-bunk with _league flag
-                var isLeagueRow = false;
-                var leagueMatchups = [];
-                var leagueLabel = '';
-
-                // Sample the first bunk to detect league
-                if (bunks.length > 0) {
-                    var sampleSched = getPerBunkSchedule(bunks[0], item);
-                    for (var si = 0; si < sampleSched.length; si++) {
-                        if (sampleSched[si].startMin === ts.startMin || (sampleSched[si].startMin < ts.endMin && sampleSched[si].endMin > ts.startMin)) {
-                            var sampleEntry = getEntry(bunks[0], si);
-                            if (sampleEntry && (sampleEntry._league || sampleEntry._h2h)) {
-                                isLeagueRow = true;
-                                leagueLabel = sampleEntry._gameLabel || sampleEntry._leagueName || sampleEntry._activity || 'League Game';
-                                // Try to get matchups from leagueAssignments
-                                var la = window.leagueAssignments || {};
-                                var divLA = la[item] || {};
-                                var laSlotIdx = findFirstSlotForTime(ts.startMin, item);
-                                var laEntry = (laSlotIdx >= 0 ? divLA[laSlotIdx] || divLA[String(laSlotIdx)] : null) || divLA[ts.startMin] || divLA[String(ts.startMin)];
-                                if (laEntry && laEntry.matchups) {
-                                    laEntry.matchups.forEach(function (m) {
-                                        var desc = '';
-                                        if (typeof m === 'string') desc = m;
-                                        else if (m.display) desc = m.display;
-                                        else if (m.teamA && m.teamB) desc = m.teamA + ' vs ' + m.teamB;
-                                        if (desc) leagueMatchups.push(desc);
-                                    });
-                                }
-                            }
-                            break;
+                // Per-bunk: each bunk's own cell. League games show
+                // "Football - Football Field 1 - Bunk 1 vs 2" (the matchup for
+                // THAT bunk); everything else uses the normal cell text.
+                var row = [ts.label];
+                bunks.forEach(function (bk) {
+                    var bunkSched = getPerBunkSchedule(bk, item);
+                    var foundIdx = -1;
+                    for (var i = 0; i < bunkSched.length; i++) {
+                        var bs = bunkSched[i];
+                        if (bs.startMin === ts.startMin && bs.endMin === ts.endMin) { foundIdx = i; break; }
+                        if (bs.startMin < ts.endMin && bs.endMin > ts.startMin) { foundIdx = i; break; }
+                    }
+                    var text = '';
+                    if (foundIdx >= 0) {
+                        var e = getEntry(bk, foundIdx);
+                        if (e && (e._league || e._h2h)) {
+                            var lg = pcLeagueLabel(e, bk, item, ts.startMin);
+                            text = _currentTemplate.hideLeagueMatchups
+                                ? ([lg.sport, lg.field].filter(Boolean).join(' - ') || (e._gameLabel || 'League Game'))
+                                : lg.full;
+                        } else {
+                            text = getExportCellText(bk, foundIdx);
                         }
                     }
-                }
-
-                var row = [ts.label];
-                if (isLeagueRow && !_currentTemplate.hideLeagueMatchups) {
-                    // League row: same text in every bunk column
-                    var leagueText = leagueLabel;
-                    if (leagueMatchups.length) leagueText += ' | ' + leagueMatchups.join(', ');
-                    bunks.forEach(function () { row.push(leagueText); });
-                } else {
-                    bunks.forEach(function (bk) {
-                        var bunkSched = getPerBunkSchedule(bk, item);
-                        // Find the slot in THIS bunk that overlaps this unified time slot
-                        var foundIdx = -1;
-                        for (var i = 0; i < bunkSched.length; i++) {
-                            var bs = bunkSched[i];
-                            // Exact match first
-                            if (bs.startMin === ts.startMin && bs.endMin === ts.endMin) { foundIdx = i; break; }
-                            // Overlap match: bunk slot overlaps with unified time slot
-                            if (bs.startMin < ts.endMin && bs.endMin > ts.startMin) { foundIdx = i; break; }
-                        }
-                        var text = foundIdx >= 0 ? getExportCellText(bk, foundIdx) : '';
-                        row.push(text);
-                    });
-                }
-                rows.push(row);
+                    row.push(text);
+                });
+                grid.push(row);
+                slotMeta.push({ startMin: ts.startMin, endMin: ts.endMin, label: ts.label });
             });
         } else {
             // ★★★ MANUAL MODE: Skeleton-based slot grid ★★★
             var blocks = buildDivisionBlocks(item);
-            rows.push(['Time'].concat(bunks));
+            grid.push(['Time'].concat(bunks));
 
             blocks.forEach(function (eb) {
                 var row = [eb.label];
@@ -4366,7 +4494,85 @@ function buildExcelRows(item) {
                         row.push(text);
                     });
                 }
-                rows.push(row);
+                grid.push(row);
+                slotMeta.push({ startMin: eb.startMin, endMin: eb.endMin, label: eb.label });
+            });
+        }
+
+        // ─── Transpose: time on the X axis, bunks on the Y axis ───
+        // The Excel sheet always breaks each period into the selected time
+        // increment: a merged period super-header on top, the increment times
+        // beneath it, and each activity merged across the increments it spans.
+        // Driven purely by the increment picker (independent of the on-screen
+        // card layout). Falls back to one-column-per-period only if a period is
+        // no longer than a single increment.
+        var incOn = _timeIncrement > 0 &&
+                    slotMeta.some(function (s) { return (s.endMin - s.startMin) > _timeIncrement; });
+        if (grid.length > 1 && incOn) {
+            var inc = _timeIncrement;
+            // Compact HH:MM (no AM/PM — the period header carries the full range).
+            var incLabel = function (min) {
+                var h = Math.floor(min / 60), m = min % 60;
+                var h12 = ((h + 11) % 12) + 1;
+                return h12 + ':' + (m < 10 ? '0' + m : m);
+            };
+            var merges = [];
+            var periodRowIdx = rows.length;      // tier-1 (period super-header)
+            var incRowIdx = periodRowIdx + 1;    // tier-2 (increment labels)
+            var firstBunkRow = incRowIdx + 1;
+
+            var periodRow = ['Bunk'];
+            var incRow = [''];
+
+            // Each period's increment cadence is anchored to its OWN start time
+            // and steps by `inc`, clamped to the period end. So a period that
+            // starts at 12:20 reads 12:20, 12:30, 12:40… (it does not continue a
+            // previous period's off-grid 12:15 cadence). The activity is merged
+            // across all of its period's increment columns.
+            var slotCols = []; // per slot: { colStart, colEnd, count }
+            var colCursor = 1;
+            slotMeta.forEach(function (sm) {
+                var times = [];
+                for (var t = sm.startMin; t < sm.endMin; t += inc) times.push(t);
+                if (!times.length) times.push(sm.startMin);
+                var colStart = colCursor;
+                times.forEach(function (tk, k) {
+                    periodRow.push(k === 0 ? sm.label : '');
+                    incRow.push(incLabel(tk));
+                });
+                var colEnd = colStart + times.length - 1;
+                slotCols.push({ colStart: colStart, colEnd: colEnd, count: times.length });
+                if (times.length > 1) merges.push({ s: { r: periodRowIdx, c: colStart }, e: { r: periodRowIdx, c: colEnd } });
+                colCursor = colEnd + 1;
+            });
+            // Vertical merge for the 'Bunk' corner across both header rows.
+            merges.push({ s: { r: periodRowIdx, c: 0 }, e: { r: incRowIdx, c: 0 } });
+
+            rows.push(periodRow);
+            rows.push(incRow);
+
+            bunks.forEach(function (bk, bi) {
+                var rowAbs = rows.length;
+                var line = [bk];
+                slotMeta.forEach(function (sm, si2) {
+                    var val = grid[si2 + 1][bi + 1] || '';
+                    var sc = slotCols[si2];
+                    for (var k = 0; k < sc.count; k++) line.push(k === 0 ? val : '');
+                    if (sc.count > 1) merges.push({ s: { r: rowAbs, c: sc.colStart }, e: { r: rowAbs, c: sc.colEnd } });
+                });
+                rows.push(line);
+            });
+
+            rows._merges = merges;
+            rows._headerRows = [periodRowIdx, incRowIdx];
+            rows._freezeRow = firstBunkRow;
+        } else if (grid.length > 1) {
+            var timeLabels = grid.slice(1).map(function (r) { return r[0]; });
+            rows.push(['Bunk'].concat(timeLabels));
+            bunks.forEach(function (bk, bi) {
+                var line = [bk];
+                for (var ri = 1; ri < grid.length; ri++) line.push(grid[ri][bi + 1] || '');
+                rows.push(line);
             });
         }
 
@@ -4386,31 +4592,12 @@ function buildExcelRows(item) {
             bunkSlots.forEach(function (slot, idx) {
                 var entry = getEntry(item, idx);
                 if (entry && (entry._league || entry._h2h)) {
-                    // League row: show league info
-                    var leagueText = entry._gameLabel || entry._leagueName || entry._activity || 'League Game';
-                    if (!_currentTemplate.hideLeagueMatchups) {
-                        var matchups = [];
-                        // Check leagueAssignments for matchup details
-                        var la = window.leagueAssignments || {};
-                        var divLA = la[dn] || {};
-                        var laSlotIdx2 = findFirstSlotForTime(slot.startMin, dn);
-                        var laEntry = (laSlotIdx2 >= 0 ? divLA[laSlotIdx2] || divLA[String(laSlotIdx2)] : null) || divLA[slot.startMin] || divLA[String(slot.startMin)];
-                        if (laEntry && laEntry.matchups) {
-                            laEntry.matchups.forEach(function (m) {
-                                var desc = typeof m === 'string' ? m : (m.display || ((m.teamA || '') + ' vs ' + (m.teamB || '')));
-                                if (desc) matchups.push(desc);
-                            });
-                        }
-                        // Fallback: check entry._allMatchups
-                        if (!matchups.length && entry._allMatchups) {
-                            entry._allMatchups.forEach(function (m) {
-                                var desc = typeof m === 'string' ? m : (m.display || ((m.teamA || '') + ' vs ' + (m.teamB || '')));
-                                if (desc) matchups.push(desc);
-                            });
-                        }
-                        if (matchups.length) leagueText += ' | ' + matchups.join(', ');
-                    }
-                    rows.push([slot.label, leagueText, '']);
+                    // League row: Activity = "Football - Bunk 1 vs 2", Location = field.
+                    var lg = pcLeagueLabel(entry, item, dn, slot.startMin);
+                    var actCol = _currentTemplate.hideLeagueMatchups
+                        ? (lg.sport || entry._gameLabel || 'League Game')
+                        : ([lg.sport, lg.matchup].filter(Boolean).join(' - ') || (entry._gameLabel || 'League Game'));
+                    rows.push([slot.label, actCol, lg.field || '']);
                 } else {
                     var al = getExportActivityLocation(item, idx);
                     rows.push([slot.label, al.activity, al.location]);
@@ -4469,11 +4656,19 @@ function csvSafeCell(v) {
 }
 function buildCSV(sel) {
     var lines = [];
-    sel.forEach(function (item, idx) {
-        if (idx > 0) lines.push(''); // blank separator between items
-        var rows = buildExcelRows(item);
-        rows.forEach(function (row) {
-            lines.push(row.map(function (c) { return '"' + csvSafeCell(c).replace(/"/g, '""') + '"'; }).join(','));
+    // Mirror the Excel sheet structure: one block per item, or a single block
+    // for the combined week grid. Unicode is normalised the same way as the
+    // .xlsx path so the CSV is just as "crisp" (no en-dashes / mojibake).
+    var specs = (_activeView === 'week')
+        ? [{ rows: buildWeekExcelRows(sel) }]
+        : sel.map(function (item) { return { rows: buildExcelRows(item) }; });
+    specs.forEach(function (spec, idx) {
+        if (idx > 0) lines.push(''); // blank separator between blocks
+        (spec.rows || []).forEach(function (row) {
+            lines.push(row.map(function (c) {
+                var v = (typeof c === 'string') ? sanitizeForExcel(c) : c;
+                return '"' + csvSafeCell(v).replace(/"/g, '""') + '"';
+            }).join(','));
         });
     });
     return lines.join('\n');
@@ -4588,16 +4783,21 @@ function bindAll() {
     if (saveBtn) saveBtn.addEventListener('click', function () { window._pc3SaveLayout(); });
     renderSavedLayoutsList();
 
-    // Transpose / Combined / Hide Matchups
-    ['pc3-transpose', 'pc3-combined', 'pc3-hide-matchups'].forEach(function (id) {
+    // Rail options — every toggle/select re-reads design values and re-renders.
+    ['pc3-show-date', 'pc3-combined', 'pc3-hide-matchups', 'pc3-orientation', 'pc3-paper-size', 'pc3-transpose'].forEach(function (id) {
         var e = el(id);
         if (e) e.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
     });
+
+    // Legacy Style menu (if present) — harmless no-op in the new shell.
+    var styleMenu = el('pc3-style-menu');
+    if (styleMenu) styleMenu.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
 
     // Time increment selector
     var incSel = el('pc3-time-increment');
     if (incSel) incSel.addEventListener('change', function () {
         _timeIncrement = parseInt(this.value) || 15;
+        _activityAligned = false; // increment only matters with uniform columns
         try { localStorage.setItem('campistry_pc3_timeIncrement', String(_timeIncrement)); } catch (e) {}
         liveRefresh();
     });
@@ -4749,9 +4949,11 @@ function bindAll() {
         if (!e.ctrlKey && !e.metaKey && !e.altKey && !inField && printActive) {
             if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); window._pc3ShowShortcuts(); return; }
             if (e.key === 'l' || e.key === 'L') { e.preventDefault(); var lb = el('pc3-live-btn'); if (lb) lb.click(); return; }
-            if (e.key === 'f' || e.key === 'F') { e.preventDefault(); window._pc3ToggleFullscreen(); return; }
+            if (e.key === 'f' || e.key === 'F') { e.preventDefault(); window._pc3ToggleFocus(); return; }
         }
         if (e.key === 'Escape') {
+            // Exit focus mode first if it's on
+            if (_focusMode) { window._pc3ToggleFocus(); e.preventDefault(); return; }
             // Close any open popover first
             if (_openPopover) {
                 document.querySelectorAll('.pc3-popover.open').forEach(function (m) { m.classList.remove('open'); });
@@ -4811,6 +5013,10 @@ function initPrintCenter() {
 
     // Restore saved time increment + new Print Center 2.0 toggles
     try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
+    // Columns are activity-aligned by default (each activity sized to its real
+    // duration); the increment picker switches to uniform fixed columns on demand.
+    // Restore the saved choice so increment mode (and its Excel layout) persists.
+    _activityAligned = true;
     try { var savedAA = localStorage.getItem('campistry_pc3_activityAligned'); if (savedAA !== null) _activityAligned = savedAA === '1'; } catch (e) {}
     try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
@@ -5134,6 +5340,12 @@ window._pc3ToggleFullscreen = function () {
     _isFullscreen = !_isFullscreen;
     var root = el('pc3-root');
     if (root) root.classList.toggle('pc3-fullscreen', _isFullscreen);
+};
+var _focusMode = false;
+window._pc3ToggleFocus = function () {
+    _focusMode = !_focusMode;
+    var root = el('pc3-root');
+    if (root) root.classList.toggle('pc3-focus', _focusMode);
 };
 window._pc3ToggleSidebar = function () {
     _sidebarCollapsed = !_sidebarCollapsed;
