@@ -2712,11 +2712,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
 
     function _buildTimeColumns(increment) {
         var allTimes = [];
+        var boundarySet = {};      // every distinct slot edge across all divisions
         var dt = window.divisionTimes || {};
         Object.keys(dt).forEach(function (divName) {
             (dt[divName] || []).forEach(function (s) {
-                if (typeof s.startMin === 'number') allTimes.push(s.startMin);
-                if (typeof s.endMin === 'number') allTimes.push(s.endMin);
+                if (typeof s.startMin === 'number') { allTimes.push(s.startMin); boundarySet[s.startMin] = true; }
+                if (typeof s.endMin === 'number') { allTimes.push(s.endMin); boundarySet[s.endMin] = true; }
             });
         });
         if (allTimes.length === 0) return [];
@@ -2727,9 +2728,23 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         //   occupies — rendered as a striped "hasn't started" band for every
         //   bunk. Columns start at the true earliest minute; a day that
         //   already starts on a clean boundary renders exactly as before.
+        // The renderer point-samples each column at its startMin
+        // (_findSlotIndexAtTime), so a slot shorter than `increment` that
+        // falls BETWEEN two grid ticks (e.g. a 25-min 11:50-12:15 Lunch under a
+        // 40-min increment: ticks at 11:40 and 12:20 both miss it) is sampled
+        // by no column and vanishes entirely. Build the grid from the union of
+        // the regular increment ticks AND every slot boundary, so each slot
+        // always owns at least one column.
+        var pointSet = {};
+        for (var t = dayStart; t < dayEnd; t += increment) pointSet[t] = true;
+        Object.keys(boundarySet).forEach(function (b) {
+            var bn = +b;
+            if (bn >= dayStart && bn < dayEnd) pointSet[bn] = true;
+        });
+        var points = Object.keys(pointSet).map(Number).sort(function (a, b) { return a - b; });
         var cols = [];
-        for (var t = dayStart; t < dayEnd; t += increment) {
-            cols.push({ startMin: t, endMin: t + increment });
+        for (var i = 0; i < points.length; i++) {
+            cols.push({ startMin: points[i], endMin: (i + 1 < points.length) ? points[i + 1] : dayEnd });
         }
         return cols;
     }
