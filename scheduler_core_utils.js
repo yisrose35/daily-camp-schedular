@@ -2467,6 +2467,304 @@
         return count;
     };
 
+    // =========================================================================
+    // ★ SHARED HARD FREQUENCY-LIMIT GATE — single source of truth ★
+    // =========================================================================
+    // The four user-configurable frequency knobs (maxUsage, exactFrequency,
+    // minFrequency, frequencyDays cooldown) were each enforced in several
+    // different places — the auto planner's candidate pre-filter, the manual
+    // solver's scorer, rotation_engine.calculateLimitScore — but NOT at the
+    // two central write trust points (AutoSolverEngine.commitWriteIfLegal and
+    // commitManualWriteIfLegal). That left holes: auto repair/fallback passes,
+    // smart-regen direct writes, manual drag/edits, and the auto-fill buttons
+    // could each plant a placement that EXCEEDS a ceiling or BREAKS a cooldown.
+    //
+    // This is the single hard-gate for the CEILING + COOLDOWN constraints:
+    //   • maxUsage (per-period ceiling, per-grade override aware)
+    //   • exactFrequency (per-period ceiling — the floor side is a scoring pull)
+    //   • frequencyDays (cooldown = minimum days between visits)
+    //
+    // FLOORS (minFrequency, and exactFrequency BELOW target) are deliberately
+    // NOT gated here — a floor cannot be enforced at write time (you can't
+    // "block" your way to a minimum). Floors are delivered by the solver's
+    // escalating scoring pull and surfaced by the end-of-build shortfall report.
+    //
+    // Returns: { ok:true } | { ok:false, kind:'max'|'exact'|'cooldown', reason }
+    //
+    // Counting matches the existing enforcement EXACTLY (getPeriodActivityCount),
+    // then ADDS today's already-placed instances (which getPeriodActivityCount
+    // excludes, since it only scans dates < today) so a same-day repeat can't
+    // slip past a per-period ceiling. opts.excludeSlots lets the caller drop the
+    // slot index(es) it is about to (re)write from that same-day tally.
+    Utils.checkFrequencyLimits = function(bunk, activity, divisionName, opts) {
+        opts = opts || {};
+        try {
+            if (!bunk || !activity || activity === 'Free') return { ok: true };
+
+            // Resolve activity properties — activityProperties is the authoritative
+            // store the scorer reads (keyed by special AND field/sport name); fall
+            // back to the canonical special config if it isn't built yet.
+            var props = (window.activityProperties && window.activityProperties[activity]) || null;
+            if (!props && typeof window.getSpecialActivityByName === 'function') {
+                try { props = window.getSpecialActivityByName(activity) || null; } catch (_e) { props = null; }
+            }
+            if (!props) return { ok: true };
+
+            var dateKey = opts.date
+                || (window.currentScheduleDate
+                    ? (typeof window.currentScheduleDate === 'string'
+                        ? window.currentScheduleDate
+                        : window.currentScheduleDate.toISOString().slice(0, 10))
+                    : null);
+
+            // Today's already-placed (non-continuation) instances for this bunk,
+            // minus any slot index the caller is about to (re)write.
+            var _exclude = null;
+            if (opts.excludeSlots != null) {
+                _exclude = (typeof opts.excludeSlots.has === 'function')
+                    ? opts.excludeSlots
+                    : new Set([].concat(opts.excludeSlots));
+            }
+            function _todayCount() {
+                var arr = (window.scheduleAssignments && window.scheduleAssignments[String(bunk)]) || null;
+                if (!Array.isArray(arr)) return 0;
+                var n = 0;
+                for (var i = 0; i < arr.length; i++) {
+                    if (_exclude && _exclude.has(i)) continue;
+                    var e = arr[i];
+                    if (!e || e.continuation) continue;
+                    if (e._activity === activity || e.field === activity) n++;
+                }
+                return n;
+            }
+
+            // ── 1. maxUsage ceiling (per-grade override beats global) ──
+            var maxUsage = parseInt(props.maxUsage, 10) || 0;
+            if (divisionName && props.maxUsagePerGrade
+                && parseInt(props.maxUsagePerGrade[divisionName], 10) > 0) {
+                maxUsage = parseInt(props.maxUsagePerGrade[divisionName], 10);
+            }
+            if (maxUsage > 0) {
+                var maxPeriod = props.maxUsagePeriod || 'half';
+                var maxCount = (Utils.getPeriodActivityCount
+                    ? Utils.getPeriodActivityCount(bunk, activity, maxPeriod, dateKey) : 0) + _todayCount();
+                if (maxCount >= maxUsage) {
+                    return { ok: false, kind: 'max',
+                        reason: bunk + ' is at the maximum of ' + maxUsage + ' × ' + activity + ' per ' + maxPeriod };
+                }
+            }
+
+            // ── 2. exactFrequency ceiling (the floor side is a scoring pull) ──
+            var exactFreq = parseInt(props.exactFrequency, 10) || 0;
+            if (divisionName && props.exactFrequencyPerGrade
+                && parseInt(props.exactFrequencyPerGrade[divisionName], 10) > 0) {
+                exactFreq = parseInt(props.exactFrequencyPerGrade[divisionName], 10);
+            }
+            if (exactFreq > 0) {
+                var exactPeriod = props.exactFrequencyPeriod || '1week';
+                var exactCount = (Utils.getPeriodActivityCount
+                    ? Utils.getPeriodActivityCount(bunk, activity, exactPeriod, dateKey) : 0) + _todayCount();
+                if (exactCount >= exactFreq) {
+                    return { ok: false, kind: 'exact',
+                        reason: bunk + ' already has its exact ' + exactFreq + ' × ' + activity + ' per ' + exactPeriod };
+                }
+            }
+
+            // ── 3. frequencyDays cooldown (minimum days between visits) ──
+            var cd = parseInt(props.frequencyDays, 10) || 0;
+            if (cd > 0 && window.RotationEngine
+                && typeof window.RotationEngine.getDaysSinceActivity === 'function') {
+                var since = window.RotationEngine.getDaysSinceActivity(bunk, activity);
+                if (typeof since === 'number' && since > 0 && since < cd) {
+                    return { ok: false, kind: 'cooldown',
+                        reason: activity + ' needs ' + cd + ' days between visits for ' + bunk
+                            + ' (only ' + since + ' day' + (since === 1 ? '' : 's') + ' since the last)' };
+                }
+            }
+
+            return { ok: true };
+        } catch (e) {
+            // Never let a checker bug block an otherwise-legal write.
+            try { console.warn('[checkFrequencyLimits] non-fatal:', e && e.message); } catch (_) {}
+            return { ok: true };
+        }
+    };
+
+    // =========================================================================
+    // ★ FLOOR SHORTFALL REPORT — minimum / exact-floor "best-effort + report" ★
+    // =========================================================================
+    // Ceilings and cooldowns are hard-gated at the write trust points
+    // (checkFrequencyLimits). FLOORS (minFrequency, and exactFrequency below its
+    // target) cannot be — you can't reach a minimum by refusing writes. The
+    // solver delivers them via an escalating scoring pull whenever it's
+    // physically feasible; this reporter makes the outcome VISIBLE so a floor is
+    // never SILENTLY missed.
+    //
+    // It scans every special with a min/exact floor, for every eligible bunk,
+    // and flags a SHORTFALL only when the floor's period is on its last
+    // generated camp-day (so a weekly minimum isn't false-alarmed on Monday).
+    // Works for BOTH builders — it reads scheduleAssignments + saved daily data,
+    // which both modes populate identically.
+    //
+    // Returns { shortfalls:[{bunk,grade,activity,kind,have,need,period}], ... }.
+    Utils.reportFloorShortfalls = function(refDate) {
+        var out = { shortfalls: [], checked: 0 };
+        try {
+            var today = refDate || (window.currentScheduleDate
+                ? (typeof window.currentScheduleDate === 'string'
+                    ? window.currentScheduleDate
+                    : window.currentScheduleDate.toISOString().slice(0, 10))
+                : null);
+            if (!today) return out;
+
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var specials = (typeof window.getAllSpecialActivities === 'function')
+                ? window.getAllSpecialActivities()
+                : ((gs.app1 && gs.app1.specialActivities) || []);
+            if (!Array.isArray(specials) || !specials.length) return out;
+
+            var divisions = window.divisions || {};
+
+            // Today's already-placed (non-continuation) count for a bunk+activity.
+            function todayCount(bunk, activity) {
+                var arr = (window.scheduleAssignments && window.scheduleAssignments[String(bunk)]) || null;
+                if (!Array.isArray(arr)) return 0;
+                var n = 0;
+                for (var i = 0; i < arr.length; i++) {
+                    var e = arr[i];
+                    if (!e || e.continuation) continue;
+                    if (e._activity === activity || e.field === activity) n++;
+                }
+                return n;
+            }
+
+            // Is `today` the last generated camp-day of this period? Mirrors the
+            // engine's WEEKLY-MUST escalation (e >= D-1). If camp-day helpers
+            // can't resolve the window, treat the period as NOT over for a
+            // weekly min (avoid false alarms) but DO report exact-floors (a
+            // precise target is meaningful regardless).
+            function periodIsOver(period) {
+                try {
+                    var norm = (period === 'week') ? '1week' : (period || '1week');
+                    var pStart = Utils.getPeriodStartDate(norm, today);
+                    var pEnd = Utils.getPeriodEndDate ? Utils.getPeriodEndDate(norm, today) : null;
+                    if (!pStart || !pEnd || typeof Utils.countCampDays !== 'function') return null;
+                    var D = Math.max(1, Utils.countCampDays(pStart, pEnd) || 1);
+                    var e = Math.max(1, Utils.countCampDays(pStart, today) || 1);
+                    return e >= (D - 1);
+                } catch (_e) { return null; }
+            }
+
+            specials.forEach(function(s) {
+                if (!s || !s.name) return;
+                var props = (window.activityProperties && window.activityProperties[s.name]) || s;
+
+                Object.keys(divisions).forEach(function(grade) {
+                    var info = divisions[grade];
+                    if (!info || !Array.isArray(info.bunks)) return;
+
+                    // Per-grade floor overrides beat the global value.
+                    var minFloor = parseInt(props.minFrequency, 10) || 0;
+                    if (props.minFrequencyPerGrade && parseInt(props.minFrequencyPerGrade[grade], 10) > 0) {
+                        minFloor = parseInt(props.minFrequencyPerGrade[grade], 10);
+                    }
+                    var exactFloor = parseInt(props.exactFrequency, 10) || 0;
+                    if (props.exactFrequencyPerGrade && parseInt(props.exactFrequencyPerGrade[grade], 10) > 0) {
+                        exactFloor = parseInt(props.exactFrequencyPerGrade[grade], 10);
+                    }
+                    if (minFloor <= 0 && exactFloor <= 0) return;
+
+                    var minPeriod = props.minFrequencyPeriod || 'week';
+                    var exactPeriod = props.exactFrequencyPeriod || '1week';
+                    var minOver = (minFloor > 0) ? periodIsOver(minPeriod) : null;
+                    var exactOver = (exactFloor > 0) ? periodIsOver(exactPeriod) : null;
+
+                    info.bunks.forEach(function(bunk) {
+                        // Only eligible bunks count toward a floor.
+                        var eligible = true;
+                        try {
+                            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                                eligible = window.isSpecialAvailableForBunk(s.name, grade, bunk, gs);
+                            }
+                        } catch (_e) { eligible = true; }
+                        if (!eligible) return;
+                        out.checked++;
+
+                        if (minFloor > 0 && minOver === true) {
+                            var mc = (Utils.getPeriodActivityCount
+                                ? Utils.getPeriodActivityCount(bunk, s.name,
+                                    (minPeriod === 'week' ? '1week' : minPeriod), today) : 0) + todayCount(bunk, s.name);
+                            if (mc < minFloor) {
+                                out.shortfalls.push({ bunk: String(bunk), grade: grade, activity: s.name,
+                                    kind: 'min', have: mc, need: minFloor, period: minPeriod });
+                            }
+                        }
+                        // exact-floor reported when the period is over, or when we
+                        // can't resolve the window (precise target still matters).
+                        if (exactFloor > 0 && exactOver !== false) {
+                            var ec = (Utils.getPeriodActivityCount
+                                ? Utils.getPeriodActivityCount(bunk, s.name, exactPeriod, today) : 0) + todayCount(bunk, s.name);
+                            if (ec < exactFloor) {
+                                out.shortfalls.push({ bunk: String(bunk), grade: grade, activity: s.name,
+                                    kind: 'exact', have: ec, need: exactFloor, period: exactPeriod });
+                            }
+                        }
+                    });
+                });
+            });
+        } catch (e) {
+            try { console.warn('[reportFloorShortfalls] non-fatal:', e && e.message); } catch (_) {}
+        }
+        return out;
+    };
+
+    // Surface floor shortfalls to the user after every build (auto OR manual).
+    // Registered once; both builders fire campistry-generation-complete.
+    if (typeof window !== 'undefined' && !window.__floorShortfallReportWired) {
+        window.__floorShortfallReportWired = true;
+        var _surfaceFloorShortfalls = function(ev) {
+            try {
+                if (window.__floorShortfallReport === false) return; // opt-out flag
+                var dateKey = (ev && ev.detail && ev.detail.dateKey) || window.currentScheduleDate || null;
+                var rep = Utils.reportFloorShortfalls(dateKey);
+                if (!rep || !rep.shortfalls.length) return;
+
+                // Group by activity for a compact, readable message.
+                var byAct = Object.create(null);
+                rep.shortfalls.forEach(function(s) {
+                    (byAct[s.activity] || (byAct[s.activity] = [])).push(s);
+                });
+                var lines = Object.keys(byAct).map(function(act) {
+                    var list = byAct[act];
+                    var kind = list[0].kind === 'exact' ? 'exact' : 'min';
+                    return act + ' (' + kind + ' ' + list[0].need + '/' + list[0].period + '): '
+                        + list.length + ' bunk(s) short — '
+                        + list.slice(0, 6).map(function(s) { return s.bunk + ' ' + s.have + '/' + s.need; }).join(', ')
+                        + (list.length > 6 ? ', …' : '');
+                });
+                var total = rep.shortfalls.length;
+                var msg = '⚠️ ' + total + ' minimum/exact shortfall(s) couldn\'t be met — add a slot/day or lower the target:\n• '
+                    + lines.join('\n• ');
+
+                try { console.warn('[FLOOR-SHORTFALL] ' + msg); } catch (_) {}
+                var shortMsg = '⚠️ ' + total + ' activity minimum(s) couldn\'t be met — see console for details';
+                if (typeof window.showToast === 'function') window.showToast(shortMsg, 'warning');
+                else if (typeof window.showNotification === 'function') window.showNotification(shortMsg, 'warning');
+
+                // Expose the structured result for any UI/report that wants it.
+                window.__lastFloorShortfalls = rep.shortfalls;
+            } catch (e) {
+                try { console.warn('[FLOOR-SHORTFALL] surface error:', e && e.message); } catch (_) {}
+            }
+        };
+        if (typeof window.addEventListener === 'function') {
+            window.addEventListener('campistry-generation-complete', _surfaceFloorShortfalls);
+        }
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('campistry-generation-complete', _surfaceFloorShortfalls);
+        }
+    }
+
     /**
      * Determine the end date of the current period.
      */
