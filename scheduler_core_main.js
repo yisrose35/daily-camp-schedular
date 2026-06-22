@@ -791,6 +791,13 @@
         //   it only binds tiles the user explicitly linked. { group: { bunk: Set } }
         const _groupOpenUsed = {};
 
+        // ★ CONNECTED-GROUP ROTATION: per pair-group, per bunk, the set of OPTION
+        //   labels (e.g. "sports"/"special"/"swim") already handed out across the
+        //   connected tiles. The rotation skips a bunk's already-used options so each
+        //   bunk walks through ALL the configured options once — that's the
+        //   "across N connected tiles, get all N" behaviour. { group: { bunk: Set } }
+        const _groupOptsUsed = {};
+
         // Helper — is this activity label a special-type that needs generation?
         const _isSpecialLabel = v => !!v && v.toLowerCase().trim().includes('special');
 
@@ -1211,14 +1218,21 @@
                     console.warn(`[SmartTile] ROTATION: no slots for ${divName} at ${_rStart}-${_rEnd}`);
                     return;
                 }
-                console.log(`[SmartTile] ROTATION MODE ${divName}: [${_rotOpts.join(' → ')}], day offset ${_dayNum % _rotOpts.length}`);
+                // ★ Connected-group rotation: offset this tile's cycle by its position
+                //   in the group so each bunk gets a DIFFERENT option per connected tile
+                //   (→ all options across the group); _usedOpts blocks any repeat.
+                const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
+                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
                 bunkList.forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
-                    let _placed = false;
+                    const _usedOpts = _grp ? ((_groupOptsUsed[_grp] = _groupOptsUsed[_grp] || {})[bunk] = _groupOptsUsed[_grp][bunk] || new Set()) : null;
+                    let _placed = false, _placedOpt = null;
                     for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
-                        const opt = _rotOpts[(_dayNum + _bIdx + _o) % _rotOpts.length];
+                        const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
                         const optNorm = opt.toLowerCase().trim();
+                        if (_usedOpts && _usedOpts.has(optNorm)) continue; // already got this option in the group
+                        _placedOpt = optNorm;
                         if (needsGeneration(opt)) {
                             if (optNorm.includes('special')) {
                                 // Category SPECIAL → this bunk's least-done claimable special
@@ -1257,6 +1271,7 @@
                             _placed = true;
                         }
                     }
+                    if (_placed && _usedOpts && _placedOpt) _usedOpts.add(_placedOpt);
                     if (!_placed) {
                         console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → Sports Slot`);
                         schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });

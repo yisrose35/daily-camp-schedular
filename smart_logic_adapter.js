@@ -600,13 +600,15 @@
             Object.keys(byDiv).forEach(div => {
                 const tiles = byDiv[div].sort((a, b) => parseTime(a.startTime) - parseTime(b.startTime));
 
-                // ★ CONNECTED TILES: tiles the user linked into the same "pair group"
-                //   (smartData.pairGroup) pair with EACH OTHER regardless of time
-                //   order — so a camp can run several smart-tile pairs in one day and
-                //   control which two periods swap together. Ungrouped tiles keep the
-                //   classic adjacent (i, i+1) pairing, so existing skeletons are
-                //   unchanged.
-                const groups = {};   // pairGroup -> [tiles] (already time-sorted)
+                // ★ CONNECTED TILES: tiles the user LINKED into the same "pair group"
+                //   (smartData.pairGroup) form a coordinated ROTATION. Each connected
+                //   tile is emitted as its OWN job tagged with groupIndex; the rotation
+                //   (scheduler_core_main) offsets each tile by its index so every bunk
+                //   walks through ALL the configured options (e.g. Sports / Special /
+                //   Swim), one per tile, with no option repeated across the group.
+                //   Ungrouped tiles keep the classic adjacent (i, i+1) A/B pairing, so
+                //   existing skeletons are unchanged.
+                const groups = {};   // pairGroup -> [tiles] (time-sorted)
                 const auto = [];     // ungrouped tiles
                 tiles.forEach(t => {
                     const g = t.smartData && t.smartData.pairGroup;
@@ -616,40 +618,29 @@
                         auto.push(t);
                     }
                 });
-                const pairs = [];    // [A, B|null]
-                Object.keys(groups).forEach(g => {
-                    const gt = groups[g];
-                    for (let i = 0; i < gt.length; i += 2) pairs.push([gt[i], gt[i + 1] || null]);
-                });
-                for (let i = 0; i < auto.length; i += 2) pairs.push([auto[i], auto[i + 1] || null]);
 
-                pairs.forEach(arr => {
-                    const A = arr[0], B = arr[1];
+                const _mkBlock = t => ({ startMin: parseTime(t.startTime), endMin: parseTime(t.endTime), division: div });
+                const _emit = (A, B, extra) => {
                     const sd = A.smartData || {};
-
-                    const job = {
+                    jobs.push(Object.assign({
                         division: div,
-                        main1: sd.main1,
-                        main2: sd.main2,
-                        fallbackFor: sd.fallbackFor,
-                        fallbackActivity: sd.fallbackActivity,
+                        main1: sd.main1, main2: sd.main2,
+                        fallbackFor: sd.fallbackFor, fallbackActivity: sd.fallbackActivity,
                         guaranteeSwap: !!sd.guaranteeSwap,
                         pairGroup: sd.pairGroup || null,
-                        blockA: {
-                            startMin: parseTime(A.startTime),
-                            endMin: parseTime(A.endTime),
-                            division: div
-                        },
-                        blockB: B ? {
-                            startMin: parseTime(B.startTime),
-                            endMin: parseTime(B.endTime),
-                            division: div
-                        } : null
-                    };
+                        blockA: _mkBlock(A),
+                        blockB: B ? _mkBlock(B) : null
+                    }, extra || {}));
+                    log(`Created job for ${div} [group ${sd.pairGroup || 'auto'}${extra && extra.groupIndex != null ? ' #' + extra.groupIndex : ''}]: ${sd.main1}/${sd.main2}`);
+                };
 
-                    jobs.push(job);
-                    log(`Created job for ${div} [group ${sd.pairGroup || 'auto'}]: ${sd.main1}/${sd.main2}`);
+                // Connected groups → one ROTATION job per tile (tagged with its index).
+                Object.keys(groups).forEach(g => {
+                    const gt = groups[g];
+                    gt.forEach((t, idx) => _emit(t, null, { groupIndex: idx, groupSize: gt.length }));
                 });
+                // Ungrouped → classic 2-at-a-time A/B pairs.
+                for (let i = 0; i < auto.length; i += 2) _emit(auto[i], auto[i + 1] || null, null);
             });
 
             return jobs;
