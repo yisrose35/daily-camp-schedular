@@ -783,6 +783,14 @@
         // =====================================================================
         const smartTileBudget = {};
 
+        // ★ CONNECTED-GROUP AWARENESS: per pair-group, per bunk, the set of open/
+        //   fallback activities already handed out (e.g. "swim"). Specials already
+        //   dedupe day-wide via _bunkSpecialsToday; this stops a bunk getting the
+        //   SAME open activity twice across connected tiles (the "2 swims" bug) —
+        //   the repeat is swapped for a fresh sport instead. Keyed by pairGroup so
+        //   it only binds tiles the user explicitly linked. { group: { bunk: Set } }
+        const _groupOpenUsed = {};
+
         // Helper — is this activity label a special-type that needs generation?
         const _isSpecialLabel = v => !!v && v.toLowerCase().trim().includes('special');
 
@@ -1363,8 +1371,22 @@
                         console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
                         schedulableSlotBlocks.push({ divName, bunk, event: fbSlotType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
                     } else if (_fbAct) {
-                        console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
-                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        // ★ CONNECTED-GROUP AWARENESS: don't direct-fill the SAME open
+                        //   activity (e.g. swim) twice for a bunk across connected tiles
+                        //   — give a fresh sport instead so connected periods vary.
+                        const _grp = job.pairGroup, _fbKey = String(_fbAct).toLowerCase().trim();
+                        if (_grp && _groupOpenUsed[_grp] && _groupOpenUsed[_grp][bunk] && _groupOpenUsed[_grp][bunk].has(_fbKey)) {
+                            console.log(`[SmartTile] ${bunk} -> "${_fbAct}" would REPEAT in connected group ${_grp} → Sports Slot instead`);
+                            schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        } else {
+                            if (_grp) {
+                                _groupOpenUsed[_grp] = _groupOpenUsed[_grp] || {};
+                                _groupOpenUsed[_grp][bunk] = _groupOpenUsed[_grp][bunk] || new Set();
+                                _groupOpenUsed[_grp][bunk].add(_fbKey);
+                            }
+                            console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
+                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        }
                     }
                     return;
                 }
