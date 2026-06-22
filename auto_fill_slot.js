@@ -384,6 +384,11 @@
             if (c.maxUsage > 0 && _maxCount >= c.maxUsage) return null; // at per-period limit
             const _exactCount = _gpc ? _gpc(bunk, act, c.exactFrequencyPeriod || '1week', today) : (countsByAct[act] || 0);
             if (c.exactFrequency > 0 && _exactCount >= c.exactFrequency) return null; // at per-period exact limit
+            // ★ Shared hard gate — closes the frequencyDays COOLDOWN hole (auto-fill
+            //   historically checked max/exact but never cooldown) and re-confirms
+            //   the ceilings through the single source of truth.
+            const _fl = window.SchedulerCoreUtils?.checkFrequencyLimits?.(bunk, act, getDivision(bunk), { date: today });
+            if (_fl && !_fl.ok) return null;
 
             // ── SCORING ─────────────────────────────────────────────────────
             let score = 0;

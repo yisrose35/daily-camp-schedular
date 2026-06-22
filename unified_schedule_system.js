@@ -321,6 +321,24 @@
                     return { ok: false, soft: true, reason: 'Violates a cooldown rule' };
                 }
             }
+
+            // 7. Frequency limits (maxUsage / exactFrequency ceiling /
+            //    frequencyDays cooldown) — SOFT. The user explicitly set these,
+            //    so a manual edit that would break one surfaces as a confirmable
+            //    "place anyway?" prompt rather than a hard block. The floor side
+            //    (minFrequency / exact-floor) is never gated — you can't reach a
+            //    minimum by refusing a write. Generation / smart-regen callers
+            //    pass allowSoftOverride and proceed (their picker already
+            //    respects these via rotation scoring), so this only affects
+            //    interactive edits — exactly where a deliberate override belongs.
+            if (window.SchedulerCoreUtils
+                && typeof window.SchedulerCoreUtils.checkFrequencyLimits === 'function') {
+                const _fl = window.SchedulerCoreUtils.checkFrequencyLimits(
+                    bunk, activity, grade, { excludeSlots: _skipSlotIndices });
+                if (!_fl.ok) {
+                    return { ok: false, soft: true, reason: _fl.reason };
+                }
+            }
         } catch (e) {
             // Never let a rule-engine bug block a legal write.
             try { console.warn('[commitManualWriteIfLegal] rule check failed (allowing write):', e && e.message); } catch (_) {}

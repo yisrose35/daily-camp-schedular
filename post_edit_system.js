@@ -1573,6 +1573,11 @@
                 const fieldMaxPeriod = fieldProps.maxUsagePeriod || 'half';
                 const usageCount = (_gpc && fieldMax < Infinity) ? _gpc(bunk, sn, fieldMaxPeriod) : (window.RotationEngine?.getActivityCount?.(bunk, sn) || 0);
                 if (usageCount >= fieldMax) return;
+                // ★ Shared hard gate — cooldown (frequencyDays) + ceilings via the
+                //   single source of truth (this candidate builder never checked
+                //   cooldown before).
+                const _flF = window.SchedulerCoreUtils?.checkFrequencyLimits?.(bunk, sn, divName, { date: currentDate });
+                if (_flF && !_flF.ok) return;
                 const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, sn, 0);
                 let score = 100 - usageCount;
                 if (daysSince === null) score += 20;
@@ -1605,6 +1610,11 @@
                 const needed = specExact - exactCount;
                 _exactEscBonus = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, needed) || 0;
             }
+            // ★ Shared hard gate — cooldown (frequencyDays) + ceilings via the
+            //   single source of truth (this candidate builder never checked
+            //   cooldown before).
+            const _flS = window.SchedulerCoreUtils?.checkFrequencyLimits?.(bunk, s.name, divName, { date: currentDate });
+            if (_flS && !_flS.ok) return;
             const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
             let score = 100 - usageCount + _exactEscBonus;
             if (daysSince === null) score += 20;

@@ -1343,6 +1343,27 @@
             }
         } catch (e) { /* never let a rule lookup error block legal writes */ }
 
+        // ★ Frequency limits (maxUsage / exactFrequency ceiling / frequencyDays
+        //   cooldown) — central hard gate. These were enforced by the planner's
+        //   candidate pre-filter but NOT here, so the repair / fallback / LNS /
+        //   ejection-chain / BFS / capacity-relax write paths could each exceed a
+        //   ceiling or break a cooldown the user explicitly set. Enforce at the
+        //   single trust point so the build keeps these promises perfectly no
+        //   matter which phase produced the placement. Floors (min / exact-floor)
+        //   are NOT gated here — a floor can't be enforced by blocking a write.
+        try {
+            const _flAct = sport || (entry && (entry._activity || entry.event)) || null;
+            if (_flAct && _flAct !== 'Free'
+                && window.SchedulerCoreUtils
+                && typeof window.SchedulerCoreUtils.checkFrequencyLimits === 'function') {
+                const _fl = window.SchedulerCoreUtils.checkFrequencyLimits(bunk, _flAct, grade, { excludeSlots: [slotIdx] });
+                if (!_fl.ok) {
+                    log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + _flAct + ' @ ' + (fieldName || '?') + ' — ' + _fl.kind + ': ' + _fl.reason);
+                    return false;
+                }
+            }
+        } catch (_flErr) { /* never let a checker error block legal writes */ }
+
         // ★ Day 23 fix: STAGGER REJECTION (centralized hard gate).
         //   If a same-grade bunk is already doing this same activity on this
         //   same field with PARTIAL time overlap (overlap exists but not
