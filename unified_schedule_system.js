@@ -4237,19 +4237,31 @@ if (bypassStatus.highlight) {
         }
         
         const divName = getDivisionForBunk(bunk);
-        let slots = findSlotsForRange(startMin, endMin, divName, bunk);
 
-        // ★ GAP ADD: In auto mode, mid-day "gaps" are uncovered TIME with no
-        //   underlying _perBunkSlots slot (see the auto gap model). The "+ Add"
-        //   gap indicator calls here with that empty range, so findSlotsForRange
-        //   returns nothing and the editor used to bail with an error instead of
-        //   opening. Materialize a slot for the clicked range first (the same
-        //   primitive the save flow uses below), so the editor opens and the new
-        //   activity lands in the gap. Auto mode only (_perBunkSlots present);
-        //   manual division slots already cover the day.
-        if (slots.length === 0 && startMin != null && endMin != null &&
-            window.divisionTimes?.[divName]?._perBunkSlots) {
-            slots = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin) || [];
+        // ★ AUTO-MODE SLOT RESOLUTION (gap "+ Add" and cell edit).
+        //   In auto mode the editor is indexed by PER-BUNK slots:
+        //   openIntegratedEditModal reads divisionTimes[div]._perBunkSlots[bunk]
+        //   and scheduleAssignments[bunk] is aligned to it. findSlotsForRange,
+        //   when NO per-bunk slot overlaps the clicked range (a mid-day gap =
+        //   uncovered time), FALLS THROUGH to the division-level slot list and
+        //   returns a DIVISION index — which then points at the WRONG per-bunk
+        //   slot (e.g. click the 11:30 gap → opens the 12:15 swim). So resolve
+        //   strictly against per-bunk slots here, and MATERIALIZE the exact
+        //   clicked range when it's an uncovered gap (the same primitive the
+        //   save flow uses). Manual mode keeps the division-level lookup.
+        const _perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+        let slots;
+        if (_perBunkSlots && startMin != null && endMin != null) {
+            slots = [];
+            for (let i = 0; i < _perBunkSlots.length; i++) {
+                const s = _perBunkSlots[i];
+                if (!(s.endMin <= startMin || s.startMin >= endMin)) slots.push(i);
+            }
+            if (slots.length === 0) {
+                slots = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin) || [];
+            }
+        } else {
+            slots = findSlotsForRange(startMin, endMin, divName, bunk);
         }
 
         if (slots.length === 0) {
