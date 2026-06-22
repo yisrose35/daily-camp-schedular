@@ -18982,6 +18982,46 @@
                                     }
                                 }
                             } catch (_glReoErr) { try { warn('[GENERIC-REORDER] error — left as-is: ' + (_glReoErr && _glReoErr.message)); } catch (_e) {} }
+                            // ── REORDER → SPORT (engine, default ON — kill: window.__reorderSportConvert=false):
+                            // the strict reorder above only rescues a dead special when an EQUAL-duration sport
+                            // blocks it. The [GENERIC-REORDER-PROBE] flags MANY more RELOCATABLE windows whose
+                            // blocker is a DIFFERENT duration (a 10-min dead food behind a 40-min sport) — no
+                            // equal-dur swap exists, so the strict pass never fires on them. This pass rescues
+                            // those: it RELOCATES the unequal-dur blocker via a clean equal-dur swap with the
+                            // bunk's OWN movable generic SPECIAL, freeing the dead window for a spacing-legal
+                            // Sport that GENERIC-SPORT-FILL then concretizes on a field (sport-fill succeeds far
+                            // more often than a jammed special seat opens). A weekly-must subcat (e.g. shiur,
+                            // min/week) is PROTECTED — its placeholder is retried another day, never turned into
+                            // a sport. Strictly gated (no new spacing violation), fail-soft.
+                            try {
+                                if ((typeof window === 'undefined' || window.__reorderSportConvert !== false) && window.GLStagger && typeof window.GLStagger.reorderDeadToSport === 'function') {
+                                    // PROTECT subcats whose activities carry a min-frequency must-have (weekly shiur etc.)
+                                    var _reoProtect = {};
+                                    try {
+                                        var _reoByName = {};
+                                        try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _reoByName[s.name] = s; }); } catch (_e) {}
+                                        Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                            (_glNamesBySub[sub] || []).forEach(function (nm) {
+                                                var ap = _reoByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                                if (ap && parseInt(ap.minFrequency, 10) > 0) _reoProtect[sub] = true;
+                                            });
+                                        });
+                                    } catch (_e) {}
+                                    var _rcNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
+                                    var _rcBunks = [];
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var _noSport = _rcNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                        _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
+                                    });
+                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
+                                    if (_rcRes && _rcRes.converted) {
+                                        _glFill.reorderConverted = _rcRes.converted;
+                                        log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s), ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
+                                    }
+                                }
+                            } catch (_glRcErr) { try { warn('[GENERIC-REORDER-CONVERT] error — left as-is: ' + (_glRcErr && _glRcErr.message)); } catch (_e) {} }
                             // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,
                             // no matter which pass laid a tile. Any UNFILLED generic special over its
                             // seats (camp-wide OR per-grade) is pulled down to a category with room (sport

@@ -28,7 +28,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '0.2.0';
+    const VERSION = '0.3.0';
 
     // Does interval [s,e) fit inside tile t's layer window? (no window ⇒ unconstrained)
     function inWindow(t, s, e) {
@@ -504,7 +504,103 @@
         return { reordered: reordered, attempts: attempts, bunks: bunks.length };
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows };
+    // reorderDeadToSport(ctx) — the case reorderDeadWindows can't reach: a dead generic special
+    // (e.g. a 10-min food that found no seat) whose ONLY blocker to becoming a Sport is an
+    // UNEQUAL-duration movable sport (a 40-min sport in its spacing radius). No equal-duration
+    // swap exists, so the strict pass never fires (the [GENERIC-REORDER-PROBE] flags it
+    // RELOCATABLE but the swap pass reports 0). Here we instead RELOCATE that blocker — a clean
+    // equal-dur swap of the blocker with the bunk's own movable generic SPECIAL partner — which
+    // frees the dead window for a spacing-legal Sport. The later GENERIC-SPORT-FILL concretizes
+    // it on a real field (sport-fill succeeds far more often than a jammed special seat opens),
+    // so a dead placeholder becomes a real activity.
+    //
+    // NET IMPROVEMENT, strictly guarded (verified by simulate-swap → gate → commit-or-restore):
+    //   • a Sport in the freed window is spacing-legal, AND the relocated blocker is spacing-
+    //     legal at its new slot (both gated).
+    //   • the partner is a MOVABLE GENERIC SPECIAL (already unfilled/dead) → moving it strands
+    //     nothing new; a SPORT partner is rejected (it would re-block the window).
+    //   • equal-duration partner swap keeps the day wall-to-wall; both stay in their windows.
+    //   • ctx.canConvert(tile) (optional) lets the caller PROTECT a subcat — e.g. a weekly-must
+    //     shiur placeholder it would rather retry tomorrow than turn into a sport.
+    // Each conversion strictly lowers the dead-special count (W → sport; the moved partner was
+    // already dead) so it always terminates. PURE: only time-position + the one kind flip.
+    //   ctx: { bunks:[{tiles,grade,noSport}], gate(block,template)->bool, sportLabel='Sport',
+    //          canon, canConvert(tile)->bool }
+    //   Returns { converted, relocations, attempts, bunks }.
+    function reorderDeadToSport(ctx) {
+        var bunks = (ctx && ctx.bunks) || [];
+        var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
+        var label = (ctx && ctx.sportLabel) || 'Sport';
+        var canConvert = (ctx && typeof ctx.canConvert === 'function') ? ctx.canConvert : function () { return true; };
+        if (!gate) return { converted: 0, relocations: 0, attempts: 0, bunks: bunks.length };
+        var converted = 0, relocations = 0, attempts = 0;
+
+        function tmplExcept(tiles, a, b) {
+            var out = [];
+            for (var i = 0; i < tiles.length; i++) { var t = tiles[i]; if (t === a || t === b) continue; out.push(_toBlk(t)); }
+            return out;
+        }
+        function sportLegalAt(tiles, s, e, exclA, exclB) {
+            try { return gate({ type: 'sport', event: label, startMin: s, endMin: e }, tmplExcept(tiles, exclA, exclB)); } catch (_e) { return false; }
+        }
+        function toSport(W) { W.kind = 'sport'; W.subcat = null; W.name = label; W.generic = true; W._fillLoc = null; W._origin = 'reorder-tosport'; }
+
+        for (var bi = 0; bi < bunks.length; bi++) {
+            var bunk = bunks[bi] || {};
+            if (bunk.noSport) continue;                          // sportless grade → never gets a Sport
+            var tiles = bunk.tiles || [];
+            if (!tiles.length) continue;
+
+            for (var pass = 0; pass < 6; pass++) {
+                var passConverts = 0;
+                var dead = [];
+                for (var di = 0; di < tiles.length; di++) {
+                    var dt = tiles[di];
+                    if (dt && dt.kind === 'special' && dt.generic === true && !dt._concrete && canConvert(dt)) dead.push(dt);
+                }
+                if (!dead.length) break;
+
+                for (var mi = 0; mi < dead.length; mi++) {
+                    var W = dead[mi];
+                    if (W.kind !== 'special' || W._concrete) continue;   // converted earlier this pass
+                    // (A) a Sport already fits W's window (no blocker) → convert directly
+                    if (sportLegalAt(tiles, W.startMin, W.endMin, W, null)) { toSport(W); converted++; passConverts++; continue; }
+                    // (B) blocked → relocate ONE movable generic sport blocker so a Sport fits W
+                    var doneW = false;
+                    for (var pj = 0; pj < tiles.length && !doneW; pj++) {
+                        var B = tiles[pj];
+                        if (!B || B === W) continue;
+                        if (!(B.kind === 'sport' && B.generic === true && !B._concrete)) continue;       // movable sport only
+                        if (!sportLegalAt(tiles, W.startMin, W.endMin, W, B)) continue;                  // removing B alone must free the window
+                        for (var pk = 0; pk < tiles.length; pk++) {
+                            var P = tiles[pk];
+                            if (!P || P === B || P === W) continue;
+                            if (P.kind !== 'special') continue;                                         // a sport partner would re-block W
+                            if (!(P.generic === true && !P._concrete)) continue;                        // movable, unfilled (already dead)
+                            if (P.durationMin !== B.durationMin) continue;                              // equal-dur ⇒ wall-to-wall safe
+                            if (!inWindow(B, P.startMin, P.endMin) || !inWindow(P, B.startMin, B.endMin)) continue;
+                            attempts++;
+                            swapTimes(B, P);                                                            // simulate B↔P
+                            var okBnew = sportLegalAt(tiles, B.startMin, B.endMin, B, null);            // blocker legal at its new slot
+                            var okW = sportLegalAt(tiles, W.startMin, W.endMin, W, null);               // a Sport now legal at W
+                            if (okBnew && okW) {
+                                B._origin = 'reorder-relocate'; P._origin = 'reorder-partner';
+                                toSport(W);
+                                converted++; relocations++; passConverts++; doneW = true;
+                                break;
+                            }
+                            swapTimes(B, P);                                                            // restore
+                        }
+                    }
+                }
+                if (!passConverts) break;
+            }
+            tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+        }
+        return { converted: converted, relocations: relocations, attempts: attempts, bunks: bunks.length };
+    }
+
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;
