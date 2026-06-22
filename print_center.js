@@ -4172,9 +4172,14 @@ function buildPolishedWorkbook(sel) {
     // identical for both and lets week-view export actually produce a file
     // (buildExcelRows has no 'week' branch → used to yield a 0-sheet workbook
     // and XLSX.writeFile would throw).
+    // "Combine all bunks" (division view) → ONE sheet with every bunk across
+    // all selected grades as columns and a unified time axis down the rows.
+    var combinedAllBunks = (_activeView === 'division' && _currentTemplate.layoutMode === 'all-bunks');
     var sheetSpecs = (_activeView === 'week')
         ? [{ name: 'Week', rows: buildWeekExcelRows(sel) }]
-        : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
+        : combinedAllBunks
+            ? [{ name: 'All Bunks', rows: buildCombinedExcelRows(sel) }]
+            : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
 
     sheetSpecs.forEach(function (spec) {
         var srcRows = spec.rows || [];
@@ -4641,6 +4646,159 @@ function buildExcelRows(item) {
         }
     }
 
+    return rows;
+}
+
+// Per-bunk activity list as { startMin, endMin, value } for either builder mode.
+// Used by the combined all-bunks export, which needs a uniform time axis.
+function pcBunkActivityList(bunk, div) {
+    var out = [];
+    if (isAutoMode()) {
+        var slots = getPerBunkSchedule(bunk, div);
+        for (var i = 0; i < slots.length; i++) {
+            var entry = getEntry(bunk, i);
+            if (entry && entry.continuation && out.length) { out[out.length - 1].endMin = slots[i].endMin; continue; }
+            var val = '';
+            if (entry && (entry._league || entry._h2h)) {
+                var lg = pcLeagueLabel(entry, bunk, div, slots[i].startMin);
+                val = _currentTemplate.hideLeagueMatchups
+                    ? ([lg.sport, lg.field].filter(Boolean).join(' - ') || (entry._gameLabel || 'League Game'))
+                    : lg.full;
+            } else {
+                val = entry ? formatEntry(entry) : '';
+            }
+            out.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, value: val });
+        }
+    } else {
+        var blocks = buildDivisionBlocks(div);
+        blocks.forEach(function (eb) {
+            var val = '';
+            if (eb.isLeague) {
+                var ml = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, div, bunk);
+                val = ml.length ? ml.join(', ') : (eb.event || 'League Game');
+            } else {
+                var si = findFirstSlotForTime(eb.startMin, div);
+                val = si >= 0 ? getExportCellText(bunk, si) : '';
+            }
+            out.push({ startMin: eb.startMin, endMin: eb.endMin, value: val });
+        });
+    }
+    return out;
+}
+
+// Combined ALL-BUNKS export: every bunk (across all selected grades) as a
+// column, a UNIFIED time axis down the rows. Because grades run on different
+// clocks, the row axis is the union of every activity boundary plus the
+// increment ticks; each activity is merged down the rows it spans.
+function buildCombinedExcelRows(divNames) {
+    var rows = [];
+    var dateStr = window.currentScheduleDate || '';
+    var mode = isAutoMode() ? 'Auto' : 'Manual';
+    var inc = _timeIncrement > 0 ? _timeIncrement : 15;
+    var divs = getDivisions();
+
+    var orderedDivs = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(divNames) : divNames.slice();
+
+    // Columns: bunks grouped by division.
+    var colDefs = [];                 // { bunk, div }
+    var divGroups = [];               // { div, startCol, endCol }
+    orderedDivs.forEach(function (d) {
+        var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
+        if (!bunks.length) return;
+        var startCol = 1 + colDefs.length;
+        bunks.forEach(function (b) { colDefs.push({ bunk: b, div: d }); });
+        divGroups.push({ div: d, startCol: startCol, endCol: colDefs.length });
+    });
+    if (!colDefs.length) return rows;
+
+    // Per-bunk activity lists + global time span.
+    var globalStart = Infinity, globalEnd = -Infinity;
+    var lists = colDefs.map(function (c) {
+        var l = pcBunkActivityList(c.bunk, c.div);
+        l.forEach(function (a) {
+            if (a.startMin < globalStart) globalStart = a.startMin;
+            if (a.endMin > globalEnd) globalEnd = a.endMin;
+        });
+        return l;
+    });
+    if (globalStart === Infinity) return rows;
+
+    // Row axis = increment ticks ∪ every activity edge (so different grade
+    // clocks all land on a shared set of row boundaries).
+    var bset = {};
+    bset[globalStart] = true; bset[globalEnd] = true;
+    for (var t = Math.ceil(globalStart / inc) * inc; t < globalEnd; t += inc) bset[t] = true;
+    lists.forEach(function (l) {
+        l.forEach(function (a) {
+            if (a.startMin >= globalStart && a.startMin <= globalEnd) bset[a.startMin] = true;
+            if (a.endMin >= globalStart && a.endMin <= globalEnd) bset[a.endMin] = true;
+        });
+    });
+    var bounds = Object.keys(bset).map(Number).sort(function (a, b) { return a - b; });
+    var rowDefs = [];
+    for (var bi = 0; bi < bounds.length - 1; bi++) rowDefs.push({ start: bounds[bi], end: bounds[bi + 1] });
+
+    var incLabel = function (min) {
+        var h = Math.floor(min / 60), m = min % 60;
+        var h12 = ((h + 11) % 12) + 1;
+        return h12 + ':' + (m < 10 ? '0' + m : m);
+    };
+
+    rows.push(['All Bunks']);
+    rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
+    rows.push([]);
+    var divHeaderRow = rows.length;       // grade super-headers
+    var bunkHeaderRow = divHeaderRow + 1; // bunk names
+    var firstDataRow = bunkHeaderRow + 1;
+
+    var merges = [];
+    var divRow = new Array(1 + colDefs.length).fill('');
+    divRow[0] = '';
+    divGroups.forEach(function (g) {
+        divRow[g.startCol] = g.div;
+        if (g.endCol > g.startCol) merges.push({ s: { r: divHeaderRow, c: g.startCol }, e: { r: divHeaderRow, c: g.endCol } });
+    });
+    rows.push(divRow);
+    rows.push(['Time'].concat(colDefs.map(function (c) { return c.bunk; })));
+    merges.push({ s: { r: divHeaderRow, c: 0 }, e: { r: bunkHeaderRow, c: 0 } });
+
+    rowDefs.forEach(function (rd) {
+        var line = [incLabel(rd.start)];
+        colDefs.forEach(function () { line.push(''); });
+        rows.push(line);
+    });
+
+    // Fill each bunk column; merge consecutive rows belonging to the same activity.
+    colDefs.forEach(function (c, ci) {
+        var col = 1 + ci;
+        var list = lists[ci];
+        var runStart = -1, runKey = null, runValue = '';
+        for (var ri = 0; ri <= rowDefs.length; ri++) {
+            var act = null;
+            if (ri < rowDefs.length) {
+                var rs = rowDefs[ri].start;
+                for (var ai = 0; ai < list.length; ai++) {
+                    if (list[ai].startMin <= rs && list[ai].endMin > rs) { act = list[ai]; break; }
+                }
+            }
+            var key = act ? (act.startMin + '-' + act.endMin) : null;
+            if (key !== runKey) {
+                if (runStart >= 0 && runValue) {
+                    var rStart = firstDataRow + runStart;
+                    var rEnd = firstDataRow + ri - 1;
+                    rows[rStart][col] = runValue;
+                    if (rEnd > rStart) merges.push({ s: { r: rStart, c: col }, e: { r: rEnd, c: col } });
+                }
+                runStart = ri; runKey = key; runValue = act ? act.value : '';
+            }
+        }
+    });
+
+    rows._merges = merges;
+    rows._headerRows = [divHeaderRow, bunkHeaderRow];
+    rows._freezeRow = firstDataRow;
+    rows._freezeCol = 1;
     return rows;
 }
 
