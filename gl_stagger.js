@@ -28,7 +28,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '0.3.1';
+    const VERSION = '0.3.2';
 
     // Does interval [s,e) fit inside tile t's layer window? (no window ⇒ unconstrained)
     function inWindow(t, s, e) {
@@ -622,7 +622,27 @@
         return { converted: converted, relocations: relocations, filledMoves: filledMoves, attempts: attempts, bunks: bunks.length };
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport };
+    // A weekly-must RESERVATION (e.g. a shiur placeholder for "≥1/week") is RELEASABLE today —
+    // safe to fill with something else or convert to a Sport, because the weekly min can still be
+    // met on a later camp-day — iff it is NOT now-or-never. This is the SAFETY CRUX of the release
+    // pass; keep it pure + tested so the boundary can never silently drift:
+    //   need      = minFreq - weekToDate                       (sessions still owed this period)
+    //   remaining = max(1, daysInPeriod - dayOfPeriod + 1)     (camp-days left incl. today)
+    //   releasable ⇔ need <= 0 (already met)  OR  need < remaining (a later day can still place it)
+    // need >= remaining is the now-or-never deadline → NOT releasable (mirrors GENERIC-WEEKLY forceNow).
+    function weeklyReleasable(o) {
+        o = o || {};
+        var M = parseInt(o.minFreq, 10) || 0;
+        if (M <= 0) return true;
+        var need = M - (parseInt(o.weekToDate, 10) || 0);
+        if (need <= 0) return true;
+        var D = Math.max(1, parseInt(o.daysInPeriod, 10) || 1);
+        var e = Math.max(1, parseInt(o.dayOfPeriod, 10) || 1);
+        var remaining = Math.max(1, D - e + 1);
+        return need < remaining;
+    }
+
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;

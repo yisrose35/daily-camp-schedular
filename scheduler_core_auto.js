@@ -18982,6 +18982,110 @@
                                     }
                                 }
                             } catch (_glReoErr) { try { warn('[GENERIC-REORDER] error — left as-is: ' + (_glReoErr && _glReoErr.message)); } catch (_e) {} }
+                            // ── RELEASE UNFILLABLE WEEKLY-MUST PLACEHOLDERS (default ON — kill:
+                            // window.__releaseWeeklyPlaceholders=false). A protected weekly-must subcat (e.g.
+                            // shiur: minFrequency≥1/week) whose scarce per-grade seat was already taken today
+                            // leaves a generic placeholder that renders as a blank "Shiur" cell. When the bunk's
+                            // weekly min is NOT now-or-never — need < remaining camp-days, the SAME geometry the
+                            // GENERIC-WEEKLY floor uses — the reservation can safely wait for a later day, so
+                            // RELEASE the slot: (1) fill it with any free real special (CROSS-subcat, via the
+                            // EXACT duration/used/capFits gates the main fill uses — so no validator rule is bent
+                            // and the weekly count simply lands on another day), else (2) mark it _releasable so
+                            // the REORDER→SPORT pass below turns it into a Sport. NEVER release on a now-or-never
+                            // day (need ≥ remaining) — that would drop the weekly guarantee. Fail-soft.
+                            try {
+                                var _rwOn = (typeof window === 'undefined') || (window.__releaseWeeklyPlaceholders !== false);
+                                var _rwU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                var _rwToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                                if (_rwOn && _rwU && typeof _rwU.getPeriodActivityCount === 'function' && _rwToday) {
+                                    // protected weekly-must subcats (mirror the reorder-convert protect set)
+                                    var _rwByName = {};
+                                    try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _rwByName[s.name] = s; }); } catch (_e) {}
+                                    var _rwProtect = {};
+                                    Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                        (_glNamesBySub[sub] || []).forEach(function (nm) {
+                                            var ap = _rwByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                            if (ap && parseInt(ap.minFrequency, 10) > 0) _rwProtect[sub] = true;
+                                        });
+                                    });
+                                    // releasable iff the bunk's weekly min for this subcat is NOT now-or-never
+                                    // (need < remaining camp-days). Mirrors GENERIC-WEEKLY geometry (lines ~17845-17900).
+                                    var _rwReleasable = function (bunk, grade, sub) {
+                                        var names = _glNamesBySub[sub] || []; if (!names.length) return true;
+                                        var M = 0, period = 'week';
+                                        names.forEach(function (nm) {
+                                            var ap = _rwByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                            if (!ap) return;
+                                            var pg = (ap.minFrequencyPerGrade && ap.minFrequencyPerGrade[grade] != null) ? parseInt(ap.minFrequencyPerGrade[grade], 10) : null;
+                                            var mf = (pg != null && pg > 0) ? pg : (ap.minFrequency != null ? parseInt(ap.minFrequency, 10) : 0);
+                                            if (mf > 0) { if (mf > M) M = mf; period = ap.minFrequencyPeriod || 'week'; }
+                                        });
+                                        if (M <= 0) return true;                                 // not actually a weekly min → releasable
+                                        var per = (period === 'week') ? '1week' : period;
+                                        var wtd = 0; names.forEach(function (nm) { try { wtd += _rwU.getPeriodActivityCount(bunk, nm, per, _rwToday) || 0; } catch (_e) {} });
+                                        var need = M - wtd;
+                                        if (need <= 0) return true;                              // weekly min already met → releasable
+                                        var D = 5, e = 1;
+                                        try {
+                                            var ps = (typeof _rwU.getPeriodStartDate === 'function') ? _rwU.getPeriodStartDate(per, _rwToday) : null;
+                                            if (ps && typeof _rwU.countCampDays === 'function') {
+                                                var nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
+                                                var peD = new Date(ps + 'T00:00:00'); peD.setDate(peD.getDate() + nW * 7 - 1);
+                                                var peStr = peD.getFullYear() + '-' + String(peD.getMonth() + 1).padStart(2, '0') + '-' + String(peD.getDate()).padStart(2, '0');
+                                                D = Math.max(1, _rwU.countCampDays(ps, peStr) || 5);
+                                                e = Math.max(1, _rwU.countCampDays(ps, _rwToday) || 1);
+                                            }
+                                        } catch (_e) {}
+                                        // boundary decision = the tested GLStagger.weeklyReleasable (faithful inline fallback)
+                                        return (typeof window !== 'undefined' && window.GLStagger && typeof window.GLStagger.weeklyReleasable === 'function')
+                                            ? window.GLStagger.weeklyReleasable({ minFreq: M, weekToDate: wtd, daysInPeriod: D, dayOfPeriod: e })
+                                            : (need < Math.max(1, D - e + 1));                   // NOT now-or-never
+                                    };
+                                    var _rwFilled = 0, _rwMarked = 0, _rwKept = 0;
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var phs = res.tiles.filter(function (t) { return t && t.kind === 'special' && t.generic !== false && !t._concrete && _rwProtect[_glCanon(t.subcat)]; });
+                                        if (!phs.length) return;
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        var used = {};
+                                        res.tiles.forEach(function (t) { if (t && t._concrete) used[String(t._concrete).toLowerCase()] = 1; else if (t && t.generic === false && t.name) used[String(t.name).toLowerCase()] = 1; });
+                                        phs.forEach(function (t) {
+                                            if (!_rwReleasable(bunk, grade, _glCanon(t.subcat))) { _rwKept++; return; }   // now-or-never → keep the reservation
+                                            // (1) CROSS-subcat real fill — any free special of the tile's length (same gates as the main fill)
+                                            var dur = t.durationMin, pick = null;
+                                            for (var i = 0; i < pool.length; i++) {
+                                                var c = pool[i]; if (!c || !c.name) continue;
+                                                if (used[String(c.name).toLowerCase()]) continue;            // no same-day repeat
+                                                var durs = _glSpecialDurs(c.name);
+                                                var fits = durs.length ? (durs.indexOf(dur) >= 0) : true;
+                                                if (!fits) continue;
+                                                if (!_glCapFits(c, grade, t.startMin, t.endMin)) continue;    // sharing/cap — the validator-mirrored hard gate
+                                                pick = c; break;
+                                            }
+                                            if (pick) {
+                                                t._concrete = pick.name;
+                                                t._fillLoc = pick.location || null;
+                                                t.subcat = pick.subcategory || t.subcat;                      // keep the tile consistent with what was placed
+                                                t._origin = 'weekly-release-fill';
+                                                used[String(pick.name).toLowerCase()] = 1;
+                                                _glRecordUse(pick, grade, t.startMin, t.endMin);
+                                                _rwFilled++;
+                                            } else {
+                                                t._releasable = true;                                         // (2) let REORDER→SPORT convert it (proven gate)
+                                                _rwMarked++;
+                                            }
+                                        });
+                                    });
+                                    if (_rwFilled || _rwMarked) {
+                                        _glFill.weeklyReleased = (_rwFilled + _rwMarked);
+                                        log('[GENERIC-RELEASE-WEEKLY] released ' + (_rwFilled + _rwMarked) + ' non-deadline weekly-must placeholder(s): ' + _rwFilled + ' filled with a real special, ' + _rwMarked + ' handed to reorder→sport' + (_rwKept ? ' (' + _rwKept + ' kept — now-or-never today)' : ''));
+                                    } else if (_rwKept) {
+                                        log('[GENERIC-RELEASE-WEEKLY] 0 released — ' + _rwKept + ' weekly-must placeholder(s) are now-or-never today (kept as reservations)');
+                                    }
+                                }
+                            } catch (_rwErr) { try { warn('[GENERIC-RELEASE-WEEKLY] error — placeholders left as-is: ' + (_rwErr && _rwErr.message)); } catch (_e) {} }
                             // ── REORDER → SPORT (engine, default ON — kill: window.__reorderSportConvert=false):
                             // the strict reorder above only rescues a dead special when an EQUAL-duration sport
                             // blocks it. The [GENERIC-REORDER-PROBE] flags MANY more RELOCATABLE windows whose
@@ -18992,7 +19096,9 @@
                             // Sport that GENERIC-SPORT-FILL then concretizes on a field (sport-fill succeeds far
                             // more often than a jammed special seat opens). A weekly-must subcat (e.g. shiur,
                             // min/week) is PROTECTED — its placeholder is retried another day, never turned into
-                            // a sport. Strictly gated (no new spacing violation), fail-soft.
+                            // a sport — UNLESS the RELEASE pass above already cleared it (t._releasable: not
+                            // now-or-never + no real special was free), in which case a Sport beats a blank cell.
+                            // Strictly gated (no new spacing violation), fail-soft.
                             try {
                                 if ((typeof window === 'undefined' || window.__reorderSportConvert !== false) && window.GLStagger && typeof window.GLStagger.reorderDeadToSport === 'function') {
                                     // PROTECT subcats whose activities carry a min-frequency must-have (weekly shiur etc.)
@@ -19015,7 +19121,7 @@
                                         var _noSport = _rcNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
                                         _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
                                     });
-                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
+                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, canConvert: function (t) { return t._releasable === true || !_reoProtect[_glCanon(t.subcat)]; } });
                                     if (_rcRes && _rcRes.converted) {
                                         _glFill.reorderConverted = _rcRes.converted;
                                         log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s)' + ((_rcRes.filledMoves || 0) ? ', ' + _rcRes.filledMoves + ' by moving a filled special into the freed slot' : '') + ', ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
