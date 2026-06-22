@@ -4775,6 +4775,296 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.66: Reshuffle-to-fill (augmenting-path). After 7.5/7.6/7.65 a SPORT
+        // slot can still be Free when every activity the bunk hasn't done today is on
+        // a field that is full / not_sharable / grade-incompatible — yet a single MOVE
+        // would open one up. Example: bunk B is Free and the only fresh thing it could
+        // do is Basketball, which bunk A already holds on a cap-1 field. Rather than
+        // leave B Free, relocate A's Basketball to a different FRESH activity on an
+        // empty/under-cap field, then seat B on the vacated field. This is an
+        // augmenting path: seat the Free bunk by displacing a MOVABLE sport occupant
+        // and re-seating that occupant elsewhere (recursively), committing the whole
+        // chain only when the Free bunk ends up seated — so a chain never creates a new
+        // Free. Every hop honors: never repeat an activity for a bunk, never cross-grade
+        // share unless the location's sharing rule permits it, and respect capacity /
+        // access / time-rules / co-start. PASS 1 (direct seat) also MAXES OUT sharing —
+        // including the rule-permitted cross-grade shares that STEP 7.65 (same-grade
+        // only) leaves on the table — so a Free slot is only ever displaced-into after
+        // every legal share has been taken. User-locked placements (_league / _postEdit
+        // / _pinned / _h2h / _bunkOverride / transitions / multi-period parents / trips)
+        // are never moved. Specials are governed by their own rotation/frequency rules,
+        // so this sport-focused pass never relocates a special and never fills a Special
+        // slot (STEP 7.65 owns those).
+        // =========================================================================
+        try {
+            const _gs66 = window.loadGlobalSettings ? window.loadGlobalSettings() : (window.globalSettings || {});
+            const _fields66 = (_gs66.app1 && _gs66.app1.fields) || _gs66.fields || [];
+            const _specials66 = (_gs66.app1 && _gs66.app1.specialActivities) || _gs66.specialActivities || [];
+            const _sa66 = window.scheduleAssignments || {};
+            const _divs66 = window.divisions || {};
+            const _dt66 = window.divisionTimes || {};
+            const _b2g66 = {};
+            Object.keys(_divs66).forEach(g => ((_divs66[g] && _divs66[g].bunks) || []).forEach(b => { _b2g66[String(b)] = g; }));
+            const _allowed66 = (function () {
+                if (!allowedDivisions || allowedDivisions.length === 0) return null;
+                const s = new Set();
+                allowedDivisions.forEach(d => (divisions[d]?.bunks || divisions[String(d)]?.bunks || []).forEach(b => s.add(String(b))));
+                return s;
+            })();
+            const _skip66 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1, 'canteen': 1, 'custom': 1 };
+            // Sharing-config normalization — identical to STEP 7.55/7.65 and auto_validator
+            // (custom-without-divisions and 'all' both collapse to same_division).
+            const _norm66 = (sw) => {
+                let ty = (sw && sw.type) || 'not_sharable';
+                const dv = (sw && Array.isArray(sw.divisions)) ? sw.divisions : [];
+                if (ty === 'custom' && dv.length === 0) ty = 'same_division';
+                if (ty === 'all') ty = 'same_division';
+                return { type: ty, cap: parseInt(sw && sw.capacity) || (ty === 'not_sharable' ? 1 : 2), pairs: (sw && sw.allowedPairs) || {}, divs: dv };
+            };
+            // Slot geometry — per-bunk grid → entry → division (same as _rtime/_stime76).
+            const _time66 = (bunk, grade, idx, e) => {
+                const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                    || (_dt66[grade] && _dt66[grade]._perBunkSlots && _dt66[grade]._perBunkSlots[bunk]);
+                if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                const ds = _dt66[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                return null;
+            };
+            const _slotEvent66 = (bunk, grade, idx, e) => {
+                const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                    || (_dt66[grade] && _dt66[grade]._perBunkSlots && _dt66[grade]._perBunkSlots[bunk]);
+                if (pbs && pbs[idx] && pbs[idx].event != null) return pbs[idx].event;
+                const ds = _dt66[grade]; if (ds && ds[idx] && ds[idx].event != null) return ds[idx].event;
+                return (e && e.event) || '';
+            };
+            const _kindByCell66 = {};
+            schedulableSlotBlocks.forEach(b => {
+                if (!b || !b._slotKind || b._slotKind === 'any' || !Array.isArray(b.slots)) return;
+                b.slots.forEach(si => { _kindByCell66[String(b.bunk) + '|' + si] = b._slotKind; });
+            });
+            const _kindOf66 = (b, g, idx, e) => { const k = _kindByCell66[String(b) + '|' + idx]; return (k && k !== 'any') ? k : slotKindOf(_slotEvent66(b, g, idx, e)); };
+            const _access66 = (f, grade) => {
+                const ar = f.accessRestrictions;
+                if (!ar || !ar.enabled) return true;
+                const dvs = ar.divisions || {};
+                if (Object.keys(dvs).length === 0) return true;
+                return !!dvs[grade];
+            };
+            const _timeOk66 = (f, s, e) => {
+                const rules = Array.isArray(f.timeRules) ? f.timeRules : null;
+                if (!rules || rules.length === 0) return true;
+                let hasAvail = false, insideAvail = false;
+                for (let i = 0; i < rules.length; i++) {
+                    const r = rules[i]; if (!r) continue;
+                    const rs = (r.startMin != null) ? r.startMin : null;
+                    const re = (r.endMin != null) ? r.endMin : null;
+                    const isUnavail = String(r.type).toLowerCase() === 'unavailable' || r.available === false;
+                    if (isUnavail) { if (rs != null && re != null && rs < e && re > s) return false; }
+                    else { hasAvail = true; if (rs != null && re != null && s >= rs && e <= re) insideAvail = true; }
+                }
+                if (hasAvail && !insideAvail) return false;
+                return true;
+            };
+            const _crossOk66 = (grade, others, pairs) => {
+                if (!pairs) return false;
+                for (let i = 0; i < others.length; i++) {
+                    if (grade === others[i]) continue;
+                    const ok = (pairs[grade] && pairs[grade][others[i]]) || (pairs[others[i]] && pairs[others[i]][grade]);
+                    if (!ok) return false;
+                }
+                return true;
+            };
+            // Candidate sport locations — fields with an activity list, excluding special
+            // rooms (a special room hosts a special, never a free-fill sport — same filter
+            // as STEP 7.6's _sportFields76). timeRules handled below via _timeOk66.
+            const _specialRooms66 = {};
+            _specials66.forEach(s => { if (s && s.location) _specialRooms66[String(s.location).toLowerCase().trim()] = 1; });
+            const _sportLocs66 = _fields66.filter(f => f && f.name && f.available !== false
+                && !_specialRooms66[String(f.name).toLowerCase().trim()]
+                && !_skip66[String(f.name).toLowerCase().trim()]
+                && Array.isArray(f.activities) && f.activities.length).map(f => ({
+                    key: String(f.name).toLowerCase().trim(), name: f.name, raw: f,
+                    cfg: _norm66(f.sharableWith || {}), activities: f.activities.slice()
+                }));
+            const _sportLocByKey66 = {}; _sportLocs66.forEach(l => { _sportLocByKey66[l.key] = l; });
+
+            // ── Live occupancy model. _locOcc66[key] = records currently on that sport
+            // field; _recByCell66[bunk|idx] = the record for a (bunk,slot) cell;
+            // _bunkActs66[bunk][idx] = activity (lowercased) the bunk does at that slot,
+            // used for the no-repeat freshness test. All three are mutated in lock-step by
+            // _commit66 / _undo66 so the DFS explores tentatively and only the committed
+            // chain is written back to scheduleAssignments.
+            const _locOcc66 = {}, _recByCell66 = {}, _bunkActs66 = {};
+            Object.keys(_sa66).forEach(b => {
+                const g = _b2g66[String(b)] || '?';
+                const arr = _sa66[b] || [];
+                arr.forEach((e, idx) => {
+                    if (!e || e.continuation) return;
+                    const aRaw = e._activity || e.sport || '';
+                    const aLow = String(aRaw).toLowerCase().trim();
+                    if (aLow && aLow !== 'free' && aLow !== 'free play' && aLow !== 'free (timeout)') {
+                        (_bunkActs66[b] = _bunkActs66[b] || {})[idx] = aLow;
+                    }
+                    const fl = String(e.field || '').toLowerCase().trim();
+                    if (!fl || _skip66[fl] || e.field === 'Free') return;
+                    const loc = _sportLocByKey66[fl]; if (!loc) return; // only model sport-field occupancy
+                    const t = _time66(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    const nextE = arr[idx + 1];
+                    const isParentSpan = !!(nextE && nextE.continuation);
+                    const movable = !e._league && !e._postEdit && !e._pinned && !e._h2h && !e._isTransition
+                        && !e._isTrip && !e._bunkOverride && !isParentSpan
+                        && (!_allowed66 || _allowed66.has(String(b)));
+                    const r = { cellId: String(b) + '|' + idx, bunk: String(b), idx, grade: g, s: t.s, e: t.e, act: aLow, actName: aRaw, locKey: fl, locName: loc.name, movable };
+                    _recByCell66[r.cellId] = r;
+                    (_locOcc66[fl] = _locOcc66[fl] || []).push(r);
+                });
+            });
+            const _freshFor66 = (bunk, idx, actLow) => {
+                const m = _bunkActs66[bunk]; if (!m) return true;
+                const ks = String(idx);
+                for (const k in m) { if (k === ks) continue; if (m[k] === actLow) return false; }
+                return true;
+            };
+            const _occAt66 = (locKey, s, e, selfBunk) => {
+                const a = _locOcc66[locKey] || []; let blocked = false; const exact = [];
+                for (let i = 0; i < a.length; i++) {
+                    const r = a[i]; if (r.bunk === selfBunk) continue;
+                    if (r.s < e && r.e > s) { if (r.s === s && r.e === e) exact.push(r); else blocked = true; }
+                }
+                return { blocked, exact };
+            };
+            // What activity (if any) bunk can take at `loc` right now: a fresh sport on an
+            // empty field, or JOIN the in-progress activity of a legal under-cap share.
+            const _seatAct66 = (bunk, grade, idx, s, e, loc) => {
+                const info = _occAt66(loc.key, s, e, bunk);
+                if (info.blocked) return null;                  // staggered overlap blocks the field
+                const exact = info.exact;
+                if (exact.length === 0) {
+                    for (let i = 0; i < loc.activities.length; i++) {
+                        const a = loc.activities[i];
+                        if (a && _freshFor66(bunk, idx, String(a).toLowerCase().trim())) return String(a);
+                    }
+                    return null;
+                }
+                let actName = null, mixed = false;
+                for (const r of exact) { if (actName === null) actName = r.actName; else if (String(r.actName).toLowerCase() !== String(actName).toLowerCase()) mixed = true; }
+                if (mixed || !actName) return null;
+                if (!_freshFor66(bunk, idx, String(actName).toLowerCase().trim())) return null;
+                const cfg = loc.cfg;
+                if (cfg.type === 'not_sharable') return null;
+                if (exact.length + 1 > cfg.cap) return null;
+                const gs = exact.map(r => r.grade);
+                if (cfg.type === 'same_division') { if (gs.some(g => g !== grade)) return null; }
+                else if (cfg.type === 'cross_division') { if (!_crossOk66(grade, gs, cfg.pairs)) return null; }
+                else if (cfg.type === 'custom') {
+                    if (cfg.divs.length > 0) { if (cfg.divs.indexOf(grade) < 0 || gs.some(g => cfg.divs.indexOf(g) < 0)) return null; }
+                    else { if (gs.some(g => g !== grade)) return null; }
+                }
+                return actName;
+            };
+            let _moves66 = [];
+            const _commit66 = (bunk, grade, idx, s, e, loc, act) => {
+                const cellId = String(bunk) + '|' + idx;
+                let r = _recByCell66[cellId];
+                const prevAct = (_bunkActs66[bunk] && _bunkActs66[bunk][idx]) || null;
+                const m = { cellId, prevAct };
+                if (!r) {
+                    r = { cellId, bunk: String(bunk), idx, grade, s, e, act: String(act).toLowerCase().trim(), actName: act, locKey: loc.key, locName: loc.name, movable: false };
+                    _recByCell66[cellId] = r;
+                    m.isNew = true; m.r = r; m.toLocKey = loc.key;
+                    (_locOcc66[loc.key] = _locOcc66[loc.key] || []).push(r);
+                } else {
+                    m.isNew = false; m.r = r;
+                    m.fromLocKey = r.locKey; m.fromLocName = r.locName; m.fromActName = r.actName; m.fromAct = r.act;
+                    const arr = _locOcc66[r.locKey]; if (arr) { const i = arr.indexOf(r); if (i >= 0) arr.splice(i, 1); }
+                    r.locKey = loc.key; r.locName = loc.name; r.actName = act; r.act = String(act).toLowerCase().trim();
+                    (_locOcc66[loc.key] = _locOcc66[loc.key] || []).push(r);
+                    m.toLocKey = loc.key;
+                }
+                (_bunkActs66[bunk] = _bunkActs66[bunk] || {})[idx] = r.act;
+                _moves66.push(m);
+            };
+            const _undo66 = (mark) => {
+                while (_moves66.length > mark) {
+                    const m = _moves66.pop(); const r = m.r;
+                    const arr = _locOcc66[m.toLocKey]; if (arr) { const i = arr.indexOf(r); if (i >= 0) arr.splice(i, 1); }
+                    if (m.isNew) {
+                        delete _recByCell66[m.cellId];
+                        if (m.prevAct == null) { if (_bunkActs66[r.bunk]) delete _bunkActs66[r.bunk][r.idx]; }
+                        else { (_bunkActs66[r.bunk] = _bunkActs66[r.bunk] || {})[r.idx] = m.prevAct; }
+                    } else {
+                        r.locKey = m.fromLocKey; r.locName = m.fromLocName; r.actName = m.fromActName; r.act = m.fromAct;
+                        (_locOcc66[r.locKey] = _locOcc66[r.locKey] || []).push(r);
+                        (_bunkActs66[r.bunk] = _bunkActs66[r.bunk] || {})[r.idx] = (m.prevAct == null ? r.act : m.prevAct);
+                    }
+                }
+            };
+            let _steps66 = 0;
+            const _findChain66 = (bunk, idx, s, e, grade, depth, movedBunks) => {
+                if (++_steps66 > 60000) return false;            // safety budget per Free cell
+                // PASS 1 — direct seat (empty field OR a legal share; maxes out sharing).
+                for (let li = 0; li < _sportLocs66.length; li++) {
+                    const loc = _sportLocs66[li]; if (_visitedLocs66.has(loc.key)) continue;
+                    if (!_access66(loc.raw, grade) || !_timeOk66(loc.raw, s, e)) continue;
+                    const act = _seatAct66(bunk, grade, idx, s, e, loc);
+                    if (act != null) { _commit66(bunk, grade, idx, s, e, loc, act); return true; }
+                }
+                if (depth <= 0) return false;
+                // PASS 2 — displace a single MOVABLE occupant, relocate it, then seat here.
+                for (let li = 0; li < _sportLocs66.length; li++) {
+                    const loc = _sportLocs66[li]; if (_visitedLocs66.has(loc.key)) continue;
+                    if (!_access66(loc.raw, grade) || !_timeOk66(loc.raw, s, e)) continue;
+                    const info = _occAt66(loc.key, s, e, bunk);
+                    if (info.blocked || info.exact.length !== 1) continue; // only the simple single-occupant case
+                    const o = info.exact[0];
+                    if (!o.movable || movedBunks.has(o.bunk)) continue;
+                    _visitedLocs66.add(loc.key); movedBunks.add(o.bunk);
+                    const mark = _moves66.length;
+                    if (_findChain66(o.bunk, o.idx, o.s, o.e, o.grade, depth - 1, movedBunks)) {
+                        const act2 = _seatAct66(bunk, grade, idx, s, e, loc); // loc now vacated
+                        if (act2 != null) { _commit66(bunk, grade, idx, s, e, loc, act2); _visitedLocs66.delete(loc.key); return true; }
+                    }
+                    _undo66(mark); movedBunks.delete(o.bunk); _visitedLocs66.delete(loc.key);
+                }
+                return false;
+            };
+            // Collect still-Free SPORT slots (detected by activity, like STEP 7.6).
+            const _frees66 = [];
+            Object.keys(_sa66).forEach(b => {
+                if (_allowed66 && !_allowed66.has(String(b))) return;
+                const g = _b2g66[String(b)] || '?';
+                (_sa66[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                    const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
+                    if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
+                    if (_kindOf66(b, g, idx, e) === 'special') return; // sports reshuffle only
+                    const t = _time66(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    _frees66.push({ bunk: String(b), idx, grade: g, s: t.s, e: t.e });
+                });
+            });
+            let _seated66 = 0, _relocated66 = 0, _visitedLocs66 = null;
+            for (const fc of _frees66) {
+                _visitedLocs66 = new Set();
+                _steps66 = 0;
+                const movedBunks = new Set([fc.bunk]);
+                if (_findChain66(fc.bunk, fc.idx, fc.s, fc.e, fc.grade, 3, movedBunks)) {
+                    for (const m of _moves66) {
+                        const r = m.r;
+                        _sa66[r.bunk][r.idx] = { field: r.locName, sport: r.actName, _activity: r.actName, _startMin: r.s, _endMin: r.e, _fixed: true, _freeFilled: true, _reshuffled: true, continuation: false };
+                    }
+                    _seated66++; _relocated66 += Math.max(0, _moves66.length - 1);
+                    _moves66 = []; // committed — _locOcc66 already reflects the chain
+                } else {
+                    _undo66(0); _moves66 = [];
+                }
+            }
+            if (_seated66 > 0) console.log('[STEP 7.66] reshuffle fill: seated ' + _seated66 + ' Free sport slot(s) (' + _relocated66 + ' activity relocation(s))');
+            else console.log('[STEP 7.66] reshuffle fill: no Free sport slots resolvable by reshuffle');
+        } catch (_e766) {
+            console.warn('[STEP 7.66] reshuffle fill failed:', _e766);
+        }
+
+        // =========================================================================
         // STEP 7.7: Spacing-rule enforcement sweep (manual analog of the auto gate).
         // The manual builder never gated spacing rules at placement time, so a
         // generated manual schedule could place e.g. a Special right after Lunch in
