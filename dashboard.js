@@ -265,22 +265,35 @@
         // ⭐ STEP 3: Check if user is a CAMP OWNER (only if not a team member)
         // =====================================================================
         try {
-            const { data: ownedCamp, error: campError } = await window.supabase
+            // A super-admin may own MULTIPLE camps (their real camp + debug
+            // copies), so .maybeSingle() would throw. Fetch all and pick the
+            // ACTIVE one: prefer the camp CampistryDB already resolved (which
+            // honors the active-camp selection / debug-copy switch), then the
+            // camp whose id == uid (signup convention), then the first.
+            const { data: ownedCamps, error: campError } = await window.supabase
                 .from('camps')
                 .select('*')
-                .eq('owner', currentUser.id)
-                .maybeSingle();
-            
+                .eq('owner', currentUser.id);
+
+            let ownedCamp = null;
+            if (Array.isArray(ownedCamps) && ownedCamps.length > 0 && !campError) {
+                const activeId = (window.CampistryDB && window.CampistryDB.getCampId)
+                    ? window.CampistryDB.getCampId() : null;
+                ownedCamp = ownedCamps.find(c => c.id === activeId) ||
+                            ownedCamps.find(c => c.id === currentUser.id) ||
+                            ownedCamps[0];
+            }
+
             console.log('📊 Camp ownership check result:', { ownedCamp, campError });
-            
-            if (ownedCamp && !campError) {
+
+            if (ownedCamp) {
                 console.log('📊 User is a camp owner, camp:', ownedCamp.name);
                 userRole = 'owner';
                 isTeamMember = false;
                 campData = ownedCamp;
                 campName = ownedCamp.name || null;
                 userName = ownedCamp.owner_name || null;
-                
+
                 // Store camp ID (use camp's row ID, not auth user ID)
                 localStorage.setItem('campistry_user_id', ownedCamp.id);
                 localStorage.setItem('campistry_camp_id', ownedCamp.id);
@@ -700,14 +713,17 @@
         // If we're an owner and don't have camp data yet, try to fetch it again
         if (!campData && !isTeamMember) {
             try {
-                const { data: camps, error } = await window.supabase
+                // Multi-camp owners: fetch all, prefer the real camp (id==uid).
+                const { data: campsList, error } = await window.supabase
                     .from('camps')
                     .select('*')
-                    .eq('owner', currentUser.id)
-                    .maybeSingle();
-                
+                    .eq('owner', currentUser.id);
+                const camps = (Array.isArray(campsList) && campsList.length > 0)
+                    ? (campsList.find(c => c.id === currentUser.id) || campsList[0])
+                    : null;
+
                 console.log('📊 Secondary camp fetch:', { camps, error });
-                
+
                 if (camps && !error) {
                     campData = camps;
                     campName = camps.name || null;

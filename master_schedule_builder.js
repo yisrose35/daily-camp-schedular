@@ -2620,10 +2620,46 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
   document.addEventListener('keydown', window._dawKeyHandler);
 }
 
+// Resolve the sharing config a general activity was given in the Facilities UI so
+//   the layer edit modal pre-fills the SAME capacity + inter-grade-sharing grades —
+//   exactly the way name and location already carry over. Returns { capacity,
+//   allowedGrades } or null when the activity/facility configures no sharing.
+//   The facility stores inter-grade sharing as allowedPairs ("gradeA|gradeB"); the
+//   default toggle seeds same-grade self-pairs for ALL grades, so only pairs whose
+//   two grades DIFFER represent true inter-grade sharing — those are the grades the
+//   modal should pre-check.
+function _dawFacilitySharingDefaults(activityName, fieldName) {
+  try {
+    if (!activityName || typeof window.getCustomActivitySharingInfo !== 'function') return null;
+    const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+    const info = window.getCustomActivitySharingInfo(activityName, fieldName || null, null, gs);
+    if (!info || info.shareType === 'not_sharable') return null;
+    const gset = {};
+    const pairs = info.allowedPairs || {};
+    Object.keys(pairs).forEach(k => {
+      if (!pairs[k]) return;
+      const parts = String(k).split('|');
+      if (parts.length === 2 && parts[0] !== parts[1]) { gset[parts[0]] = 1; gset[parts[1]] = 1; }
+    });
+    let allowedGrades = Object.keys(gset);
+    if (allowedGrades.length === 0 && Array.isArray(info.allowedDivisions)) {
+      allowedGrades = info.allowedDivisions.map(String).filter(Boolean);
+    }
+    const cap = (info.capacity && isFinite(info.capacity) && info.capacity > 0) ? info.capacity : null;
+    if (!cap && allowedGrades.length === 0) return null;
+    return { capacity: cap, allowedGrades: allowedGrades };
+  } catch (_e) { return null; }
+}
+
 function showDAWPopover(bandEl, layer, grade, opts) {
   const onSave = opts?.onSave || saveDAWLayers;
   const onRender = opts?.onRender || renderDAWGrid;
-  
+  // Pre-fill sharing from the facility general-activity config when this layer has
+  //   no override of its own yet (so the inter-grade-sharing grades show the same
+  //   way name/location already do, and a blind Save can't silently clear them).
+  const _facShareDef = (layer && layer.type === 'custom' && !layer.customSharing)
+    ? _dawFacilitySharingDefaults(layer.customActivity, layer.customField) : null;
+
   // Remove existing
   document.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
   // Remove existing overlays too
@@ -2918,7 +2954,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <div class="ms-daw-pop-field">
         <label>Max bunks at a time</label>
         <div class="ms-daw-pop-row">
-          <input type="number" id="daw-pop-custom-share-cap" min="1" max="99" value="${(layer.customSharing && layer.customSharing.capacity) ? layer.customSharing.capacity : ''}" placeholder="no limit" style="flex:1;">
+          <input type="number" id="daw-pop-custom-share-cap" min="1" max="99" value="${(layer.customSharing && layer.customSharing.capacity) ? layer.customSharing.capacity : (_facShareDef && _facShareDef.capacity ? _facShareDef.capacity : '')}" placeholder="no limit" style="flex:1;">
         </div>
         <div class="ms-daw-pop-hint">The most bunks that can be doing this activity simultaneously (the facility's capacity). Leave blank for no limit.</div>
       </div>
@@ -2928,7 +2964,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           ${(() => {
             const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
             const allG = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(Object.keys(divs)) : Object.keys(divs);
-            const sel = (layer.customSharing && Array.isArray(layer.customSharing.allowedGrades)) ? layer.customSharing.allowedGrades.map(String) : [];
+            const sel = (layer.customSharing && Array.isArray(layer.customSharing.allowedGrades)) ? layer.customSharing.allowedGrades.map(String) : ((_facShareDef && Array.isArray(_facShareDef.allowedGrades)) ? _facShareDef.allowedGrades.map(String) : []);
             return allG.map(g => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (sel.includes(String(g)) ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-share-grade-cb" value="' + g + '"' + (sel.includes(String(g)) ? ' checked' : '') + ' style="width:13px;height:13px;">' + g + '</label>').join('');
           })()}
         </div>

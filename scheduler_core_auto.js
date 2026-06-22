@@ -424,6 +424,7 @@
     function getCustomActivitySharingInfo(activityName, fieldName, layerOverride, gs) {
         gs = gs || globalSettings;
         var out = { shareType: 'not_sharable', capacity: 1, allowedDivisions: [], allowedPairs: {}, consecutiveBunks: false, instructor: '', source: 'default' };
+        var _layerCapExplicit = false;   // did the layer itself carry a usable capacity number?
 
         // (1) Per-layer override — translate { capacity, allowedGrades } → sharableWith.
         if (layerOverride && (layerOverride.capacity != null || Array.isArray(layerOverride.allowedGrades))) {
@@ -435,6 +436,7 @@
                 }
             }
             var lcCap = parseInt(layerOverride.capacity);
+            _layerCapExplicit = (layerOverride.capacity != null && isFinite(lcCap) && lcCap >= 1);
             if (!isFinite(lcCap) || lcCap < 1) lcCap = 1;
             out.shareType = (lcCap > 1 || grades.length > 1) ? (grades.length > 1 ? 'cross_division' : 'same_division') : 'not_sharable';
             out.capacity = lcCap;
@@ -498,6 +500,22 @@
             }
             if (!out.consecutiveBunks && fld.consecutiveBunks === true) out.consecutiveBunks = true;
         }
+        // (4) Cross-division layer sharing with NO explicit capacity on the layer.
+        //     Branch (1) defaults capacity to 1 and stamps source='layer', which then
+        //     blocks tiers (2)/(3) from supplying the room's real capacity. But a
+        //     cross_division layer whose whole purpose is to run several grades together
+        //     in one room (e.g. a shared "Morning Breakout" across 3rd/4th/5th) must NOT
+        //     be throttled to a single bunk — cap 1 silently forces a staggered, per-bunk
+        //     placement and drops grades. When the layer turned on cross-division sharing
+        //     but typed no capacity number, resolve the real room capacity from the
+        //     per-activity / field config; if none is configured, fall back to a generous
+        //     value so the joint session can hold the whole group.
+        if (out.source === 'layer' && !_layerCapExplicit && out.shareType === 'cross_division' && (!isFinite(out.capacity) || out.capacity <= 1)) {
+            var _roomCap = 0;
+            if (ga && ga.sharableWith && parseInt(ga.sharableWith.capacity) > _roomCap) _roomCap = parseInt(ga.sharableWith.capacity);
+            if (fld && fld.sharableWith && parseInt(fld.sharableWith.capacity) > _roomCap) _roomCap = parseInt(fld.sharableWith.capacity);
+            out.capacity = _roomCap > 1 ? _roomCap : 99;   // 99 = "fits the whole group" when no room cap configured
+        }
         return out;
     }
     try { window.getCustomActivitySharingInfo = getCustomActivitySharingInfo; } catch (_eXp) {}
@@ -514,12 +532,21 @@
         if (!cfg) return true;
         if (!isRainy && cfg.rainyDayOnly) return false;
         if (isRainy && cfg.availableOnRainyDay === false) return false;
+        // Day names come in BOTH long ("Thursday") and short ("Thu") forms — the UI
+        // saves availableDays as short codes while the engine's dayName is long. Match
+        // on a canonical 3-letter key so either form works (else a short-coded special
+        // is judged unavailable EVERY day → todaysSpecials goes empty → blank schedule).
+        const _dayKey = d => String(d == null ? '' : d).toLowerCase().slice(0, 3);
         if (Array.isArray(cfg.availableDays) && cfg.availableDays.length > 0)
-            return cfg.availableDays.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+            return cfg.availableDays.map(_dayKey).includes(_dayKey(dayName));
         if (cfg.dayAvailability) {
             const da = cfg.dayAvailability;
-            if (typeof da === 'object' && !Array.isArray(da)) return da[dayName] !== false;
-            if (Array.isArray(da)) return da.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+            if (typeof da === 'object' && !Array.isArray(da)) {
+                if (da[dayName] !== undefined) return da[dayName] !== false;
+                const _k = Object.keys(da).find(k => _dayKey(k) === _dayKey(dayName));
+                return _k ? da[_k] !== false : true;
+            }
+            if (Array.isArray(da)) return da.map(_dayKey).includes(_dayKey(dayName));
         }
         return true;
     }
@@ -5264,6 +5291,10 @@
                 return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v;
             };
             const specialSubcategoryCap = {};
+            // Per-subcat REQUIRED count (operator floor): '<='/at-most → 0, '='/'>=' → qty.
+            // Carried alongside the cap so the generic layout can honor "at most N" as a
+            // CEILING (floor 0) instead of re-deriving floor=cap and demanding it as a quota.
+            const specialSubcategoryFloor = {};
             let _hasSubcategoryTags = false;
             specialNeeds.forEach(n => {
                 const subRaw = (n.layer && typeof n.layer.subcategory === 'string') ? n.layer.subcategory.trim() : '';
@@ -5273,6 +5304,7 @@
                 specialSubcategoryCap[subKey] = (specialSubcategoryCap[subKey] === Infinity || c === Infinity)
                     ? Infinity
                     : ((specialSubcategoryCap[subKey] || 0) + c);
+                specialSubcategoryFloor[subKey] = (specialSubcategoryFloor[subKey] || 0) + (n.count || 0); // n.count = operator floor (0 for '<=')
             });
 
             const specialPriorityList = [];
@@ -5298,6 +5330,36 @@
                 // Per-grade cap overrides the global cap for this grade
                 const gradeMaxUsage = parseInt((props.maxUsagePerGrade || {})[grade]) || 0;
                 if (gradeMaxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= gradeMaxUsage) return;
+                // ★ WEEKLY-MUST guard: is THIS bunk still under its per-week minFrequency for this
+                //   special THIS week? A per-week minimum is a hard generator promise, so the COHORT
+                //   thinning below (which uses cross-week LIFETIME counts) must NOT evict it — doing so
+                //   stranded a required weekly special out of the fill pool → an unfillable
+                //   "Special:<subcat>" placeholder (the live shiur miss). General (shiur, weekly trip,
+                //   swim-3×); reads activityProperties AND the special config (mirrors the min-freq
+                //   block below) so a config-only minFrequency still counts. Gated; fail-soft to false.
+                //   NOT applied to the exact/maxUsage CEILINGS — only the cohort fairness skip.
+                let _wmOwes = false;
+                try {
+                    if ((typeof window === 'undefined') || (window.__weeklyQuota !== false)) {
+                        const _wmCfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(s.name, globalSettings) : null;
+                        const _wmMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(_wmCfg && _wmCfg.minFrequency) || 0;
+                        if (_wmMin > 0) {
+                            const _wmPer = props.minFrequencyPeriod || (_wmCfg && _wmCfg.minFrequencyPeriod) || 'week';
+                            const _wmPerN = (_wmPer === 'week') ? '1week' : _wmPer;
+                            // AIM-FOR-MAX: protect a scarce must-have from COHORT thinning up to its weekly
+                            // TARGET (= maxUsage when set as a weekly ceiling), not just its min. Otherwise a
+                            // special you want REPEATED (shiur 3×/wk) is stripped from the fill pool after its
+                            // 1st by the lifetime-count cohort rule, so the aim-up layout tile is laid but fails
+                            // 'no-activity-in-subcat' and the climb stalls at 1. Falls back to the min when no
+                            // weekly max is set. (The weekly-MAX ceiling still hard-stops at maxUsage, so this
+                            // only widens pool ELIGIBILITY, never over-places.)
+                            const _wmMaxRaw = parseInt((props.maxUsagePerGrade || {})[grade]) || parseInt(props.maxUsage) || parseInt(_wmCfg && _wmCfg.maxUsage) || 0;
+                            const _wmMaxPer = props.maxUsagePeriod || (_wmCfg && _wmCfg.maxUsagePeriod) || 'half';
+                            const _wmTarget = (_wmMaxRaw > 0 && (_wmMaxPer === 'week' || _wmMaxPer === '1week')) ? Math.max(_wmMin, _wmMaxRaw) : _wmMin;
+                            _wmOwes = ((getPeriodCount(bunk, s.name, _wmPerN) || 0) < _wmTarget);
+                        }
+                    }
+                } catch (_wmErr) { _wmOwes = false; }
                 // Rotation cohort: every bunk in the cohort must visit this
                 // special the same number of times before any bunk visits it
                 // again. Skip this special for `bunk` if its lifetime count
@@ -5319,7 +5381,7 @@
                             const c = getLifetimeSpecialCount(b, s.name);
                             if (c < minCount) minCount = c;
                         }
-                        if (myCount > minCount) {
+                        if (myCount > minCount && !_wmOwes) {
                             log('[cohort] skip ' + s.name + ' for ' + bunk +
                                 ' (count=' + myCount + ' > cohort min=' + minCount + ')');
                             return;
@@ -5531,7 +5593,7 @@
             return {
                 bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
                 sports: { required: sportCount, cap: sportCap, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
-                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryEnforced: _hasSubcategoryTags },
+                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryFloor: specialSubcategoryFloor, subcategoryEnforced: _hasSubcategoryTags },
                 snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
@@ -6423,31 +6485,39 @@
                     globalSpecialUsage[sName].slice().forEach(function (slot) {
                         var grade = slot.grade;
                         var Ts = slot.startMin, Te = slot.endMin;
+                        // CROSS-GRADE SHARE (window.__crossGradeShareFormer, default ON): for a cross_division
+                        // special, pool bunks from ANY allowedPairs-eligible grade into this session, and count
+                        // occupancy GLOBALLY (all grades overlapping) — mirroring canAssignSpecialToGrade's global
+                        // cross_division cap (:5679) so the loop bound + the "shared occ/cap" log are in the SAME
+                        // frame as the gate (never over-seats). For other share types this is byte-identical
+                        // (per-grade) to before. shiur/not_sharable never reach here (cap>1 guard above).
+                        var _xGrade = ((typeof window === 'undefined') || (window.__crossGradeShareFormer !== false)) && (info.shareType === 'cross_division');
                         var occ = globalSpecialUsage[sName].filter(function (e) {
-                            return e.grade === grade && e.startMin < Te && e.endMin > Ts;
+                            return (_xGrade || e.grade === grade) && e.startMin < Te && e.endMin > Ts;
                         }).length;
                         if (occ >= info.capacity) return; // already full at this slot
                         var _why = '';
                         for (var bi = 0; bi < allBunkList.length && occ < info.capacity; bi++) {
                             var cand = allBunkList[bi];
-                            if (cand.grade !== grade) continue;
+                            if (!_xGrade && cand.grade !== grade) continue;   // cross_division: admit any grade (gate enforces pairs + global cap)
+                            var cg = cand.grade;
                             var b = cand.bunk, r = draftResults[b], sl = shoppingLists[b];
                             if (!r || !sl) continue;
                             var cap = (sl.specials && sl.specials.cap != null) ? sl.specials.cap : ((sl.specials && sl.specials.required) || 0);
                             if (r.specials.length >= cap) continue;
                             if (r.usedActivities.has(sName)) continue;
-                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, grade, b, globalSettings)) { _why = 'availability/cooldown'; continue; } } catch (e) {}
-                            if (!canAssignSpecialToGrade(sName, grade, Ts, Te)) { _why = 'pair/capacity rule'; continue; }
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, cg, b, globalSettings)) { _why = 'availability/cooldown'; continue; } } catch (e) {}
+                            if (!canAssignSpecialToGrade(sName, cg, Ts, Te)) { _why = 'pair/capacity rule'; continue; }
                             var item = (sl.specials && sl.specials.priorityList || []).find(function (s) { return s.name === sName; });
                             var loc = (item && item.location) || slot.location || sName;
-                            if (loc && !isFieldStillAvailableGP(loc, Ts, Te, b, grade, sName)) { _why = 'field "' + loc + '" full (capacity)'; continue; }
+                            if (loc && !isFieldStillAvailableGP(loc, Ts, Te, b, cg, sName)) { _why = 'field "' + loc + '" full (capacity)'; continue; }
                             if (!_canPickSpecialBySubcategory(item || { subcategory: '' }, sl, r)) { _why = 'subcategory cap'; continue; }
                             // bunk must be free across the existing occupant's slot
                             var fw = getUpdatedFreeWindowsForBunk(b, sl, r);
                             if (!fw.some(function (w) { return w.start <= Ts && w.end >= Te; })) { _why = 'no free window at slot'; continue; }
                             // seat it — share the existing occupant's exact slot
-                            if (loc) claimFieldGlobal(loc, Ts, Te, b, grade, sName);
-                            registerSpecialAssignment(sName, grade, Ts, Te);
+                            if (loc) claimFieldGlobal(loc, Ts, Te, b, cg, sName);
+                            registerSpecialAssignment(sName, cg, Ts, Te);
                             r.specials.push({
                                 name: sName, type: (item && item.type) || 'special',
                                 rotationScore: item && item.rotationScore, duration: item && item.duration,
@@ -6501,8 +6571,15 @@
                 });
                 Object.keys(_sharable).forEach(function (sName) {
                     var capN = _sharable[sName];
-                    // group eligible candidates by grade
-                    var byGrade = {};
+                    // CROSS-GRADE SHARE (window.__crossGradeShareFormer, default ON): a cross_division special
+                    // pools bunks from ALL allowedPairs-eligible grades into ONE session (vs one session per
+                    // grade), seated at a single aligned start. canAssignSpecialToGrade enforces allowedPairs +
+                    // the global cap PER SEAT (:5674-5679) and isFieldStillAvailableGP guards the physical field,
+                    // so it can never over-seat. Other share types keep the original per-grade grouping
+                    // (byte-identical). not_sharable/shiur never reach here (cap>1 guard above).
+                    var _info6 = getSpecialSharingInfo(sName, activityProperties, globalSettings);
+                    var _xGrade6 = ((typeof window === 'undefined') || (window.__crossGradeShareFormer !== false)) && _info6 && _info6.shareType === 'cross_division';
+                    var _allC = [];
                     allBunkList.forEach(function (c) {
                         var b = c.bunk, g = c.grade, r = draftResults[b], sl = shoppingLists[b];
                         if (!r || !sl) return;
@@ -6512,10 +6589,17 @@
                         try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, g, b, globalSettings)) return; } catch (e) {}
                         var item = (sl.specials && sl.specials.priorityList || []).find(function (s) { return s.name === sName; });
                         if (!item) return;
-                        (byGrade[g] = byGrade[g] || []).push({ b: b, g: g, r: r, sl: sl, item: item });
+                        _allC.push({ b: b, g: g, r: r, sl: sl, item: item });
                     });
-                    Object.keys(byGrade).forEach(function (g) {
-                        var cands = byGrade[g];
+                    var _groups;
+                    if (_xGrade6) {
+                        _groups = _allC.length ? [_allC] : [];   // ONE cross-grade pool
+                    } else {
+                        var byGrade = {};
+                        _allC.forEach(function (x) { (byGrade[x.g] = byGrade[x.g] || []).push(x); });
+                        _groups = Object.keys(byGrade).map(function (k) { return byGrade[k]; });
+                    }
+                    _groups.forEach(function (cands) {
                         if (cands.length < 2) return; // need ≥2 to share
                         var D = (cands[0].item.totalDuration || cands[0].item.duration || cands[0].item.dMin || 0);
                         if (!D || D <= 0) return;
@@ -6527,13 +6611,13 @@
                             });
                         });
                         var Ts = Object.keys(Tset).map(Number).sort(function (a, b) { return a - b; });
-                        // pick the time that the most candidates can attend
+                        // pick the time that the most candidates can attend (each gated by its OWN grade c.g)
                         var bestT = null, bestList = [];
                         Ts.forEach(function (T) {
                             var Te = T + D;
                             var ok = [];
                             cands.forEach(function (c) {
-                                if (!canAssignSpecialToGrade(sName, g, T, Te)) return;
+                                if (!canAssignSpecialToGrade(sName, c.g, T, Te)) return;
                                 var loc = (c.item && c.item.location) || sName;
                                 var fw = getUpdatedFreeWindowsForBunk(c.b, c.sl, c.r);
                                 if (!fw.some(function (w) { return w.start <= T && w.end >= Te; })) return;
@@ -6547,11 +6631,11 @@
                         var seated = 0;
                         for (var k = 0; k < bestList.length && seated < capN; k++) {
                             var c = bestList[k], loc = (c.item && c.item.location) || sName;
-                            // final field-room guard (updates as we seat)
-                            if (loc && !isFieldStillAvailableGP(loc, bestT, Te, c.b, g, sName)) continue;
-                            if (!canAssignSpecialToGrade(sName, g, bestT, Te)) continue;
-                            if (loc) claimFieldGlobal(loc, bestT, Te, c.b, g, sName);
-                            registerSpecialAssignment(sName, g, bestT, Te);
+                            // final field-room guard + capacity gate (re-checked GLOBALLY as we seat → no over-seat)
+                            if (loc && !isFieldStillAvailableGP(loc, bestT, Te, c.b, c.g, sName)) continue;
+                            if (!canAssignSpecialToGrade(sName, c.g, bestT, Te)) continue;
+                            if (loc) claimFieldGlobal(loc, bestT, Te, c.b, c.g, sName);
+                            registerSpecialAssignment(sName, c.g, bestT, Te);
                             c.r.specials.push({
                                 name: sName, type: (c.item && c.item.type) || 'special',
                                 rotationScore: c.item && c.item.rotationScore, duration: c.item && c.item.duration,
@@ -14936,11 +15020,155 @@
                     var lc = String(fieldName).toLowerCase();
                     (_p14FieldUse[lc] = _p14FieldUse[lc] || []).push({ start: s, end: e, grade: grade });
                 };
+                // ═══════════════════════════════════════════════════════════════
+                // STEP 1.45 — SYNC SHARED CROSS-DIVISION CUSTOM LAYERS
+                //   A custom layer (no connect-to) that is SHARED cross-division across
+                //   ≥2 grades (e.g. "Morning Breakout (Exclusive)" for 3rd/4th/5th) must
+                //   run as ONE joint session: all participating grades/bunks at the SAME
+                //   time in the shared room. The normal per-bunk Phase-1.4/Phase-3 path
+                //   places each grade independently → they land at different times, collide
+                //   in the shared room at misaligned starts (cross-division / staggered-
+                //   sharing violations) and the later grades get dropped. This pass finds
+                //   ONE common slot free for EVERY participating bunk and pins them all
+                //   there (committed wall, like Phase 1.4). All-or-nothing: if no common
+                //   slot exists it changes nothing and the normal path runs (no regression).
+                //   KILL SWITCH: globalSettings.app1.syncSharedCustom ('off'|false → skip).
+                // ═══════════════════════════════════════════════════════════════
+                var _syncHandled = {};
+                try {
+                    var _syncOff = false;
+                    try { var _sf = (globalSettings && globalSettings.app1 && globalSettings.app1.syncSharedCustom); if (_sf === 'off' || _sf === false) _syncOff = true; } catch (_e) {}
+                    if (!_syncOff) {
+                        var _syncGroups = {};
+                        allGrades.forEach(function (grade) {
+                            (layersByGrade[grade] || []).forEach(function (cl) {
+                                if ((cl.type || '').toLowerCase() !== 'custom') return;
+                                if (cl._classification === 'pinned') return;   // Phase 0 hard-pin
+                                if (cl.adjacentTo) return;                     // connect-to → Phase 2.4
+                                var _nmS = String(cl.customActivity || cl.event || '').toLowerCase().trim();
+                                if (!_nmS) return;
+                                if ((window.__cbGeneralNamesLow || []).indexOf(_nmS) >= 0) return;
+                                var _fldS = cl.customField || null;
+                                var _info = null; try { _info = getCustomActivitySharingInfo(cl.customActivity || cl.event, _fldS, cl.customSharing, globalSettings); } catch (_e) {}
+                                // Only EXPLICIT cross-division sharing qualifies (user listed the
+                                //   co-occupying grades → shareType 'cross_division'). not_sharable /
+                                //   same_division / default 'all' never force a synchronized session.
+                                if (!_info || _info.shareType !== 'cross_division') return;
+                                var _keyS = _nmS + '||' + String(_fldS || '').toLowerCase();
+                                if (!_syncGroups[_keyS]) _syncGroups[_keyS] = { act: cl.customActivity || cl.event || 'Custom', field: _fldS, dur: (cl.durationMin || cl.periodMin || 30), info: _info, entries: [] };
+                                _syncGroups[_keyS].entries.push({ grade: grade, cl: cl });
+                            });
+                        });
+                        var _syncRoomLedger = [];   // {field,s,e,act} of joint sessions placed here — prevents two DIFFERENT activities sharing one room at the same time
+                        try { log('[Phase1.45-DIAG] groups=' + Object.keys(_syncGroups).length + (Object.keys(_syncGroups).length ? ': ' + Object.keys(_syncGroups).map(function (k) { var gg = _syncGroups[k]; var gset = {}; gg.entries.forEach(function (e) { gset[String(e.grade)] = 1; }); return '"' + gg.act + '"(grades=' + Object.keys(gset).length + ',share=' + (gg.info && gg.info.shareType) + ',dur=' + gg.dur + ',field=' + (gg.field || 'none') + ')'; }).join(' | ') : ' — NO custom layers resolved to cross_division sharing (check that the layer lists ≥2 allowed grades)')); } catch (_eDg) {}
+                        Object.keys(_syncGroups).forEach(function (_keyS) {
+                            var g = _syncGroups[_keyS];
+                            var _gradeSet = {}; g.entries.forEach(function (en) { _gradeSet[String(en.grade)] = 1; });
+                            var _gradeList = Object.keys(_gradeSet);
+                            if (_gradeList.length < 2) return;   // single grade → normal path handles it
+                            // every participating-grade PAIR must be allowed to co-occupy, else a joint
+                            //   session would be illegal — verify with EACH grade's OWN sharing config
+                            //   (configs can be asymmetric). Skip the group if any pair fails.
+                            var _pairsOk = true;
+                            g.entries.forEach(function (en) {
+                                if (!_pairsOk) return;
+                                var _gi2 = null; try { _gi2 = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
+                                var _ap = (_gi2 && _gi2.allowedPairs) || {};
+                                var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
+                                if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
+                            });
+                            if (!_pairsOk) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: participating grades not all allowed to co-occupy (allowedPairs)'); } catch (_e) {} return; }
+                            // consensus DURATION — a joint session has ONE length. If the participating
+                            //   layers disagree, skip the group (a single slot can't satisfy all).
+                            var _durList = g.entries.map(function (en) { return (en.cl.durationMin || en.cl.periodMin || 30); });
+                            var _durS = _durList[0];
+                            for (var _di = 1; _di < _durList.length; _di++) { if (_durList[_di] !== _durS) { _durS = null; break; } }
+                            if (_durS == null) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: duration mismatch (' + _durList.join('/') + ')'); } catch (_e) {} return; }
+                            // strictest (MIN) room capacity across every participating grade's own config
+                            var _capS = Infinity;
+                            g.entries.forEach(function (en) {
+                                var _ci = null; try { _ci = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
+                                var _c = (_ci && _ci.capacity) ? _ci.capacity : Infinity;
+                                if (_c < _capS) _capS = _c;
+                            });
+                            // participating bunks + common window (∩ of grade days ∩ layer windows)
+                            var _parts = [], _winS = -Infinity, _winE = Infinity;
+                            g.entries.forEach(function (en) {
+                                var _gd = divisions[en.grade] || divisions[String(en.grade)] || {};
+                                var _gsS = parseTimeToMinutes(_gd.startTime) || 540, _geS = parseTimeToMinutes(_gd.endTime) || 960;
+                                _winS = Math.max(_winS, Math.max(en.cl.startMin || 0, _gsS));
+                                _winE = Math.min(_winE, Math.min(en.cl.endMin || 1440, _geS));
+                                var _allBS = getBunksForGrade(en.grade, divisions);
+                                var _tbS = (en.cl.customBunks && en.cl.customBunks.length > 0) ? _allBS.filter(function (b) { return en.cl.customBunks.includes(String(b)); }) : _allBS;
+                                _tbS.forEach(function (b) { _parts.push({ bunk: b, grade: en.grade, cl: en.cl }); });
+                            });
+                            if (!_parts.length || !(isFinite(_winS) && isFinite(_winE)) || _winE - _winS < _durS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: no common window (win ' + _winS + '-' + _winE + ' < dur ' + _durS + ', parts ' + _parts.length + ')'); } catch (_e) {} return; }
+                            if (isFinite(_capS) && _parts.length > _capS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: ' + _parts.length + ' bunks > capacity ' + _capS); } catch (_e) {} return; }   // can't all fit the room at once
+                            // ALL-OR-NOTHING: if ANY participating bunk ALREADY has this activity (e.g. a
+                            //   Phase-0 pin), abort the whole group — a partial sync would re-stagger the rest.
+                            var _actLow = String(g.act).toLowerCase().trim();
+                            var _alreadyHas = false;
+                            for (var _qi = 0; _qi < _parts.length; _qi++) {
+                                var _qtl = bunkTimelines[_parts[_qi].bunk] || [];
+                                if (_qtl.some(function (b) { return b && String(b._activity || b.event || '').toLowerCase().trim() === _actLow; })) { _alreadyHas = true; break; }
+                            }
+                            if (_alreadyHas) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: already placed on a participating bunk (e.g. Phase-0 pin)'); } catch (_e) {} return; }
+                            // earliest common slot: free for EVERY participating bunk's committed walls,
+                            //   not overlapping any participating grade's planned SWIM band (swim is pinned
+                            //   later in Phase 2.3 — must not be blocked), the room holds no non-participating
+                            //   grade and no DIFFERENT joint activity.
+                            var _fldLow = g.field ? String(g.field).toLowerCase() : null;
+                            var _slotS = null;
+                            for (var _s = _winS; _s + _durS <= _winE; _s += 5) {
+                                var _e = _s + _durS, _ok = true;
+                                for (var _pi = 0; _pi < _parts.length && _ok; _pi++) {
+                                    var _tl = bunkTimelines[_parts[_pi].bunk] || [];
+                                    for (var _bi = 0; _bi < _tl.length; _bi++) {
+                                        var _blk = _tl[_bi];
+                                        if (!_blk || !(_blk._committed || _blk._fixed || _blk._classification === 'pinned')) continue;
+                                        if (_blk.startMin < _e && _blk.endMin > _s) { _ok = false; break; }
+                                    }
+                                }
+                                if (_ok) {
+                                    for (var _gj = 0; _gj < _gradeList.length && _ok; _gj++) {
+                                        var _swB = staggerPlan && staggerPlan[_gradeList[_gj]] && staggerPlan[_gradeList[_gj]].typeBands && staggerPlan[_gradeList[_gj]].typeBands.swim;
+                                        if (_swB && _s < _swB.end && _e > _swB.start) _ok = false;
+                                    }
+                                }
+                                if (_ok && _fldLow) {
+                                    var _usedS = _p14FieldUse[_fldLow] || [];
+                                    for (var _ui = 0; _ui < _usedS.length && _ok; _ui++) { var _u = _usedS[_ui]; if (_u.start < _e && _u.end > _s && !_gradeSet[String(_u.grade)]) _ok = false; }
+                                    for (var _ri = 0; _ri < _syncRoomLedger.length && _ok; _ri++) { var _r = _syncRoomLedger[_ri]; if (_r.field === _fldLow && _r.act !== _actLow && _r.s < _e && _r.e > _s) _ok = false; }
+                                }
+                                if (_ok) { _slotS = _s; break; }
+                            }
+                            if (_slotS == null) { try { log('[Phase1.45-DIAG] "' + g.act + '" qualified (' + _parts.length + ' bunks, dur ' + _durS + ', win ' + _winS + '-' + _winE + ') but NO common slot free for all bunks while avoiding swim bands — left to per-bunk path'); } catch (_e) {} return; }   // no common slot → normal per-bunk path (no change)
+                            var _e2S = _slotS + _durS;
+                            _parts.forEach(function (p) {
+                                var _tl = bunkTimelines[p.bunk] || (bunkTimelines[p.bunk] = []);
+                                _tl.push({
+                                    startMin: _slotS, endMin: _e2S,
+                                    type: 'custom', event: g.act, layer: p.cl, field: g.field || null,
+                                    _activity: g.act, _customActivity: p.cl.customActivity || g.act, _customField: g.field || null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _activityLocked: true, _source: 'phase1.45-sync-shared-custom'
+                                });
+                                if (typeof ensureTimelineIntegrity === 'function') { try { ensureTimelineIntegrity(p.bunk); } catch (_eti) {} }
+                                _p14RecordField(g.field, p.grade, _slotS, _e2S);
+                                _p14Count++;
+                            });
+                            if (_fldLow) _syncRoomLedger.push({ field: _fldLow, s: _slotS, e: _e2S, act: _actLow });
+                            _syncHandled[_keyS] = true;
+                            log('[Phase1.45] ★ SYNC shared custom "' + g.act + '" → one joint session for ' + _parts.length + ' bunk(s) across ' + _gradeList.length + ' grades at ' + _slotS + '-' + _e2S);
+                        });
+                    }
+                } catch (_e145) { try { warn('[Phase1.45] sync-shared-custom error (skipped, non-fatal): ' + (_e145 && _e145.message)); } catch (_x) {} }
                 allGrades.forEach(function (grade) {
                     (layersByGrade[grade] || []).forEach(function (cl) {
                         if ((cl.type || '').toLowerCase() !== 'custom') return;
                         if (cl._classification === 'pinned') return;
                         if (cl.adjacentTo) return;
+                        if (_syncHandled[String(cl.customActivity || cl.event || '').toLowerCase().trim() + '||' + String(cl.customField || '').toLowerCase()]) return;
                         var _nm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
                         if (!_nm) return;
                         if ((window.__cbGeneralNamesLow || []).indexOf(_nm) >= 0) return;
@@ -15070,6 +15298,76 @@
             // naturally works around them, just like it does for fullGrade swim.
             {
                 var _p23Count = 0;
+                // ── INTERLEAVE SWIM (window.__interleaveSwim, default ON — disable with =false) ──────
+                // Match the human Neranina reference: instead of dumping a whole grade into one
+                // swim band, spread bunks so each pool slot holds a MIX of grades (~1-2 per
+                // grade). The de-congestion that kills the dead "Special: Uncategorized" tiles
+                // comes from CROSS-grade spread, so the load map is CAMP-WIDE (NOT reset per
+                // grade): each bunk picks the least globally-loaded pool start among its
+                // already-pool-gated candidates, capped at ~2 same-grade per start. Even though
+                // the outer loop drains grade-by-grade, later grades fill the least-loaded
+                // starts → grades mix on each slot → each grade's free time spreads → the
+                // downstream special demand stops piling on one band. Window-flag only (no
+                // persisted setting), fail-soft; OFF reproduces today's exact clustered output.
+                var _p23Interleave = true; try { _p23Interleave = (typeof window === 'undefined') || (window.__interleaveSwim !== false); } catch (_eIL) {}
+                var _p23SameGradeSoftCap = 2;
+                var _p23SlotLoad = {};        // startMin -> total bunks placed there (ALL grades)
+                var _p23SlotGradeLoad = {};   // startMin -> { grade -> count }  (same-grade soft cap)
+                // FIELD-BALANCE (window.__swimFieldBalance, default ON when interleaving): a running
+                // estimate of LAND pressure per candidate start = how many already-placed bunks will be
+                // on land (sport/special, NOT swimming) during that period. Pure pool-spread leaves the
+                // high-contention morning periods under-swum → those bunks pile onto the 15 fields (the
+                // 19>15 peak). Steering each swimmer to the start that RELIEVES the most land pressure
+                // flattens concurrent land demand so no period outruns the fields. Same hard caps (pool
+                // ≤8 via canUsePoolAtTime, ≤2 same-grade) so the cross-grade reference mix is preserved.
+                var _p23LandLoad = {};        // startMin -> running count of placed bunks on land there
+                // ── CONTENTION CURVE (window.__swimContention, default ON — disable with =false) ─────────────
+                // The user's principle: swim is a RELEASE VALVE — place it where the day is
+                // most CONTENDED (most bunks free, all competing for fields/specials), so it
+                // pulls bunks out of the scramble exactly when the scramble is worst. The
+                // morning (few walls → everyone free) is peak contention; the afternoon (Main
+                // Activity / lunch / cleanup occupy chunks of camp) is slack. GENERIC: derived
+                // from the actual pinned-wall shape, so a morning-Main-Activity camp gets the
+                // mirror image automatically — no hardcoded times. STATIC pre-swim snapshot
+                // (taken once, before any swim is placed) so every bunk steers to the same
+                // base-contention peaks; pool cap 8 + same-grade cap 2 then bound the pile-up.
+                var _p23ContentionOn = true; try { _p23ContentionOn = (typeof window === 'undefined') || (window.__swimContention !== false); } catch (_eC0) {}
+                var _p23ConSnap = [];   // per swimming bunk: { s:dayStart, e:dayEnd, walls:[[ws,we]...] } from pinned/_fixed walls (excl pre/post-change)
+                if (_p23ContentionOn) {
+                    try {
+                        allGrades.forEach(function (g) {
+                            var today = todaysSwimmers[g];
+                            if (!today || today.size === 0) return;
+                            var dv = divisions[g] || divisions[String(g)];
+                            var dStart = parseTimeToMinutes(dv && dv.startTime) || 540;
+                            var dEnd   = parseTimeToMinutes(dv && dv.endTime)   || 960;
+                            getBunksForGrade(g, divisions).forEach(function (bk) {
+                                if (!today.has(String(bk))) return;
+                                var walls = [];
+                                (bunkTimelines[bk] || []).forEach(function (b) {
+                                    if (!b) return;
+                                    if (!(b._activityLocked || b._fixed || b._classification === 'pinned')) return;
+                                    var bt = (b.type || '').toLowerCase();
+                                    if (bt === 'pre-change' || bt === 'post-change') return; // sub-walls, counted via parent
+                                    walls.push([b.startMin, b.endMin]);
+                                });
+                                _p23ConSnap.push({ s: dStart, e: dEnd, walls: walls });
+                            });
+                        });
+                    } catch (_eConSnap) { _p23ConSnap = []; }
+                }
+                // free (uncontended-by-a-wall) swimming bunks active across [st,en) — higher = more contended
+                var _p23ContentionAt = function (st, en) {
+                    var free = 0;
+                    for (var ci = 0; ci < _p23ConSnap.length; ci++) {
+                        var b = _p23ConSnap[ci];
+                        if (!(b.s <= st && b.e >= en)) continue;          // bunk not active across the whole slot
+                        var walled = false;
+                        for (var wi = 0; wi < b.walls.length; wi++) { if (b.walls[wi][0] < en && b.walls[wi][1] > st) { walled = true; break; } }
+                        if (!walled) free++;
+                    }
+                    return free;
+                };
                 // ★ v16.0: Brain-directed swim grade ordering — grades that failed
                 // swim in previous iterations get first pick of pool time
                 var _p23GradeOrder = adaptiveBrain.getSwimGradeOrder() || allGrades;
@@ -15249,8 +15547,45 @@
                             if (b.score !== a.score) return b.score - a.score;
                             return a.start - b.start;
                         });
-                        var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[0].period : null;
-                        var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[0].start : null;
+                        // INTERLEAVE: override the earliest-first pick with the LEAST camp-wide-
+                        // loaded start (cross-grade spread), skipping starts already at the
+                        // same-grade soft cap. Load LEADS (score only a tiebreak) so spread isn't
+                        // re-clustered by a high wet-bundle score. Falls back to index 0 (earliest)
+                        // if every legal start is at the soft cap → the bunk still swims. Every
+                        // candidate already passed canUsePoolAtTime, so this is a pure re-order
+                        // over a pre-gated set — it can never exceed pool cap 8 / break allowedPairs.
+                        var _p23PickIdx = 0;
+                        if (_p23Interleave && _p23AllFree.length > 1) {
+                            try {
+                                // PRIMARY objective (higher = better), MUTUALLY EXCLUSIVE so the two
+                                // never fight:
+                                //  • CONTENTION (window.__swimContention): steer swim to the MOST contended
+                                //    start (most free bunks competing) — the release valve. Wall-aware.
+                                //  • else FIELD-BALANCE (window.__swimFieldBalance, proven neutral): flatten
+                                //    land pressure. Kept only when contention is OFF.
+                                //  • else pure pool-spread (both terms 0).
+                                // Tiebreak: least pool-loaded (cross-grade spread) → wet-bundle score → earliest.
+                                var _ilContention = _p23ContentionOn && _p23ConSnap.length > 0;
+                                var _ilFieldBal = !_ilContention && ((typeof window === 'undefined') || (window.__swimFieldBalance !== false));
+                                var _ilBest = -1, _ilBestKey = -Infinity, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
+                                for (var _ilk = 0; _ilk < _p23AllFree.length; _ilk++) {
+                                    var _ilC = _p23AllFree[_ilk];
+                                    var _ilGL = (_p23SlotGradeLoad[_ilC.start] && _p23SlotGradeLoad[_ilC.start][grade]) || 0;
+                                    if (_ilGL >= _p23SameGradeSoftCap) continue;       // ≤~2 same-grade per start
+                                    var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide pool load → cross-grade spread (tiebreak)
+                                    var _ilKey = _ilContention ? _p23ContentionAt(_ilC.start, _ilC.start + _p23SwimDur)
+                                               : (_ilFieldBal ? (_p23LandLoad[_ilC.start] || 0) : 0);
+                                    if (_ilKey > _ilBestKey
+                                        || (_ilKey === _ilBestKey && _ilLoad < _ilBestLoad)
+                                        || (_ilKey === _ilBestKey && _ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
+                                        _ilBest = _ilk; _ilBestKey = _ilKey; _ilBestLoad = _ilLoad; _ilBestScore = _ilC.score;
+                                    }
+                                }
+                                if (_ilBest >= 0) _p23PickIdx = _ilBest;
+                            } catch (_eILpick) { _p23PickIdx = 0; }
+                        }
+                        var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[_p23PickIdx].period : null;
+                        var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[_p23PickIdx].start : null;
 
                         if (!_p23Chosen) {
                             // ★ FN-59: a bunk on a trip is EXCUSED from swim — the
@@ -15332,16 +15667,50 @@
                         }
 
                         registerPoolUsage(grade, _p23SwimS, _p23SwimE);
+                        if (_p23Interleave) {   // additive spread tally (not a 2nd pool ledger) so later bunks pick a different/less-loaded start
+                            _p23SlotLoad[_p23SwimS] = (_p23SlotLoad[_p23SwimS] || 0) + 1;
+                            (_p23SlotGradeLoad[_p23SwimS] || (_p23SlotGradeLoad[_p23SwimS] = {}))[grade] = ((_p23SlotGradeLoad[_p23SwimS] || {})[grade] || 0) + 1;
+                            // FIELD-BALANCE: this bunk now swims at _p23SwimS, so it will be on LAND at
+                            // every OTHER period it was free to swim in → bump those starts' land pressure
+                            // so later swimmers gravitate to the busiest land periods and flatten the peak.
+                            try {
+                                var _llSeen = {};
+                                _p23AllFree.forEach(function (c) {
+                                    if (c.start === _p23SwimS || _llSeen[c.start]) return;
+                                    _llSeen[c.start] = 1;
+                                    _p23LandLoad[c.start] = (_p23LandLoad[c.start] || 0) + 1;
+                                });
+                            } catch (_eLL) {}
+                        }
                         _p23Count++;
                         log('[Phase2.3] ✓ ' + bunk + '/' + grade + ' swim → ' + minutesToTimeLabel(_p23SwimS) + '-' + minutesToTimeLabel(_p23SwimE)
                             + ((_p23Anch.pre  ? ' +pre:'  + minutesToTimeLabel(_p23Anch.pre.startMin)  + '-' + minutesToTimeLabel(_p23Anch.pre.endMin)  : ''))
-                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : '')));
+                            + ((_p23Anch.post ? ' +post:' + minutesToTimeLabel(_p23Anch.post.startMin) + '-' + minutesToTimeLabel(_p23Anch.post.endMin) : ''))
+                            + ((_p23ContentionOn && _p23ConSnap.length) ? ' (contention=' + _p23ContentionAt(_p23SwimS, _p23SwimE) + ' free)' : ''));
                     });
                 });
 
                 // Always log the summary (even 0) so a live log definitively shows
                 // whether swim was reserved BEFORE specials, vs left to Phase 3.
                 log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change block(s) as walls (before specials)');
+                if (_p23Interleave) {
+                    try {
+                        var _ilSlots = Object.keys(_p23SlotLoad).map(Number).sort(function (a, b) { return a - b; });
+                        var _ilMaxSG = 0; _ilSlots.forEach(function (st) { var gm = _p23SlotGradeLoad[st] || {}; Object.keys(gm).forEach(function (g) { if (gm[g] > _ilMaxSG) _ilMaxSG = gm[g]; }); });
+                        log('[Phase2.3-Interleave] pool slots (start=total[grades]): ' + _ilSlots.map(function (st) { var gm = _p23SlotGradeLoad[st] || {}; return minutesToTimeLabel(st) + '=' + _p23SlotLoad[st] + '[' + Object.keys(gm).map(function (g) { return String(g).slice(0, 3) + ':' + gm[g]; }).join(',') + ']'; }).join(' | ') + '  — maxSameGradePerSlot=' + _ilMaxSG + ' (≤' + _p23SameGradeSoftCap + ' target; each slot should mix grades)');
+                        if (_p23ContentionOn && _p23ConSnap.length) {
+                            var _cLo = Infinity, _cHi = -Infinity;
+                            _p23ConSnap.forEach(function (b) { if (b.s < _cLo) _cLo = b.s; if (b.e > _cHi) _cHi = b.e; });
+                            var _cParts = [];
+                            for (var _ct = _cLo; _ct + 40 <= _cHi && _cParts.length < 16; _ct += 40) { _cParts.push(minutesToTimeLabel(_ct) + '=' + _p23ContentionAt(_ct, _ct + 40)); }
+                            log('[Phase2.3-Contention] pre-swim bunks-free per 40-min start (swim steered to the HIGHEST as a release valve): ' + _cParts.join(' | ') + ' (higher = more contended; mornings should top this if afternoon holds Main Activity)');
+                        }
+                        if (!_p23ContentionOn && ((typeof window === 'undefined') || (window.__swimFieldBalance !== false))) {
+                            var _llSlots = Object.keys(_p23LandLoad).map(Number).sort(function (a, b) { return a - b; });
+                            if (_llSlots.length) log('[Phase2.3-FieldBalance] residual land pressure by start (swimmers steered to flatten it): ' + _llSlots.map(function (st) { return minutesToTimeLabel(st) + '=' + _p23LandLoad[st]; }).join(' | ') + ' (lower+flatter ⇒ fewer bunks competing for the 15 fields at any one time)');
+                        }
+                    } catch (_eILlog) {}
+                }
                 if (_p23Count > 0) {
                     allGrades.forEach(function(grade) {
                         getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
@@ -17205,6 +17574,2108 @@
                     warn('[DayPacker] pack error: ' + (_dpPackErr && _dpPackErr.message));
                     if (_dpPackErr && _dpPackErr.stack) warn(_dpPackErr.stack);
                 }
+            }
+
+            // ── GENERIC-LAYOUT PREVIEW (manual-model-in-auto) ────────────────────
+            //   Behind window.__useGenericLayout / globalSettings.app1.useGenericLayout.
+            //   Decouples LAYOUT from CONTENT: reads the per-bunk DEMAND from the layers
+            //   (pinned walls already placed in bunkTimelines + floating special-
+            //   subcategory floors + a sport filler), lays GENERIC kind-labeled tiles
+            //   wall-to-wall across each bell period via window.PeriodLayout (NO concrete
+            //   activity, NO content gates), writes them straight to divisionTimes /
+            //   _perBunkSlots / scheduleAssignments, persists, and RETURNS — so NONE of
+            //   the activity-assignment phases (2.5 / 3 / 4 / recapture / cap sweeps /
+            //   floor enforcers) run. The user sees Sport / Special: Food / Swim / Main
+            //   Activity / Change / Lunch / Cleanup tiles, not basketball / hit-the-deck.
+            //   Iteration 0 only. Fully fail-safe: ANY error falls through to normal gen.
+            if (totalIters < 1) {
+              try {
+                var _genOn = true;   // default ON — disable with window.__useGenericLayout=false (or globalSettings.app1.useGenericLayout=false)
+                try { var _wGen = (typeof window !== 'undefined') ? window.__useGenericLayout : undefined; var _aGen = (globalSettings && globalSettings.app1) ? globalSettings.app1.useGenericLayout : undefined; _genOn = (_wGen === false || _aGen === false) ? false : true; } catch (_e) {}
+                if (_genOn && window.PeriodLayout && window.PeriodPacker && window.DivisionTimesSystem) {
+                    log('═══════════════════════════════════════════════════════════');
+                    log('[GENERIC-LAYOUT] ★ ACTIVE — laying generic kind tiles, NOT activities. (disable: window.__useGenericLayout=false)');
+
+                    var _glBreak = /break|transition|passing/i;
+                    var _glCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                    var _glTitle = function (s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); };
+                    var _glWallLabel = function (b) {
+                        var t = String(b.type || '').toLowerCase();
+                        if (t === 'swim') return 'Swim';
+                        if (t === 'change' || t === 'pre-change' || t === 'post-change') return 'Change';
+                        if (t === 'lunch') return 'Lunch';
+                        if (t === 'snack' || t === 'snacks') return 'Snack';
+                        if (t === 'cleanup' || t === 'dismissal') return 'Cleanup';
+                        if (t === 'league') return b.event || 'League';
+                        if (t === 'trip') return b.event || 'Trip';
+                        return b.event || b._assignedSpecial || _glTitle(t || 'Activity');
+                    };
+
+                    // CONTENT GATE = the camp's configured SPACING rules ONLY.
+                    // window.SchedulingRules.isCandidateAllowed reads
+                    // settings.schedulingRules.cooldowns — pure "don't place X within N
+                    // min of Y" spacing. It does NOT block plain repeats. That matches the
+                    // model exactly: "CATEGORIES REPEAT, ACTIVITIES DON'T" — a day may hold
+                    // many Sport tiles and many Special: Uncategorized tiles (no repeat
+                    // block), but the user's spacing rule (e.g. "no Sport within N min of a
+                    // Sport") MUST still hold so sports aren't clustered. The packer's
+                    // guaranteed-fill fallback turns a window where a sport would be too
+                    // close into a SPECIAL instead — never a blank, never a too-close
+                    // sport. Activity-level uniqueness (no two Basketballs) remains the
+                    // FILL step's job. Physical facility limits stay on _glResourceGate.
+                    var _glGate = (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function')
+                        ? function (block, template) { try { return window.SchedulingRules.isCandidateAllowed(block, template, { mode: 'auto' }); } catch (_e) { return true; } }
+                        : null;
+
+                    // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
+                    var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0, _glCapLogged = {};
+                    // ── FLOAT SWIM (opt-in: window.__floatSwim) ───────────────────────────
+                    // The user's "everything within its window": let the LAYOUT reposition swim
+                    // instead of the fixed Phase-2.3 slot, so it can reorder swim↔sport and stop
+                    // boxing windows into dead placeholders. We strip the pre-placed swim + its
+                    // change envelope from bunkTimelines here; the re-float pass below re-adds swim
+                    // as a FLOATING demand (wide window), the main packer positions it, and the
+                    // pool stays capped because poolSwimPairFreeAt counts live swim tiles in
+                    // bunkTimelines — kept current by a marker the commit hook adds per placement.
+                    // The change BUFFER isn't re-floated (a swim+change envelope is too long for the
+                    // 40-min gaps); its freed minutes become fillable time. v1: swim is a stable
+                    // anchor the main pass places (the repair passes don't move it). Default OFF.
+                    var _glFloatSwim = (typeof window !== 'undefined' && window.__floatSwim === true);
+                    if (_glFloatSwim) {
+                        try {
+                            var _glSwimStripped = 0;
+                            Object.keys(bunkTimelines || {}).forEach(function (bk) {
+                                var tl = bunkTimelines[bk]; if (!Array.isArray(tl)) return;
+                                var kept = [];
+                                for (var i = 0; i < tl.length; i++) {
+                                    var b = tl[i]; var ty = String((b && b.type) || '').toLowerCase();
+                                    if (b && b._swimGroupId != null && (ty === 'swim' || ty === 'change' || ty === 'pre-change' || ty === 'post-change')) { _glSwimStripped++; continue; }
+                                    kept.push(b);
+                                }
+                                if (kept.length !== tl.length) { tl.length = 0; Array.prototype.push.apply(tl, kept); }
+                            });
+                            log('[GENERIC-LAYOUT] FLOAT SWIM on — stripped ' + _glSwimStripped + ' pre-placed swim/change block(s); swim will be repositioned within its window (change buffer folded out)');
+                        } catch (_glStripErr) { try { warn('[GENERIC-LAYOUT] float-swim strip error — ' + (_glStripErr && _glStripErr.message)); } catch (_e) {} }
+                    }
+                    // ── SEAT-AWARE ROUND-ROBIN base-day for weekly-quota specials (window.__seatRoundRobin, default ON) ──
+                    // The per-bunk weekly floor (below) spreads a bunk's M weekly sessions across the period's
+                    // camp-days using a per-bunk NAME-HASH phase. That hash is blind to how many OTHER bunks
+                    // share the SAME scarce cap-1 physical seat (e.g. ~13 bunks all restricted to "Shiur 1"),
+                    // so it CLUMPS contenders onto the same day, overflowing that day's window capacity → the
+                    // losers fall to the Friday deadline where everyone piles up again → permanent zeros for the
+                    // crowded seats (Shiur 1 got 5/13 while the lucky-hash Shiur 3 got 11/12). Fix: give each
+                    // contender a DISTINCT base day by its stable RANK within the seat's contention group
+                    // (round-robin across the period's camp-days), pacing demand to ~capacity/day. Fail-soft:
+                    // a bunk→base-day map only for specials with a per-week minFrequency; the floor block falls
+                    // back to the hash when a bunk has no entry. Byte-identical when no weekly-quota special.
+                    var _wqDueDay = Object.create(null);   // subcatKey -> { bunkName -> baseDayIndex (0..D-1) }
+                    try {
+                        var _rrOn = (typeof window === 'undefined') || (window.__seatRoundRobin !== false);
+                        var _rrU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                        var _rrToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                        if (_rrOn && _rrU && _rrToday && typeof todaysSpecials !== 'undefined' && todaysSpecials) {
+                            todaysSpecials.forEach(function (s) {
+                                if (!s || !s.name) return;
+                                var _ap = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                var _mf = (_ap.minFrequency != null) ? parseInt(_ap.minFrequency, 10) : 0;
+                                if (!(_mf > 0) && _ap.minFrequencyPerGrade) { Object.keys(_ap.minFrequencyPerGrade).forEach(function (g) { var v = parseInt(_ap.minFrequencyPerGrade[g], 10); if (v > 0) _mf = Math.max(_mf, v); }); }
+                                if (!(_mf > 0)) return;                                  // no weekly min → not a quota seat
+                                var _perR = ((_ap.minFrequencyPeriod || 'week') === 'week') ? '1week' : (_ap.minFrequencyPeriod || '1week');
+                                // period camp-day count D (same for all bunks; depends only on the period + today)
+                                var _Dr = 5;
+                                try {
+                                    var _psr = (typeof _rrU.getPeriodStartDate === 'function') ? _rrU.getPeriodStartDate(_perR, _rrToday) : null;
+                                    if (_psr && typeof _rrU.countCampDays === 'function') {
+                                        var _nWr = (_ap.minFrequencyPeriod === '2weeks') ? 2 : (_ap.minFrequencyPeriod === '3weeks') ? 3 : (_ap.minFrequencyPeriod === '4weeks') ? 4 : 1;
+                                        var _per = new Date(_psr + 'T00:00:00'); _per.setDate(_per.getDate() + _nWr * 7 - 1);
+                                        var _peSr = _per.getFullYear() + '-' + String(_per.getMonth() + 1).padStart(2, '0') + '-' + String(_per.getDate()).padStart(2, '0');
+                                        _Dr = Math.max(1, _rrU.countCampDays(_psr, _peSr) || 5);
+                                    }
+                                } catch (_e) {}
+                                // contention group = camp-wide bunks that can access THIS physical activity
+                                var _grp = [];
+                                (allGrades || []).forEach(function (g) {
+                                    (getBunksForGrade(g, divisions) || []).forEach(function (bk) {
+                                        var _ok = true;
+                                        try { if (typeof isSpecialAvailableForBunk === 'function') _ok = isSpecialAvailableForBunk(s.name, g, bk, globalSettings); } catch (_e) { _ok = true; }
+                                        if (_ok) _grp.push(bk);
+                                    });
+                                });
+                                if (!_grp.length) return;
+                                _grp.sort();                                             // stable + deterministic across days/regens
+                                var _subR = _glCanon(s.subcategory);
+                                var _mR = _wqDueDay[_subR] || (_wqDueDay[_subR] = Object.create(null));
+                                for (var _gi = 0; _gi < _grp.length; _gi++) {
+                                    if (_mR[_grp[_gi]] == null) _mR[_grp[_gi]] = _gi % Math.max(1, _Dr - 2);   // first assignment wins; clamp off the trailing (ungenerated) camp-day AND leave ≥1 retry day for the persistent floor
+                                }
+                            });
+                            try { var _rrKeys = Object.keys(_wqDueDay); if (_rrKeys.length) log('[GENERIC-WEEKLY] seat round-robin base-days computed for subcats: ' + _rrKeys.join(', ')); } catch (_e) {}
+                        }
+                    } catch (_rrErr) { try { warn('[GENERIC-WEEKLY] round-robin error — falling back to per-bunk hash: ' + (_rrErr && _rrErr.message)); } catch (_e) {} }
+                    allGrades.forEach(function (grade) {
+                        var rawPeriods = (window.campPeriods && window.campPeriods[grade]) || [];
+                        var gObj = divisions[grade] || divisions[String(grade)] || {};
+                        var gStart = parseTimeToMinutes(gObj.startTime);
+                        var gEnd = parseTimeToMinutes(gObj.endTime);
+                        if (gStart == null && rawPeriods.length) gStart = Math.min.apply(null, rawPeriods.map(function (p) { return p.startMin; }));
+                        if (gEnd == null && rawPeriods.length) gEnd = Math.max.apply(null, rawPeriods.map(function (p) { return p.endMin; }));
+                        if (gStart == null) gStart = 0;
+                        if (gEnd == null) gEnd = 1440;
+                        var maxLen = rawPeriods.reduce(function (m, p) { return Math.max(m, (p.endMin - p.startMin) || 0); }, 60);
+
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                            var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                            // pinned walls = whatever is already placed in bunkTimelines (swim/change/lunch/main/cleanup).
+                            var pinned = (bunkTimelines[bunk] || []).filter(function (b) { return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin; })
+                                .map(function (b) { return { kind: String(b.type || 'wall').toLowerCase(), subcat: null, name: _glWallLabel(b), startMin: b.startMin, endMin: b.endMin }; });
+
+                            var floating = [];
+                            // special-subcategory demands → ONE generic tile per subcat (food/theme/shiur/uncategorized/…)
+                            //   FLOOR (qty) = the layer's configured count (deliver at least that).
+                            //   CAP        = the number of DISTINCT available specials in the subcat, so the
+                            //                day can be FILLED with the many specials the camp actually has —
+                            //                fill assigns a distinct activity to each generic tile — instead of
+                            //                being throttled to the floor (the live "Soloists/Duetos can't close
+                            //                the day" + the "utilize the >2 specials of dur 20-40" asks). One
+                            //                Regular subcat with 11 distinct activities can fill ~11 slots.
+                            var subDur = {}, subFloor = {}, subCap = {}, subAvail = {}, _wqScarce = {};
+                            var caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
+                            var capFloors = (sl && sl.specials && sl.specials.subcategoryFloor) || {};
+                            // HONOR THE OPERATOR (window.__capOnlyNoFloor, default ON): a subcat the user set
+                            // as "< N / at most N" carries floor 0 — a CEILING, not a quota. We must NOT
+                            // demand it, so it never leaves a dead "Special:<subcat>" placeholder when no seat
+                            // is free; it fills opportunistically up to cap and the rest of the window goes to
+                            // sport / an abundant subcat. "=N" and ">=N" keep their real floor. OFF (or no
+                            // floor info) reverts to the legacy floor=cap behavior.
+                            var _honorOpFloor = (typeof window === 'undefined') || (window.__capOnlyNoFloor !== false);
+                            Object.keys(caps).forEach(function (k) {
+                                var key = _glCanon(k); var c = caps[k]; var fRaw = capFloors[k];
+                                subFloor[key] = (_honorOpFloor && fRaw != null) ? fRaw : ((c === Infinity || c == null) ? 1 : c);
+                                subCap[key] = (c === Infinity || c == null) ? Infinity : c;
+                            });
+                            // Ingest one special into the per-subcat DISTINCT-availability + duration maps.
+                            var _glIngestSpecial = function (sx) {
+                                var key = _glCanon(sx.subcategory);
+                                if (subFloor[key] == null) subFloor[key] = 1;
+                                (subAvail[key] = subAvail[key] || {})[sx.name || ('#' + Math.round(sx.dMin || 0))] = 1;  // count DISTINCT available specials
+                                var durs = [];
+                                try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(sx.name, window.activityProperties, globalSettings) : null; durs = (gd && gd.durations) || gd; } catch (_e) {}
+                                if (!Array.isArray(durs)) durs = [];
+                                if (!durs.length) { if (sx.dMin) durs.push(sx.dMin); if (sx.dMax && sx.dMax !== sx.dMin) durs.push(sx.dMax); }
+                                subDur[key] = subDur[key] || {};
+                                durs.forEach(function (d) { if (d) subDur[key][d] = 1; });
+                            };
+                            // CAP source = the FULL access-available special list (todaysSpecials),
+                            // NOT the rotation-thinned priorityList. priorityList drops specials for
+                            // cohort / maxUsage / multi-part / rotation reasons — a "how OFTEN" concern.
+                            // The generic-layout CAP is "how many DISTINCT specials EXIST that fill
+                            // could assign to this subcat" — a "what EXISTS" concern. Using the thinned
+                            // list throttled the cap (live: 5th grade lost 4 specials to cohort skips →
+                            // cap 3 → most of the day fell to the "activity" placeholder). Filter by
+                            // access (isSpecialAvailableForBunk) + drop fullGrade only; rotation fairness
+                            // is the FILL step's job, and over-counting just yields more real-special
+                            // tiles (capped per window) which is exactly the goal.
+                            var _glAvailN = 0;
+                            try {
+                                (typeof todaysSpecials !== 'undefined' && todaysSpecials ? todaysSpecials : []).forEach(function (s) {
+                                    if (!s || !s.name) return;
+                                    try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(s.name, grade, bunk, globalSettings)) return; } catch (_e) {}
+                                    var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                    if (_sp.fullGrade === true || s.fullGrade === true) return;
+                                    _glIngestSpecial(s); _glAvailN++;
+                                });
+                            } catch (_glAvErr) {}
+                            // Fallback: if the access scan yielded nothing (edge config), use the
+                            // priorityList so the subcats/floors are still discovered.
+                            if (_glAvailN === 0) {
+                                ((sl && sl.specials && sl.specials.priorityList) || []).forEach(_glIngestSpecial);
+                            }
+                            // PER-BUNK FILLABLE LENGTHS: a (subcat,length) tile is only worth laying if THIS
+                            // bunk can actually FILL it at that length — i.e. an activity in the bunk's
+                            // rotation-thinned priorityList (cohort / maxUsage / cooldown / exact·min-freq
+                            // already applied — the exact set fill draws from) whose getSpecialDurations lists
+                            // that length. Offering the access-union [20,30,40] for uncategorized when only
+                            // Baking does 30 — and Baking is cohort-skipped today — is what strands the dead
+                            // "uncategorized 30min" placeholder. CAP stays from the full access set (how many
+                            // DISTINCT specials EXIST); only the LENGTHS are restricted to fillable ones.
+                            // Toggle: window.__fillableDurOnly=false.
+                            var subFillDur = {};
+                            try {
+                                if (window.__fillableDurOnly !== false) {
+                                    ((sl && sl.specials && sl.specials.priorityList) || []).forEach(function (px) {
+                                        if (!px || !px.name) return;
+                                        var _fk = _glCanon(px.subcategory);
+                                        var pds = [];
+                                        try { var pg = (typeof getSpecialDurations === 'function') ? getSpecialDurations(px.name, window.activityProperties, globalSettings) : null; pds = (pg && pg.durations) || pg; } catch (_e) {}
+                                        if (!Array.isArray(pds)) pds = [];
+                                        pds = pds.map(Number).filter(function (x) { return x > 0; });
+                                        if (!pds.length) { if (px.dMin) pds.push(Number(px.dMin)); if (px.dMax && px.dMax !== px.dMin) pds.push(Number(px.dMax)); }
+                                        if (pds.length) { subFillDur[_fk] = subFillDur[_fk] || {}; pds.forEach(function (d) { subFillDur[_fk][d] = 1; }); }
+                                    });
+                                }
+                            } catch (_glFillDurErr) {}
+                            // ── WEEKLY-QUOTA FLOOR (on by default; kill: window.__weeklyQuota===false) ──
+                            // A subcategory whose accessible activities carry a per-WEEK minFrequency
+                            // (special_activities.js: minFrequency + minFrequencyPeriod 'week') expresses a
+                            // WEEKLY quota — "≥M per week, ≤X per week" — which a per-DAY layer floor cannot.
+                            // So make THIS bunk's per-day floor for such a subcat DYNAMIC: spread the bunk's
+                            // M weekly sessions across the period's camp-days (deterministic per-bunk phase →
+                            // ~even daily load, e.g. 13 bunks×1 shiur ≈ 2-3/day), force NOW-OR-NEVER as the
+                            // hard guarantee, and stop once the weekly MAX is reached. Reuses
+                            // SchedulerCoreUtils.getPeriodActivityCount (week-to-date) + getPeriodStartDate +
+                            // countCampDays. FAIL-SOFT: no weekly config on the subcat's activities → subFloor
+                            // untouched (byte-identical to today). Camp-generic (shiur, weekly trip, swim-3×, …).
+                            try {
+                                var _wqOn = (typeof window === 'undefined') || (window.__weeklyQuota !== false);
+                                var _U = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                var _wqToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                                if (_wqOn && _U && typeof _U.getPeriodActivityCount === 'function' && _wqToday) {
+                                    // Prefer the RAW special config (the UI's source of truth) for the weekly
+                                    // min/max. window.activityProperties may not carry specials on this page —
+                                    // the auto gen only sets it when unset (`if (!window.activityProperties)`),
+                                    // so on the Daily-Adjustments page it stays specials-less and reading it
+                                    // ALONE made the whole weekly-quota floor silently no-op for shiur etc.
+                                    // (floor=0, zero [GENERIC-WEEKLY]) even when minFrequency/maxUsage are set.
+                                    var _wqSpecByName = Object.create(null);
+                                    try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _wqSpecByName[s.name] = s; }); } catch (_e) {}
+                                    Object.keys(subAvail).forEach(function (key) {
+                                        var names = Object.keys(subAvail[key] || {});
+                                        if (!names.length) return;
+                                        // pull the weekly config across this subcat's accessible activities
+                                        var M = 0, X = Infinity, period = 'week', hasMin = false;
+                                        names.forEach(function (nm) {
+                                            var ap = _wqSpecByName[nm] || (typeof window !== 'undefined' && window.activityProperties && window.activityProperties[nm]) || null;
+                                            if (!ap) return;
+                                            var _pg = (ap.minFrequencyPerGrade && ap.minFrequencyPerGrade[grade] != null) ? parseInt(ap.minFrequencyPerGrade[grade], 10) : null;
+                                            var _mf = (_pg != null && _pg > 0) ? _pg : (ap.minFrequency != null ? parseInt(ap.minFrequency, 10) : 0);
+                                            if (_mf > 0) { hasMin = true; if (_mf > M) M = _mf; period = ap.minFrequencyPeriod || 'week'; }
+                                            var _mxp = ap.maxUsagePeriod || 'half';
+                                            if ((_mxp === 'week' || _mxp === '1week') && ap.maxUsage != null) {
+                                                var _mxg = (ap.maxUsagePerGrade && ap.maxUsagePerGrade[grade] != null) ? parseInt(ap.maxUsagePerGrade[grade], 10) : null;
+                                                var _mx = (_mxg != null && _mxg > 0) ? _mxg : parseInt(ap.maxUsage, 10);
+                                                if (_mx > 0 && _mx < X) X = _mx;
+                                            }
+                                        });
+                                        if (!hasMin && X === Infinity) return; // no weekly config → leave subFloor as-is
+                                        var _per = (period === 'week') ? '1week' : period;
+                                        // week-to-date count for this bunk across the subcat's accessible activities
+                                        var wtd = 0;
+                                        names.forEach(function (nm) { try { wtd += _U.getPeriodActivityCount(bunk, nm, _per, _wqToday) || 0; } catch (_e) {} });
+                                        // weekly MAX ceiling: already met → block this subcat for today
+                                        if (X !== Infinity && wtd >= X) { subFloor[key] = 0; subCap[key] = 0; return; }
+                                        if (!hasMin || M <= 0) return; // ceiling-only config (no min to force)
+                                        var need = M - wtd;
+                                        // ── AIM-FOR-MAX (window.__aimForMax, default ON) ──────────────────────────
+                                        // For a SCARCE min-freq must-have (shiur: small pool + cap-tight + weekly
+                                        // min), give it a BOUNDED scarcity priority so it climbs toward the weekly
+                                        // TARGET (= maxUsage, e.g. 3) by WINNING its ONE daily window over abundant
+                                        // fillers on days the bunk is still under target — across DISTINCT days. We
+                                        // do NOT raise the day cap (so no same-day repeat) and do NOT add a qty floor
+                                        // for the extras (so an unfillable 2nd/3rd is never a placeholder — when the
+                                        // cap-1 seat is busy the candidate is simply ineligible and a filler takes the
+                                        // window). Deficit-weighted: a bunk at 0/3 outranks one at 2/3, so the scarce
+                                        // seat spreads across bunks toward 3×. Bounded far below floorBonus (1000) so
+                                        // it can NEVER displace a still-owed hard floor of any layer. Read in
+                                        // period_layout _mkScoreFn via the demand's `_scarce`. General + fail-soft.
+                                        try {
+                                            var _afmOn = (typeof window === 'undefined') || (window.__aimForMax !== false);
+                                            var _afmAvail = subAvail[key] ? Object.keys(subAvail[key]).length : 0;
+                                            if (_afmOn && hasMin && X !== Infinity && X > M && _afmAvail > 0 && _afmAvail <= Math.max(M, 3) && wtd < X) {
+                                                _wqScarce[key] = 25 * Math.max(1, X - wtd);   // << floorBonus(1000); spreads by deficit
+                                            }
+                                        } catch (_e) {}
+                                        if (need <= 0) { subFloor[key] = 0; return; } // weekly min already met → optional (cap-only); aim-up still drives the climb via _scarce
+                                        // period camp-day geometry: D = camp-days in period, e = 1-based camp-day of today
+                                        var D = 5, e = 1;
+                                        try {
+                                            var _ps = (typeof _U.getPeriodStartDate === 'function') ? _U.getPeriodStartDate(_per, _wqToday) : null;
+                                            if (_ps && typeof _U.countCampDays === 'function') {
+                                                var _nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
+                                                var _peD = new Date(_ps + 'T00:00:00'); _peD.setDate(_peD.getDate() + _nW * 7 - 1);
+                                                var _peStr = _peD.getFullYear() + '-' + String(_peD.getMonth() + 1).padStart(2, '0') + '-' + String(_peD.getDate()).padStart(2, '0');
+                                                D = Math.max(1, _U.countCampDays(_ps, _peStr) || 5);
+                                                e = Math.max(1, _U.countCampDays(_ps, _wqToday) || 1);
+                                            }
+                                        } catch (_e) {}
+                                        var remaining = Math.max(1, D - e + 1);
+                                        // base day → spread bunks across the period's days. Prefer the SEAT-AWARE
+                                        // round-robin rank (paces same-seat contenders to ~capacity/day); fall back
+                                        // to the deterministic per-bunk name hash. Clamp the hash span to D-2 so a
+                                        // base day never lands on (or one day before) a trailing camp-day the
+                                        // generation won't reach — a Sun-Fri camp whose Monday-anchored period counts
+                                        // a trailing Sunday as day D, which a Mon-Fri gen never reaches — and so EVERY
+                                        // bunk gets ≥2 generated days from its base day for the persistent floor to
+                                        // retry. (The round-robin map is clamped the same way.)
+                                        var _h = 0, _bs = String(bunk); for (var _hi = 0; _hi < _bs.length; _hi++) _h = ((_h << 5) - _h + _bs.charCodeAt(_hi)) | 0;
+                                        var _phaseSpan = Math.max(1, D - 2);
+                                        var phase = (_wqDueDay[key] && _wqDueDay[key][bunk] != null) ? _wqDueDay[key][bunk] : (Math.abs(_h) % _phaseSpan);
+                                        var step = Math.max(1, Math.floor(D / Math.max(1, M)));
+                                        // PERSISTENT FLOOR (deadline-independent): fire on the bunk's base day AND
+                                        // every camp-day after it, until the weekly min is met. The old single-shot
+                                        // (phase === e-1, ONE day) gave each bunk exactly one attempt; a miss
+                                        // (rotation-thinned / contended / base-day on an ungenerated trailing day)
+                                        // stranded it at 0, because the now-or-never deadline can land on a day that is
+                                        // never generated (D=6 Sun-Fri camp, gen Mon-Fri → Fri is day 5/6, remaining=2,
+                                        // forceNow never fires). Persisting retries the placement Mon→Fri. It does NOT
+                                        // spam early placeholders — it stays OFF until the staggered base day — and
+                                        // CANNOT exceed max: need<=0 zeroes the floor once met (above) and the weekly
+                                        // MAX ceiling hard-blocks at wtd>=X (above). Gated by window.__weeklyQuota.
+                                        var _wqPersist = (typeof window === 'undefined') || (window.__weeklyQuota !== false);
+                                        var dueToday = false;
+                                        if (_wqPersist) {
+                                            dueToday = ((e - 1) >= phase);   // base day onward; need<=0 / max ceiling stop it
+                                        } else {
+                                            for (var _dk = 0; _dk < M; _dk++) { if (((phase + _dk * step) % D) === (e - 1)) { dueToday = true; break; } }
+                                        }
+                                        var forceNow = need >= remaining; // now-or-never hard guarantee (redundant safety w/ persist)
+                                        if (dueToday || forceNow) {
+                                            subFloor[key] = Math.max(subFloor[key] || 0, 1);
+                                            try { log('[GENERIC-WEEKLY] ' + grade + ' ' + bunk + ' → ' + key + ' floor=1 (wk ' + wtd + '/' + M + (X !== Infinity ? ' max' + X : '') + ', day ' + e + '/' + D + ', ' + (forceNow ? 'deadline' : 'paced') + ')'); } catch (_e) {}
+                                        }
+                                    });
+                                }
+                            } catch (_wqErr) { try { warn('[GENERIC-WEEKLY] error — weekly quota skipped: ' + (_wqErr && _wqErr.message)); } catch (_e) {} }
+                            // ── BAND-SPREAD (opt-in: window.__bandSpread, default ON) ───────────────
+                            // Confine this grade's SPECIAL tiles to its matrix special band so grades
+                            // SCATTER across the day: morning-band grades keep the morning special seats;
+                            // afternoon-band grades do their specials in the afternoon and SPORT in their
+                            // morning gaps. That drops per-band special demand to ≤ seats, so the bunks
+                            // that were stuck at the congested 11:30-12:55 bands (all the absorb-kept dead
+                            // tiles) can fill a real special instead. SAFE-GUARD against the old over-confine
+                            // frees: only narrow when THIS bunk has enough FREE time inside the band for its
+                            // floor specials (+40 margin); otherwise keep the full-day window so a floor is
+                            // never starved. Sport stays full-day (pushed below) → off-band gaps fill with sport.
+                            var _glBand = null, _glBandWhy = 'full-day';
+                            try {
+                                // DEFAULT OFF: band-confinement shifts congestion rather than resolving it
+                                // (confining a grade to its band overloads that band for others) → frees +
+                                // sport overflow + unmet floors. Kept opt-in for experiments only.
+                                if (window.__bandSpread === true) {
+                                    var _sb = staggerPlan && staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
+                                    if (_sb && _sb.start != null && _sb.end != null && _sb.end > _sb.start) {
+                                        var _bs = Math.max(_sb.start, gStart), _be = Math.min(_sb.end, gEnd), _bandFree = _be - _bs;
+                                        pinned.forEach(function (w) { var os = Math.max(w.startMin, _bs), oe = Math.min(w.endMin, _be); if (oe > os) _bandFree -= (oe - os); });
+                                        var _floorMin = 0;
+                                        Object.keys(subFloor).forEach(function (k) {
+                                            var _dd = Object.keys(((subFillDur[k] && Object.keys(subFillDur[k]).length) ? subFillDur[k] : subDur[k]) || {}).map(Number).filter(Boolean);
+                                            _floorMin += (subFloor[k] || 0) * (_dd.length ? Math.min.apply(null, _dd) : 40);
+                                        });
+                                        if (_bandFree >= _floorMin + 40) { _glBand = [_bs, _be]; _glBandWhy = minutesToTimeLabel(_bs) + '-' + minutesToTimeLabel(_be); }
+                                        else { _glBandWhy = 'full-day (band too tight: free ' + _bandFree + 'min < floors ' + _floorMin + '+40)'; }
+                                    }
+                                }
+                            } catch (_glBandErr) {}
+                            var _glCapParts = [];
+                            Object.keys(subFloor).forEach(function (key) {
+                                // offer only lengths THIS bunk can FILL (rotation-thinned priorityList); fall
+                                // back to the access-union when the thinned list has nothing for the subcat
+                                // (preserve floor discovery for a fully-thinned subcat — absorb/sport heals it).
+                                var _fdSrc = (subFillDur[key] && Object.keys(subFillDur[key]).length) ? subFillDur[key] : subDur[key];
+                                var durs = Object.keys(_fdSrc || {}).map(Number).filter(Boolean).sort(function (a, b) { return a - b; });
+                                if (!durs.length) durs = [10, 20, 30, 40];
+                                var _avail = subAvail[key] ? Object.keys(subAvail[key]).length : 0;
+                                // AUTO-IGNORE EMPTY SUBCATEGORY (user-chosen; kill window.__dropEmptySubcat=false):
+                                // a special subcat with ZERO available activities (e.g. a "Sport" special tag in a
+                                // sports-free camp) can never be filled — demanding a floor for it only strands dead
+                                // "Special: <subcat>" tiles and inflates unmet floors. Drop the demand entirely.
+                                if (_avail === 0 && ((typeof window === 'undefined') || (window.__dropEmptySubcat !== false))) {
+                                    subFloor[key] = 0; subCap[key] = 0;
+                                    _glCapParts.push(key + ' (avail=0 → IGNORED: no matching activities)');
+                                    return;
+                                }
+                                // CAP semantics for generic-layout fill:
+                                //  • an EXPLICIT finite cap ("<=" / "=") is the user's HARD ceiling → honor it
+                                //    EXACTLY (never inflate it to availability — that would place N "Special:
+                                //    Food" when the user said max 1).
+                                //  • ">=" (cap=Infinity) or NO configured cap (subcat seen only in the
+                                //    priorityList) → the only ceiling is the count of DISTINCT available
+                                //    specials, so the day FILLS with the many specials the camp has while fill
+                                //    still gives each generic tile a distinct activity (no forced same-day
+                                //    repeat). NOT left Infinity — that would let one subcat blanket the day.
+                                //  • a must-place FLOOR always wins.
+                                var _hasFiniteCfg = (subCap[key] != null && subCap[key] !== Infinity);
+                                var _cap = _hasFiniteCfg ? Math.max(subCap[key], subFloor[key]) : Math.max(_avail, subFloor[key]);
+                                // score 1 (was 0): an over-floor special outranks the generic placeholder
+                                // filler below, so the day fills with REAL specials, not "Activity" tiles.
+                                floating.push({ kind: 'special', subcat: key, durations: durs, window: (_glBand || [gStart, gEnd]), qty: subFloor[key], cap: _cap, score: 1, _scarce: (_wqScarce[key] || 0) });
+                                _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + (_wqScarce[key] ? ', AIM-UP scarce+' + _wqScarce[key] : '') + ', durs=[' + durs.join(',') + '])');
+                            });
+                            // One cap-diagnostic line per grade (first bunk) so a throttled subcat is visible.
+                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _glBandWhy); }
+                            // Generic FILLER — fills whatever the layer demands leave open. A sport filler
+                            // (real content) keeps score 1; the abstract "activity" placeholder (sports-free
+                            // camps) drops to score 0 so it is a LAST resort and real specials are used first
+                            // (the live "what is this Activity tile" complaint). dMax spans the grade day so
+                            // the filler can cover a LARGE gap as ONE block (free-form camps have no bell
+                            // periods, so maxLen defaults to 60 and a 140-min gap would fragment).
+                            var hasSport = !!(sl && sl.sports && sl.sports.priorityList && sl.sports.priorityList.length);
+                            if (hasSport) {
+                                // SPORT is a REQUIRED layer, not a leftover filler. It was pushed with qty
+                                // omitted (⇒ floor ∞ ⇒ never "owed" ⇒ only placed in time the specials left
+                                // behind). Once a special subcat has no explicit cap its cap defaults to
+                                // availability (e.g. Regular cap=12), so specials fill the WHOLE day and ZERO
+                                // sports come out — even though every grade has a sport layer. Give sport its
+                                // configured per-bunk FLOOR (sl.sports.required) so PeriodLayout guarantees
+                                // that many sport tiles (a finite-qty sport earns the structural floor bonus,
+                                // placed before optional over-floor specials); omit cap (⇒ ∞) so any extra
+                                // sports still fill leftover time. Over-floor sports carry the filler penalty,
+                                // so the day is: the required sports + special floors + specials filling the
+                                // rest — not a sport flood.
+                                var _spReq = Math.max(0, Math.round(Number(sl.sports.required) || 0));
+                                var _spDem = { kind: 'sport', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: 1 };
+                                if (_spReq > 0) _spDem.qty = _spReq;   // FLOOR (guaranteed); cap omitted ⇒ ∞ (also the leftover filler)
+                                floating.push(_spDem);
+                            } else {
+                                floating.push({ kind: 'activity', subcat: null, dMin: 10, dMax: Math.max(maxLen, (gEnd - gStart) || 0, 60), window: [gStart, gEnd], score: 0 });
+                            }
+
+                            // ── RE-FLOAT DEFERRED FIXED-DURATION / MOVEABLE-WINDOW LAYERS ──
+                            // A layer whose configured WINDOW is wider than its DURATION "floats"
+                            // (it may sit anywhere in its window). Most are pre-pinned by earlier
+                            // phases (e.g. swim by Phase 2.3), but the generic path RETURNs before
+                            // the fill phases — so any layer the pre-pass DEFERRED (pool full, wide
+                            // window, …) would silently vanish (the live Majors swim bug). Re-introduce
+                            // EVERY required, not-yet-pinned, fixed-duration layer — swim, elective, a
+                            // windowed custom/main, … — as a FLOATING demand so PeriodLayout slides the
+                            // other tiles aside to place it. These are STRUCTURAL floors (must-place),
+                            // so they outrank the optional special/sport fillers.
+                            //   Skipped (already handled, never a gap): special (floated by subcat
+                            //   above), sport/slot/activity (the unlimited filler fills all leftover
+                            //   time), lunch/snacks/dinner (always pre-pinned), league/trip (own
+                            //   placement), change (a swim envelope, not standalone).
+                            //   Dedup: a layer already placed as a wall for THIS bunk is matched by its
+                            //   (type|window) signature read off each wall's .layer back-ref — robust
+                            //   even though STEP 1.5 classification copies the layer object. swim also
+                            //   gated on todaysSwimmers (don't give swim to a non-swimmer). Pool
+                            //   capacity etc. are CONTENT concerns, deferred to the fill step.
+                            try {
+                                var _glPinnedSig = {};
+                                (bunkTimelines[bunk] || []).forEach(function (w) {
+                                    var _srcL = w && w.layer;
+                                    if (_srcL && _srcL.type != null) _glPinnedSig[String(_srcL.type).toLowerCase() + '|' + _srcL.startMin + '|' + _srcL.endMin] = 1;
+                                });
+                                var _glSkipKind = { special: 1, sport: 1, sports: 1, slot: 1, activity: 1, lunch: 1, snack: 1, snacks: 1, dinner: 1, league: 1, trip: 1, change: 1, 'pre-change': 1, 'post-change': 1 };
+                                (layersByGrade[grade] || []).forEach(function (L) {
+                                    if (!L) return;
+                                    var lk = String(L.type || '').toLowerCase();
+                                    if (_glSkipKind[lk]) return;
+                                    var _rawDur = L.durationMin || L.periodMin || L.duration || 0;
+                                    if (!(_rawDur > 0)) return; // not a FIXED-duration demand → leave to the filler
+                                    if (_glPinnedSig[lk + '|' + L.startMin + '|' + L.endMin]) return; // already a wall for this bunk
+                                    if (lk === 'swim') {
+                                        var _set = (typeof todaysSwimmers !== 'undefined' && todaysSwimmers) ? todaysSwimmers[grade] : null;
+                                        if (!(_set && typeof _set.has === 'function' && _set.has(String(bunk)))) return; // not swimming today
+                                    }
+                                    var _c = (typeof resolveConstraints === 'function') ? (resolveConstraints(L, lk) || {}) : {};
+                                    var _dMin = _c.dMin || _rawDur, _dMax = _c.dMax || _dMin;
+                                    var _ws = Math.max(L.startMin != null ? L.startMin : gStart, gStart);
+                                    var _we = Math.min(L.endMin != null ? L.endMin : gEnd, gEnd);
+                                    // FLOAT SWIM: widen swim's window to the whole grade day so the layout
+                                    // can place it anywhere a 40-min gap + the pool allow — that freedom is
+                                    // exactly what lets it reorder swim↔sport and unbox the stuck windows.
+                                    if (lk === 'swim' && _glFloatSwim) { _ws = gStart; _we = gEnd; }
+                                    if (!(_we - _ws >= _dMin)) return; // window can't even fit it
+                                    var _qty = Number(L.qty != null ? L.qty : (L.quantity != null ? L.quantity : 1));
+                                    if (!(_qty > 0)) _qty = 1;
+                                    var _dem = { kind: lk, subcat: null, name: _glWallLabel(L), window: [_ws, _we], qty: _qty, cap: _qty, score: 0 };
+                                    if (_dMin === _dMax) _dem.durations = [_dMin]; else { _dem.dMin = _dMin; _dem.dMax = _dMax; }
+                                    // ── LAYER SHARING (watched AT PLACEMENT) ──────────────────
+                                    // Resolve this layer's facility + sharing config (capacity +
+                                    // allowedPairs, from the layer override → per-activity → field
+                                    // chain) and attach it as `share`. PeriodLayout's resourceGate
+                                    // then keeps the facility within capacity / allowedPairs across
+                                    // grades as the tile is laid (not as a post-pass). Swim is the
+                                    // one exception — its pool concurrency is the engine's own
+                                    // poolSwimPairFreeAt (resolves the Swim activity's config) — so
+                                    // leave swim's `share` unset and let _glResourceGate route it.
+                                    if (lk !== 'swim') {
+                                        try {
+                                            var _facName = L.customField || L.field || null;
+                                            if (_facName && typeof getCustomActivitySharingInfo === 'function') {
+                                                var _actName = L.activity || L.event || L.name || _glWallLabel(L);
+                                                var _si = getCustomActivitySharingInfo(_actName, _facName, L.customSharing, globalSettings);
+                                                if (_si) _dem.share = { facility: _facName, shareType: _si.shareType, capacity: _si.capacity, allowedPairs: _si.allowedPairs || {}, allowedDivisions: _si.allowedDivisions || [] };
+                                            }
+                                        } catch (_glShErr) {}
+                                    }
+                                    floating.push(_dem);
+                                    if (lk === 'swim') _glInjectedSwim++; else _glInjectedLayer++;
+                                });
+                            } catch (_glReflErr) {}
+
+                            // Periods to tile. Bell-schedule camps have campPeriods (with 5-min
+                            // breaks). FREE-FORM division-times camps have NONE — then synthesize a
+                            // single day-spanning period bounded by the bunk's own pinned walls, so
+                            // freeSubWindows carves exactly the inter-wall gaps (never inventing time
+                            // beyond the day). Without this the layout had 0 periods ⇒ 0 windows ⇒ 0
+                            // tiles, and the early-return left those gaps empty (the live Leebi bug:
+                            // "0/0 free windows tiled" — 3rd/4th/5th gaps got nothing).
+                            var _glPeriods;
+                            if (rawPeriods.length) {
+                                _glPeriods = rawPeriods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _glBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; });
+                            } else if (pinned.length) {
+                                var _glWMin = Math.min.apply(null, pinned.map(function (w) { return w.startMin; }));
+                                var _glWMax = Math.max.apply(null, pinned.map(function (w) { return w.endMin; }));
+                                _glPeriods = [{ startMin: _glWMin, endMin: _glWMax, name: 'Day', isBreak: false }];
+                            } else {
+                                _glPeriods = [{ startMin: gStart, endMin: gEnd, name: 'Day', isBreak: false }];
+                            }
+
+                            _glPerBunk[bunk] = {
+                                grade: grade,
+                                periods: _glPeriods,
+                                pinned: pinned, floating: floating
+                            };
+                            _glOrder.push(bunk);
+                        });
+                    });
+
+                    // ── Cross-grade SHARING gate (watched AT PLACEMENT) ──────────────
+                    // A generic tile tied to a real shared layer must respect that
+                    // facility's cross-division capacity + allowedPairs. Two checkable
+                    // cases at layout time:
+                    //   • swim → pool: the engine's own poolSwimPairFreeAt (resolves the
+                    //     Swim activity's config, counts bunks vs pool capacity + pairs
+                    //     against the LIVE pinned swims).
+                    //   • any other shared layer (re-floated Main Activity / custom at a
+                    //     specific facility): _glFacilityFreeAt below, using the layer's
+                    //     resolved `share` descriptor, against BOTH the live pinned walls
+                    //     of that facility AND an in-run reservation of the generic tiles
+                    //     this same layout has already placed for other bunks (so e.g. an
+                    //     "Exclusive" cap-1 Main Activity that NO grade has pinned yet still
+                    //     can't be laid on top of itself across bunks).
+                    // Sport/Special placeholder tiles have no concrete field yet → not
+                    // checkable here (their sharing is enforced when fill assigns a field).
+                    var _glFacKey = function (f) { return String(f == null ? '' : f).toLowerCase().trim(); };
+
+                    // ── SEATS: max bunks that can be on a category AT ONCE, counted from the
+                    // specials that are ACTUALLY AVAILABLE TODAY (todaysSpecials — already filtered
+                    // by day-of-week / rainy / etc.), NOT the whole config. (Bug fixed: on a day
+                    // where a subcat has no available activity its seats are now 0, instead of
+                    // counting unavailable specials.) The SAME idea as the swim pool's "only 8
+                    // swimmers at a time": the engine never lays more than `seats` tiles of a
+                    // category in any overlapping window.
+                    //   special:<subcat> = Σ that subcat's AVAILABLE distinct activities' bunk-capacity
+                    //                      (not_sharable = 1 seat each; shareable = its cap).
+                    //   sport            = Σ enabled sport-hosting fields' bunk-capacity.
+                    //   swim             = the pool's bunk-capacity (also gated by poolSwimPairFreeAt).
+                    // Counted ONCE here, BEFORE layout, so the resourceGate below can enforce it.
+                    // SEATS are PER-LENGTH: an activity that only runs 40 min can't fill a 30-min
+                    // slot, so a subcat's concurrent capacity is counted PER DURATION
+                    // ('special:uncategorized@30' etc.). e.g. 30-min uncat = only Baking = 1 seat,
+                    // even though there are 13 uncat activities (most are 40-min only).
+                    var _glSeats = {};        // 'special:<subcat>@<dur>' / 'sport' / 'swim' -> concurrent SEATS
+                    var _glSeatBySubDur = {}; // subcat -> { dur -> seats }   (for the visible breakdown)
+                    var _glSpecActsBySub = {};// subcat -> # of DISTINCT available activities
+                    var _glNamesBySub = {};   // subcat -> [activity names]
+                    var _glDurList = function (s) {   // an activity's permitted durations (numbers)
+                        var ds = [];
+                        try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(s.name, window.activityProperties, globalSettings) : null; ds = (gd && gd.durations) || gd; } catch (_e) {}
+                        if (!Array.isArray(ds)) ds = [];
+                        ds = ds.map(Number).filter(function (x) { return x > 0; });
+                        if (!ds.length) { if (s.dMin) ds.push(Number(s.dMin)); if (s.dMax && s.dMax !== s.dMin) ds.push(Number(s.dMax)); }
+                        return ds.length ? ds : [40];
+                    };
+                    try {
+                        var _seatSrc = (typeof todaysSpecials !== 'undefined' && todaysSpecials && todaysSpecials.length)
+                            ? todaysSpecials
+                            : ((globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || []);
+                        _seatSrc.forEach(function (s) {
+                            if (!s || !s.name) return;
+                            var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
+                            if (_sp.fullGrade === true || s.fullGrade === true) return;   // whole-grade specials aren't per-bunk seats
+                            var _sub = _glCanon(s.subcategory);
+                            var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
+                            var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
+                            var _seat = (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                            _glDurList(s).forEach(function (d) {
+                                var _k = 'special:' + _sub + '@' + d;
+                                _glSeats[_k] = (_glSeats[_k] || 0) + _seat;
+                                (_glSeatBySubDur[_sub] = _glSeatBySubDur[_sub] || {})[d] = (_glSeatBySubDur[_sub][d] || 0) + _seat;
+                            });
+                            // TOTAL POOL cap (length-INDEPENDENT): the SAME physical activities back EVERY
+                            // duration bucket, so per-length seats SUM to MORE than the distinct pool
+                            // (uncategorized: 14@40 + 1@30 = 15 counted from ~13-14 activities). Count each
+                            // activity's seat ONCE here; the gate checks this pool ALONGSIDE the per-length cap,
+                            // so a subcat can never have more tiles laid than it has activities to fill them —
+                            // even split across lengths — while the per-length cap still protects a scarce length.
+                            _glSeats['special:' + _sub] = (_glSeats['special:' + _sub] || 0) + _seat;
+                            _glSpecActsBySub[_sub] = (_glSpecActsBySub[_sub] || 0) + 1;
+                            (_glNamesBySub[_sub] = _glNamesBySub[_sub] || []).push(s.name);
+                        });
+                        var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
+                        var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
+                        var _sportSeats = 0;
+                        _fldsSeat.forEach(function (f) {
+                            if (!(f && f.name && _disF.indexOf(f.name) < 0 && f.activities && f.activities.length)) return;
+                            // Mirror the FILL ledger's capacity (see ~line 2687): a field's sharing lives
+                            // in f.sharableWith (modern config), NOT the legacy f.capacity. Counting only
+                            // f.capacity undercounted shared sport fields → false "over field capacity"
+                            // SEAT AUDIT flags AND throttled _glSeatFreeAt('sport') + the seat-enforce pull
+                            // (over-cap specials → Sport), since both read _glSeats['sport'].
+                            var _fsw = f.sharableWith || {};
+                            var _fty = _fsw.type || _fsw.shareType || 'not_sharable';
+                            var _fcap = parseInt(_fsw.capacity) || parseInt(f.capacity) || (_fty === 'not_sharable' ? 1 : (_fty === 'all' ? 999 : 2));
+                            _sportSeats += Math.max(1, _fcap);
+                        });
+                        if (_sportSeats > 0) _glSeats['sport'] = _sportSeats;   // sport/swim are duration-independent (same field/pool)
+                        var _swimSeats = 0;
+                        ((globalSettings && globalSettings.facilities) || []).forEach(function (fac) {
+                            ((fac && fac.generalActivities) || []).forEach(function (ga) {
+                                if (ga && /swim/i.test(String(ga.name || '')) && ga.sharableWith && parseInt(ga.sharableWith.capacity) > 0) _swimSeats = Math.max(_swimSeats, parseInt(ga.sharableWith.capacity));
+                            });
+                        });
+                        if (_swimSeats > 0) _glSeats['swim'] = _swimSeats;
+                    } catch (_glSeatErr) {}
+                    // ── PER-GRADE seats (also per-length): grade-restricted activities (e.g. Shiur 1 =
+                    // Minors-only) only count for the grades that can use them.
+                    var _glSeatsByGrade = {};   // grade -> { 'special:<subcat>@<dur>' -> accessible seats }
+                    var _glSoloAct = {};        // grade -> { '<subcat>' -> physical activity NAME }  (only when the grade reaches EXACTLY ONE activity in the subcat)
+                    try {
+                        (allGrades || []).forEach(function (g) {
+                            var _rep = (typeof getBunksForGrade === 'function') ? (getBunksForGrade(g, divisions) || [])[0] : null;
+                            var _gm = _glSeatsByGrade[g] = {};
+                            var _bySub = Object.create(null);   // subcat -> [accessible activity objects]
+                            ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || []).forEach(function (s) {
+                                if (!s || !s.name) return;
+                                var _sp = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                if (_sp.fullGrade === true || s.fullGrade === true) return;
+                                var _ok = true;
+                                try { if (typeof isSpecialAvailableForBunk === 'function') _ok = isSpecialAvailableForBunk(s.name, g, _rep, globalSettings); } catch (_e) { _ok = true; }
+                                if (!_ok) return;
+                                var _sub = _glCanon(s.subcategory);
+                                var _sw = s.sharableWith || {}; var _ty = _sw.type || 'not_sharable';
+                                var _cp = parseInt(_sw.capacity) || (_ty === 'not_sharable' ? 1 : 2);
+                                var _seat = (_ty === 'not_sharable' ? 1 : Math.max(1, _cp));
+                                _glDurList(s).forEach(function (d) { var _k = 'special:' + _sub + '@' + d; _gm[_k] = (_gm[_k] || 0) + _seat; });
+                                _gm['special:' + _sub] = (_gm['special:' + _sub] || 0) + _seat;   // length-independent pool cap (see camp-wide build)
+                                (_bySub[_sub] = _bySub[_sub] || []).push(s);
+                            });
+                            // PER-PHYSICAL-ACTIVITY seat (window.__physActSeat, default ON): when a grade reaches
+                            // EXACTLY ONE activity in a subcat (e.g. each grade → one Shiur), the subcat seat count
+                            // (= Σ DISTINCT activities camp-wide) OVER-states what THIS grade's generic tile can
+                            // become. Register a seat keyed by the PHYSICAL ACTIVITY so the cap-1 not_sharable
+                            // resource is enforced ACROSS the different grades that share it (Minors+Duetos both
+                            // = Shiur 1): the layout then STAGGERS them to distinct windows instead of co-placing
+                            // two tiles in one window that fill can't both name (the "Special: Shiur" placeholder).
+                            // Multi-activity subcats (Regular, …) keep the subcat seat (no 1:1 mapping).
+                            if ((typeof window === 'undefined') || (window.__physActSeat !== false)) {
+                                Object.keys(_bySub).forEach(function (_sub) {
+                                    var _acts = _bySub[_sub];
+                                    if (_acts.length !== 1) return;                      // only the unambiguous 1:1 case
+                                    var s1 = _acts[0];
+                                    (_glSoloAct[g] || (_glSoloAct[g] = {}))[_sub] = s1.name;
+                                    var _sw1 = s1.sharableWith || {}; var _ty1 = _sw1.type || 'not_sharable';
+                                    var _cp1 = parseInt(_sw1.capacity) || (_ty1 === 'not_sharable' ? 1 : 2);
+                                    var _seat1 = (_ty1 === 'not_sharable' ? 1 : Math.max(1, _cp1));
+                                    // DURATION-INDEPENDENT physical seat (mirrors the duration-agnostic fill
+                                    // ledger _glCapFits): one physical chair regardless of session length, so two
+                                    // overlapping tiles of the SAME activity at DIFFERENT lengths (e.g. @30 vs @40)
+                                    // still contend for the single seat and get staggered. A '@dur'-keyed seat
+                                    // would split them into separate buckets and miss the overlap.
+                                    var _pk = 'specialact:' + s1.name;
+                                    _gm[_pk] = _seat1;                               // per-grade seat for the physical-activity key
+                                    if (!(_glSeats[_pk] > 0)) _glSeats[_pk] = _seat1; // camp-wide cap for this ONE physical activity
+                                });
+                            }
+                        });
+                    } catch (_glSeatGErr) {}
+                    // ── VISIBLE COUNT: print exactly what the engine counted (per length), auditable.
+                    try {
+                        var _subs = Object.keys(_glSeatBySubDur).sort();
+                        var _totActs = _subs.reduce(function (a, s) { return a + (_glSpecActsBySub[s] || 0); }, 0);
+                        log('[SEAT COUNT] ═══ Special activities AVAILABLE TODAY: ' + _totActs + ' activit' + (_totActs === 1 ? 'y' : 'ies') + ' in ' + _subs.length + ' subcategor' + (_subs.length === 1 ? 'y' : 'ies') + ' (seats counted PER LENGTH) ═══');
+                        if (_subs.length) {
+                            _subs.forEach(function (sub) {
+                                var dd = _glSeatBySubDur[sub];
+                                var parts = Object.keys(dd).map(Number).sort(function (a, b) { return a - b; }).map(function (d) { return d + 'min=' + dd[d] + ' seat' + (dd[d] === 1 ? '' : 's'); });
+                                var _poolCap = _glSeats['special:' + sub];
+                                log('[SEAT COUNT]    • ' + sub + ': ' + (_glSpecActsBySub[sub] || 0) + ' activit' + ((_glSpecActsBySub[sub] || 0) === 1 ? 'y' : 'ies') + ' → seats by length: ' + parts.join(', ') + (_poolCap != null ? (' · POOL cap=' + _poolCap + ' (length-independent ceiling)') : '') + '  [' + (_glNamesBySub[sub] || []).join(', ') + ']');
+                            });
+                        } else {
+                            log('[SEAT COUNT]    • (no special activities available today)');
+                        }
+                        log('[SEAT COUNT]    • sport: ' + (_glSeats['sport'] != null ? _glSeats['sport'] + ' seats (fields)' : '∞ (no field cap)') + '  |  swim: ' + (_glSeats['swim'] != null ? _glSeats['swim'] + ' seats (pool)' : 'n/a'));
+                        // per-grade restriction, per (subcat, length), only where a grade reaches FEWER seats.
+                        Object.keys(_glSeats).filter(function (k) { return k.indexOf('special:') === 0; }).sort().forEach(function (k) {
+                            var _anyR = (allGrades || []).some(function (g) { return ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0) < _glSeats[k]; });
+                            if (_anyR) log('[SEAT COUNT]    ↳ ' + k.slice(8) + ' is grade-restricted → per-grade seats: ' + (allGrades || []).map(function (g) { return g + '=' + ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0); }).join(', '));
+                        });
+                    } catch (_glSeatLogErr) {}
+                    // category key for a generic tile — DURATION-AWARE for specials (seats are per length).
+                    // swim handled by its own pool gate, not here.
+                    var _glCatOf = function (kind, ref, sMin, eMin, grade) {
+                        var k = String(kind || '').toLowerCase();
+                        if (k === 'special') {
+                            var d = (sMin != null && eMin != null) ? (eMin - sMin) : null;
+                            var _sub = _glCanon(ref && ref.subcat);
+                            // when this grade reaches exactly ONE activity in the subcat, key the seat by that
+                            // PHYSICAL ACTIVITY (cap-1 enforced across the grades sharing it); else by subcat.
+                            if (grade && _glSoloAct[grade] && _glSoloAct[grade][_sub]) {
+                                return 'specialact:' + _glSoloAct[grade][_sub];   // duration-independent: one physical seat for all lengths
+                            }
+                            return 'special:' + _sub + (d != null ? ('@' + d) : '');
+                        }
+                        if (k === 'sport') return 'sport';
+                        return null;
+                    };
+                    // cross-bunk reservation of generic special/sport tiles, keyed by category, so the
+                    // seat gate sees how many bunks already hold that category at an overlapping time.
+                    var _glCatResv = {};   // category -> [{ s, e }]  (camp-wide)
+                    var _glCatResvByGrade = {};   // grade -> category -> [{ s, e }]  (per-grade)
+                    var _glSeatFreeAt = function (cat, sMin, eMin) {
+                        var seats = _glSeats[cat];
+                        if (!(seats > 0) || seats === Infinity) return true;   // uncounted category ⇒ no cap
+                        var list = _glCatResv[cat] || [], n = 0;
+                        for (var i = 0; i < list.length; i++) { if (list[i].s < eMin && list[i].e > sMin) n++; }
+                        return (n + 1) <= seats;   // counts THIS tile too — never exceed the seat count
+                    };
+                    // PER-GRADE seat check: a grade may hold at most as many tiles of a special
+                    // subcat as it has ACCESSIBLE activities (grade-restricted activities don't
+                    // count for grades that can't use them). seats 0 ⇒ grade can't fill this subcat
+                    // at all ⇒ don't lay it (a sport/other category fills instead). Only specials are
+                    // grade-access-limited; sport/swim use the camp-wide check above.
+                    var _glSeatFreeAtGrade = function (cat, grade, sMin, eMin) {
+                        if (!cat || (cat.indexOf('special:') !== 0 && cat.indexOf('specialact:') !== 0)) return true;
+                        var gm = _glSeatsByGrade[grade];
+                        if (!gm) return true;                                   // unknown grade ⇒ no per-grade cap
+                        var seats = gm[cat] || 0;
+                        if (seats <= 0) return false;                          // grade can't access ANY activity here
+                        var byG = _glCatResvByGrade[grade] || {};
+                        var list = byG[cat] || [], n = 0;
+                        for (var i = 0; i < list.length; i++) { if (list[i].s < eMin && list[i].e > sMin) n++; }
+                        return (n + 1) <= seats;
+                    };
+
+                    var _glResv = {};   // facilityKey -> [{ grade, bunk, s, e }]  (this-run reservations)
+                    var _glFacilityFreeAt = function (facility, grade, sMin, eMin, ignoreBunk, share) {
+                        try {
+                            if (!facility || !share) return true;
+                            var key = _glFacKey(facility);
+                            var type = String(share.shareType || 'not_sharable').toLowerCase();
+                            var cap = (type === 'not_sharable') ? 1 : (parseInt(share.capacity) > 0 ? parseInt(share.capacity) : 2);
+                            var pairs = share.allowedPairs || {};
+                            var seen = {}, bunkCount = 0, otherGrades = {};
+                            // (a) live pinned walls in bunkTimelines occupying this facility
+                            var _bt = bunkTimelines || {};
+                            Object.keys(_bt).forEach(function (bk) {
+                                if (String(bk) === String(ignoreBunk)) return;
+                                var tl = _bt[bk] || [];
+                                for (var i = 0; i < tl.length; i++) {
+                                    var b = tl[i];
+                                    if (!b || b.continuation || b.startMin == null || b.endMin == null) continue;
+                                    var bf = b.field || b.customField || b._specialLocation || (b.layer && (b.layer.customField || b.layer.field)) || null;
+                                    if (_glFacKey(bf) !== key) continue;
+                                    if (b.startMin < eMin && b.endMin > sMin) {
+                                        if (!seen[String(bk)]) { seen[String(bk)] = 1; bunkCount++; var g = _gradeOfBunkForPool(bk); if (g && g !== grade) otherGrades[g] = true; }
+                                        break;
+                                    }
+                                }
+                            });
+                            // (b) this-run reservations of generic tiles already laid for other bunks
+                            var rv = _glResv[key] || [];
+                            for (var j = 0; j < rv.length; j++) {
+                                var e = rv[j];
+                                if (String(e.bunk) === String(ignoreBunk) || seen[String(e.bunk)]) continue;
+                                if (e.s < eMin && e.e > sMin) { seen[String(e.bunk)] = 1; bunkCount++; if (e.grade && e.grade !== grade) otherGrades[e.grade] = true; }
+                            }
+                            if (bunkCount + 1 > cap) return false;             // capacity counts THIS bunk too
+                            var og = Object.keys(otherGrades);
+                            if (og.length === 0) return true;                  // only same-grade (or empty) → fine
+                            if (type === 'all') return true;                   // capacity-only (already checked)
+                            if (type === 'not_sharable' || type === 'same_division') return false;
+                            if (type === 'custom') { var ad = share.allowedDivisions || []; return og.concat([grade]).every(function (g) { return ad.indexOf(g) !== -1; }); }
+                            return isCrossDivAllowed(grade, og, pairs);        // cross_division
+                        } catch (_e) { return true; }                          // never hard-block on error
+                    };
+                    var _glResourceGate = function (kind, grade, bunk, sMin, eMin, ref) {
+                        try {
+                            if (String(kind || '').toLowerCase() === 'swim' && typeof poolSwimPairFreeAt === 'function') {
+                                return poolSwimPairFreeAt(grade, sMin, eMin, bunk);
+                            }
+                            if (ref && ref.share && ref.share.facility) {
+                                return _glFacilityFreeAt(ref.share.facility, grade, sMin, eMin, bunk, ref.share);
+                            }
+                            // SEAT GATE: a generic special/sport tile may only be laid if its category
+                            // still has a free seat at this time (the swim-pool rule, generalized) —
+                            // BOTH camp-wide AND for this grade's accessible activities (grade-restricted
+                            // activities don't count for a grade that can't use them). When a category is
+                            // full the packer is steered to one that still has room.
+                            if (window.__seatGate !== false) {
+                                var _cat = _glCatOf(kind, ref, sMin, eMin, grade);
+                                if (_cat && !_glSeatFreeAt(_cat, sMin, eMin)) return false;
+                                if (_cat && !_glSeatFreeAtGrade(_cat, grade, sMin, eMin)) return false;
+                                // TOTAL-POOL cap (window.__seatPoolCap, default ON): a per-length special key
+                                // ALSO counts against its subcat's length-independent pool, so 14@40 + 1@30 can't
+                                // exceed the ~13-14 distinct activities that back BOTH lengths. (The duration-
+                                // independent 'specialact:' solo key has no '@' → skipped, already pool-level.)
+                                if ((typeof window === 'undefined' || window.__seatPoolCap !== false) && _cat && _cat.indexOf('special:') === 0) {
+                                    var _atG = _cat.indexOf('@');
+                                    if (_atG > 0) {
+                                        var _poolG = _cat.slice(0, _atG);
+                                        if (!_glSeatFreeAt(_poolG, sMin, eMin)) return false;
+                                        if (!_glSeatFreeAtGrade(_poolG, grade, sMin, eMin)) return false;
+                                    }
+                                }
+                            }
+                        } catch (_e) {}
+                        return true;
+                    };
+                    var _glResourceCommit = function (kind, grade, bunk, sMin, eMin, ref) {
+                        try {
+                            if (ref && ref.share && ref.share.facility) {
+                                var key = _glFacKey(ref.share.facility);
+                                (_glResv[key] || (_glResv[key] = [])).push({ grade: grade, bunk: bunk, s: sMin, e: eMin });
+                            }
+                            // reserve the category seat so the next bunk's gate counts it (camp-wide + per-grade)
+                            var _cat2 = _glCatOf(kind, ref, sMin, eMin, grade);
+                            if (_cat2 && _glSeats[_cat2] > 0) (_glCatResv[_cat2] || (_glCatResv[_cat2] = [])).push({ s: sMin, e: eMin });
+                            if (_cat2 && (_cat2.indexOf('special:') === 0 || _cat2.indexOf('specialact:') === 0)) {
+                                var _bg = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
+                                (_bg[_cat2] || (_bg[_cat2] = [])).push({ s: sMin, e: eMin });
+                            }
+                            // mirror the gate's TOTAL-POOL reservation (length-independent subcat key)
+                            var _atC = _cat2 ? _cat2.indexOf('@') : -1;
+                            if (_atC > 0 && _cat2.indexOf('special:') === 0) {
+                                var _poolC = _cat2.slice(0, _atC);
+                                if (_glSeats[_poolC] > 0) (_glCatResv[_poolC] || (_glCatResv[_poolC] = [])).push({ s: sMin, e: eMin });
+                                var _bgP = (_glCatResvByGrade[grade] || (_glCatResvByGrade[grade] = {}));
+                                (_bgP[_poolC] || (_bgP[_poolC] = [])).push({ s: sMin, e: eMin });
+                            }
+                            // FLOAT SWIM: record the placed swim as a live tile so the NEXT bunk's
+                            // poolSwimPairFreeAt (which counts swim tiles in bunkTimelines) sees it →
+                            // the pool capacity stays enforced across bunks as the layout places swim.
+                            if (_glFloatSwim && String(kind || '').toLowerCase() === 'swim') {
+                                (bunkTimelines[bunk] || (bunkTimelines[bunk] = [])).push({ type: 'swim', event: 'Swim', startMin: sMin, endMin: eMin, _glFloatMark: true });
+                            }
+                        } catch (_e) {}
+                    };
+                    // RELEASE the inverse of commit: when a repair pass RELOCATES an already-laid
+                    // seat-bearing tile, its old [s,e] reservation must be freed so the ledger
+                    // follows the tile to its new slot. Without this the layout module conservatively
+                    // REFUSES to relocate seat tiles (no leak, but fewer swap-repair fills) — and any
+                    // relocation that did slip through would leave a phantom seat the next bunk's gate
+                    // double-counts (the cross-grade over-placement bug). Splices one matching entry.
+                    var _glSplice = function (arr, sMin, eMin) {
+                        if (!arr) return; for (var i = 0; i < arr.length; i++) { if (arr[i].s === sMin && arr[i].e === eMin) { arr.splice(i, 1); return; } }
+                    };
+                    var _glResourceRelease = function (kind, grade, bunk, sMin, eMin, ref) {
+                        try {
+                            if (ref && ref.share && ref.share.facility) {
+                                var key = _glFacKey(ref.share.facility), list = _glResv[key];
+                                if (list) { for (var i = 0; i < list.length; i++) { if (list[i].s === sMin && list[i].e === eMin && list[i].grade === grade && list[i].bunk === bunk) { list.splice(i, 1); break; } } }
+                            }
+                            var _cat2 = _glCatOf(kind, ref, sMin, eMin, grade);
+                            if (_cat2 && _glSeats[_cat2] > 0) _glSplice(_glCatResv[_cat2], sMin, eMin);
+                            if (_cat2 && (_cat2.indexOf('special:') === 0 || _cat2.indexOf('specialact:') === 0) && _glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_cat2], sMin, eMin);
+                            var _atR = _cat2 ? _cat2.indexOf('@') : -1;
+                            if (_atR > 0 && _cat2.indexOf('special:') === 0) {
+                                var _poolR = _cat2.slice(0, _atR);
+                                if (_glSeats[_poolR] > 0) _glSplice(_glCatResv[_poolR], sMin, eMin);
+                                if (_glCatResvByGrade[grade]) _glSplice(_glCatResvByGrade[grade][_poolR], sMin, eMin);
+                            }
+                            if (_glFloatSwim && String(kind || '').toLowerCase() === 'swim') {
+                                var _stl = bunkTimelines[bunk];
+                                if (_stl) { for (var _si = 0; _si < _stl.length; _si++) { if (_stl[_si] && _stl[_si]._glFloatMark && _stl[_si].startMin === sMin && _stl[_si].endMin === eMin) { _stl.splice(_si, 1); break; } } }
+                            }
+                        } catch (_e) {}
+                    };
+
+                    // ── DEMAND ↔ CAPACITY RECONCILIATION (window.__demandReconcile, default ON) ──
+                    // The per-bunk demand loop above pushes a FLOOR (qty) for every special subcat
+                    // and the required sport WITHOUT checking whether the SUM of those floors across
+                    // all bunks can physically be SERVED by the category's SEATS in the day. When it
+                    // can't — the classic case: 13 bunks each floored for a Shiur that is ONE cap-1
+                    // chair ⇒ 13 must-place tiles into 1 seat — the seat gate below rejects the floors
+                    // it can't seat, PeriodLayout fights to honor impossible must-place bonuses, the
+                    // unplaceable specials get ABSORBED → "Sport", and the weekly-MUST pass re-demands
+                    // the shortfall tomorrow. That cascade is the "gives out more than it can chew"
+                    // thrash (over-PROMISING, not over-placing — the gate never literally double-books).
+                    //
+                    // This pass clamps each seat category's AGGREGATE floor to what the day can deliver
+                    // (seats × sessions-that-fit-in-the-band), KEEPING the floor for the bunks that are
+                    // MOST OWED (lowest week-to-date count for the category) and DEMOTING the rest to
+                    // OPPORTUNISTIC — qty 0 (no must-place guarantee) but cap kept, so the activity still
+                    // fills when a seat is genuinely free, and is simply never PROMISED beyond capacity.
+                    // Floors are only ever REDUCED, never raised. Reuses the gate's own _glCatOf bucketing
+                    // so the categories match exactly. Fail-soft: any error leaves demand byte-identical.
+                    try {
+                        if ((typeof window === 'undefined') || (window.__demandReconcile !== false)) {
+                            (function () {
+                                var _rcToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate
+                                             : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                                var _rcU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                // owed score = week-to-date count across a category's activities (lower = more owed)
+                                var _rcOwedCache = {};
+                                var _rcOwed = function (bunk, names) {
+                                    var ck = String(bunk) + '|' + names.join(',');
+                                    if (_rcOwedCache[ck] != null) return _rcOwedCache[ck];
+                                    var c = 0;
+                                    if (_rcU && typeof _rcU.getPeriodActivityCount === 'function' && _rcToday) {
+                                        for (var i = 0; i < names.length; i++) { try { c += _rcU.getPeriodActivityCount(bunk, names[i], '1week', _rcToday) || 0; } catch (_e) {} }
+                                    }
+                                    _rcOwedCache[ck] = c; return c;
+                                };
+                                // deterministic, day-rotating tiebreak (so the demoted bunks aren't the same daily)
+                                var _rcHash = function (s) { var h = 0; s = String(s); for (var i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return Math.abs(h); };
+                                var _rcDaySeed = _rcHash(String(_rcToday || ''));
+                                // Group every FLOORED seat-counted demand by the category key the gate uses.
+                                //   group: { seats, repDur, win:[lo,hi], entries:[{bunk, dem, names}] }
+                                var _rcGroups = {};
+                                _glOrder.forEach(function (bunk) {
+                                    var pb = _glPerBunk[bunk]; if (!pb) return;
+                                    var grade = pb.grade;
+                                    (pb.floating || []).forEach(function (dem) {
+                                        if (!dem || !(dem.qty > 0)) return;                       // only a FLOOR can over-promise
+                                        var kind = String(dem.kind || '').toLowerCase();
+                                        if (kind !== 'special' && kind !== 'sport') return;       // only seat-counted categories
+                                        var durs = (dem.durations && dem.durations.length) ? dem.durations.slice() : [];
+                                        if (!durs.length) { if (dem.dMin) durs.push(dem.dMin); if (dem.dMax) durs.push(dem.dMax); }
+                                        durs = durs.map(Number).filter(function (x) { return x > 0; });
+                                        var repDur = durs.length ? Math.min.apply(null, durs) : 30; // shortest ⇒ most sessions fit ⇒ conservative (under-clamp)
+                                        var cat = _glCatOf(kind, dem, 0, repDur, grade);
+                                        if (!cat) return;
+                                        var seats = _glSeats[cat];
+                                        if (!(seats > 0) || seats === Infinity) return;           // uncapped ⇒ can't over-subscribe
+                                        var g = _rcGroups[cat] || (_rcGroups[cat] = { seats: seats, repDur: repDur, win: [Infinity, -Infinity], entries: [] });
+                                        if (repDur < g.repDur) g.repDur = repDur;
+                                        var w = dem.window || [0, 1440];
+                                        if (w[0] < g.win[0]) g.win[0] = w[0];
+                                        if (w[1] > g.win[1]) g.win[1] = w[1];
+                                        var names = (cat.indexOf('specialact:') === 0) ? [cat.slice(11)] : ((_glNamesBySub[_glCanon(dem.subcat)] || []).slice());
+                                        g.entries.push({ bunk: bunk, dem: dem, names: names });
+                                    });
+                                });
+                                Object.keys(_rcGroups).forEach(function (cat) {
+                                    var g = _rcGroups[cat];
+                                    var totalFloor = g.entries.reduce(function (a, e) { return a + (e.dem.qty || 0); }, 0);
+                                    var bandMin = (g.win[1] > g.win[0]) ? (g.win[1] - g.win[0]) : 0;
+                                    var slots = Math.max(1, Math.floor(bandMin / Math.max(10, g.repDur)));
+                                    var deliverable = g.seats * slots;
+                                    if (totalFloor <= deliverable) return;                         // the day can serve it → leave as-is
+                                    // Rank: most-owed (fewest week-to-date) keep the floor; ties broken day-rotated.
+                                    var ranked = g.entries.slice().sort(function (a, b) {
+                                        var oa = _rcOwed(a.bunk, a.names), ob = _rcOwed(b.bunk, b.names);
+                                        if (oa !== ob) return oa - ob;
+                                        return ((_rcHash(a.bunk) + _rcDaySeed) % 1000003) - ((_rcHash(b.bunk) + _rcDaySeed) % 1000003);
+                                    });
+                                    var kept = 0, demoted = 0;
+                                    for (var i = 0; i < ranked.length; i++) {
+                                        var dem = ranked[i].dem, q = (dem.qty || 0);
+                                        if (kept + q <= deliverable) { kept += q; continue; }      // still within capacity → keep its floor
+                                        dem.qty = 0; demoted++;                                    // demote: drop the GUARANTEE, keep the cap (opportunistic)
+                                    }
+                                    try { log('[GENERIC-RECONCILE] ' + cat + ': demand floor ' + totalFloor + ' > deliverable ' + deliverable + ' (' + g.seats + ' seat' + (g.seats === 1 ? '' : 's') + ' × ' + slots + ' session' + (slots === 1 ? '' : 's') + '/day @' + g.repDur + 'min) → kept floors for ' + (g.entries.length - demoted) + ' most-owed bunk(s), demoted ' + demoted + ' to opportunistic (cap kept)'); } catch (_e) {}
+                                });
+                            })();
+                        }
+                    } catch (_rcErr) { try { warn('[GENERIC-RECONCILE] error — reconciliation skipped (demand unchanged): ' + (_rcErr && _rcErr.message)); } catch (_e) {} }
+
+                    // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
+                    //    cross-bunk resourceGate, which enforces shared-facility limits).
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+
+                    // 2.5) FILL — assign a CONCRETE special activity to each generic special tile.
+                    // STEP 1 (specials, per-bunk): for each generic "Special: <subcat>" tile, pick the
+                    // ROTATION-BEST concrete special from this bunk's priorityList that (a) is the same
+                    // subcategory, (b) lists the tile's EXACT laid duration among its allowed durations,
+                    // and (c) isn't already used by this bunk today (categories repeat, ACTIVITIES DON'T).
+                    // The priorityList is already access- + rotation- + constraint-filtered (maxUsage /
+                    // cohort / multiPart / cooldown / exact·min-frequency), so the "how often / who can"
+                    // rules come for free — this step only chooses WHICH concrete activity lands in each
+                    // already-placed tile. A tile with no legal fill stays GENERIC (TBD) and is reported,
+                    // so the duration↔activity mismatch is visible rather than silently wrong.
+                    // NOT yet: cross-bunk facility sharing/capacity, or re-flowing a tile whose exact
+                    // length no free activity matches (steps 3-4). Fail-soft + kill: window.__fillSpecials=false.
+                    var _glFill = { tiles: 0, filled: 0, miss: 0, capSkips: 0, missDetail: [], causes: {} };
+                    var _doFillSpecials = (typeof window === 'undefined') ? true : (window.__fillSpecials !== false);
+                    if (_doFillSpecials) {
+                        try {
+                            var _glDurCache = {};
+                            var _glSpecialDurs = function (name) {
+                                if (_glDurCache[name]) return _glDurCache[name];
+                                var arr = [];
+                                try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(name, window.activityProperties, globalSettings) : null; arr = (gd && gd.durations) || gd || []; } catch (_e) {}
+                                if (!Array.isArray(arr)) arr = [];
+                                arr = arr.map(Number).filter(function (x) { return x > 0; });
+                                _glDurCache[name] = arr;
+                                return arr;
+                            };
+                            // ── STEP 4: CROSS-BUNK CAPACITY ────────────────────────────────────
+                            // Resolve each special's SHARING the same way auto_validator.
+                            // buildFieldSharingMap does — from the special's own `sharableWith`
+                            // (NOT getSpecialCapacity, which is a PLAYER count) — so the fill
+                            // prevents over-sharing per the special's OWN config — the user's THREE
+                            // options: not_sharable = NO sharing ever (≤1 bunk on the resource at any
+                            // instant, across every grade) / same_division = one grade at a time up to cap /
+                            // cross_division = any grade up to cap. Resource key = (location || name).
+                            // As specials are assigned bunk-by-bunk, a candidate that would
+                            // exceed its capacity at an overlapping time is skipped and the next
+                            // rotation-best is taken instead — which is ALSO what spreads a grade
+                            // across different specials (the variety win).
+                            var _glSpecShare = {};
+                            try {
+                                var _specSrc = (globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || (globalSettings && globalSettings.specialActivities) || [];
+                                _specSrc.forEach(function (s) {
+                                    if (!s || !s.name) return;
+                                    var sw = s.sharableWith || {};
+                                    var type = sw.type || 'not_sharable';
+                                    var divs = Array.isArray(sw.divisions) ? sw.divisions : [];
+                                    if (type === 'custom' && divs.length === 0) type = 'same_division';
+                                    if (type === 'all') type = 'same_division';
+                                    var cap = parseInt(sw.capacity) || (type === 'not_sharable' ? 1 : 2);
+                                    _glSpecShare[String(s.name).toLowerCase().trim()] = { key: String(s.location || s.name).toLowerCase().trim(), type: type, cap: cap };
+                                });
+                            } catch (_glShErr) {}
+                            var _glUsage = {};   // resourceKey -> [{ grade, s, e }] assigned across ALL bunks this run
+                            var _glShareOf = function (cand) {
+                                var sh = _glSpecShare[String(cand.name).toLowerCase().trim()];
+                                return sh || { key: String(cand.location || cand.name).toLowerCase().trim(), type: 'not_sharable', cap: 1 };
+                            };
+                            // Peak overlap of a set of clipped intervals (used to size concurrency).
+                            var _glMaxCover = function (ivals) {
+                                var ev = [];
+                                ivals.forEach(function (iv) { ev.push([iv[0], 1]); ev.push([iv[1], -1]); });
+                                ev.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; }); // end(-1) before start(+1) at a tie (touching ≠ overlap)
+                                var cur = 0, mx = 0;
+                                ev.forEach(function (x) { cur += x[1]; if (cur > mx) mx = cur; });
+                                return mx;
+                            };
+                            // True iff assigning `cand` to `grade` over [s,e] keeps the resource within its
+                            // sharing config. TYPE-AWARE (the 3 options):
+                            //   • not_sharable → cap 1 + counts ALL overlapping (any grade) ⇒ truly never
+                            //     shared, not even within a grade (e.g. workshops).
+                            //   • same_division → a DIFFERENT grade already on the resource blocks it (two
+                            //     grades can't co-occupy); same-grade uses count toward cap.
+                            //   • cross_division → any grade may join, up to cap (allowedPairs = TBD refinement).
+                            var _glCapFits = function (cand, grade, s, e) {
+                                var sh = _glShareOf(cand);
+                                var list = _glUsage[sh.key] || [];
+                                var counted = [];
+                                for (var i = 0; i < list.length; i++) {
+                                    var u = list[i];
+                                    if (!(u.s < e && u.e > s)) continue;        // must overlap the new tile
+                                    // STAGGERED-SHARING GUARD (Issue-2 · window.__alignShared, default ON):
+                                    // two bunks co-occupying a shared (cap>1) resource must START at the same
+                                    // minute, else auto_validator [staggered_sharing] flags it. Mirror the
+                                    // validator EXACTLY (auto_validator.js checkStaggeredSharing): it flags on a
+                                    // DIFFERING START only (same-start / different-duration is benign), and
+                                    // EXEMPTS cross-GRADE overlap on cross_division/any_division/custom resources
+                                    // (those are designed for divisions to arrive on their own clocks). So reject
+                                    // here iff the validator would flag — never on an end-only mismatch (the
+                                    // earlier `|| u.e !== e` form over-blocked benign fills and stranded floors).
+                                    if (sh.cap > 1 && (typeof window === 'undefined' || window.__alignShared !== false) && u.s !== s) {
+                                        if (u.grade === grade) return false;                                       // same-grade offset start → always flagged
+                                        if (sh.type !== 'cross_division' && sh.type !== 'any_division' && sh.type !== 'custom') return false; // cross-grade offset on a non-exempt type → flagged
+                                    }
+                                    if (sh.type === 'same_division' && u.grade !== grade) return false; // 2nd grade can't co-occupy
+                                    counted.push([Math.max(u.s, s), Math.min(u.e, e)]); // counts toward cap (global for not_sharable/cross_division; per-grade for same_division)
+                                }
+                                return (1 + _glMaxCover(counted)) <= sh.cap;
+                            };
+                            var _glRecordUse = function (cand, grade, s, e) {
+                                var sh = _glShareOf(cand);
+                                (_glUsage[sh.key] = _glUsage[sh.key] || []).push({ grade: grade, s: s, e: e });
+                            };
+                            // Drop ONE usage entry for cand at exactly [s,e] (used by the stagger restructure
+                            // when a tile is relocated in time — remove its old slot before recording the new).
+                            var _glRemoveUse = function (cand, grade, s, e) {
+                                var sh = _glShareOf(cand);
+                                var list = _glUsage[sh.key]; if (!list) return;
+                                for (var i = 0; i < list.length; i++) {
+                                    var u = list[i];
+                                    if (u.grade === grade && u.s === s && u.e === e) { list.splice(i, 1); return; }
+                                }
+                            };
+                            // DIAGNOSTIC (true ceiling): for a capacity-full miss, could a WITHIN-BUNK
+                            // re-time actually recover it? A re-time can only move the tile onto one of the
+                            // bunk's OWN non-wall slots (a sport or special tile — walls like swim/lunch can't
+                            // move). So a miss is RECOVERABLE iff some unused subcat activity has a capacity-OK
+                            // slot at the time of one of the bunk's equal-duration sport/special tiles (a legal
+                            // swap target). Else it is STUCK: free capacity exists in the day but only at wall-
+                            // times the bunk can't use → only CONFIG (raise cap / make shareable) or a layout
+                            // band-spread can help, not a within-bunk shuffle. (Earlier _glCapMovable scanned
+                            // the whole window and over-counted, because the free time was often a wall.)
+                            var _glCapRecoverable = function (t, grade, pool, used, bunkTiles) {
+                                var sub = _glCanon(t.subcat), d = t.durationMin;
+                                var win = (t._ref && t._ref.window) || [t.startMin, t.endMin];
+                                // candidate swap-target slots = bunk's own sport/special tiles, equal duration,
+                                // different from t, lying inside t's window.
+                                var targets = [];
+                                for (var ti = 0; ti < bunkTiles.length; ti++) {
+                                    var bt = bunkTiles[ti];
+                                    if (!bt || bt === t) continue;
+                                    if (bt.kind !== 'sport' && bt.kind !== 'special') continue;
+                                    if (bt.durationMin !== d) continue;
+                                    if (bt.startMin < win[0] || bt.endMin > win[1]) continue;
+                                    targets.push(bt);
+                                }
+                                if (!targets.length) return false;
+                                for (var i = 0; i < pool.length; i++) {
+                                    var c = pool[i];
+                                    if (!c || !c.name || used[String(c.name).toLowerCase()]) continue;
+                                    if (_glCanon(c.subcategory) !== sub) continue;
+                                    var durs = _glSpecialDurs(c.name);
+                                    if (durs.length && durs.indexOf(d) < 0) continue;
+                                    for (var k = 0; k < targets.length; k++) {
+                                        if (_glCapFits(c, grade, targets[k].startMin, targets[k].endMin)) return true;
+                                    }
+                                }
+                                return false;
+                            };
+                            // ── SPREAD SHADOW (measure-only): per-category concurrent demand vs supply ──
+                            // The user's "perfect day" = spread grades across categories per band so each
+                            // category's concurrent demand stays ≤ its supply (shareable swim/sport absorb the
+                            // overflow). Before changing any placement, MEASURE where grades collide so the
+                            // diagnosis is visible and the spread can be sized. Pure log, zero mutation.
+                            // Silence with window.__spreadShadow=false.
+                            // SEATS were counted + logged pre-layout ([SEAT COUNT], above the resourceGate)
+                            // and are ENFORCED there as a hard per-timeframe cap. Here we just measure peaks.
+                            try {
+                                if (window.__spreadShadow !== false && window.GLBandPlan && typeof window.GLBandPlan.measure === 'function') {
+                                    var _spBunks = [];
+                                    _glOrder.forEach(function (b) { var r = _glOut.layoutByBunk[b]; if (r && r.tiles) _spBunks.push({ tiles: r.tiles }); });
+                                    var _spRes = window.GLBandPlan.measure({ bunks: _spBunks, supply: _glSeats, canon: _glCanon, byDuration: true });
+                                    var _spFmt = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
+                                    var _peakStr = Object.keys(_spRes.cats).sort().map(function (k) { var c = _spRes.cats[k]; return k + ' ' + c.peak + (c.supply == null ? '/∞' : '/' + c.supply); }).join(', ');
+                                    log('[GENERIC-SPREAD shadow] category peak-concurrency / seats: ' + _peakStr);
+                                    if (_spRes.overCats.length) {
+                                        _spRes.overCats.forEach(function (k) {
+                                            var c = _spRes.cats[k];
+                                            var wins = c.overWindows.slice(0, 4).map(function (w) { return _spFmt(w.s) + '-' + _spFmt(w.e) + ' (' + w.demand + '>' + c.supply + ')'; }).join(', ');
+                                            log('[GENERIC-SPREAD shadow]   OVER ' + k + ': peak ' + c.peak + ' > ' + c.supply + ' seats — collides at ' + wins + (c.overWindows.length > 4 ? ' …' : ''));
+                                        });
+                                        log('[GENERIC-SPREAD shadow] spreadable overflow ≈ ' + _spRes.totalOverMin + ' tile-min across ' + _spRes.overCats.length + ' category(ies); a per-band spread serializes the scarce ones across time + lets swim/sport absorb the rest.');
+                                    } else {
+                                        log('[GENERIC-SPREAD shadow] no category exceeds its seats — cross-grade collisions are NOT the bottleneck this run.');
+                                    }
+                                }
+                            } catch (_spShErr) { try { warn('[GENERIC-SPREAD shadow] error: ' + (_spShErr && _spShErr.message)); } catch (_e) {} }
+                            // ── SHARABLE-SPECIAL ALIGNMENT (cluster cross_division specials onto common bands) ──
+                            // PeriodLayout packs each bunk independently, so a uniformly cross_division special
+                            // (e.g. Theme Activity cap 15) scatters across starts → many under-filled sessions,
+                            // and the staggered-sharing guard (_glCapFits / __alignShared) then blocks a same-
+                            // grade bunk from joining a session at an OFFSET start. This clusters such tiles onto
+                            // a shared band — swapping a bunk's off-band special with its OWN equal-duration sport
+                            // sitting on that band — so one session serves many bunks and the vacated slots become
+                            // fillable Sports. SHADOW by default; set window.__glAlign=true to APPLY. Per-bunk
+                            // counts + wall-to-wall + each special's cap are preserved; runs BEFORE fill so the
+                            // fill seats the (now aligned) shared session.
+                            try {
+                                if (window.GLAlign && typeof window.GLAlign.align === 'function') {
+                                    // a subcat qualifies only if EVERY activity in it is cross_division (cap>1) —
+                                    // then a generic tile of that subcat is guaranteed to fill with a sharable
+                                    // activity, so clustering can never strand a not_sharable one.
+                                    var _alSubs = {};
+                                    Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                        var names = _glNamesBySub[sub] || [];
+                                        if (!names.length) return;
+                                        var allX = true, minCap = Infinity;
+                                        names.forEach(function (nm) {
+                                            var sh = _glSpecShare[String(nm).toLowerCase().trim()] || { type: 'not_sharable', cap: 1 };
+                                            if (sh.type !== 'cross_division' || !(sh.cap > 1)) allX = false;
+                                            if (sh.cap < minCap) minCap = sh.cap;
+                                        });
+                                        if (allX && isFinite(minCap) && minCap > 1) _alSubs[sub] = minCap;
+                                    });
+                                    if (Object.keys(_alSubs).length) {
+                                        var _alBunks = [];
+                                        _glOrder.forEach(function (b) { var r = _glOut.layoutByBunk[b]; if (r && r.tiles) _alBunks.push({ tiles: r.tiles }); });
+                                        var _alApply = (typeof window !== 'undefined' && window.__glAlign === true);
+                                        var _alRes = window.GLAlign.align({ bunks: _alBunks, sharableSubcats: _alSubs, canon: _glCanon, apply: _alApply });
+                                        var _alStr = (_alRes.plan.subcats || []).filter(function (s) { return s.sessionsAfter < s.sessionsBefore; })
+                                            .map(function (s) { return s.key + ' ' + s.sessionsBefore + '→' + s.sessionsAfter; }).join(', ');
+                                        if (_alRes.plan.totalSwaps > 0) {
+                                            log('[GENERIC-ALIGN] ' + (_alApply ? 'APPLIED' : 'shadow') + ' — clustered sharable specials onto common bands: ' + _alRes.plan.totalSwaps + ' swap(s)' + (_alStr ? ' (' + _alStr + ')' : '') + (_alApply ? '' : ' — set window.__glAlign=true to apply'));
+                                        } else {
+                                            log('[GENERIC-ALIGN] ' + (_alApply ? 'on' : 'shadow') + ' — no cross_division special needs clustering (already aligned, or no free swap target)');
+                                        }
+                                    }
+                                }
+                            } catch (_alErr) { try { warn('[GENERIC-ALIGN] error — left as-is: ' + (_alErr && _alErr.message)); } catch (_e) {} }
+                            _glOrder.forEach(function (bunk) {
+                                var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                var pool = (sl && sl.specials && sl.specials.priorityList) || [];   // rotation-sorted, constraint-filtered
+                                // seed "used" with any concrete (already-named) special on this bunk's tiles
+                                var used = {};
+                                res.tiles.forEach(function (t) { if (t && !t.generic && t.name) used[String(t.name).toLowerCase()] = 1; });
+                                var sTiles = res.tiles.filter(function (t) { return t && t.generic && t.kind === 'special'; });
+                                // MOST-CONSTRAINED-FIRST: count how many pool activities could EVER fill each
+                                // tile (same subcat + a configured duration covering the tile length, before
+                                // used/capacity) = its "constrainedness", and fill the tightest tiles first so
+                                // a tile with only one possible activity isn't starved by a flexible tile
+                                // grabbing it. This is the ONLY thing bent — rotation ORDER. Every real rule
+                                // (cohort/maxUsage/cooldown already thinned `pool`; access/day/capacity/uniqueness
+                                // below) stays strict.
+                                sTiles.forEach(function (t) {
+                                    var _sub = _glCanon(t.subcat), _dur = t.durationMin, _n = 0;
+                                    for (var _ci = 0; _ci < pool.length; _ci++) {
+                                        var _c = pool[_ci]; if (!_c || !_c.name || _glCanon(_c.subcategory) !== _sub) continue;
+                                        var _d = _glSpecialDurs(_c.name);
+                                        if (!_d.length || _d.indexOf(_dur) >= 0) _n++;
+                                    }
+                                    t._nCand = _n;
+                                });
+                                sTiles.sort(function (a, b) { return (a._nCand - b._nCand) || (a.startMin - b.startMin); });
+                                sTiles.forEach(function (t) {
+                                    _glFill.tiles++;
+                                    var sub = _glCanon(t.subcat);
+                                    var dur = t.durationMin;
+                                    var pick = null, anySub = false, anyDur = false, anyFree = false;
+                                    for (var i = 0; i < pool.length; i++) {
+                                        var c = pool[i];
+                                        if (!c || !c.name) continue;
+                                        if (_glCanon(c.subcategory) !== sub) continue;
+                                        anySub = true;
+                                        var durs = _glSpecialDurs(c.name);
+                                        var fits = durs.length ? (durs.indexOf(dur) >= 0) : true; // no configured durs ⇒ flex ⇒ fits
+                                        if (!fits) continue;
+                                        anyDur = true;
+                                        if (used[String(c.name).toLowerCase()]) continue;        // no same-day repeat (strict)
+                                        anyFree = true;
+                                        // capacity / sharing per the special's own config — a HARD rule, kept strict.
+                                        if (!_glCapFits(c, grade, t.startMin, t.endMin)) { _glFill.capSkips++; continue; }
+                                        pick = c; break;
+                                    }
+                                    if (pick) {
+                                        t._concrete = pick.name;
+                                        t._fillLoc = pick.location || null;
+                                        used[String(pick.name).toLowerCase()] = 1;
+                                        _glRecordUse(pick, grade, t.startMin, t.endMin);
+                                        _glFill.filled++;
+                                    } else {
+                                        _glFill.miss++;
+                                        // WHY it couldn't fill (so config-vs-engine is clear):
+                                        //   no-activity-in-subcat → no special tagged this subcat exists for the bunk
+                                        //   no-activity-at-Nmin    → DURATION TRAP: a special exists but none at this length
+                                        //   pool-exhausted         → every duration-matching special is already used/thinned today
+                                        //   capacity-full          → all candidates blocked by their sharing cap at this time
+                                        var cause = !anySub ? 'no-activity-in-subcat'
+                                                  : !anyDur ? ('no-activity-at-' + dur + 'min')
+                                                  : !anyFree ? 'pool-exhausted'
+                                                  // capacity-full splits: recoverable (a within-bunk swap onto an
+                                                  // equal-dur sport/special slot could fill it) vs stuck (free
+                                                  // capacity only at wall-times → config / layout-spread only).
+                                                  : (_glCapRecoverable(t, grade, pool, used, res.tiles) ? 'capacity-recoverable' : 'capacity-stuck');
+                                        _glFill.causes[cause] = (_glFill.causes[cause] || 0) + 1;
+                                        if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min [' + cause + ']');
+                                    }
+                                });
+                            });
+                            // ── RESTRUCTURE (stagger): recover capacity misses by within-bunk swaps ──
+                            // Shuffle equal-duration tiles so an empty special lands on a free-capacity time
+                            // (a generic SPORT just moves; a filled SPECIAL keeps/re-picks its activity).
+                            // Only TIME changes — wall-to-wall + sharing/uniqueness/duration stay strict.
+                            // Isolated + unit-tested in gl_stagger.js (the v1 inline attempt threw a stack
+                            // overflow; this calls the tested module). Toggle: window.__staggerFill=false.
+                            try {
+                                if (window.__staggerFill !== false && window.GLStagger && typeof window.GLStagger.restructure === 'function') {
+                                    var _stagBunks = [];
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        _stagBunks.push({ grade: grade, tiles: res.tiles, pool: pool });
+                                    });
+                                    var _stagCtx = {
+                                        bunks: _stagBunks,
+                                        canon: _glCanon,
+                                        specialDurs: _glSpecialDurs,
+                                        capFits: _glCapFits,
+                                        recordUse: _glRecordUse,
+                                        removeUse: _glRemoveUse,
+                                        onRecover: function () {
+                                            _glFill.filled++; _glFill.miss--;
+                                            _glFill.staggered = (_glFill.staggered || 0) + 1;
+                                            _glFill.causes['capacity-recoverable'] = Math.max(0, (_glFill.causes['capacity-recoverable'] || 0) - 1);
+                                        }
+                                    };
+                                    // ITERATE to a fixed point: each swap frees capacity that can unlock the
+                                    // next miss. Bounded (≤6 passes); stop as soon as a pass recovers nothing.
+                                    for (var _stagPass = 0; _stagPass < 6; _stagPass++) {
+                                        var _stagRes = window.GLStagger.restructure(_stagCtx);
+                                        if (!_stagRes || !_stagRes.recovered) break;
+                                    }
+                                }
+                            } catch (_glStagErr) { try { warn('[GENERIC-STAGGER] error — left as-is: ' + (_glStagErr && _glStagErr.message)); } catch (_e) {} }
+                            // ── ABSORB: "if you can't fill a special, use a sport" ─────────────
+                            // The still-OPEN stretches (empty specials + the layout's generic sport filler)
+                            // are re-tiled into ≤40-min blocks; each block becomes a Sport WHERE THE CAMP'S
+                            // SPACING GATE ALLOWS ONE (e.g. honoring "no Sport within 40 min of a Sport"),
+                            // otherwise a generic Special — so the merges never violate the rules. FILLED
+                            // specials and walls are left untouched (the layers the day must keep) and break
+                            // the runs. The gate is the SAME `_glGate` the layout used, so absorb's Sports
+                            // obey the same spacing. Toggle: window.__absorbSport=false.
+                            try {
+                                if (window.__absorbSport !== false && window.GLStagger && typeof window.GLStagger.absorbUnfilledToSport === 'function') {
+                                    var _absBunks = [];
+                                    // SPORTLESS (default ON, kill window.__sportlessNoSport=false): a grade with NO
+                                    // sport layer must never get a "Sport" filler — flag the bunk so absorb fills
+                                    // its open time with REAL specials instead. window.__sportlessRepeatFill (default
+                                    // OFF) lets such a bunk repeat a special to fill the day rather than go dead.
+                                    var _slNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        var _noSport = _slNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                        _absBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
+                                    });
+                                    // STEP 3 — pass the fill context so a Sport-spacing-blocked block is filled with a
+                                    // REAL special that still has a seat (aware of what fill already took) before any
+                                    // dead generic placeholder. capFits keeps sharing/cap strict; recordUse threads
+                                    // the cross-bunk usage so two bunks never over-share one activity.
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true) });
+                                    if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.absorbRepeat = _absRes.toRepeatFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0) + (_absRes.toRepeatFilled || 0); }
+                                    if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }
+                                    if (_absRes && (_absRes.toSplitFilled || 0) > 0) { log('[GENERIC-ABSORB-SPLIT] ' + _absRes.toSplitFilled + ' short special tile(s) placed by splitting stuck 40-min windows (theme/food/shiur combos) that would otherwise be dead'); }
+                                    // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
+                                    // help. RELOCATABLE = a movable sport blocks it (the reorder the user asked for
+                                    // is worth building); WALL-STUCK = blocked by lunch/swim/anchor (reorder can't
+                                    // help — the lever is config: raise this special's cap/sharing or add a seat).
+                                    if (_absRes && _absRes.reorderProbe) {
+                                        var _rp = _absRes.reorderProbe;
+                                        var _rpTot = (_rp.feasible || 0) + (_rp.wallStuck || 0);
+                                        var _rpFmt = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
+                                        if (_rpTot) {
+                                            log('[GENERIC-REORDER-PROBE] ' + _rpTot + ' dead window(s): ' + (_rp.feasible || 0) + ' RELOCATABLE (a movable sport blocks them — a reorder could free a properly-spaced sport) · ' + (_rp.wallStuck || 0) + ' WALL-STUCK (blocked by lunch/swim/anchor — reorder cannot help; raise the special\'s cap/sharing or add a seat)');
+                                            (_rp.detail || []).slice(0, 20).forEach(function (d) { log('[GENERIC-REORDER-PROBE]   • ' + d.bunk + ' ' + _rpFmt(d.s) + '-' + _rpFmt(d.e) + ' → ' + (d.feasible ? 'RELOCATABLE (movable sport blocker)' : 'WALL-STUCK')); });
+                                        } else {
+                                            log('[GENERIC-REORDER-PROBE] ✓ no dead windows to reorder');
+                                        }
+                                    }
+                                }
+                            } catch (_glAbsErr) { try { warn('[GENERIC-ABSORB] error — left as-is: ' + (_glAbsErr && _glAbsErr.message)); } catch (_e) {} }
+                            // ── REORDER (engine, default ON — kill with window.__reorderApply=false): the
+                            // absorb probe above only MEASURES which dead windows are RELOCATABLE. This pass
+                            // ACTS on them. For each dead generic special whose only blocker is a MOVABLE
+                            // generic sport sitting in its spacing radius, SWAP the two (equal duration, both
+                            // stay inside their layer windows) — but only as a STRICT WIN: the displaced
+                            // special must land a concrete free-seat fill at the sport's vacated slot AND a
+                            // Sport must be spacing-legal in the freed window (gated against the bunk's FULL
+                            // tile set minus the moved sport). Net per rescue: one dead tile → a real filled
+                            // special; the sport merely relocates (the later GENERIC-SPORT-FILL concretizes it
+                            // on a field). capFits gates the fill, the gate gates the sport — every
+                            // sharing/cap/spacing rule stays strict. Fail-soft: any error leaves tiles as-is.
+                            try {
+                                if ((typeof window === 'undefined' || window.__reorderApply !== false) && window.GLStagger && typeof window.GLStagger.reorderDeadWindows === 'function') {
+                                    var _reoBunks = [];
+                                    var _reoNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        var _noSport = _reoNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                        _reoBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
+                                    });
+                                    var _reoRes = window.GLStagger.reorderDeadWindows({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
+                                    if (_reoRes && _reoRes.reordered) {
+                                        _glFill.reordered = _reoRes.reordered;
+                                        log('[GENERIC-REORDER] rescued ' + _reoRes.reordered + ' dead window(s): swapped a blocking movable sport out → the freed window becomes a properly-spaced Sport and the displaced special is filled concretely (' + _reoRes.attempts + ' swap attempt(s))');
+                                    } else if (_reoRes && _reoRes.attempts) {
+                                        log('[GENERIC-REORDER] no strict-win swaps among ' + _reoRes.attempts + ' candidate(s) — dead windows left as-is (the displaced special found no free seat, or a Sport would be mis-spaced in the freed window)');
+                                    }
+                                }
+                            } catch (_glReoErr) { try { warn('[GENERIC-REORDER] error — left as-is: ' + (_glReoErr && _glReoErr.message)); } catch (_e) {} }
+                            // ── REORDER → SPORT (engine, default ON — kill: window.__reorderSportConvert=false):
+                            // the strict reorder above only rescues a dead special when an EQUAL-duration sport
+                            // blocks it. The [GENERIC-REORDER-PROBE] flags MANY more RELOCATABLE windows whose
+                            // blocker is a DIFFERENT duration (a 10-min dead food behind a 40-min sport) — no
+                            // equal-dur swap exists, so the strict pass never fires on them. This pass rescues
+                            // those: it RELOCATES the unequal-dur blocker via a clean equal-dur swap with the
+                            // bunk's OWN movable generic SPECIAL, freeing the dead window for a spacing-legal
+                            // Sport that GENERIC-SPORT-FILL then concretizes on a field (sport-fill succeeds far
+                            // more often than a jammed special seat opens). A weekly-must subcat (e.g. shiur,
+                            // min/week) is PROTECTED — its placeholder is retried another day, never turned into
+                            // a sport. Strictly gated (no new spacing violation), fail-soft.
+                            try {
+                                if ((typeof window === 'undefined' || window.__reorderSportConvert !== false) && window.GLStagger && typeof window.GLStagger.reorderDeadToSport === 'function') {
+                                    // PROTECT subcats whose activities carry a min-frequency must-have (weekly shiur etc.)
+                                    var _reoProtect = {};
+                                    try {
+                                        var _reoByName = {};
+                                        try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _reoByName[s.name] = s; }); } catch (_e) {}
+                                        Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                            (_glNamesBySub[sub] || []).forEach(function (nm) {
+                                                var ap = _reoByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                                if (ap && parseInt(ap.minFrequency, 10) > 0) _reoProtect[sub] = true;
+                                            });
+                                        });
+                                    } catch (_e) {}
+                                    var _rcNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
+                                    var _rcBunks = [];
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var _noSport = _rcNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                        _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
+                                    });
+                                    var _rcMaxBlk = (typeof window !== 'undefined' && +window.__reorderMaxBlockers > 1) ? +window.__reorderMaxBlockers : 3;
+                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rcMaxBlk, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)]; } });
+                                    if (_rcRes && _rcRes.converted) {
+                                        _glFill.reorderConverted = _rcRes.converted;
+                                        log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s)' + ((_rcRes.multiHops || 0) ? ', ' + _rcRes.multiHops + ' via multi-blocker reorder' : '') + ((_rcRes.filledMoves || 0) ? ', ' + _rcRes.filledMoves + ' by moving a filled special into the freed slot' : '') + ', ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
+                                    } else if (_rcRes && _rcRes.attempts) {
+                                        log('[GENERIC-REORDER-CONVERT] 0 rescued — examined ' + _rcRes.attempts + ' blocker-swap candidate(s), none freed a spacing-legal window (the blocker or the freed slot would be mis-spaced, or the displaced activity had no seat at its new slot)');
+                                    }
+                                }
+                            } catch (_glRcErr) { try { warn('[GENERIC-REORDER-CONVERT] error — left as-is: ' + (_glRcErr && _glRcErr.message)); } catch (_e) {} }
+                            // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,
+                            // no matter which pass laid a tile. Any UNFILLED generic special over its
+                            // seats (camp-wide OR per-grade) is pulled down to a category with room (sport
+                            // first, then another accessible special). Then AUDIT the final state and log
+                            // any residual so the cap is always visible/accountable. Toggle window.__seatGate.
+                            try {
+                                if (window.__seatGate !== false && window.GLBandPlan && typeof window.GLBandPlan.enforce === 'function') {
+                                    var _enfBunks = [];
+                                    _glOrder.forEach(function (bunk) { var r = _glOut.layoutByBunk[bunk]; if (r && r.tiles) _enfBunks.push({ grade: (_glPerBunk[bunk] && _glPerBunk[bunk].grade), tiles: r.tiles }); });
+                                    // sportless grades (no sport layer) → enforce must never pull an over-cap special down to Sport
+                                    var _enfSportless = {};
+                                    try { if ((typeof window === 'undefined') || (window.__sportlessNoSport !== false)) { allGrades.forEach(function (g) { if (typeof gradeHasSportLayer === 'function' && !gradeHasSportLayer(g)) _enfSportless[String(g)] = 1; }); } } catch (_e) {}
+                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport', byDuration: true, sportlessGrades: _enfSportless });
+                                    if (_enf) {
+                                        var _fmtA = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
+                                        log('[SEAT AUDIT] over-cap leftovers pulled down: ' + (_enf.toSport || 0) + ' → Sport, ' + (_enf.toOtherSpecial || 0) + ' → another subcat'
+                                            + ((_enf.left || 0) ? ('; ' + _enf.left + ' could NOT be moved (every category full at that time)') : ''));
+                                        if (_enf.violations && _enf.violations.length) {
+                                            _enf.violations.slice(0, 8).forEach(function (v) {
+                                                log('[SEAT AUDIT]   ⚠ STILL OVER ' + v.cat + (v.grade ? (' (' + v.grade + ')') : ' (camp-wide)') + ': ' + v.peak + ' > ' + v.cap + ' seats @ ' + _fmtA(v.at[0]) + '-' + _fmtA(v.at[1]) + ' — genuine over-capacity (raise this activity\'s sharing/capacity or add one)');
+                                            });
+                                        } else {
+                                            log('[SEAT AUDIT]   ✓ every category within its seats (camp-wide AND per-grade) in the final schedule');
+                                        }
+                                    }
+                                }
+                            } catch (_glEnfErr) { try { warn('[SEAT AUDIT] error — ' + (_glEnfErr && _glEnfErr.message)); } catch (_e) {} }
+                            // ── RELEASE UNFILLABLE WEEKLY-MUST PLACEHOLDERS (default ON — kill:
+                            // window.__releaseWeeklyPlaceholders=false). Runs LAST — after SEAT-ENFORCE, which is
+                            // what CREATES most of these placeholders via enforce-relabel — so it sees every
+                            // unfilled protected tile. A protected weekly-must subcat (e.g. shiur: minFrequency≥1/
+                            // week) whose scarce per-grade seat was taken today leaves a generic placeholder that
+                            // renders as a blank "Shiur" cell. When the bunk's weekly min is NOT now-or-never —
+                            // need < remaining camp-days, the SAME geometry the GENERIC-WEEKLY floor uses — the
+                            // reservation can wait for a later day, so RELEASE the slot: (1) fill it with any free
+                            // real special (CROSS-subcat, via the EXACT duration/used/capFits gates the main fill
+                            // uses — no validator rule bent, the weekly count just lands on another day), else (2)
+                            // mark it _releasable and hand the batch to one more reorder→sport pass (proven spacing
+                            // gate; GENERIC-SPORT-FILL then concretizes it on a field) so a Sport beats a blank.
+                            // NEVER release on a now-or-never day (need ≥ remaining) — that would drop the weekly
+                            // guarantee. Fail-soft.
+                            try {
+                                var _rwOn = (typeof window === 'undefined') || (window.__releaseWeeklyPlaceholders !== false);
+                                var _rwU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                var _rwToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                                if (_rwOn && _rwU && typeof _rwU.getPeriodActivityCount === 'function' && _rwToday) {
+                                    // protected weekly-must subcats (mirror the reorder-convert protect set)
+                                    var _rwByName = {};
+                                    try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _rwByName[s.name] = s; }); } catch (_e) {}
+                                    var _rwProtect = {};
+                                    Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                        (_glNamesBySub[sub] || []).forEach(function (nm) {
+                                            var ap = _rwByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                            if (ap && parseInt(ap.minFrequency, 10) > 0) _rwProtect[sub] = true;
+                                        });
+                                    });
+                                    // releasable iff the bunk's weekly min for this subcat is NOT now-or-never
+                                    // (need < remaining camp-days). Mirrors GENERIC-WEEKLY geometry (lines ~17845-17900).
+                                    var _rwReleasable = function (bunk, grade, sub) {
+                                        var names = _glNamesBySub[sub] || []; if (!names.length) return true;
+                                        var M = 0, period = 'week';
+                                        names.forEach(function (nm) {
+                                            var ap = _rwByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                            if (!ap) return;
+                                            var pg = (ap.minFrequencyPerGrade && ap.minFrequencyPerGrade[grade] != null) ? parseInt(ap.minFrequencyPerGrade[grade], 10) : null;
+                                            var mf = (pg != null && pg > 0) ? pg : (ap.minFrequency != null ? parseInt(ap.minFrequency, 10) : 0);
+                                            if (mf > 0) { if (mf > M) M = mf; period = ap.minFrequencyPeriod || 'week'; }
+                                        });
+                                        if (M <= 0) return true;                                 // not actually a weekly min → releasable
+                                        var per = (period === 'week') ? '1week' : period;
+                                        var wtd = 0; names.forEach(function (nm) { try { wtd += _rwU.getPeriodActivityCount(bunk, nm, per, _rwToday) || 0; } catch (_e) {} });
+                                        var need = M - wtd;
+                                        if (need <= 0) return true;                              // weekly min already met → releasable
+                                        var D = 5, e = 1;
+                                        try {
+                                            var ps = (typeof _rwU.getPeriodStartDate === 'function') ? _rwU.getPeriodStartDate(per, _rwToday) : null;
+                                            if (ps && typeof _rwU.countCampDays === 'function') {
+                                                var nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
+                                                var peD = new Date(ps + 'T00:00:00'); peD.setDate(peD.getDate() + nW * 7 - 1);
+                                                var peStr = peD.getFullYear() + '-' + String(peD.getMonth() + 1).padStart(2, '0') + '-' + String(peD.getDate()).padStart(2, '0');
+                                                D = Math.max(1, _rwU.countCampDays(ps, peStr) || 5);
+                                                e = Math.max(1, _rwU.countCampDays(ps, _rwToday) || 1);
+                                            }
+                                        } catch (_e) {}
+                                        // boundary decision = the tested GLStagger.weeklyReleasable (faithful inline fallback)
+                                        return (typeof window !== 'undefined' && window.GLStagger && typeof window.GLStagger.weeklyReleasable === 'function')
+                                            ? window.GLStagger.weeklyReleasable({ minFreq: M, weekToDate: wtd, daysInPeriod: D, dayOfPeriod: e })
+                                            : (need < Math.max(1, D - e + 1));                   // NOT now-or-never
+                                    };
+                                    var _rwFilled = 0, _rwMarked = 0, _rwKept = 0;
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var phs = res.tiles.filter(function (t) { return t && t.kind === 'special' && t.generic !== false && !t._concrete && _rwProtect[_glCanon(t.subcat)]; });
+                                        if (!phs.length) return;
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        var used = {};
+                                        res.tiles.forEach(function (t) { if (t && t._concrete) used[String(t._concrete).toLowerCase()] = 1; else if (t && t.generic === false && t.name) used[String(t.name).toLowerCase()] = 1; });
+                                        phs.forEach(function (t) {
+                                            if (!_rwReleasable(bunk, grade, _glCanon(t.subcat))) { _rwKept++; return; }   // now-or-never → keep the reservation
+                                            // (1) CROSS-subcat real fill — any free special of the tile's length (same gates as the main fill)
+                                            var dur = t.durationMin, pick = null;
+                                            for (var i = 0; i < pool.length; i++) {
+                                                var c = pool[i]; if (!c || !c.name) continue;
+                                                if (used[String(c.name).toLowerCase()]) continue;            // no same-day repeat
+                                                var durs = _glSpecialDurs(c.name);
+                                                var fits = durs.length ? (durs.indexOf(dur) >= 0) : true;
+                                                if (!fits) continue;
+                                                if (!_glCapFits(c, grade, t.startMin, t.endMin)) continue;    // sharing/cap — the validator-mirrored hard gate
+                                                pick = c; break;
+                                            }
+                                            if (pick) {
+                                                t._concrete = pick.name;
+                                                t._fillLoc = pick.location || null;
+                                                t.subcat = pick.subcategory || t.subcat;                      // keep the tile consistent with what was placed
+                                                t._origin = 'weekly-release-fill';
+                                                used[String(pick.name).toLowerCase()] = 1;
+                                                _glRecordUse(pick, grade, t.startMin, t.endMin);
+                                                _rwFilled++;
+                                            } else {
+                                                t._releasable = true;                                         // (2) sport fallback below
+                                                _rwMarked++;
+                                            }
+                                        });
+                                    });
+                                    // SPORT fallback for the ones no real special could fill: one more reorder→sport
+                                    // pass restricted to the released tiles (proven spacing gate + relocation; only
+                                    // generic tiles move). GENERIC-SPORT-FILL (below) then concretizes them.
+                                    var _rwSported = 0;
+                                    if (_rwMarked && (typeof window === 'undefined' || window.__reorderSportConvert !== false) && window.GLStagger && typeof window.GLStagger.reorderDeadToSport === 'function') {
+                                        var _rwNoSportOn = (typeof window === 'undefined') || (window.__sportlessNoSport !== false);
+                                        var _rwBunks = [];
+                                        _glOrder.forEach(function (bunk) {
+                                            var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                            var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                            var _ns = _rwNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
+                                            _rwBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _ns });
+                                        });
+                                        var _rwMaxBlk = (typeof window !== 'undefined' && +window.__reorderMaxBlockers > 1) ? +window.__reorderMaxBlockers : 3;
+                                        var _rwSp = window.GLStagger.reorderDeadToSport({ bunks: _rwBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rwMaxBlk, canConvert: function (t) { return t._releasable === true; } });
+                                        _rwSported = (_rwSp && _rwSp.converted) || 0;
+                                    }
+                                    if (_rwFilled || _rwMarked) {
+                                        _glFill.weeklyReleased = (_rwFilled + _rwSported);
+                                        log('[GENERIC-RELEASE-WEEKLY] cleared ' + (_rwFilled + _rwSported) + '/' + (_rwFilled + _rwMarked) + ' non-deadline weekly-must placeholder(s): ' + _rwFilled + ' filled with a real special, ' + _rwSported + ' converted to Sport' + ((_rwMarked - _rwSported) ? ', ' + (_rwMarked - _rwSported) + ' still stuck (no free special + sport mis-spaced)' : '') + (_rwKept ? ' · ' + _rwKept + ' kept (now-or-never today)' : ''));
+                                    } else if (_rwKept) {
+                                        log('[GENERIC-RELEASE-WEEKLY] 0 released — ' + _rwKept + ' weekly-must placeholder(s) are now-or-never today (kept as reservations)');
+                                    }
+                                }
+                            } catch (_rwErr) { try { warn('[GENERIC-RELEASE-WEEKLY] error — placeholders left as-is: ' + (_rwErr && _rwErr.message)); } catch (_e) {} }
+                        } catch (_glFillErr) { try { warn('[GENERIC-FILL] error — tiles left generic: ' + (_glFillErr && _glFillErr.message)); } catch (_e) {} }
+                    }
+
+                    // ── FLOAT SWIM: re-attach the CHANGE buffer adjacent to each repositioned swim.
+                    // A swim+change envelope (≈60 min) is too long for the 40-min gaps, so swim floats
+                    // alone; here we carve the configured pre/post-change from the generic SPORT block
+                    // touching swim (abundant after absorb) so swimmers keep their change time next to
+                    // swim. Carve from a sport only (never a filled special) → no real activity is lost.
+                    if (_glFloatSwim) {
+                        try {
+                            var _swChAtt = 0, _swChMiss = 0;
+                            _glOrder.forEach(function (bunk) {
+                                var r = _glOut.layoutByBunk[bunk]; if (!r || !r.tiles) return;
+                                var _gr = _glPerBunk[bunk] && _glPerBunk[bunk].grade;
+                                var _sL = (layersByGrade[_gr] || []).filter(function (L) { return L && String(L.type || '').toLowerCase() === 'swim'; })[0];
+                                var _preC = (_sL && _sL.preChangeMin > 0) ? _sL.preChangeMin : 0;
+                                var _postC = (_sL && _sL.postChangeMin > 0) ? _sL.postChangeMin : 0;
+                                if (_preC <= 0 && _postC <= 0) return;
+                                var _tiles = r.tiles;
+                                _tiles.filter(function (t) { return t.kind === 'swim'; }).forEach(function (sw) {
+                                    var _did = false;
+                                    if (_postC > 0) {
+                                        var _aft = _tiles.filter(function (t) { return t !== sw && t.kind === 'sport' && t.generic !== false && t.startMin === sw.endMin && (t.endMin - t.startMin) >= _postC; })[0];
+                                        if (_aft) {
+                                            var _cs = _aft.startMin; _aft.startMin = _cs + _postC; _aft.durationMin = _aft.endMin - _aft.startMin;
+                                            if (_aft.durationMin <= 0) { var _ai = _tiles.indexOf(_aft); if (_ai >= 0) _tiles.splice(_ai, 1); }
+                                            _tiles.push({ kind: 'change', subcat: null, name: 'Change', generic: false, startMin: _cs, endMin: _cs + _postC, durationMin: _postC, _origin: 'swim-change' });
+                                            _swChAtt++; _did = true;
+                                        }
+                                    }
+                                    if (!_did && _preC > 0) {
+                                        var _bef = _tiles.filter(function (t) { return t !== sw && t.kind === 'sport' && t.generic !== false && t.endMin === sw.startMin && (t.endMin - t.startMin) >= _preC; })[0];
+                                        if (_bef) {
+                                            var _ce = _bef.endMin; _bef.endMin = _ce - _preC; _bef.durationMin = _bef.endMin - _bef.startMin;
+                                            if (_bef.durationMin <= 0) { var _bi = _tiles.indexOf(_bef); if (_bi >= 0) _tiles.splice(_bi, 1); }
+                                            _tiles.push({ kind: 'change', subcat: null, name: 'Change', generic: false, startMin: _ce - _preC, endMin: _ce, durationMin: _preC, _origin: 'swim-change' });
+                                            _swChAtt++; _did = true;
+                                        }
+                                    }
+                                    if (!_did) _swChMiss++;
+                                });
+                            });
+                            log('[GENERIC-LAYOUT] FLOAT SWIM: attached ' + _swChAtt + ' change block(s) next to swim' + (_swChMiss ? (' — ' + _swChMiss + ' swim(s) had no adjacent sport to carve change from (left without change)') : ''));
+                        } catch (_glSwChErr) { try { warn('[GENERIC-LAYOUT] swim-change attach error — ' + (_glSwChErr && _glSwChErr.message)); } catch (_e) {} }
+                    }
+
+                    // ── PROVENANCE: name every UNFILLED generic Special still in the schedule — bunk +
+                    // time + which pass placed it — so the "blind" ones are explicit. origin legend:
+                    //   layout       = original wall-to-wall tiling (the main packer)
+                    //   absorb-kept  = ADDED LATER: a sport was spacing-blocked AND no special seat was
+                    //                  free there → the blind dead placeholder the user flagged
+                    //   absorb-fill / enforce-* = post-pass relabels. (user ask: "see when… bunk + time")
+                    try {
+                        var _provList = [], _provBy = {};
+                        _glOrder.forEach(function (bunk) {
+                            var r = _glOut.layoutByBunk[bunk]; if (!r || !r.tiles) return;
+                            r.tiles.forEach(function (t) {
+                                if (t.kind === 'special' && t.generic !== false && !t._concrete) {
+                                    var o = t._origin || '?'; _provBy[o] = (_provBy[o] || 0) + 1;
+                                    _provList.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + '-' + minutesToTimeLabel(t.endMin) + ' (' + (t.subcat || 'uncategorized') + ') [' + o + ']');
+                                }
+                            });
+                        });
+                        if (_provList.length) {
+                            log('[GENERIC-PROVENANCE] ' + _provList.length + ' unfilled generic Special tile(s) remain — by origin: ' + Object.keys(_provBy).sort().map(function (o) { return o + '×' + _provBy[o]; }).join(', '));
+                            log('[GENERIC-PROVENANCE]   legend: layout=original tiling · absorb-kept=added later (sport blocked + no free special) · enforce-*=seat-cap relabel');
+                            _provList.slice(0, 50).forEach(function (s) { log('[GENERIC-PROVENANCE]   • ' + s); });
+                        } else {
+                            log('[GENERIC-PROVENANCE] ✓ no unfilled generic Special tiles remain in the final schedule');
+                        }
+                    } catch (_glProvErr) {}
+
+                    // 3) Build a GENERIC autoSkeleton from the tiles → divisionTimes → _perBunkSlots
+                    //    (mirrors STEP 2.7 :20069). Uses a LOCAL skeleton var — the real
+                    //    `autoSkeleton` const isn't declared until ~:19732 (TDZ if touched here).
+                    var _genSkeleton = [];
+                    var _bunkToGrade = {};
+                    allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _bunkToGrade[String(b)] = g; }); });
+
+                    // 2.7) FILL SPORTS — turn each generic "Sport" tile into a CONCRETE sport on a
+                    // real field, so the day shows Basketball/Hockey/… instead of the "Sport"
+                    // placeholder. For each generic sport tile (incl. absorb-sport), take the
+                    // ROTATION-BEST sport from the bunk's sportPriorityList (already access+rotation
+                    // sorted) that (a) the bunk hasn't had today (no same-day repeat) and (b) has a
+                    // field FREE at the tile's time — checked + claimed via the same isFieldAvailable
+                    // / claimFieldGlobal the legacy solver uses, so no two bunks double-book a field,
+                    // no sport exceeds its field capacity, sharing/maxPlayers honored. The field claim
+                    // naturally SPREADS sports (once a sport's fields are full, the next bunk takes the
+                    // next sport). A tile with no free field stays generic "Sport" (e.g. the >15-
+                    // concurrent overflow). Kill: window.__fillSports=false.
+                    if ((typeof window === 'undefined') || (window.__fillSports !== false)) {
+                        var _glSportFilled = 0, _glSportMiss = 0, _glSportFieldsReset = 0;
+                        try {
+                            // STALE-CLAIM RESET. The draft planner (runGlobalPlanner @15190) already
+                            // claimed fields in fieldLedger for its 95 *drafted* sports — but the generic
+                            // layout re-tiles from scratch and ignores those draft placements, so every
+                            // sport field reads as occupied here and the fill would place 0. Release the
+                            // occupancy on SPORT fields only (fields any sport can use), so the fill
+                            // claims reflect ONLY the generic sport tiles it actually places. Safe: the
+                            // validator never reads fieldLedger (it rebuilds from scheduleAssignments),
+                            // generic specials/swim key on activity name (not physical courts), and
+                            // nothing downstream of the generic block reads fieldLedger. Non-sport field
+                            // claims (e.g. league/trip courts) are left intact.
+                            var _glSportFieldSet = Object.create(null);
+                            _glOrder.forEach(function (bunk) {
+                                var _sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
+                                var _pl = (_sl && _sl.sports && _sl.sports.priorityList) || [];
+                                _pl.forEach(function (sp) { (sp && sp.fields || []).forEach(function (fn) { _glSportFieldSet[fn] = 1; }); });
+                            });
+                            try {
+                                Object.keys(_glSportFieldSet).forEach(function (fn) {
+                                    if (fieldLedger[fn] && Array.isArray(fieldLedger[fn].claims) && fieldLedger[fn].claims.length) { fieldLedger[fn].claims = []; _glSportFieldsReset++; }
+                                });
+                            } catch (_eClr) {}
+                            _glOrder.forEach(function (bunk) {
+                                var res0 = _glOut.layoutByBunk[bunk]; if (!res0 || !res0.tiles) return;
+                                var grd = _bunkToGrade[String(bunk)];
+                                var sl0 = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
+                                var plist = (sl0 && sl0.sports && sl0.sports.priorityList) || [];
+                                if (!plist.length) return;
+                                var usedSport = Object.create(null);
+                                res0.tiles.forEach(function (t) { if (t.kind === 'sport' && t._concrete) usedSport[String(t._concrete).toLowerCase()] = 1; });
+                                res0.tiles.filter(function (t) { return t.kind === 'sport' && t.generic !== false && !t._concrete; })
+                                    .sort(function (a, b) { return a.startMin - b.startMin; })
+                                    .forEach(function (t) {
+                                        var placed = false;
+                                        for (var i = 0; i < plist.length && !placed; i++) {
+                                            var sp = plist[i]; if (!sp || !sp.name) continue;
+                                            var nm = String(sp.name).toLowerCase();
+                                            if (usedSport[nm]) continue;                 // no same-day repeat
+                                            var flds = sp.fields || [];
+                                            for (var fi = 0; fi < flds.length; fi++) {
+                                                var ok = false;
+                                                try { ok = isFieldAvailable(flds[fi], t.startMin, t.endMin, bunk, grd, sp.name); } catch (_e) { ok = false; }
+                                                if (!ok) continue;
+                                                // STAGGERED-SHARING GUARD: a shareable (cap>1) field may be co-used by
+                                                // two SAME-GRADE bunks only if they START together — the validator
+                                                // forbids mid-session joins ("staggered_sharing"). If a same-grade
+                                                // bunk already holds an overlapping, different-START claim on this
+                                                // field, skip it and try another field/sport. Without this the
+                                                // capacity-repair gate demoted the staggered sport → Free (a generic
+                                                // hole — exactly what we're trying to remove). Mirrors _glCapFits for
+                                                // specials. Cross-grade is left to the capacity gate, matching the
+                                                // cross_division/any_division/custom sharing exemption.
+                                                var _stag = false;
+                                                try {
+                                                    var _cl = (fieldLedger[flds[fi]] && fieldLedger[flds[fi]].claims) || [];
+                                                    for (var _ci = 0; _ci < _cl.length; _ci++) {
+                                                        var _c = _cl[_ci];
+                                                        if (_c && _c.startMin !== t.startMin && _c.endMin > t.startMin && _c.startMin < t.endMin && String(_c.grade) === String(grd)) { _stag = true; break; }
+                                                    }
+                                                } catch (_eS) {}
+                                                if (_stag) continue;
+                                                // Claim by DIRECT ledger push. claimFieldGlobal is nested inside
+                                                // runGlobalPlanner (out of scope here — it was silently throwing,
+                                                // which is why every tile missed despite isFieldAvailable=Y).
+                                                // fieldLedger is in scope (the wall passes push to it the same
+                                                // way at :15857/:17496/:19767); availability already verified above.
+                                                var claimed = false;
+                                                try {
+                                                    var _fl = fieldLedger[flds[fi]];
+                                                    if (_fl && Array.isArray(_fl.claims)) { _fl.claims.push({ bunk: bunk, grade: grd, activity: sp.name, startMin: t.startMin, endMin: t.endMin }); claimed = true; }
+                                                } catch (_e) { claimed = false; }
+                                                if (!claimed) continue;
+                                                t._concrete = sp.name; t.name = sp.name; t._assignedSport = sp.name; t._fillLoc = flds[fi];
+                                                usedSport[nm] = 1; placed = true; _glSportFilled++;
+                                                break;
+                                            }
+                                        }
+                                        if (!placed) _glSportMiss++;
+                                    });
+                            });
+                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : '') + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)');
+                        } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
+                    }
+
+                    // SPORTLESS SAFETY (belt-and-suspenders; kill window.__sportlessNoSport=false):
+                    // a grade with NO sport layer must never show a generic "Sport" tile. The absorb
+                    // + seat-enforce are already gated, but convert ANY residual generic sport tile in
+                    // a sportless grade to a neutral special placeholder so a camp that can't staff a
+                    // single sport never ends up with phantom "Sport" cells, whatever pass laid them.
+                    try {
+                        if ((typeof window === 'undefined') || (window.__sportlessNoSport !== false)) {
+                            var _splessN = 0;
+                            _glOrder.forEach(function (bunk) {
+                                var _sg = _bunkToGrade[String(bunk)];
+                                if (typeof gradeHasSportLayer === 'function' && gradeHasSportLayer(_sg)) return; // grade has sport → leave
+                                var _sres = _glOut.layoutByBunk[bunk]; if (!_sres || !_sres.tiles) return;
+                                _sres.tiles.forEach(function (t) {
+                                    if (t && t.kind === 'sport' && t.generic !== false && !t._concrete) {
+                                        t.kind = 'special'; t.subcat = 'uncategorized'; t.name = 'Special: Uncategorized'; t._fillLoc = null; t._origin = 'sportless-safety';
+                                        _splessN++;
+                                    }
+                                });
+                            });
+                            if (_splessN) log('[GENERIC-SPORTLESS] converted ' + _splessN + ' residual generic Sport tile(s) → Special (grade has no sport layer)');
+                        }
+                    } catch (_splessErr) { try { warn('[GENERIC-SPORTLESS] error — ' + (_splessErr && _splessErr.message)); } catch (_e) {} }
+
+                    _glOrder.forEach(function (bunk) {
+                        var grade = _bunkToGrade[String(bunk)];
+                        var res = _glOut.layoutByBunk[bunk];
+                        if (!res) return;
+                        res.tiles.forEach(function (t) {
+                            // a FILLED special tile carries a concrete activity (_concrete) → emit that as
+                            // the event and mark it NON-generic so same-day-repeat validation applies to it
+                            // (no two Basketballs); an unfilled tile keeps its generic "Special: <subcat>"
+                            // label. _subcat + _specialLocation are carried for the fill / sharing steps.
+                            var _ev = t._concrete || t.name;
+                            _genSkeleton.push({ division: grade, _bunk: bunk, startMin: t.startMin, endMin: t.endMin, startTime: minutesToTimeLabel(t.startMin), endTime: minutesToTimeLabel(t.endMin), type: t.kind, event: _ev, _generic: t._concrete ? false : !!t.generic, _subcat: t.subcat || null, _specialLocation: t._fillLoc || null });
+                        });
+                    });
+
+                    window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(_genSkeleton, divisions);
+                    allGrades.forEach(function (grade) {
+                        var ds = window.divisionTimes[grade]; if (!ds) return;
+                        var pbs = {};
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                            pbs[String(bunk)] = _genSkeleton.filter(function (b) { return b.division === grade && String(b._bunk) === String(bunk); })
+                                .sort(function (a, b) { return a.startMin - b.startMin; })
+                                .map(function (b, i) { return { startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true, _generic: !!b._generic, _subcat: b._subcat || null, _specialLocation: b._specialLocation || null }; });
+                        });
+                        window.divisionTimes[grade]._perBunkSlots = pbs;
+                    });
+                    window._perBunkSlots = {};
+                    allGrades.forEach(function (grade) { var ds = window.divisionTimes[grade]; if (ds && ds._perBunkSlots) window._perBunkSlots[grade] = ds._perBunkSlots; });
+
+                    // 4) scheduleAssignments aligned to _perBunkSlots — generic labels only.
+                    window.scheduleAssignments = {};
+                    allGrades.forEach(function (grade) {
+                        var pbs = window._perBunkSlots[grade] || {};
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                            var arr = pbs[String(bunk)] || [];
+                            window.scheduleAssignments[String(bunk)] = arr.map(function (s) {
+                                // _generic now reflects the SLOT: a filled special is a real activity
+                                // (_generic:false → uniqueness/rotation count it); an unfilled tile stays
+                                // generic. _specialLocation/_subcat carried for the sharing step.
+                                // For a CONCRETE sport the `field` column must be the PHYSICAL field
+                                // we claimed (carried in _specialLocation), NOT the sport name — else
+                                // the validator keys two legal concurrent Basketballs (on different
+                                // courts) as one field and false-flags a conflict. _activity stays the
+                                // sport name so the grid still DISPLAYS "Basketball" (getActivityDisplayName
+                                // reads _activity first). Specials/generic tiles keep field = event.
+                                var _isSportConc = (s.type === 'sport' && !s._generic && s._specialLocation);
+                                return { field: _isSportConc ? s._specialLocation : s.event, sport: _isSportConc ? s.event : null, _activity: s.event, _startMin: s.startMin, _endMin: s.endMin, _fixed: true, _autoMode: true, _generic: !!s._generic, continuation: false, type: s.type, _subcat: s._subcat || null, _specialLocation: s._specialLocation || null };
+                            });
+                        });
+                    });
+
+                    // 5) Persist (mirrors STEP 5 :25589) so the generic skeleton survives reload.
+                    try {
+                        var _glDate = window._activeGenDate || currentDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                        var _glClean = {};
+                        Object.entries(window.scheduleAssignments || {}).forEach(function (kv) { _glClean[kv[0]] = (kv[1] || []).map(function (x) { return x || null; }); });
+                        var _glSpbs = {};
+                        Object.keys(window.divisionTimes || {}).forEach(function (g) { if (window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) _glSpbs[g] = window.divisionTimes[g]._perBunkSlots; });
+                        var _GLKEY = 'campDailyData_v1';
+                        var _glAll = JSON.parse(localStorage.getItem(_GLKEY) || '{}');
+                        if (!_glAll[_glDate]) _glAll[_glDate] = {};
+                        Object.assign(_glAll[_glDate], { scheduleAssignments: _glClean, leagueAssignments: {}, manualSkeleton: _genSkeleton, _perBunkSlotsData: _glSpbs, _autoGenerated: true, _genericLayout: true, _generatedAt: new Date().toISOString() });
+                        try { localStorage.setItem(_GLKEY, JSON.stringify(_glAll)); }
+                        catch (_q) { var _one = {}; _one[_glDate] = _glAll[_glDate]; try { localStorage.setItem(_GLKEY, JSON.stringify(_one)); } catch (_q2) {} }
+                        if (typeof window.saveGlobalSettings === 'function') {
+                            _glAll[_glDate].divisionTimes = (window.DivisionTimesSystem.serialize && window.DivisionTimesSystem.serialize(window.divisionTimes)) || window.divisionTimes || {};
+                            window.saveGlobalSettings('daily_schedules', _glAll);
+                        }
+                        log('[GENERIC-LAYOUT] saved ' + _glOrder.length + ' bunks for ' + _glDate);
+                    } catch (_glSaveErr) { warn('[GENERIC-LAYOUT] save: ' + (_glSaveErr && _glSaveErr.message)); }
+
+                    // DIAGNOSTIC: the GAP-CLOSE reader scanned every bunk's schedule for gaps and
+                    // filled them from the layers (fewest, largest tiles). Report how much it filled
+                    // and list any gap STILL open (no layer item fits without breaking a rule/cap) —
+                    // with the bunk + time + the packer's original reason — so a genuinely unclosable
+                    // window is visible instead of inferred. Capped so a pathological run can't flood.
+                    try {
+                        var _glOpen = [], _glOpenMin = 0, _glGcTiles = 0, _glGcGrew = 0;
+                        _glOrder.forEach(function (bunk) {
+                            var res = _glOut.layoutByBunk[bunk]; if (!res) return;
+                            _glGcTiles += (res.stats && res.stats.gapCloseTilesPlaced) || 0;
+                            _glGcGrew += (res.stats && res.stats.gapCloseGrew) || 0;
+                            (res.gaps || []).forEach(function (g) {
+                                if (g.len >= 5) { _glOpenMin += g.len; _glOpen.push(bunk + ' ' + minutesToTimeLabel(g.startMin) + '-' + minutesToTimeLabel(g.endMin) + ' (' + g.len + 'min): ' + (g.reason || 'unfillable')); }
+                            });
+                        });
+                        log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)');
+                        if (_glOpen.length) {
+                            log('[GENERIC-LAYOUT] ⚠ ' + _glOpen.length + ' gap(s) STILL open (' + _glOpenMin + ' min) — no layer item fits without breaking a rule/cap:');
+                            _glOpen.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });
+                            if (_glOpen.length > 25) log('[GENERIC-LAYOUT]     …and ' + (_glOpen.length - 25) + ' more');
+                        } else {
+                            log('[GENERIC-LAYOUT] ✓ no gaps left — every bunk filled wall-to-wall from the layers');
+                        }
+                    } catch (_glDiagErr) {}
+
+                    // SHARING-WATCH summary: how many shared-layer placements were reserved
+                    // (facility → cross-grade capacity/pairs honored at placement time).
+                    var _glShareFacs = 0, _glShareResv = 0;
+                    try { Object.keys(_glResv).forEach(function (k) { _glShareFacs++; _glShareResv += (_glResv[k] || []).length; }); } catch (_e) {}
+
+                    // FILL summary (Step 1, specials): how many generic special tiles got a concrete
+                    // activity vs. were left generic (no duration-matching activity free in rotation).
+                    try {
+                        if (_doFillSpecials) {
+                            var _glCauseStr = Object.keys(_glFill.causes).map(function (k) { return k + '×' + _glFill.causes[k]; }).join(', ');
+                            var _anyAbsorb = (_glFill.absorbed || _glFill.absorbFilled || _glFill.absorbSplit || _glFill.absorbRepeat || _glFill.absorbBlocked) ? true : false;
+                            log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
+                                + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
+                                + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
+                                + (_anyAbsorb ? (' — open time → ' + (_glFill.absorbed || 0) + ' Sport block(s)'
+                                       + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')
+                                       + (_glFill.absorbSplit ? (' + ' + _glFill.absorbSplit + ' split into shorter specials (stuck 40-min → theme/food combos)') : '')
+                                       + (_glFill.absorbRepeat ? (' + ' + _glFill.absorbRepeat + ' filled with a REPEAT special (sportless camp)') : '')
+                                       + (_glFill.absorbBlocked ? (' + ' + _glFill.absorbBlocked + ' kept generic Special (no sport + no free special there)') : '')
+                                       + '. couldn\'t-fill causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | '))
+                                   : (_glFill.miss ? (' — ' + _glFill.miss + ' left generic. causes: ' + (_glCauseStr || '?') + ' | e.g. ' + _glFill.missDetail.slice(0, 8).join(' | ')) : '')));
+                        }
+                    } catch (_glFillLogErr) {}
+
+                    // ── WEEKLY-MUST SHORTFALL REPORT (general; window.__weeklyMustReport, default ON) ──
+                    // A per-WEEK minimum (minFrequency + minFrequencyPeriod:'week'/2-4weeks) is a HARD
+                    // generator promise — not a shiur-specific rule. The floor + round-robin + cap-1 seat
+                    // passes DELIVER it whenever it is physically feasible; this report makes the outcome
+                    // VISIBLE so a must-have is never SILENTLY skipped. Every gen it prints a per-subcat
+                    // status line; on the LAST camp-day of the period it ESCALATES any bunk still under its
+                    // weekly minimum to a ★ SHORTFALL warning (= infeasible config or a starved scarce seat →
+                    // the operator must add a slot/instructor/day or lower the minimum). Diagnostic only
+                    // (counts week-to-date from saved days + concrete fills laid today); never blocks gen.
+                    try {
+                        if ((typeof window === 'undefined') || (window.__weeklyMustReport !== false)) {
+                            var _wmU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                            var _wmToday = (typeof currentDate !== 'undefined' && currentDate) ? currentDate : ((typeof window !== 'undefined' && window.currentScheduleDate) || null);
+                            if (_wmU && _wmToday && typeof _wmU.getPeriodActivityCount === 'function' && typeof todaysSpecials !== 'undefined' && todaysSpecials) {
+                                var _wmSub = Object.create(null);   // subcat -> { min, period, names:[] }
+                                todaysSpecials.forEach(function (s) {
+                                    if (!s || !s.name) return;
+                                    var _ap = (window.activityProperties && window.activityProperties[s.name]) || s;
+                                    var _mf = (_ap.minFrequency != null) ? parseInt(_ap.minFrequency, 10) : 0;
+                                    if (!(_mf > 0) && _ap.minFrequencyPerGrade) { Object.keys(_ap.minFrequencyPerGrade).forEach(function (g) { var v = parseInt(_ap.minFrequencyPerGrade[g], 10); if (v > 0) _mf = Math.max(_mf, v); }); }
+                                    if (!(_mf > 0)) return;
+                                    var _sc = _glCanon(s.subcategory);
+                                    var _o = _wmSub[_sc] || (_wmSub[_sc] = { min: 0, period: (_ap.minFrequencyPeriod || 'week'), names: [] });
+                                    _o.min = Math.max(_o.min, _mf); _o.names.push(s.name);
+                                });
+                                Object.keys(_wmSub).forEach(function (_sc) {
+                                    var _info = _wmSub[_sc];
+                                    var _perW = (_info.period === 'week') ? '1week' : _info.period;
+                                    var _Dw = 5, _ew = 1;
+                                    try {
+                                        var _psw = (typeof _wmU.getPeriodStartDate === 'function') ? _wmU.getPeriodStartDate(_perW, _wmToday) : null;
+                                        if (_psw && typeof _wmU.countCampDays === 'function') {
+                                            var _nWw = (_info.period === '2weeks') ? 2 : (_info.period === '3weeks') ? 3 : (_info.period === '4weeks') ? 4 : 1;
+                                            var _pew = new Date(_psw + 'T00:00:00'); _pew.setDate(_pew.getDate() + _nWw * 7 - 1);
+                                            var _peSw = _pew.getFullYear() + '-' + String(_pew.getMonth() + 1).padStart(2, '0') + '-' + String(_pew.getDate()).padStart(2, '0');
+                                            _Dw = Math.max(1, _wmU.countCampDays(_psw, _peSw) || 5);
+                                            _ew = Math.max(1, _wmU.countCampDays(_psw, _wmToday) || 1);
+                                        }
+                                    } catch (_e) {}
+                                    // Escalate on the last GENERATED camp-day. A Sun-Fri camp whose Monday-anchored
+                                    // period counts a trailing Sunday (Dw=6) never reaches e=Dw on a Mon-Fri gen, so
+                                    // (e >= Dw-1) lets the shortfall surface on Friday (the real last generated day).
+                                    var _isLast = (_ew >= (_Dw - 1));
+                                    var _short = [], _okN = 0, _phN = 0, _grpN = 0;
+                                    (allGrades || []).forEach(function (g) {
+                                        (getBunksForGrade(g, divisions) || []).forEach(function (bk) {
+                                            var _canAcc = _info.names.some(function (nm) { try { return (typeof isSpecialAvailableForBunk !== 'function') || isSpecialAvailableForBunk(nm, g, bk, globalSettings); } catch (_e) { return true; } });
+                                            if (!_canAcc) return;
+                                            _grpN++;
+                                            var _wtd = 0; _info.names.forEach(function (nm) { try { _wtd += _wmU.getPeriodActivityCount(bk, nm, _perW, _wmToday) || 0; } catch (_e) {} });
+                                            var _todayN = 0, _ph = 0;
+                                            var _res = _glOut && _glOut.layoutByBunk && _glOut.layoutByBunk[bk];
+                                            if (_res && _res.tiles) _res.tiles.forEach(function (t) {
+                                                if (!t || t.kind !== 'special' || _glCanon(t.subcat) !== _sc) return;
+                                                if (t._concrete || (!t.generic && t.name)) _todayN++; else _ph++;
+                                            });
+                                            if (_ph > 0) _phN++;
+                                            if ((_wtd + _todayN) >= _info.min) _okN++;
+                                            else if (_isLast) _short.push(bk + ' (' + (_wtd + _todayN) + '/' + _info.min + (_ph ? ', +' + _ph + ' unfilled' : '') + ')');
+                                        });
+                                    });
+                                    if (_isLast && _short.length) {
+                                        warn('[WEEKLY-MUST] ★ SHORTFALL — ' + _sc + ' (min ' + _info.min + '/' + _info.period + '): ' + _short.length + '/' + _grpN + ' bunk(s) UNDER after the last camp-day → add a slot/instructor/day or lower the minimum. ' + _short.join(', '));
+                                    } else {
+                                        log('[WEEKLY-MUST] ' + _sc + ' (min ' + _info.min + '/' + _info.period + '): ' + _okN + '/' + _grpN + ' bunk(s) on track' + (_phN ? (' (' + _phN + ' have an unfilled placeholder today)') : '') + (_isLast ? ' [last camp-day]' : ' [day ' + _ew + '/' + _Dw + ']'));
+                                    }
+                                });
+                            }
+                        }
+                    } catch (_wmErr) { try { warn('[WEEKLY-MUST] report error: ' + (_wmErr && _wmErr.message)); } catch (_e) {} }
+
+                    var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+                    log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
+                    try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
+                    return true; // ← early return: skip ALL activity-assignment phases
+                }
+              } catch (_glErr) {
+                try { warn('[GENERIC-LAYOUT] error — falling through to normal generation: ' + (_glErr && _glErr.message)); } catch (_e) {}
+                try { if (_glErr && _glErr.stack) warn(_glErr.stack); } catch (_e) {}
+              }
+            }
+
+            // ── PHASE 2.45: PeriodOrchestrator SHADOW (period-tiling projection) ──
+            //   Behind globalSettings.app1.usePeriodTiling ('shadow'|'apply'). Computes,
+            //   per bunk per non-break period, how the FREE REMAINDER around the pinned
+            //   walls WOULD tile wall-to-wall using window.PeriodPacker (the finished
+            //   exact subset-sum primitive) + window.PeriodOrchestrator, then logs the
+            //   projected fully-tiled %. NO MUTATION — this is the Phase-A measurement
+            //   that gates flipping to 'apply'. Iteration 0 only. Fully fail-safe.
+            if (totalIters < 1) {
+                try {
+                    var _potMode = '';
+                    // Read the in-scope globalSettings (getGlobalSettings() at :1087) — there is
+                    // NO window.globalSettings. window.__usePeriodTiling is a console override for
+                    // quick shadow runs without persisting to cloud config.
+                    try { _potMode = (typeof window !== 'undefined' && window.__usePeriodTiling) || (globalSettings && globalSettings.app1 && globalSettings.app1.usePeriodTiling) || ''; } catch (_e) {}
+                    try { log('[PeriodOrchestrator PROBE] iter0 reached — mode=' + (_potMode || '(none)') + ' orch=' + (typeof window !== 'undefined' && !!window.PeriodOrchestrator) + ' packer=' + (typeof window !== 'undefined' && !!window.PeriodPacker) + ' shoppingLists=' + (typeof shoppingLists) + ' buildFn=' + (typeof buildBunkShoppingList)); } catch (_eP) {}
+                    if ((_potMode === 'shadow' || _potMode === 'apply') && window.PeriodOrchestrator && window.PeriodPacker) {
+                        var _potCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                        var _potBreak = /break|transition|passing|change/i;
+                        // projection-only reservation maps (so the shadow is honest cross-bunk WITHOUT touching real ledgers)
+                        var _potFieldRes = {}, _potSpecRes = {};
+                        var _potClashField = function (f, s, e) { var a = _potFieldRes[f] || []; for (var i = 0; i < a.length; i++) if (s < a[i].e && e > a[i].s) return true; return false; };
+                        var _potSpecCount = function (n, s, e) { var a = _potSpecRes[n] || []; var c = 0; for (var i = 0; i < a.length; i++) if (s < a[i].e && e > a[i].s) c++; return c; };
+                        var _potSpecCap = function (n) { try { var cfg = (typeof getSpecialActivityByName === 'function') ? getSpecialActivityByName(n) : null; var sw = (cfg && cfg.sharableWith) || {}; return parseInt(sw.capacity) || (sw.type === 'all' ? 999 : 1); } catch (_e) { return 1; } };
+                        var _potPerBunk = {}, _potOrder = [];
+                        allGrades.forEach(function (grade) {
+                            var periods = (window.campPeriods && window.campPeriods[grade]) || [];
+                            getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                                var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null); if (!sl) return;
+                                var occupied = (bunkTimelines[bunk] || []).filter(function (b) { return b && b.startMin != null && b.endMin != null; }).map(function (b) { return { startMin: b.startMin, endMin: b.endMin }; });
+                                var sports = ((sl.sports && sl.sports.priorityList) || []).map(function (sp) {
+                                    var durs = []; try { durs = (typeof getSportDurations === 'function') ? (getSportDurations(sp.name, globalSettings) || []) : []; } catch (_e) {}
+                                    if (!Array.isArray(durs)) durs = [];
+                                    return { name: sp.name, durations: durs, dMin: sp.dMin, dMax: sp.dMax, dIdeal: sp.dIdeal, fields: sp.fields || [], baseScore: -(sp.rotationScore || 0) };
+                                });
+                                var specials = ((sl.specials && sl.specials.priorityList) || []).map(function (sx) {
+                                    var durs = []; try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(sx.name, activityProperties, globalSettings) : null; durs = (gd && gd.durations) || gd; if (!Array.isArray(durs)) durs = []; } catch (_e) {}
+                                    var loc = sx.location || sx.name; try { var c = (typeof getSpecialActivityByName === 'function') ? getSpecialActivityByName(sx.name) : null; if (c && c.location) loc = c.location; } catch (_e) {}
+                                    return { name: sx.name, durations: durs, dMin: sx.dMin, dMax: sx.dMax, subcategoryKey: _potCanon(sx.subcategory), location: loc, baseScore: -(sx.rotationScore || 0) };
+                                });
+                                var floors = {}; var caps = (sl.specials && sl.specials.subcategoryCap) || {}; var _cFl = (sl.specials && sl.specials.subcategoryFloor) || {}; var _honorOpFloorP = (typeof window === 'undefined') || (window.__capOnlyNoFloor !== false); Object.keys(caps).forEach(function (k) { var c = caps[k]; floors[k] = (_honorOpFloorP && _cFl[k] != null) ? _cFl[k] : ((c === Infinity || c == null) ? 1 : c); });
+                                _potPerBunk[bunk] = {
+                                    grade: grade,
+                                    periods: periods.map(function (p) { return { startMin: p.startMin, endMin: p.endMin, name: p.name, isBreak: _potBreak.test(p.name || '') || (p.endMin - p.startMin) < 10 }; }),
+                                    occupied: occupied, sports: sports, specials: specials, floors: floors,
+                                    alreadyOnDay: (bunkTimelines[bunk] || []).map(function (b) { return b._assignedSpecial || b.event; }).filter(Boolean)
+                                };
+                                _potOrder.push(bunk);
+                            });
+                        });
+                        var _potMakeGates = function (bunk, grade) {
+                            return {
+                                validateSport: function (name, fields, s, e) {
+                                    for (var i = 0; i < (fields || []).length; i++) {
+                                        var f = fields[i]; var ok = true;
+                                        try { ok = (typeof isFieldAvailable !== 'function') || isFieldAvailable(f, s, e, bunk, grade, name); } catch (_e) { ok = true; }
+                                        if (ok && !_potClashField(f, s, e)) return f;
+                                    }
+                                    return null;
+                                },
+                                validateSpecial: function (name, location, s, e) {
+                                    var ok = true; try { ok = (typeof canAssignSpecialToGrade !== 'function') || canAssignSpecialToGrade(name, grade, s, e); } catch (_e) { ok = true; }
+                                    if (!ok) return false;
+                                    return _potSpecCount(name, s, e) < _potSpecCap(name);
+                                },
+                                onReserve: function (seg) {
+                                    if (seg.kind === 'sport' && seg.field) { (_potFieldRes[seg.field] = _potFieldRes[seg.field] || []).push({ s: seg.startMin, e: seg.endMin }); }
+                                    else if (seg.kind === 'special') { (_potSpecRes[seg.name] = _potSpecRes[seg.name] || []).push({ s: seg.startMin, e: seg.endMin }); }
+                                }
+                            };
+                        };
+                        var _potOut = window.PeriodOrchestrator.planAllBunks({ order: _potOrder, perBunk: _potPerBunk, makeGates: _potMakeGates, packer: window.PeriodPacker, opts: { granularityMin: 5, minSegmentMin: 10, topN: 6, maxSegments: 4 } });
+                        var _ps = _potOut.stats;
+                        var _tilePct = _ps.windowsConsidered ? Math.round(100 * _ps.windowsTiled / _ps.windowsConsidered) : 0;
+                        log('═══ [PeriodOrchestrator SHADOW] period-tiling projection (no mutation) ═══');
+                        log('  [PeriodOrchestrator SHADOW] ' + _ps.bunks + ' bunks · ' + _ps.windowsConsidered + ' free sub-windows → ' + _ps.windowsTiled + ' would tile wall-to-wall (' + _tilePct + '%) · ' + _ps.bunksFullyTiled + ' bunks fully tiled · ~' + _ps.residualMin + ' residual min left for legacy fill · ' + _ps.segmentsPlaced + ' segments placed');
+                        // WHY do windows fail to tile? aggregate the per-window reason (no module
+                        // change — read the planByBunk the orchestrator already returned). This is
+                        // the breakdown that decides the Phase-B fix: no-packing (exact subset-sum
+                        // impossible → need partial/duration-flex) vs no-valid-packing (cap/cooldown
+                        // gates reject → distribution) vs window-not-granular (wall misalignment).
+                        var _rc = {}, _rm = {}, _samp = [];
+                        try {
+                            Object.keys(_potOut.planByBunk || {}).forEach(function (_bk) {
+                                var _pps = (_potOut.planByBunk[_bk] && _potOut.planByBunk[_bk].periodPlans) || [];
+                                _pps.forEach(function (_P) {
+                                    (_P.windows || []).forEach(function (_w) {
+                                        if (_w.tiled) return;
+                                        var _r = _w.reason || 'unknown';
+                                        _rc[_r] = (_rc[_r] || 0) + 1; _rm[_r] = (_rm[_r] || 0) + (_w.len || 0);
+                                        if (_samp.length < 12) _samp.push(_bk + ' "' + ((_P.period && _P.period.name) || '?') + '" ' + _w.start + '-' + _w.end + ' len=' + _w.len + ' cand=' + (_w.nCand || 0) + ' pack=' + (_w.nPack || 0) + ' → ' + _r);
+                                    });
+                                });
+                            });
+                        } catch (_eHist) {}
+                        var _rk = Object.keys(_rc).sort(function (a, b) { return _rc[b] - _rc[a]; });
+                        log('  [PeriodOrchestrator SHADOW] untiled-window reasons: ' + (_rk.length ? _rk.map(function (k) { return k + '=' + _rc[k] + ' (' + _rm[k] + 'min)'; }).join(', ') : '(none)'));
+                        _samp.forEach(function (_s) { log('    [PeriodOrchestrator SHADOW] untiled: ' + _s); });
+                        log('  [PeriodOrchestrator SHADOW] (Phase A: projection only. Flip globalSettings.app1.usePeriodTiling=\'apply\' to commit once this looks right.)');
+                    }
+                } catch (_potErr) { try { warn('[PeriodOrchestrator SHADOW] ' + (_potErr && _potErr.message)); } catch (_e) {} }
             }
 
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
@@ -27767,6 +30238,22 @@
                 var _rfDivs = window.divisions || {};
                 var _rfB2G = {}; Object.keys(_rfDivs).forEach(function (g) { ((_rfDivs[g] && _rfDivs[g].bunks) || []).forEach(function (b) { _rfB2G[String(b)] = g; }); });
                 var _rfDT = window.divisionTimes || {};
+                // ── subcategory-cap awareness: don't refill a demoted slot with a special
+                //   whose subcategory is already at the bunk's layer cap — that just re-makes
+                //   a duplicate the FN-56 ceiling (which runs after this) demotes right back to
+                //   Free. Skipping it lets the refill pick an UNDER-cap subcat that survives
+                //   (live: Minors' food). canon ''/regular/uncategorized → 'uncategorized'.
+                //   No-op when no subcategory layers (map/caps empty → never skips).
+                var _rfNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _rfSubOf = {};
+                try {
+                    var _rfA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_rfA1 && _rfA1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return; var _n = _rfNorm(s.name); var _sc = _rfNorm(s.subcategory);
+                        _rfSubOf[_n] = (!_sc || _sc === 'regular' || _sc === 'uncategorized') ? 'uncategorized' : _sc;
+                    });
+                } catch (_e) {}
+                var _rfCapsByBunk = (typeof window !== 'undefined' && window._subcatCapsByBunk) || null;
                 var _rfSlotTime = function (bunk, grade, idx, e) {
                     if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
                     var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
@@ -27790,6 +30277,7 @@
                 Object.keys(_rfSA).forEach(function (bunk) {
                     var slots = _rfSA[bunk]; if (!Array.isArray(slots)) return;
                     var g = _rfB2G[String(bunk)] || '?';
+                    var _rfCaps = (_rfCapsByBunk && _rfCapsByBunk[bunk] && _rfCapsByBunk[bunk].enforced) ? _rfCapsByBunk[bunk].caps : null;
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
                         // Fill: (a) FN-19/21 cap demotions — tagged 'fn1921_type_cap'
@@ -27804,7 +30292,7 @@
                         _rfCands++;
                         var _t = _rfSlotTime(bunk, g, idx, e); if (!_t || _t.s == null || _t.e == null) return;
                         var width = _t.e - _t.s;
-                        var done = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
+                        var done = {}, _rfSubCount = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') { done[a] = 1; if (_rfCaps) { var _xsc = _rfSubOf[a]; if (_xsc != null) _rfSubCount[_xsc] = (_rfSubCount[_xsc] || 0) + 1; } } } });
                         // Pick a fitting special with spare capacity. Pass 1 prefers a special
                         // the bunk hasn't done today; pass 2 allows a repeat as a last resort so
                         // the slot still fills. Duration only needs to FIT the cell (dur<=width),
@@ -27815,6 +30303,7 @@
                                 var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
                                 var nm = String(sp.name).toLowerCase().trim();
                                 if (!allowRepeat && done[nm]) continue;
+                                if (_rfCaps) { var _sc = _rfSubOf[nm]; if (_sc != null) { var _cp = _rfCaps[_sc]; if (_cp != null && isFinite(_cp) && (_rfSubCount[_sc] || 0) >= _cp) continue; } }   // subcat already at cap → FN-56 would demote it
                                 try { if (!isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
                                 var dur = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0;
                                 if (dur <= 0 || dur > width) continue;            // must fit the cell
@@ -28193,6 +30682,108 @@
                 (_rcMissingNoSlot > 0 ? ', ' + _rcMissingNoSlot + ' had no reclaimable in-window slot' : ''));
         } catch (_e684) { try { warn('[STEP 6.84 REQ-CUSTOM] error: ' + (_e684 && _e684.message)); } catch (_x) {} }
 
+        // ★ STEP 6.84b — REQUIRED-DAILY-SPECIAL ENSURE (exact-frequency workshops)
+        //   A special with an exact WEEKLY frequency that works out to >=1/day (e.g.
+        //   5x/week with a 5-day camp week = once/day) must appear once per day for
+        //   every eligible bunk. The planner's special demand is layer-derived, so a
+        //   camp built from custom layers distributes 0 specials and the late fill pads
+        //   with repeated short activities instead of these workshops. This MIRRORS
+        //   STEP 6.84: for each missing required-daily special, relabel ONE reclaimable
+        //   SAME-DURATION in-window slot IN PLACE (geometry untouched → no new gaps),
+        //   preferring to reclaim a DUPLICATE special so a duplicate is removed in the
+        //   same move; field-gated by isFieldAvailable so a workshop room is never
+        //   over-booked. Kill switch: globalSettings.app1.requireDailySpecials='off'.
+        try {
+            var _rdsOn = !(globalSettings && globalSettings.app1 &&
+                (globalSettings.app1.requireDailySpecials === false ||
+                 String(globalSettings.app1.requireDailySpecials).toLowerCase() === 'off'));
+            var _rdsDPW = parseInt(globalSettings && globalSettings.app1 && globalSettings.app1.campDaysPerWeek) || 5;
+            if (_rdsOn && typeof todaysSpecials !== 'undefined' && todaysSpecials && todaysSpecials.length) {
+                var _rdsList = [];
+                todaysSpecials.forEach(function (sp) {
+                    var nm = sp && sp.name; if (!nm) return;
+                    var cfg = null; try { cfg = getSpecialConfig(nm, globalSettings); } catch (_e) {}
+                    if (!cfg) return;
+                    if (String(cfg.exactFrequencyPeriod || '1week').toLowerCase().indexOf('week') < 0) return; // only weekly maps to per-day
+                    var dur = getSpecialDuration(nm, activityProperties, globalSettings) || sp.defaultDuration || sp.duration || 0;
+                    if (dur <= 0) return;
+                    _rdsList.push({ name: nm, nameLow: String(nm).toLowerCase().trim(), dur: dur,
+                        loc: cfg.location || null, exBase: parseInt(cfg.exactFrequency) || 0,
+                        perGrade: cfg.exactFrequencyPerGrade || {} });
+                });
+                if (_rdsList.length) {
+                    var _rdsReqLow = {}; _rdsList.forEach(function (r) { _rdsReqLow[r.nameLow] = 1; });
+                    var _rdsWallRe = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|shiur|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+                    var _rdsEnsured = 0, _rdsNoSlot = 0;
+                    allGrades.forEach(function (grade) {
+                        var _gd = divisions[grade] || divisions[String(grade)] || {};
+                        var gs2 = parseTimeToMinutes(_gd.startTime) || 540;
+                        var ge2 = parseTimeToMinutes(_gd.endTime) || 960;
+                        var _bunks = getBunksForGrade(grade, divisions);
+                        _rdsList.forEach(function (r) {
+                            var _ex = parseInt(r.perGrade[grade]) || r.exBase || 0;
+                            if (_ex < _rdsDPW) return; // <1/day for this grade → leave to rotation floor
+                            _bunks.forEach(function (bunk) {
+                                var slots = window.scheduleAssignments && window.scheduleAssignments[bunk];
+                                if (!Array.isArray(slots) || !slots.length) return;
+                                if (typeof isSpecialAvailableForBunk === 'function' &&
+                                    !isSpecialAvailableForBunk(r.name, grade, bunk, globalSettings)) return;
+                                if (slots.some(function (s) { return s && !s.continuation &&
+                                    String(s._activity || s.event || '').toLowerCase().trim() === r.nameLow; })) return; // already today
+                                var _cnt = {};
+                                slots.forEach(function (s) {
+                                    if (!s || s.continuation) return;
+                                    var sp2 = s._assignedSpecial || (s.type === 'special' ? (s._activity || s.event) : null);
+                                    if (sp2) { var k = String(sp2).toLowerCase().trim(); _cnt[k] = (_cnt[k] || 0) + 1; }
+                                });
+                                var bestIdx = -1, bestRank = -1;
+                                for (var i = 0; i < slots.length; i++) {
+                                    var s = slots[i];
+                                    if (!s || s.continuation) continue;
+                                    if (slots[i + 1] && slots[i + 1].continuation === true) continue; // multi-slot block
+                                    if (s._startMin == null || s._endMin == null) continue;
+                                    if ((s._endMin - s._startMin) !== r.dur) continue;          // geometry-preserving: exact duration
+                                    if (s._startMin < gs2 || s._endMin > ge2) continue;
+                                    var act = String(s._activity || s.event || '').toLowerCase().trim();
+                                    if ((s._pinned === true || s._fixed === true) &&
+                                        !(s._constraintDemoted || !act || /^free$/i.test(act))) continue;
+                                    if (_rdsWallRe.test(act)) continue;
+                                    if (typeof _customLayerActivityNames !== 'undefined' && _customLayerActivityNames.has && _customLayerActivityNames.has(act)) continue;
+                                    if (s._league || s._isChinuch || s._isTrip || s._isPrep || s._isRotationEvent || s._bunkOverride) continue;
+                                    if (_rdsReqLow[act]) continue;                              // never rob another required workshop
+                                    if (r.loc && typeof isFieldAvailable === 'function' &&
+                                        !isFieldAvailable(r.loc, s._startMin, s._endMin, bunk, grade, r.name)) continue; // room cap
+                                    var rank;
+                                    if (!act || /^free$/i.test(act)) rank = 2;
+                                    else if (_cnt[act] > 1) rank = 3;                           // duplicate special → reclaim first
+                                    else if (s.sport && !s._assignedSpecial && s.type !== 'special') rank = 1;
+                                    else rank = 0;
+                                    if (rank > bestRank) { bestRank = rank; bestIdx = i; }
+                                    if (bestRank === 3) break;
+                                }
+                                if (bestIdx < 0) { _rdsNoSlot++; return; }
+                                var tgt = slots[bestIdx];
+                                slots[bestIdx] = Object.assign({}, tgt, {
+                                    _activity: r.name, event: r.name, type: 'special',
+                                    field: r.loc || tgt.field || null, sport: null,
+                                    _assignedSpecial: r.name, _autoSpecial: true,
+                                    _isSpecialLocation: !!r.loc, _specialLocation: r.loc || null,
+                                    _customActivity: null, _customField: null,
+                                    _source: 'step6.84b-required-daily-special'
+                                });
+                                try { if (r.loc && typeof claimField === 'function') claimField(r.loc, tgt._startMin, tgt._endMin, bunk, grade, r.name); } catch (_e) {}
+                                _rdsEnsured++;
+                                log('[STEP 6.84b REQ-DAILY] placed "' + r.name + '" for ' + bunk + ' @ ' +
+                                    tgt._startMin + '-' + tgt._endMin + ' (reclaimed ' + (tgt._activity || tgt.sport || 'Free') + ')');
+                            });
+                        });
+                    });
+                    log('[STEP 6.84b REQ-DAILY] ' + _rdsList.length + ' daily-required special(s) → ensured ' +
+                        _rdsEnsured + ' block(s)' + (_rdsNoSlot ? ', ' + _rdsNoSlot + ' had no reclaimable same-duration slot' : ''));
+                }
+            }
+        } catch (_e684b) { try { warn('[STEP 6.84b REQ-DAILY] error: ' + (_e684b && _e684b.message)); } catch (_x) {} }
+
         // ★ STEP 6.85 — SPACING-RULE ENFORCEMENT SWEEP (FINAL, runs LAST among placement
         //   passes). The main solver path gates spacing via isCandidateAllowed({mode:'auto'}),
         //   but coverage/recapture fill passes (phase4.9-recapture, the 4.97b / FN-22 /
@@ -28406,37 +30997,43 @@
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
-        // STEP 6.862 — REGION-COMPACT (slide staggered/windowed pieces so the
-        //   gaps line up, then 6.863 fills) [KILL SWITCH + per-bunk rollback]
+        // STEP 6.862 — GAP-CONSOLIDATE & FILL (time-space) [KILL SWITCH + rollback]
         // ───────────────────────────────────────────────────────────────────
-        // 6.863 only fills a run whose slack already sits together. Most leftover
-        // gaps are SEPARATED by a movable piece — a STAGGERED lunch (each bunk may
-        // lunch at its own time), a field-less Activity anchor, or a wide-window
-        // special. Per the user: "lunch is staggered … pull it closer … push the
-        // afternoon specials later … that lines the gaps up and opens a hole to
-        // fill." This pass LEFT-PACKS the movable pieces inside each hard-wall-
-        // bounded sub-span, which coalesces the scattered gaps into ONE opening at
-        // the sub-span's end; 6.863 (next) then fills it.
+        // Mid-day gaps are NOT cells — they are UNCOVERED TIME between the timed
+        // blocks (the renderer draws a dashed "+ Add" for any minute no block
+        // covers; cf. auto_schedule_grid computeFreeGaps / the [REAL-GAP] verifier).
+        // The earlier cell-based version saw nothing (gapU=0) because there is no
+        // cell to gather. This pass works in TIME-space:
+        //   1. Per bunk, split the day into regions bounded by FIXED blocks (walls
+        //      + any non-movable activity). Inside a region sit MOVABLE blocks (a
+        //      staggered lunch whose layer window is wider than its duration, a
+        //      field-less anchor, a wide-window special) plus the region's slack.
+        //   2. LEFT-PACK the movables against the region's left wall (window-clamped
+        //      + shift-capped). This slides each piece's cell AND its _perBunkSlots
+        //      slot in lockstep, coalescing the scattered slack into ONE contiguous
+        //      opening [packEnd, R].
+        //   3. If that opening fits an eligible special (not-used-today, access,
+        //      rotation-limit, field/time free), MATERIALIZE a slot+cell for it
+        //      (mirror of unified_schedule_system.ensurePerBunkSlotForRange) and
+        //      write the special directly.
+        //   User's case: Minors  shiur│gap10│lunch│icecream│gap15│main  → slide
+        //   lunch+icecream left →  shiur│lunch│icecream│gap25│main  → fill the 25.
         //
-        // MOVABLE = a piece whose layer WINDOW is wider than its duration (real
-        //   slide room, read from the window._bunkTimelines snapshot) AND is not
-        //   shared with another bunk (no co-occupancy desync). A PINNED lunch
-        //   (window == duration) is therefore NOT movable — the regression guard
-        //   "keeps a pinned lunch at its configured time" stays green.
+        // MOVABLE = layer WINDOW wider than the block's duration (real slide room,
+        //   from the live bunkTimelines) AND not shared with another bunk (no
+        //   co-occupancy desync). A PINNED lunch (window == duration) has no slack
+        //   → never moves → the "keeps a pinned lunch at its configured time"
+        //   regression guard stays green.
         //
-        // GRID-SAFE: a sub-span's existing cells are PERMUTED (movable blocks in
-        //   order, then the gaps), each cell keeping its width + content, re-timed
-        //   contiguously — slot count never changes (no split/splice). A moved
-        //   special is re-checked with canUseSpecialAtTime; field-ed non-specials
-        //   stay fixed (no field-conflict risk). Each piece's shift is capped
-        //   (regionCompactMaxShift, default 60) and clamped to its window; a
-        //   sub-span that can't pack tight within windows is left untouched.
-        //   Per-bunk deep clone + validate; committed ONLY when the gathered gap
-        //   is actually fillable (peek) — so a reshuffle that buys nothing is
-        //   rolled back (no churn).
+        // GRID-SAFE: scheduleAssignments[bunk] and _perBunkSlots[grade][bunk] are
+        //   kept index-aligned and time-sorted (zip → modify → sort → unzip). The
+        //   renderer is time-based (positions by _startMin/_endMin), so slid and
+        //   newly-materialized blocks land where their times say. Per-bunk deep
+        //   clone of BOTH arrays + validate(alignment, no head overlap, coverage
+        //   strictly up) + rollback → a bad transform degrades to "no change".
         //
         // KILL SWITCH: globalSettings.app1.sliverCoalesce (shared with 6.863/4)
-        //   'off' | false → skip   |  else → ON (default).
+        //   'off' | false | 'shadow' → skip   |  else → ON (default).
         // To remove the feature: delete this whole try{...}catch block.
         // ═══════════════════════════════════════════════════════════════════
         try {
@@ -28449,10 +31046,28 @@
                 var _rkGradeOf = {};
                 allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _rkGradeOf[String(b)] = g; }); });
                 var _rkSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
+                // ── subcategory-cap awareness: never fill an opening with a special whose
+                //   subcategory is already at the bunk's layer cap (e.g. Food=1). Without this
+                //   the picker grabs the LONGEST not-used-today special — often a 2nd
+                //   "uncategorized" workshop — which the FN-56 ceiling then demotes back to
+                //   Free, wasting the opening AND starving the under-cap subcats (live: Minors
+                //   א got a 2nd uncategorized here, lost it at FN-56, ended with 0 Food while a
+                //   short Food would have fit and survived). canon: ''/regular/uncategorized →
+                //   'uncategorized'. No-op when no subcategory layers (map/caps empty).
+                var _rkSubOf = {};
+                try {
+                    var _rkA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_rkA1 && _rkA1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return; var _n = _rkNorm(s.name);
+                        var _sc = String(s.subcategory == null ? '' : s.subcategory).toLowerCase().trim();
+                        _rkSubOf[_n] = (!_sc || _sc === 'regular' || _sc === 'uncategorized') ? 'uncategorized' : _sc;
+                    });
+                } catch (_e) {}
+                var _rkCapsByBunk = (typeof window !== 'undefined' && window._subcatCapsByBunk) || null;
                 var _rkCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
+                var _rkLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
 
-                // (grade → normName → widest [ws,we]) layer windows. Prefer the in-scope
-                // bunkTimelines (live during this run); fall back to the window snapshot.
+                // (grade → normName → widest [ws,we]) layer windows from the live timelines.
                 var _rkWin = {}, _rkBtKeys = 0, _rkBtLayered = 0, _rkLunchWin = null;
                 try {
                     var _bt = (typeof bunkTimelines !== 'undefined' && bunkTimelines && Object.keys(bunkTimelines).length) ? bunkTimelines : (window._bunkTimelines || {});
@@ -28478,147 +31093,590 @@
                     arr.forEach(function (s) { if (!s || s.continuation || _rkNorm(s.field) === 'free' || s._startMin == null) return; var nm = _rkNorm(s._assignedSpecial || s._activity || s.event); if (nm) { var k = nm + '@' + s._startMin; _rkShared[k] = (_rkShared[k] || 0) + 1; } });
                 });
 
-                var _rkBunks = 0, _rkSpans = 0, _rkRolled = 0;
-                var _rkRegions = 0, _rkNoMov = 0, _rkNoGap = 0, _rkCoalesced = 0, _rkPackAbort = 0, _rkPeekFail = 0;
+                var _rkBunks = 0, _rkSlid = 0, _rkFilled = 0, _rkRolled = 0;
+                var _rkRegions = 0, _rkFreeT = 0, _rkSmallGap = 0, _rkPackAbort = 0, _rkNoPick = 0, _rkOpened = 0, _rkMovU = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                     var slots = window.scheduleAssignments[bunk];
                     if (!Array.isArray(slots) || !slots.length) return;
                     var g = _rkGradeOf[String(bunk)]; if (!g) return;
                     var winG = _rkWin[g] || {};
-                    var _clone; try { _clone = JSON.parse(JSON.stringify(slots)); } catch (_e) { return; }
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(bunk)])
+                            || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(bunk)]);
+                    if (!Array.isArray(pbs) || pbs.length !== slots.length) return;   // need an aligned slot grid to stay grid-safe
 
-                    var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
-                    var _buildHeads = function () { var hs = []; for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rkCell(c) || _rkNorm(c.field) === 'free') continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); } hs.sort(function (a, b) { return a.s - b.s; }); return hs; };
+                    var gs = parseTimeToMinutes(divisions[g] && divisions[g].startTime);
+                    var ge = parseTimeToMinutes(divisions[g] && divisions[g].endTime);
 
-                    // build ordered units (block head+conts, or a Free cell)
-                    var units = [], i = 0;
-                    while (i < slots.length) {
+                    // ── real (timed, head) blocks, classified fixed vs movable. A Free/blank
+                    //    head is uncovered slack (not a block); pure uncovered time has no cell. ──
+                    var blocks = [];
+                    for (var i = 0; i < slots.length; i++) {
                         var c = slots[i];
-                        if (!_rkCell(c)) { i++; continue; }
-                        if (c.continuation) { i++; continue; }
-                        var head = i, tail = _tailOf(i), cells = []; for (var z = head; z <= tail; z++) cells.push(z);
-                        var s = c._startMin, e = slots[tail]._endMin;
-                        var isFree = (_rkNorm(c.field) === 'free' || _rkNorm(c._activity) === 'free');
+                        if (!_rkCell(c) || c.continuation) continue;
+                        var tail = i; while (tail + 1 < slots.length && slots[tail + 1] && slots[tail + 1].continuation === true) tail++;
+                        var s0 = c._startMin, e0 = slots[tail]._endMin;
                         var rawNm = c._assignedSpecial || c._activity || c.event, nm = _rkNorm(rawNm);
-                        var kind, isSpec = _rkSpecialDur(rawNm) > 0;
-                        if (isFree) kind = 'gap';
-                        else {
-                            var hard = _RK_WALL.test(nm) || !!(c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
-                            if (hard) kind = 'fixed';
-                            else {
-                                var w = winG[nm];
-                                var hasSlack = !!(w && (w.we - w.ws) > (e - s) + 1);
-                                var shared = ((_rkShared[nm + '@' + s] || 0) > 1);
-                                var isAnchor = (c.type === 'custom');
-                                var fieldless = (!c.field || _rkNorm(c.field) === nm);
-                                kind = (hasSlack && !shared && (isSpec || isAnchor || fieldless)) ? 'movable' : 'fixed';
-                            }
-                        }
-                        units.push({ kind: kind, cells: cells, s: s, e: e, dur: e - s, name: nm, isSpec: isSpec, win: winG[nm] || null });
-                        i = tail + 1;
+                        if (!nm || nm === 'free') { i = tail; continue; }
+                        var isSpec = _rkSpecialDur(rawNm) > 0;
+                        var hard = _RK_WALL.test(nm) || !!(c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved || c._fixed || c._pinned);
+                        var w = winG[nm];
+                        var hasSlack = !!(w && (w.we - w.ws) > (e0 - s0) + 1);
+                        var shared = ((_rkShared[nm + '@' + s0] || 0) > 1);
+                        var isAnchor = (c.type === 'custom');
+                        var fieldless = (!c.field || _rkNorm(c.field) === nm);
+                        var movable = !hard && hasSlack && !shared && (isSpec || isAnchor || fieldless);
+                        blocks.push({ head: i, tail: tail, s: s0, e: e0, dur: e0 - s0, nm: nm, isSpec: isSpec, win: w || null, kind: movable ? 'movable' : 'fixed' });
+                        i = tail;
                     }
+                    if (!blocks.length) return;
+                    blocks.sort(function (a, b) { return a.s - b.s; });
+                    if (gs == null || isNaN(gs)) gs = blocks[0].s;
+                    if (ge == null || isNaN(ge)) ge = blocks[blocks.length - 1].e;
+
+                    // ── regions bounded by FIXED blocks; movables + uncovered slack live inside ──
+                    var regions = [], curMovs = [], leftWall = gs;
+                    blocks.forEach(function (b) {
+                        if (b.kind === 'fixed') { regions.push({ L: leftWall, R: b.s, movs: curMovs }); curMovs = []; leftWall = Math.max(leftWall, b.e); }
+                        else curMovs.push(b);
+                    });
+                    regions.push({ L: leftWall, R: ge, movs: curMovs });
 
                     var todaySet = new Set();
-                    units.forEach(function (u) { if (u.kind !== 'gap' && u.name && u.name !== 'free') todaySet.add(u.name); });
+                    blocks.forEach(function (b) { if (b.nm && b.nm !== 'free') todaySet.add(b.nm); });
 
-                    // PEEK: is a contiguous span of `cellWidths` (gap) fillable by an eligible special?
-                    var _rkPeek = function (cellWidths, startMin) {
-                        if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return false;
+                    // per-bunk subcategory caps + running count (for the cap-aware picker)
+                    var _rkCaps = (_rkCapsByBunk && _rkCapsByBunk[bunk] && _rkCapsByBunk[bunk].enforced) ? _rkCapsByBunk[bunk].caps : null;
+                    var _rkSubCount = {};
+                    if (_rkCaps) blocks.forEach(function (b) { if (!b || b.nm === 'free') return; var _sc = _rkSubOf[b.nm]; if (_sc != null) _rkSubCount[_sc] = (_rkSubCount[_sc] || 0) + 1; });
+
+                    // longest eligible special that fits [startMin, startMin+dur], dur<=cap
+                    var _rkPick = function (startMin, cap) {
+                        if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return null;
+                        var best = null;
                         for (var si = 0; si < todaysSpecials.length; si++) {
                             var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
                             var nmL = _rkNorm(sp.name); if (todaySet.has(nmL)) continue;
+                            if (_rkCaps) { var _spc = _rkSubOf[nmL]; if (_spc != null) { var _spCap = _rkCaps[_spc]; if (_spCap != null && isFinite(_spCap) && (_rkSubCount[_spc] || 0) >= _spCap) continue; } }   // subcat already at cap → would be demoted by FN-56
                             var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
                             if (!durs.length) { var d1 = _rkSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
                             for (var dj = 0; dj < durs.length; dj++) {
-                                var d = durs[dj]; if (d <= 0) continue;
-                                var acc = 0, ok2 = false; for (var ci = 0; ci < cellWidths.length; ci++) { acc += cellWidths[ci]; if (acc === d) { ok2 = true; break; } if (acc > d) break; }
-                                if (!ok2) continue;
+                                var d = durs[dj]; if (d <= 0 || d > cap) continue;
+                                if (best && d <= best.dur) continue;
                                 try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) {}
                                 try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, g))) continue; } catch (_e) {}
                                 try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, g, startMin, startMin + d)) continue; } catch (_e) { continue; }
-                                return true;
+                                var loc = sp.location; try { if (!loc && typeof getLocationForSpecial === 'function') loc = getLocationForSpecial(sp.name); } catch (_e) {}
+                                best = { name: sp.name, dur: d, loc: loc || sp.name };
                             }
                         }
-                        return false;
+                        return best;
                     };
 
-                    // walk units; fixed/wall units bound sub-spans of {movable|gap}
-                    var bunkChanged = false, run = [], runStart = null;
-                    var processSpan = function (spUnits, S, E) {
-                        if (E <= S || !spUnits.length) return;
+                    // ── plan per region: left-pack movables, then pick a fill for the opening ──
+                    var slidePlan = [], fillPlan = [];
+                    regions.forEach(function (region) {
                         _rkRegions++;
-                        var movs = spUnits.filter(function (u) { return u.kind === 'movable'; });
-                        var gaps = spUnits.filter(function (u) { return u.kind === 'gap'; });
-                        if (!gaps.length) { _rkNoGap++; return; }            // nothing to gather
-                        if (!movs.length) { _rkNoMov++; return; }            // nothing movable to slide
-                        // already coalesced? (no gap precedes the last movable) → leave to 6.863
-                        var lastMovOrd = -1, firstGapOrd = 1e9, ord = 0;
-                        spUnits.forEach(function (u) { if (u.kind === 'movable') lastMovOrd = ord; if (u.kind === 'gap' && ord < firstGapOrd) firstGapOrd = ord; ord++; });
-                        if (firstGapOrd > lastMovOrd) { _rkCoalesced++; return; }
-                        // left-pack movables (tight, window-clamped); abort if any can't pack tight
-                        var cursor = S, ok = true, plan = [];
+                        var L = region.L, R = region.R, movs = region.movs;
+                        if (R - L < 15) return;
+                        var sumMov = 0; movs.forEach(function (m) { sumMov += m.dur; });
+                        var freeTime = (R - L) - sumMov;
+                        if (freeTime > 0) _rkFreeT += freeTime;
+                        if (freeTime < 15) { _rkSmallGap++; return; }
+                        // left-pack movables against L (window-clamped + shift-capped + special re-time legal)
+                        var cursor = L, ok = true, packed = [];
                         for (var mi = 0; mi < movs.length; mi++) {
                             var M = movs[mi], ns = cursor;
-                            if (M.win) { if (cursor < M.win.ws) { ok = false; break; } if (cursor + M.dur > M.win.we) { ok = false; break; } }
+                            if (M.win) { if (ns < M.win.ws) ns = M.win.ws; if (ns + M.dur > M.win.we) { ok = false; break; } }
                             if (Math.abs(M.s - ns) > _rkMax) { ok = false; break; }
-                            if (M.isSpec && ns !== M.s) { try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(M.name, g, ns, ns + M.dur)) { ok = false; break; } } catch (_e) { ok = false; break; } }
-                            plan.push({ M: M, ns: ns }); cursor = ns + M.dur;
+                            if (M.isSpec && ns !== M.s) { try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(M.nm, g, ns, ns + M.dur)) { ok = false; break; } } catch (_e) { ok = false; break; } }
+                            packed.push({ M: M, ns: ns }); cursor = Math.max(cursor, ns + M.dur);
                         }
                         if (!ok) { _rkPackAbort++; return; }
-                        var gapStart = cursor;
-                        if (E - gapStart <= 5) return;
-                        var gapWidths = []; gaps.forEach(function (gp) { gp.cells.forEach(function (cx) { gapWidths.push(slots[cx]._endMin - slots[cx]._startMin); }); });
-                        if (!_rkPeek(gapWidths, gapStart)) { _rkPeekFail++; return; }          // not fillable → don't reshuffle
-
-                        // APPLY permutation: [movables in plan order][gaps in order], cells re-timed
-                        var subCells = []; spUnits.forEach(function (u) { u.cells.forEach(function (cx) { subCells.push(cx); }); });
-                        subCells.sort(function (a, b) { return a - b; });
-                        var ordered = plan.map(function (p) { return { u: p.M, ns: p.ns }; });
-                        var gc = gapStart; gaps.forEach(function (gp) { ordered.push({ u: gp, ns: gc }); gc += gp.dur; });
-                        var p = 0;
-                        ordered.forEach(function (o) {
-                            var u = o.u, base = o.ns, t = base;
-                            for (var k = 0; k < u.cells.length; k++) {
-                                var orig = slots[u.cells[k]], wdt = orig._endMin - orig._startMin, phys = subCells[p++], isHead = (k === 0);
-                                if (u.kind === 'gap') {
-                                    slots[phys] = { field: 'Free', sport: null, _activity: 'Free', continuation: false, _startMin: t, _endMin: t + wdt, _autoMode: true };
-                                } else {
-                                    var nc = JSON.parse(JSON.stringify(orig));
-                                    nc.continuation = !isHead;
-                                    nc._startMin = isHead ? base : t;
-                                    nc._endMin = isHead ? (base + u.dur) : (t + wdt);
-                                    nc._regionMoved = true;
-                                    slots[phys] = nc;
-                                }
-                                t += wdt;
-                            }
-                        });
-                        plan.forEach(function (p2) { if (p2.M.isSpec && p2.ns !== p2.M.s) { try { var loc = slots[subCells[0]] && slots[subCells[0]]._specialLocation; if (typeof claimField === 'function') claimField(loc || p2.M.name, p2.ns, p2.ns + p2.M.dur, bunk, g, p2.M.name); } catch (_e) {} } });
-                        bunkChanged = true; _rkSpans++;
-                    };
-
-                    units.forEach(function (u) {
-                        if (u.kind === 'fixed') { if (run.length) { processSpan(run, runStart, u.s); } run = []; runStart = null; }
-                        else { if (!run.length) runStart = u.s; run.push(u); }
+                        var gapStart = cursor, gapDur = R - gapStart;
+                        if (gapDur < 15) { _rkSmallGap++; return; }
+                        _rkOpened++;
+                        var pick = _rkPick(gapStart, gapDur);
+                        if (!pick) { _rkNoPick++; return; }
+                        packed.forEach(function (p) { if (p.ns !== p.M.s) { slidePlan.push({ head: p.M.head, tail: p.M.tail, delta: p.ns - p.M.s }); _rkMovU++; } });
+                        fillPlan.push({ start: gapStart, end: gapStart + pick.dur, name: pick.name, loc: pick.loc });
+                        todaySet.add(_rkNorm(pick.name));
+                        if (_rkCaps) { var _pkSc = _rkSubOf[_rkNorm(pick.name)]; if (_pkSc != null) _rkSubCount[_pkSc] = (_rkSubCount[_pkSc] || 0) + 1; }
                     });
-                    if (run.length) { var _de = (divisions[g] && parseTimeToMinutes(divisions[g].endTime)) || (slots.length ? slots[slots.length - 1]._endMin : null); if (_de != null) processSpan(run, runStart, _de); }
 
-                    if (bunkChanged) {
-                        var _ok = true, _vh = _buildHeads();
-                        for (var vi = 0; vi + 1 < _vh.length && _ok; vi++) { if (_vh[vi + 1].s < _vh[vi].e) _ok = false; }
-                        if (_ok) { var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _rkNorm(s2.field) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; }; if (_cov(slots) < _cov(_clone)) _ok = false; }
-                        if (!_ok) { window.scheduleAssignments[bunk] = _clone; _rkRolled++; }
-                        else { _rkBunks++; }
+                    if (!fillPlan.length) return;   // a slide that opens nothing fillable buys nothing → skip churn
+
+                    // ── APPLY: deep-clone BOTH arrays, mutate, validate, rollback ──
+                    var _cloneSlots, _clonePbs;
+                    try { _cloneSlots = JSON.parse(JSON.stringify(slots)); _clonePbs = JSON.parse(JSON.stringify(pbs)); } catch (_e) { return; }
+
+                    // 1. slides — shift cell + slot times in lockstep (force slot == cell time)
+                    slidePlan.forEach(function (mv) {
+                        for (var k = mv.head; k <= mv.tail; k++) {
+                            if (slots[k]) { slots[k]._startMin += mv.delta; slots[k]._endMin += mv.delta; slots[k]._regionMoved = true; }
+                            if (pbs[k] && slots[k]) { pbs[k].startMin = slots[k]._startMin; pbs[k].endMin = slots[k]._endMin; pbs[k].startTime = _rkLabel(pbs[k].startMin); pbs[k].endTime = _rkLabel(pbs[k].endMin); }
+                        }
+                    });
+
+                    // 2. rebuild as ordered GROUPS — each head keeps its continuation cells as ONE
+                    //    unit so the sort can never separate them. Drop empty slots a fill overlaps
+                    //    (a free cell may carry its emptiness in field, _activity, OR event).
+                    var fillRanges = fillPlan.map(function (f) { return { s: f.start, e: f.end }; });
+                    var _isFreeCell = function (cc) { return (!cc || cc._startMin == null || _rkNorm(cc.field) === 'free' || _rkNorm(cc._activity) === 'free' || _rkNorm(cc.event) === 'free'); };
+                    var groups = [];
+                    for (var pi = 0; pi < slots.length; pi++) {
+                        var cc = slots[pi], ss = pbs[pi];
+                        if (cc && cc.continuation === true && groups.length) { groups[groups.length - 1].cells.push({ cell: cc, slot: ss }); continue; }
+                        if (_isFreeCell(cc) && ss && ss.startMin != null && ss.endMin != null) {
+                            var drop = fillRanges.some(function (r) { return Math.max(r.s, ss.startMin) < Math.min(r.e, ss.endMin); });
+                            if (drop) continue;   // a fill will cover this empty time
+                        }
+                        var key0 = (cc && cc._startMin != null) ? cc._startMin : ((ss && ss.startMin != null) ? ss.startMin : 1e9);
+                        groups.push({ key: key0, cells: [{ cell: cc, slot: ss }] });
+                    }
+                    fillPlan.forEach(function (f) {
+                        var cell = { field: f.loc, sport: null, _activity: f.name, type: 'special', _autoSpecial: true, _assignedSpecial: f.name, _specialLocation: f.loc, _startMin: f.start, _endMin: f.end, _autoMode: true, _regionFilled: true, _final: true, continuation: false };
+                        var slot = { startMin: f.start, endMin: f.end, startTime: _rkLabel(f.start), endTime: _rkLabel(f.end), event: f.name, type: 'special', _bunk: bunk, _autoGenerated: true, _injected: true };
+                        groups.push({ key: f.start, cells: [{ cell: cell, slot: slot }] });
+                    });
+
+                    // 3. sort GROUPS by head time, flatten (head + its continuations stay contiguous)
+                    groups.sort(function (a, b) { return a.key - b.key; });
+                    var newSlots = [], newPbs = [];
+                    groups.forEach(function (grp) { grp.cells.forEach(function (pc) { newSlots.push(pc.cell); newPbs.push(pc.slot); }); });
+                    newPbs.forEach(function (s, idx) { if (s) s.slotIndex = idx; });
+
+                    // 4. validate: equal length, no block-span overlap (true span = head ∪ its
+                    //    continuations, so a fill that hits a continuation tail is caught, and a head
+                    //    whose _endMin already spans its tail is not a false positive), coverage up.
+                    var _ok = (newSlots.length === newPbs.length);
+                    if (_ok) {
+                        var occ = [];
+                        groups.forEach(function (grp) {
+                            var h0 = grp.cells[0].cell; if (_isFreeCell(h0)) return;
+                            var gs2 = null, ge2 = null;
+                            grp.cells.forEach(function (pc) { var cl = pc.cell; if (cl && cl._startMin != null && cl._endMin != null) { if (gs2 == null || cl._startMin < gs2) gs2 = cl._startMin; if (ge2 == null || cl._endMin > ge2) ge2 = cl._endMin; } });
+                            if (gs2 != null && ge2 != null && ge2 > gs2) occ.push({ s: gs2, e: ge2 });
+                        });
+                        occ.sort(function (a, b) { return a.s - b.s; });
+                        for (var vi = 0; vi + 1 < occ.length && _ok; vi++) { if (occ[vi + 1].s < occ[vi].e) _ok = false; }
+                    }
+                    if (_ok) {
+                        var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _rkNorm(s2.field) !== 'free' && _rkNorm(s2._activity) !== 'free' && _rkNorm(s2.event) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; };
+                        if (_cov(newSlots) <= _cov(_cloneSlots)) _ok = false;
+                    }
+
+                    if (!_ok) {
+                        window.scheduleAssignments[bunk] = _cloneSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = _clonePbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = _clonePbs;
+                        _rkRolled++;
+                    } else {
+                        window.scheduleAssignments[bunk] = newSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = newPbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = newPbs;
+                        fillPlan.forEach(function (f) { try { if (typeof claimField === 'function') claimField(f.loc, f.start, f.end, bunk, g, f.name); } catch (_e) {} });
+                        _rkBunks++; _rkSlid += slidePlan.length; _rkFilled += fillPlan.length;
                     }
                 });
 
-                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' noGap=' + _rkNoGap + ' noMov=' + _rkNoMov + ' coalesced=' + _rkCoalesced + ' packAbort=' + _rkPackAbort + ' peekFail=' + _rkPeekFail + ' | spans=' + _rkSpans + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
-                if (_rkSpans > 0 || _rkRolled > 0) {
-                    log('[STEP 6.862 REGION-COMPACT] ✅ lined up gaps in ' + _rkSpans + ' sub-span(s) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + ' → 6.863 fills the openings. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
+                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' freeT=' + _rkFreeT + ' smallGap=' + _rkSmallGap + ' packAbort=' + _rkPackAbort + ' opened=' + _rkOpened + ' noPick=' + _rkNoPick + ' | movU=' + _rkMovU + ' slid=' + _rkSlid + ' filled=' + _rkFilled + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
+                if (_rkBunks > 0 || _rkRolled > 0) {
+                    log('[STEP 6.862 GAP-CONSOLIDATE] ✅ filled ' + _rkFilled + ' opening(s) (slid ' + _rkSlid + ' piece(s)) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + '. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
                     try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
                 }
             }
-        } catch (_e6862) { try { warn('[STEP 6.862 REGION-COMPACT] skipped (error: ' + (_e6862 && _e6862.message) + ')'); } catch (_e) {} }
+        } catch (_e6862) { try { warn('[STEP 6.862 GAP-CONSOLIDATE] skipped (error: ' + (_e6862 && _e6862.message) + ')'); } catch (_e) {} }
+
+        // STEP 6.862b — WORKSHOP-RECLAIM: turn [Sports/Sport 2 filler + trailing gap]
+        // ───────────────────────────────────────────────────────────────────
+        //   into a 40-min workshop in a FREE cap-1 workshop room. Root cause: the
+        //   Phase-3 cursor filler halves a 40-min window into a 20-min generic sport +
+        //   20-min uncovered gap (~line 10788), and 6.862 treats that sport-filler as a
+        //   FIXED region boundary, so the wasted [filler+gap] span is never reclaimed.
+        //   This pass classifies ONLY the generic fillers "Sports"/"Sport 2" as
+        //   RECLAIMABLE free space, so a wall-bounded region containing one becomes a
+        //   contiguous opening; it then greedily places the longest eligible workshop(s)
+        //   there. It REUSES 6.862's exact materialize → validate → rollback primitive
+        //   (grid-safe: zip groups → drop covered free/filler cells → add fresh slot+cell
+        //   → sort → validate equal-length + no-overlap + coverage-up → per-bunk rollback).
+        //   Frequency / availability / cap-1 room are honored by the picker + claimField.
+        //   Additive, kill-switched (globalSettings.app1.workshopReclaim='off'), no-op when
+        //   nothing matches. Runs before STEP 6.9 so rotation counts reflect the swap.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _wrOff = false;
+            try { var _wrF = (globalSettings && globalSettings.app1 && globalSettings.app1.workshopReclaim); if (_wrF === 'off' || _wrF === false || _wrF === 'shadow') _wrOff = true; } catch (_e) {}
+            if (!_wrOff && typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials) && todaysSpecials.length) {
+                var _wrNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _WR_WALL = /^(swim|change|pre-change|post-change|davening|league game|specialty league|chinuch|trip|snack|snacks|dismissal|cleanup|lunch|shiur|main activity|morning breakout)$/i;
+                var _wrFillerRe = /^(sports|sport 2)$/i;   // ONLY the generic sportless fillers are reclaimable
+                var _wrGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _wrGradeOf[String(b)] = g; }); });
+                var _wrLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                var _wrSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
+                var _wrCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
+                var _wrIsHard = function (cc, nm) { return _WR_WALL.test(nm) || !!(cc._isTrip || cc._trip || cc._league || cc._isChinuch || cc._isRotationEvent || cc._staggerReserved || cc._fixed || cc._pinned) || cc.type === 'custom'; };
+                var _wrFilled = 0, _wrBunks = 0, _wrRolled = 0;
+
+                Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                    var slots = window.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots) || !slots.length) return;
+                    var g = _wrGradeOf[String(bunk)]; if (!g) return;
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(bunk)])
+                            || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(bunk)]);
+                    if (!Array.isArray(pbs) || pbs.length !== slots.length) return;   // need an aligned slot grid
+                    var gs = parseTimeToMinutes(divisions[g] && divisions[g].startTime);
+                    var ge = parseTimeToMinutes(divisions[g] && divisions[g].endTime);
+
+                    var blocks = [], todaySet = new Set();
+                    for (var i = 0; i < slots.length; i++) {
+                        var c = slots[i];
+                        if (!_wrCell(c) || c.continuation) continue;
+                        var tail = i; while (tail + 1 < slots.length && slots[tail + 1] && slots[tail + 1].continuation === true) tail++;
+                        var s0 = c._startMin, e0 = slots[tail]._endMin;
+                        var rawNm = c._assignedSpecial || c._activity || c.event, nm = _wrNorm(rawNm);
+                        var isFreeC = (!nm || nm === 'free');
+                        var reclaimable = !isFreeC && !_wrIsHard(c, nm) && _wrFillerRe.test(nm);
+                        if (!isFreeC && !reclaimable) todaySet.add(nm);   // real content → no-repeat for the picker
+                        blocks.push({ s: s0, e: e0, nm: nm, reclaimable: reclaimable, free: isFreeC });
+                        i = tail;
+                    }
+                    if (!blocks.length) return;
+                    blocks.sort(function (a, b) { return a.s - b.s; });
+                    if (gs == null || isNaN(gs)) gs = blocks[0].s;
+                    if (ge == null || isNaN(ge)) ge = blocks[blocks.length - 1].e;
+
+                    // regions bounded by NON-reclaimable, non-free blocks (walls / anchors / real specials).
+                    // Reclaimable fillers + Free + uncovered time form the region interior.
+                    var regions = [], leftWall = gs, curHas = false;
+                    blocks.forEach(function (b) {
+                        if (!b.reclaimable && !b.free) { regions.push({ L: leftWall, R: b.s, has: curHas }); curHas = false; leftWall = Math.max(leftWall, b.e); }
+                        else if (b.reclaimable) curHas = true;
+                    });
+                    regions.push({ L: leftWall, R: ge, has: curHas });
+
+                    // longest eligible workshop fitting [startMin, startMin+dur], room free (cap-1)
+                    var _wrPick = function (startMin, cap) {
+                        var best = null;
+                        for (var si = 0; si < todaysSpecials.length; si++) {
+                            var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
+                            var nmL = _wrNorm(sp.name); if (todaySet.has(nmL) || _wrFillerRe.test(nmL)) continue;
+                            var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                            if (!durs.length) { var d1 = _wrSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
+                            for (var dj = 0; dj < durs.length; dj++) {
+                                var d = durs[dj]; if (d <= 0 || d > cap) continue;
+                                if (best && d <= best.dur) continue;
+                                try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) {}
+                                try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, g))) continue; } catch (_e) {}
+                                try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, g, startMin, startMin + d)) continue; } catch (_e) { continue; }
+                                var loc = sp.location; try { if (!loc && typeof getLocationForSpecial === 'function') loc = getLocationForSpecial(sp.name); } catch (_e) {}
+                                try { if (loc && typeof isFieldAvailable === 'function' && !isFieldAvailable(loc, startMin, startMin + d, bunk, g, sp.name)) continue; } catch (_e) {}
+                                best = { name: sp.name, dur: d, loc: loc || sp.name };
+                            }
+                        }
+                        return best;
+                    };
+
+                    var fillPlan = [];
+                    regions.forEach(function (region) {
+                        if (!region.has) return;                 // only reclaim regions that hold a Sports/Sport 2 filler
+                        if (region.R - region.L < 20) return;
+                        var cursor = region.L, guard = 12;
+                        while (cursor < region.R && guard-- > 0) {
+                            var pick = _wrPick(cursor, region.R - cursor);
+                            if (!pick) break;
+                            fillPlan.push({ start: cursor, end: cursor + pick.dur, name: pick.name, loc: pick.loc });
+                            todaySet.add(_wrNorm(pick.name));
+                            cursor += pick.dur;
+                        }
+                    });
+                    if (!fillPlan.length) return;
+
+                    var _cloneSlots, _clonePbs;
+                    try { _cloneSlots = JSON.parse(JSON.stringify(slots)); _clonePbs = JSON.parse(JSON.stringify(pbs)); } catch (_e) { return; }
+                    var fillRanges = fillPlan.map(function (f) { return { s: f.start, e: f.end }; });
+                    var _isFreeCell = function (cc) { return (!cc || cc._startMin == null || _wrNorm(cc.field) === 'free' || _wrNorm(cc._activity) === 'free' || _wrNorm(cc.event) === 'free'); };
+                    var _isReclaimCell = function (cc) { if (!cc || cc._startMin == null) return false; var nm = _wrNorm(cc._assignedSpecial || cc._activity || cc.event); return !_wrIsHard(cc, nm) && _wrFillerRe.test(nm); };
+                    var groups = [];
+                    for (var pi = 0; pi < slots.length; pi++) {
+                        var cc = slots[pi], ss = pbs[pi];
+                        if (cc && cc.continuation === true && groups.length) { groups[groups.length - 1].cells.push({ cell: cc, slot: ss }); continue; }
+                        var st = (cc && cc._startMin != null) ? cc._startMin : (ss && ss.startMin != null ? ss.startMin : null);
+                        var en = (cc && cc._endMin != null) ? cc._endMin : (ss && ss.endMin != null ? ss.endMin : null);
+                        if (st != null && en != null && (_isFreeCell(cc) || _isReclaimCell(cc))) {
+                            var drop = fillRanges.some(function (r) { return Math.max(r.s, st) < Math.min(r.e, en); });
+                            if (drop) continue;   // a workshop fill covers this filler/empty time
+                        }
+                        var key0 = (cc && cc._startMin != null) ? cc._startMin : ((ss && ss.startMin != null) ? ss.startMin : 1e9);
+                        groups.push({ key: key0, cells: [{ cell: cc, slot: ss }] });
+                    }
+                    fillPlan.forEach(function (f) {
+                        var cell = { field: f.loc, sport: null, _activity: f.name, type: 'special', _autoSpecial: true, _assignedSpecial: f.name, _specialLocation: f.loc, _startMin: f.start, _endMin: f.end, _autoMode: true, _workshopReclaim: true, _final: true, continuation: false };
+                        var slot = { startMin: f.start, endMin: f.end, startTime: _wrLabel(f.start), endTime: _wrLabel(f.end), event: f.name, type: 'special', _bunk: bunk, _autoGenerated: true, _injected: true };
+                        groups.push({ key: f.start, cells: [{ cell: cell, slot: slot }] });
+                    });
+                    groups.sort(function (a, b) { return a.key - b.key; });
+                    var newSlots = [], newPbs = [];
+                    groups.forEach(function (grp) { grp.cells.forEach(function (pc) { newSlots.push(pc.cell); newPbs.push(pc.slot); }); });
+                    newPbs.forEach(function (s, idx) { if (s) s.slotIndex = idx; });
+
+                    var _ok = (newSlots.length === newPbs.length);
+                    if (_ok) {
+                        var occ = [];
+                        groups.forEach(function (grp) {
+                            var h0 = grp.cells[0].cell; if (_isFreeCell(h0)) return;
+                            var a = null, b = null;
+                            grp.cells.forEach(function (pc) { var cl = pc.cell; if (cl && cl._startMin != null && cl._endMin != null) { if (a == null || cl._startMin < a) a = cl._startMin; if (b == null || cl._endMin > b) b = cl._endMin; } });
+                            if (a != null && b != null && b > a) occ.push({ s: a, e: b });
+                        });
+                        occ.sort(function (a, b) { return a.s - b.s; });
+                        for (var vi = 0; vi + 1 < occ.length && _ok; vi++) { if (occ[vi + 1].s < occ[vi].e) _ok = false; }
+                    }
+                    if (_ok) {
+                        var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _wrNorm(s2.field) !== 'free' && _wrNorm(s2._activity) !== 'free' && _wrNorm(s2.event) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; };
+                        if (_cov(newSlots) <= _cov(_cloneSlots)) _ok = false;
+                    }
+                    if (!_ok) {
+                        window.scheduleAssignments[bunk] = _cloneSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = _clonePbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = _clonePbs;
+                        _wrRolled++;
+                    } else {
+                        window.scheduleAssignments[bunk] = newSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = newPbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = newPbs;
+                        fillPlan.forEach(function (f) { try { if (typeof claimField === 'function') claimField(f.loc, f.start, f.end, bunk, g, f.name); } catch (_e) {} });
+                        _wrBunks++; _wrFilled += fillPlan.length;
+                    }
+                });
+                if (_wrBunks > 0 || _wrRolled > 0) {
+                    log('[STEP 6.862b WORKSHOP-RECLAIM] ✅ placed ' + _wrFilled + ' workshop(s) over reclaimed Sports/gap span(s) across ' + _wrBunks + ' bunk(s)' + (_wrRolled ? ' (' + _wrRolled + ' rolled back)' : '') + '. [kill switch: globalSettings.app1.workshopReclaim=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                }
+            }
+        } catch (_e6862b) { try { warn('[STEP 6.862b WORKSHOP-RECLAIM] skipped (error: ' + (_e6862b && _e6862b.message) + ')'); } catch (_e) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.862c — WORKSHOP-REBALANCE: even out workshop distribution across bunks.
+        // ───────────────────────────────────────────────────────────────────
+        //   The pre-place/solver can leave the cap-1 workshop rooms unevenly shared —
+        //   live: 5 bunks with 0 workshops while 2 hoard 3 — because the rooms saturate
+        //   during the post-lunch band and the neediest bunks' free windows collide with
+        //   anchors (so 6.862/6.862b find every room full and can't help them). This pass
+        //   DONATES a surplus bunk's workshop-room slot to a zero-served bunk that is free
+        //   at that exact window: the donor's block becomes a generic Sports, the recipient
+        //   reclaims its filler/gap into the workshop. Net room occupancy at that window is
+        //   UNCHANGED (donor out, recipient in), so cap-1 rooms stay within cap — only clean
+        //   single-occupant windows are swapped. The recipient side reuses 6.862/6.862b's
+        //   exact materialize → validate (equal-length, no-overlap, coverage-up) → rollback
+        //   primitive and is atomic (donor is only relabeled AFTER the recipient succeeds).
+        //   Config is read from the durable app1 (loadGlobalSettings() is {} mid-gen — the
+        //   FN-25c hazard). Kill switch: globalSettings.app1.workshopRebalance='off'.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            // ★ DEFAULT OFF (2026-06-18): the donor-relabel turns a freed 40-min workshop
+            //   slot into a 40-min "Sports" block, which VIOLATES the activity's configured
+            //   20-min duration (the user's hard rule: never exceed a configured duration).
+            //   A correct rebalance must re-fill the donor's freed window at exact durations
+            //   — pending a proper redesign. Until then this pass only runs when explicitly
+            //   enabled (globalSettings.app1.workshopRebalance === 'on' / true).
+            var _wbOff = true;
+            try { var _wbF = (globalSettings && globalSettings.app1 && globalSettings.app1.workshopRebalance); if (_wbF === 'on' || _wbF === true) _wbOff = false; } catch (_e) {}
+            if (!_wbOff && typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials) && todaysSpecials.length) {
+                var _wbNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _wbFillerRe = /^(sports|sport 2)$/i;
+                // ---- workshop set: a not_sharable cap-1 special with a DEDICATED room and a
+                //   ~daily exact-frequency target (weekly>=5). Cleanly selects the user's 4
+                //   workshops; excludes generic fillers (Sports/Sport 2), shared-cap fields,
+                //   and lower-frequency room-specials (Shiur 3/wk, HC/Leebi-in-Motion per-half).
+                var _wbCfg = {};
+                try {
+                    var _wbApp1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_wbApp1 && _wbApp1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return;
+                        var sw = s.sharableWith || {}; var per = _wbNorm(s.exactFrequencyPeriod); var fv = parseInt(s.exactFrequency) || 0;
+                        var wf = (per.indexOf('week') >= 0) ? fv : (per.indexOf('day') >= 0 ? fv * 7 : 0);
+                        _wbCfg[_wbNorm(s.name)] = { loc: s.location || null, cap: (parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2)), type: sw.type || 'not_sharable', wf: wf, pairs: sw.allowedPairs || {} };
+                    });
+                } catch (_e) {}
+                // workshop = a room-special (dedicated room, loc != name) with a ~daily exact-
+                //   frequency target (weekly>=5), at ANY share capacity (the user may set the
+                //   rooms not_sharable cap-1 OR cross_division cap-2). Generic fillers
+                //   (Sports/Sport 2) are excluded by name even though Sport 2 also carries a
+                //   room+weekly>=5 — it is the sportless filler, not a rotated workshop.
+                var _wbIsWorkshop = function (nmL) { var c = _wbCfg[nmL]; return !!(c && c.loc && _wbNorm(c.loc) !== nmL && c.wf >= 5 && !_wbFillerRe.test(nmL)); };
+                var _wbRoomOf = function (nmL) { var c = _wbCfg[nmL]; return (c && c.loc) ? c.loc : null; };
+                var _wbCapOf = function (nmL) { var c = _wbCfg[nmL]; return (c && c.cap) ? c.cap : 1; };
+                var _wbLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+
+                var _wbSA = window.scheduleAssignments || {};
+                var _wbGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _wbGradeOf[String(b)] = g; }); });
+                var _wbPbs = function (g, b) { return (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(b)]) || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(b)]); };
+                var _wbProtected = function (c) { return !!(c._pinned || c._isChinuch || c._league || c._isTrip || c._trip || c._isRotationEvent || c._staggerReserved || c.type === 'custom'); };
+
+                // ---- per-bunk workshop count + donatable workshop sessions (head blocks)
+                var _wbCount = {}, _wbSessions = [];
+                Object.keys(_wbSA).forEach(function (b) {
+                    var g = _wbGradeOf[String(b)]; var arr = _wbSA[b]; if (!g || !Array.isArray(arr)) return;
+                    var n = 0;
+                    for (var i = 0; i < arr.length; i++) {
+                        var c = arr[i]; if (!c || c.continuation || c._startMin == null) continue;
+                        var nmL = _wbNorm(c._assignedSpecial || c._activity || c.event);
+                        if (!_wbIsWorkshop(nmL)) continue;
+                        n++;
+                        if (_wbProtected(c)) continue;   // counts toward the bunk's total but is never donated
+                        var tail = i; while (tail + 1 < arr.length && arr[tail + 1] && arr[tail + 1].continuation === true) tail++;
+                        _wbSessions.push({ bunk: b, g: g, name: (c._assignedSpecial || c._activity || c.event), nmL: nmL, room: (_wbRoomOf(nmL) || c.field), s: c._startMin, e: arr[tail]._endMin, idx: i, tail: tail });
+                    }
+                    _wbCount[b] = n;
+                });
+
+                // ---- live workshop-ROOM occupancy at [s,e) excluding a bunk
+                var _wbRoomConc = function (roomL, s, e, exclBunk) {
+                    var rl = _wbNorm(roomL), n = 0;
+                    Object.keys(_wbSA).forEach(function (b) {
+                        if (String(b) === String(exclBunk)) return;
+                        (_wbSA[b] || []).forEach(function (x) {
+                            if (!x || x.continuation || x._startMin == null || x._endMin == null) return;
+                            var xnm = _wbNorm(x._assignedSpecial || x._activity || x.event);
+                            var xr = _wbNorm(_wbRoomOf(xnm) || x.field);
+                            if (xr === rl && x._startMin < e && x._endMin > s) n++;
+                        });
+                    });
+                    return n;
+                };
+
+                // ---- swap-aware sharing check: after the donor leaves and Z joins, is Z's
+                //   grade allowed to share the room with whoever ELSE is there? (canUseSpecialAtTime
+                //   can't be used — it reads the runtime ledger which still counts the donor, so it
+                //   double-rejects a net-neutral swap. This checks the live schedule instead.)
+                var _wbShareOk = function (gZ, nmL, roomL, s, e, exclBunk) {
+                    var cf = _wbCfg[nmL] || {}; var type = cf.type || 'not_sharable'; var pairs = cf.pairs || {};
+                    var rl = _wbNorm(roomL); var otherGrades = [];
+                    Object.keys(_wbSA).forEach(function (b) {
+                        if (String(b) === String(exclBunk)) return;   // donor is leaving
+                        (_wbSA[b] || []).forEach(function (x) {
+                            if (!x || x.continuation || x._startMin == null || x._endMin == null) return;
+                            var xnm = _wbNorm(x._assignedSpecial || x._activity || x.event);
+                            var xr = _wbNorm(_wbRoomOf(xnm) || x.field);
+                            if (xr === rl && x._startMin < e && x._endMin > s) { var bg = _wbGradeOf[String(b)]; if (bg) otherGrades.push(bg); }
+                        });
+                    });
+                    if (!otherGrades.length) return true;                 // empty room → always fine
+                    if (type === 'not_sharable') return false;            // can't share with anyone
+                    if (type === 'same_division') return otherGrades.every(function (g) { return g === gZ; });
+                    if (type === 'cross_division') { try { return (typeof isCrossDivAllowed === 'function') ? !!isCrossDivAllowed(gZ, otherGrades, pairs) : true; } catch (_e) { return true; } }
+                    return true;
+                };
+
+                // ---- recipient: give bunk Z the workshop (name@room) at [fS,fE], reclaiming
+                //   the filler/free cells it covers. Atomic: validate + rollback on failure.
+                var _wbGive = function (Z, gZ, name, room, fS, fE) {
+                    var slots = _wbSA[Z]; var pbs = _wbPbs(gZ, Z);
+                    if (!Array.isArray(slots) || !Array.isArray(pbs) || pbs.length !== slots.length) return false;
+                    var _isFreeCell = function (cc) { return (!cc || cc._startMin == null || _wbNorm(cc.field) === 'free' || _wbNorm(cc._activity) === 'free' || _wbNorm(cc.event) === 'free'); };
+                    var _isReclaim = function (cc) { if (!cc || cc._startMin == null) return false; var nm = _wbNorm(cc._assignedSpecial || cc._activity || cc.event); return _wbFillerRe.test(nm) && !_wbProtected(cc); };
+                    // every cell overlapping [fS,fE] must be reclaimable (filler/free) — never clobber real content
+                    for (var qi = 0; qi < slots.length; qi++) {
+                        var qc = slots[qi]; if (!qc || qc.continuation || qc._startMin == null) continue;
+                        if (qc._startMin < fE && qc._endMin > fS && !_isFreeCell(qc) && !_isReclaim(qc)) return false;
+                    }
+                    var _clS, _clP; try { _clS = JSON.parse(JSON.stringify(slots)); _clP = JSON.parse(JSON.stringify(pbs)); } catch (_e) { return false; }
+                    var groups = [];
+                    for (var pi = 0; pi < slots.length; pi++) {
+                        var cc = slots[pi], ss = pbs[pi];
+                        if (cc && cc.continuation === true && groups.length) { groups[groups.length - 1].cells.push({ cell: cc, slot: ss }); continue; }
+                        var st = (cc && cc._startMin != null) ? cc._startMin : (ss && ss.startMin != null ? ss.startMin : null);
+                        var en = (cc && cc._endMin != null) ? cc._endMin : (ss && ss.endMin != null ? ss.endMin : null);
+                        if (st != null && en != null && (_isFreeCell(cc) || _isReclaim(cc)) && (Math.max(fS, st) < Math.min(fE, en))) continue;   // dropped (covered by the workshop)
+                        var key0 = (cc && cc._startMin != null) ? cc._startMin : ((ss && ss.startMin != null) ? ss.startMin : 1e9);
+                        groups.push({ key: key0, cells: [{ cell: cc, slot: ss }] });
+                    }
+                    var cell = { field: room || name, sport: null, _activity: name, event: name, type: 'special', _autoSpecial: true, _assignedSpecial: name, _specialLocation: room, _isSpecialLocation: !!room, _startMin: fS, _endMin: fE, _autoMode: true, _workshopRebalance: true, _final: true, continuation: false };
+                    var slot = { startMin: fS, endMin: fE, startTime: _wbLabel(fS), endTime: _wbLabel(fE), event: name, type: 'special', _bunk: Z, _autoGenerated: true, _injected: true };
+                    groups.push({ key: fS, cells: [{ cell: cell, slot: slot }] });
+                    groups.sort(function (a, b) { return a.key - b.key; });
+                    var nS = [], nP = []; groups.forEach(function (grp) { grp.cells.forEach(function (pc) { nS.push(pc.cell); nP.push(pc.slot); }); });
+                    nP.forEach(function (s, idx) { if (s) s.slotIndex = idx; });
+                    var ok = (nS.length === nP.length);
+                    if (ok) {
+                        var occ = [];
+                        groups.forEach(function (grp) { var h0 = grp.cells[0].cell; if (_isFreeCell(h0)) return; var a = null, b = null; grp.cells.forEach(function (pc) { var cl = pc.cell; if (cl && cl._startMin != null && cl._endMin != null) { if (a == null || cl._startMin < a) a = cl._startMin; if (b == null || cl._endMin > b) b = cl._endMin; } }); if (a != null && b != null && b > a) occ.push({ s: a, e: b }); });
+                        occ.sort(function (a, b) { return a.s - b.s; });
+                        for (var vi = 0; vi + 1 < occ.length && ok; vi++) { if (occ[vi + 1].s < occ[vi].e) ok = false; }
+                    }
+                    if (!ok) return false;
+                    _wbSA[Z] = nS;
+                    if (window._perBunkSlots && window._perBunkSlots[gZ]) window._perBunkSlots[gZ][String(Z)] = nP;
+                    if (window.divisionTimes && window.divisionTimes[gZ] && window.divisionTimes[gZ]._perBunkSlots) window.divisionTimes[gZ]._perBunkSlots[String(Z)] = nP;
+                    return true;
+                };
+
+                // ---- donor: relabel the workshop block at its slot positions into generic Sports
+                //   (keeps timing/positions, so the donor's grid alignment is untouched).
+                var _wbTakeFrom = function (D, sess) {
+                    var arr = _wbSA[D]; if (!Array.isArray(arr)) return false;
+                    var head = arr[sess.idx]; if (!head || _wbNorm(head._assignedSpecial || head._activity || head.event) !== sess.nmL) return false;
+                    head.field = 'Sports'; head.sport = 'Sports'; head._activity = 'Sports'; head.event = 'Sports'; head.type = 'special';
+                    head._assignedSpecial = 'Sports'; head._specialLocation = null; head._isSpecialLocation = false; head._autoSpecial = true; head._source = 'wb-donor-sports';
+                    try { delete head._workshopRebalance; delete head._workshopReclaim; } catch (_e) {}
+                    for (var k = sess.idx + 1; k <= sess.tail && k < arr.length; k++) { if (arr[k] && arr[k].continuation) { arr[k].field = 'Sports'; arr[k].sport = 'Sports'; arr[k]._activity = 'Sports'; arr[k].event = 'Sports'; arr[k]._assignedSpecial = 'Sports'; arr[k]._specialLocation = null; } }
+                    return true;
+                };
+
+                // ---- even out toward a FAIR per-bunk target. A donor gives a workshop only
+                //   while it stays ABOVE target; a needy bunk receives until it reaches target.
+                //   Net room occupancy per swap is unchanged (donor out, recipient in), so the
+                //   configured room cap is never exceeded. This turns the live "5 bunks 0w / 2
+                //   bunks 3w" (or, post cap-bump, "5 bunks 1w / 6 bunks 3+w") into an even spread.
+                var _wbDonations = 0, _wbErr = 0, _usedSess = {};
+                var _wbDiag = { rejCap: 0, rejAccess: 0, rejTime: 0, rejLimit: 0, rejGive: 0, pairsTried: 0 };   // DIAG: per-gate reject counts
+                var _wbTotal = 0, _wbN = 0;
+                Object.keys(_wbCount).forEach(function (b) { if (_wbGradeOf[String(b)]) { _wbTotal += (_wbCount[b] || 0); _wbN++; } });
+                var _wbTarget = Math.max(1, Math.round(_wbTotal / Math.max(1, _wbN)));   // fair share, >=1
+                var _needy = Object.keys(_wbCount).filter(function (b) { return (_wbCount[b] || 0) < _wbTarget && _wbGradeOf[String(b)]; });
+                _needy.sort(function (a, b) { return (_wbCount[a] || 0) - (_wbCount[b] || 0); });   // neediest first
+                _needy.forEach(function (Z) {
+                    var gZ = _wbGradeOf[String(Z)]; if (!gZ) return;
+                    var _guard = 8;
+                    while ((_wbCount[Z] || 0) < _wbTarget && _guard-- > 0) {
+                        var zHas = {}; (_wbSA[Z] || []).forEach(function (x) { if (x && !x.continuation) { var a = _wbNorm(x._assignedSpecial || x._activity || x.event); if (_wbIsWorkshop(a)) zHas[a] = 1; } });
+                        var _placed = false;
+                        for (var si = 0; si < _wbSessions.length; si++) {
+                            var sess = _wbSessions[si];
+                            var sk = sess.bunk + '|' + sess.idx; if (_usedSess[sk]) continue;
+                            if (String(sess.bunk) === String(Z)) continue;
+                            if ((_wbCount[sess.bunk] || 0) <= _wbTarget) continue;         // donor must stay >= target (give only surplus)
+                            if (zHas[sess.nmL]) continue;                                  // no duplicate workshop for Z
+                            _wbDiag.pairsTried++;
+                            var room = sess.room, cap = _wbCapOf(sess.nmL);
+                            if (_wbRoomConc(room, sess.s, sess.e, sess.bunk) >= cap) { _wbDiag.rejCap++; continue; }   // net-neutral swap stays within cap
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sess.name, gZ, Z, globalSettings)) { _wbDiag.rejAccess++; continue; } } catch (_e) { _wbDiag.rejAccess++; continue; }
+                            if (!_wbShareOk(gZ, sess.nmL, room, sess.s, sess.e, sess.bunk)) { _wbDiag.rejTime++; continue; }   // swap-aware sharing/pairs (not the stale ledger)
+                            try { if (typeof instructorConflictAt === 'function' && instructorConflictAt(sess.name, sess.s, sess.e, Z)) { _wbDiag.rejTime++; continue; } } catch (_e) {}
+                            try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(Z, sess.name, activityProperties, gZ))) { _wbDiag.rejLimit++; continue; } } catch (_e) {}
+                            if (!_wbGive(Z, gZ, sess.name, room, sess.s, sess.e)) { _wbDiag.rejGive++; continue; }      // atomic recipient first
+                            if (!_wbTakeFrom(sess.bunk, sess)) { _wbErr++; }                     // then relabel donor
+                            try { if (typeof claimField === 'function') claimField(room, sess.s, sess.e, Z, gZ, sess.name); } catch (_e) {}
+                            _usedSess[sk] = 1;
+                            _wbCount[Z] = (_wbCount[Z] || 0) + 1;
+                            _wbCount[sess.bunk] = (_wbCount[sess.bunk] || 0) - 1;
+                            _wbDonations++; _placed = true;
+                            break;
+                        }
+                        if (!_placed) break;   // nothing more can be donated to Z
+                    }
+                });
+                try { log('[6.862c-DIAG] workshops=' + Object.keys(_wbCfg).filter(_wbIsWorkshop).length + ' target=' + _wbTarget + ' sessions=' + _wbSessions.length + ' needy=' + _needy.length + ' pairsTried=' + _wbDiag.pairsTried + ' rejCap=' + _wbDiag.rejCap + ' rejAccess=' + _wbDiag.rejAccess + ' rejTime=' + _wbDiag.rejTime + ' rejLimit=' + _wbDiag.rejLimit + ' rejGive=' + _wbDiag.rejGive + ' donations=' + _wbDonations); } catch (_e) {}
+                if (_wbDonations > 0) {
+                    log('[STEP 6.862c WORKSHOP-REBALANCE] ✅ donated ' + _wbDonations + ' workshop slot(s) from over-served to under-served bunk(s)' + (_wbErr ? ' (' + _wbErr + ' donor-relabel warning)' : '') + '. [kill switch: globalSettings.app1.workshopRebalance=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('[STEP 6.862c WORKSHOP-REBALANCE] no donatable workshop slots matched needy bunks (balanced or capacity-locked)');
+                }
+            }
+        } catch (_e6862c) { try { warn('[STEP 6.862c WORKSHOP-REBALANCE] skipped (error: ' + (_e6862c && _e6862c.message) + ')'); } catch (_e) {} }
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
@@ -28698,7 +31756,7 @@
                     var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
                     var _buildHeads = function () {
                         var hs = [];
-                        for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rcCell(c) || _rcNorm(c.field) === 'free') continue; if (_headOf(i) !== i) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); }
+                        for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rcCell(c)) continue; var _hnm = _rcNorm(c._assignedSpecial || c._activity || c.event); if (!_hnm || _hnm === 'free' || _rcNorm(c.field) === 'free' || c._isPlaceholder || c._synthetic) continue; if (_headOf(i) !== i) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); }
                         hs.sort(function (a, b) { return a.s - b.s; });
                         return hs;
                     };
@@ -28710,12 +31768,14 @@
                         if (!_rcCell(c)) { i++; continue; }
                         if (c.continuation) { i++; continue; }
                         var head = i, tail = _tailOf(i), s = c._startMin, e = slots[tail]._endMin;
-                        var isFree = (_rcNorm(c.field) === 'free' || _rcNorm(c._activity) === 'free');
+                        var rawNm = c._assignedSpecial || c._activity || c.event;
+                        var nm = _rcNorm(rawNm);
+                        // ★ Gap = any empty/filler cell (mirrors the engine's _rgIsFiller):
+                        //   blank-named slot, literal "Free", or synthetic/placeholder "+ Add".
+                        var isFree = (!nm || nm === 'free' || _rcNorm(c.field) === 'free' || !!c._isPlaceholder || !!c._synthetic);
                         var kind;
                         if (isFree) { kind = 'free'; }
                         else {
-                            var rawNm = c._assignedSpecial || c._activity || c.event;
-                            var nm = _rcNorm(rawNm);
                             var hard = _RC_WALL.test(nm) || !!(c._fixed || c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
                             var spDur = _rcSpecialDur(rawNm);
                             var isSpecial = !hard && spDur > 0;
@@ -29097,7 +32157,7 @@
             // A block is a stretchable SPECIAL (last resort). Specials carry
             // _autoSpecial / _isSpecialLocation / type 'special', OR live in a
             // registered special room, OR are named after a configured special.
-            var _sabSpecialElig = function (M) {
+            var _sabSpecialElig = function (M, _allowStretch) {
                 if (!M) return false;
                 var t = _sabNorm(M.type);
                 var fld = _sabNorm(M.field || M._specialLocation);
@@ -29112,8 +32172,12 @@
                 //   exactly — never grow it to swallow a sliver (that's how a 20-min
                 //   Shiur ended up in a 25-min slot). Only a special with NO configured
                 //   duration (flexible, falls back to its layer duration) may stretch.
+                //   EXCEPTION: when _allowStretch is set (caller passes true ONLY for a
+                //   sub-floor gap < floor, with the kill switch on), a configured special
+                //   MAY grow by exactly that gap — the only way to close a 15-20min hole
+                //   bounded by a special + wall in a sportless camp with no short filler.
                 var _nm = M._assignedSpecial || M.event || M._activity || M.name;
-                if (_nm) {
+                if (_nm && !_allowStretch) {
                     try {
                         var _cd = getSpecialDuration(_nm, activityProperties, globalSettings);
                         if (_cd && _cd > 0) return false;
@@ -29265,6 +32329,15 @@
                 return null;
             };
             var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0, _sabBySoft = 0, _sabByFiller = 0;
+            // ★ SLIVER-STRETCH (opt-in, default OFF): allow tier-2 to grow a bounding
+            //   special by EXACTLY a sub-floor gap. Reverted to OFF after a live regen
+            //   showed the default-on stretch interacting badly with later gates (FN-54
+            //   demotions of the now-longer special) and producing render artifacts. Keep
+            //   the capability behind an explicit opt-in while the interaction is fixed:
+            //   set globalSettings.app1.sliverStretchSpecial = true (or 'on') to enable.
+            var _sliverStretchOn = !!(globalSettings && globalSettings.app1 &&
+                (globalSettings.app1.sliverStretchSpecial === true ||
+                 String(globalSettings.app1.sliverStretchSpecial).toLowerCase() === 'on'));
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
@@ -29372,7 +32445,7 @@
                     // (2) Both neighbours are walls (or non-stretchable). Stretch the
                     //     bounding SPECIAL over the sliver — a slightly longer special
                     //     beats a Free hole. Try LEFT special forward, then RIGHT back.
-                    if (_sabSpecialElig(Lh)) {
+                    if (_sabSpecialElig(Lh, _sliverStretchOn && gapDur > 0 && gapDur < floor)) {
                         var sActL = Lh._activity || Lh.event;
                         var sFieldL = Lh.field || Lh._specialLocation;
                         if (sFieldL && _sabNorm(sFieldL) !== 'free' &&
@@ -29389,7 +32462,7 @@
                             _sabAbsorbed++; _sabBySpecial++; continue;
                         }
                     }
-                    if (_sabSpecialElig(Rh)) {
+                    if (_sabSpecialElig(Rh, _sliverStretchOn && gapDur > 0 && gapDur < floor)) {
                         var sActR = Rh._activity || Rh.event;
                         var sFieldR = Rh.field || Rh._specialLocation;
                         if (sFieldR && _sabNorm(sFieldR) !== 'free' &&
@@ -29455,37 +32528,16 @@
                             _sabAbsorbed++; _sabBySwim++; continue;
                         }
                     }
-                    // (4) Neither sport, special, nor swim could take it, but a
-                    //     bounding SOFT TRANSITION wall (Cleanup) sits against the
-                    //     sliver. Cleanup is the day's flexible tail — growing it a
-                    //     few minutes is invisible. CHANGE / pre-change / post-change
-                    //     are deliberately EXCLUDED here: the user sets those to a
-                    //     fixed length (e.g. 10 min), and inflating a 10-min change to
-                    //     20 to swallow a leftover is wrong (the live "20-min change"
-                    //     report). A change-adjacent sliver is instead left as its own
-                    //     small gap — the change keeps its configured length.
-                    //     (Inter-period gaps are already excluded at the loop top via
-                    //     coveredByContiguousPeriods, so this never bridges a real
-                    //     transition/lunch dead zone.)
-                    var _SAB_SOFT = /^cleanup$/i;
-                    if (Lh && _SAB_SOFT.test(_sabNorm(Lh._activity || Lh.event))) {
-                        Lh._endMin = gapE;
-                        for (var ksl = L.tail + 1; ksl <= R.head - 1; ksl++) {
-                            slots[ksl] = { field: Lh.field, _activity: Lh._activity || Lh.event, type: Lh.type,
-                                continuation: true, _startMin: slots[ksl] ? slots[ksl]._startMin : gapS, _endMin: slots[ksl] ? slots[ksl]._endMin : gapE,
-                                _autoMode: true, _sliverAbsorbed: true };
-                        }
-                        _sabAbsorbed++; _sabBySoft++; continue;
-                    }
-                    if (Rh && _SAB_SOFT.test(_sabNorm(Rh._activity || Rh.event))) {
-                        Rh._startMin = gapS;
-                        for (var ksr = L.tail + 1; ksr <= R.head - 1; ksr++) {
-                            slots[ksr] = { field: Rh.field, _activity: Rh._activity || Rh.event, type: Rh.type,
-                                continuation: true, _startMin: slots[ksr] ? slots[ksr]._startMin : gapS, _endMin: slots[ksr] ? slots[ksr]._endMin : gapE,
-                                _autoMode: true, _sliverAbsorbed: true };
-                        }
-                        _sabAbsorbed++; _sabBySoft++; continue;
-                    }
+                    // (4) A bounding SOFT TRANSITION wall (Cleanup) sits against the
+                    //     sliver. We DELIBERATELY DO NOT stretch it. Cleanup has a
+                    //     configured length (e.g. 10 min); inflating it to swallow a
+                    //     leftover is an over-duration violation — the user's live
+                    //     "Cleanup 2:55-3:25 = 30min" report on Minors ב — and the same
+                    //     reason CHANGE / pre-change / post-change are excluded. A
+                    //     cleanup-adjacent sliver is left as its own small Free gap; the
+                    //     wall keeps its configured length. No-over-duration is a HARD
+                    //     rule and is preferred over closing the gap. (_sabBySoft stays 0;
+                    //     the formerly-stretched cleanup is the bug this removal fixes.)
 
                     // No stretchable bounding block → leave Free (true impossibility).
                 }
@@ -30510,6 +33562,141 @@
         } catch (_eSB) { try { warn('[FN-54 SPECIAL BACKSTOP] ' + (_eSB && _eSB.message)); } catch (_e3) {} }
 
         // ─────────────────────────────────────────────────────────────────────
+        // FN-56 SUBCATEGORY-CAP — final guarantee: no bunk exceeds its layer's per-
+        //   subcategory cap. The GlobalPlanner (Phase A) + Phase 4.9 honor the per-
+        //   subcategory grid (layer.subQuantities, e.g. "Food = 1"), but the downstream
+        //   gap-fill passes (6.84b REQ-DAILY, 6.862 GAP-CONSOLIDATE, 6.863/6.865, 4.97b,
+        //   FN-19/21 refill) place specials WITHOUT a subcategory check — so a "Food=1"
+        //   layer could finish with 3 Food (live: Minors ב got Ice cream + Neranitas +
+        //   Razzles). This sweep reads the per-bunk caps the planner stashed
+        //   (window._subcatCapsByBunk), counts each bunk's specials per subcategory, and
+        //   where a subcategory exceeds its cap keeps the EARLIEST `cap` (the planner's
+        //   intended placements) and removes the extras — best-effort REPLACING the freed
+        //   slot in place with a demanded-but-unmet subcategory special that fits the slot
+        //   EXACTLY (configured duration == slot width → never over-duration), is
+        //   available, room-free (per physical room), not-already-today, and time-rule ok;
+        //   else Free. Never touches leagues/trips/custom anchors. No-op when no
+        //   subcategory layers exist. Kill: globalSettings.app1.subcategoryCapSweep='off'.
+        // ─────────────────────────────────────────────────────────────────────
+        try {
+            var _scOff = false;
+            try { var _scF = (globalSettings && globalSettings.app1 && globalSettings.app1.subcategoryCapSweep); if (_scF === 'off' || _scF === false) _scOff = true; } catch (_e) {}
+            var _scCaps = (typeof window !== 'undefined' && window._subcatCapsByBunk) || null;
+            if (!_scOff && _scCaps && Object.keys(_scCaps).length) {
+                var _scNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _scCanon = function (v) { var s = _scNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _scSub = {}, _scLoc = {}, _scCap = {};
+                try {
+                    var _scA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_scA1 && _scA1.specialActivities) || []).forEach(function (s) {
+                        if (!s || !s.name) return; var n = _scNorm(s.name);
+                        _scSub[n] = _scCanon(s.subcategory); _scLoc[n] = s.location || s.name;
+                        var sw = s.sharableWith || {}; _scCap[n] = parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 1);
+                    });
+                } catch (_e) {}
+                var _scSA = window.scheduleAssignments || {};
+                var _scB2G = {}; allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _scB2G[String(b)] = g; }); });
+                // capacity-aware room occupancy at [s,e) excluding a bunk
+                var _scRoomFull = function (loc, cap, s, e, exclBunk) {
+                    var rl = _scNorm(loc); if (!rl) return false; var n = 0;
+                    var keys = Object.keys(_scSA);
+                    for (var ki = 0; ki < keys.length; ki++) {
+                        var b = keys[ki]; if (String(b) === String(exclBunk)) continue;
+                        var ar = _scSA[b]; if (!Array.isArray(ar)) continue;
+                        for (var j = 0; j < ar.length; j++) {
+                            var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue;
+                            var xnm = _scNorm(x._assignedSpecial || x._activity || x.event);
+                            var xr = _scNorm(_scLoc[xnm] || x.field);
+                            if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; }
+                        }
+                    }
+                    return false;
+                };
+                var _scDemoted = 0, _scReplaced = 0;
+                Object.keys(_scSA).forEach(function (bunk) {
+                    var cfg = _scCaps[bunk]; if (!cfg || !cfg.enforced || !cfg.caps) return;
+                    var arr = _scSA[bunk]; if (!Array.isArray(arr)) return;
+                    var g = _scB2G[String(bunk)];
+                    var sp = [];
+                    for (var i = 0; i < arr.length; i++) {
+                        var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                        if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c.type === 'custom' || c._customActivity || c._pinned) continue;
+                        var nm = _scNorm(c._assignedSpecial || c._activity || c.event); if (!nm) continue;
+                        // Count any block whose NAME is a configured special — not only ones flagged
+                        // _assignedSpecial. The cheap food/theme fillers (Ice cream, Popcorn, Slush, D.P.)
+                        // that the gap-fill passes (6.862 GAP-CONSOLIDATE, POST-GAP, 4.97b) drop into
+                        // slivers are written as SLOT-type WITHOUT _assignedSpecial, so they used to slip
+                        // past this cap (live: Soloists א got Popcorn [special] + Ice cream [filler] = 2
+                        // Food under a Food=1 layer). Tag whether each is a planner-placed special (_scReal)
+                        // so the demotion below can keep the real one and free the filler.
+                        var _scReal = !!(c._assignedSpecial || c.type === 'special');
+                        if (!_scReal && _scSub[nm] == null) continue;   // sport / Free / wall — not a known special
+                        var sk = (_scSub[nm] != null) ? _scSub[nm] : _scCanon(c.subcategory);
+                        sp.push({ idx: i, nm: nm, sk: sk, s: c._startMin, e: c._endMin, real: _scReal });
+                    }
+                    if (!sp.length) return;
+                    var caps = cfg.caps;
+                    var count = {}; sp.forEach(function (x) { count[x.sk] = (count[x.sk] || 0) + 1; });
+                    var underTargets = Object.keys(caps).filter(function (k) { var cp = caps[k]; return isFinite(cp) ? ((count[k] || 0) < cp) : false; });
+                    Object.keys(count).forEach(function (sk) {
+                        var cap = caps[sk];
+                        if (cap == null || !isFinite(cap)) return;     // floor-only (>=) or undemanded → never demote
+                        if (count[sk] <= cap) return;
+                        var occ = sp.filter(function (x) { return x.sk === sk; }).sort(function (a, b) {
+                            var ra = a.real ? 1 : 0, rb = b.real ? 1 : 0;
+                            if (ra !== rb) return rb - ra;   // keep planner-placed specials; free gap-fillers first
+                            return a.s - b.s;                // then keep the earliest
+                        });
+                        for (var k = cap; k < occ.length; k++) {
+                            var o = occ[k]; var width = o.e - o.s; var placed = null;
+                            for (var ti = 0; ti < underTargets.length && !placed; ti++) {
+                                var tsk = underTargets[ti]; if (tsk === sk) continue;
+                                for (var si = 0; si < todaysSpecials.length; si++) {
+                                    var cand = todaysSpecials[si]; if (!cand || !cand.name) continue;
+                                    var cnm = _scNorm(cand.name);
+                                    if (((_scSub[cnm] != null) ? _scSub[cnm] : 'uncategorized') !== tsk) continue;
+                                    if (sp.some(function (x) { return x.nm === cnm; })) continue;            // not already today
+                                    var cdur = 0; try { cdur = getSpecialDuration(cand.name, activityProperties, globalSettings) || 0; } catch (_e) {}
+                                    if (cdur !== width) continue;                                            // EXACT fit only → never over-duration
+                                    try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(cand.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                                    try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, cand.name, activityProperties, g))) continue; } catch (_e) {}
+                                    try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(cand.name, g, o.s, o.e)) continue; } catch (_e) { continue; }
+                                    var cloc = _scLoc[cnm] || cand.location || cand.name;
+                                    if (_scRoomFull(cloc, _scCap[cnm] || 1, o.s, o.e, bunk)) continue;       // per-room capacity
+                                    placed = { name: cand.name, loc: cloc, sk: tsk }; break;
+                                }
+                            }
+                            if (placed) {
+                                arr[o.idx] = { field: placed.loc, sport: null, _activity: placed.name, event: placed.name, type: 'special', _assignedSpecial: placed.name, _specialLocation: placed.loc, _isSpecialLocation: true, _autoSpecial: true, _autoMode: true, _startMin: o.s, _endMin: o.e, _source: 'fn56-subcat-rebalance', continuation: false };
+                                try { if (typeof claimField === 'function') claimField(placed.loc, o.s, o.e, bunk, g, placed.name); } catch (_e) {}
+                                count[placed.sk] = (count[placed.sk] || 0) + 1;
+                                if (isFinite(caps[placed.sk]) && count[placed.sk] >= caps[placed.sk]) underTargets = underTargets.filter(function (x) { return x !== placed.sk; });
+                                _scReplaced++;
+                            } else {
+                                arr[o.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _source: 'fn56-subcat-cap', _startMin: o.s, _endMin: o.e, continuation: false };
+                                _scDemoted++;
+                            }
+                            for (var tt = o.idx + 1; tt < arr.length; tt++) {
+                                if (arr[tt] && arr[tt].continuation) {
+                                    arr[tt] = placed
+                                        ? { field: placed.loc, _activity: placed.name, event: placed.name, type: 'special', _assignedSpecial: placed.name, _specialLocation: placed.loc, continuation: true, _startMin: arr[tt]._startMin, _endMin: arr[tt]._endMin, _autoMode: true }
+                                        : { field: 'Free', _activity: 'Free', _autoMode: true, continuation: false, _startMin: arr[tt]._startMin, _endMin: arr[tt]._endMin };
+                                } else break;
+                            }
+                            count[sk]--;
+                        }
+                    });
+                });
+                if (_scDemoted || _scReplaced) {
+                    log('  ⛔ [FN-56 SUBCATEGORY-CAP] ' + _scReplaced + ' rebalanced to a missing subcategory, ' + _scDemoted + ' demoted → Free (enforced per-layer subcategory caps). [kill switch: globalSettings.app1.subcategoryCapSweep=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('  ✅ [FN-56 SUBCATEGORY-CAP] no subcategory-cap violations');
+                }
+            }
+        } catch (_e56) { try { warn('[FN-56 SUBCATEGORY-CAP] ' + (_e56 && _e56.message)); } catch (_e) {} }
+
+        // ─────────────────────────────────────────────────────────────────────
         // FN-55 LAYER-WINDOW GATE — final authority on WHEN a grade may be scheduled.
         //   Owner rule: "for grades that have no layers, or times that have no
         //   layers, nothing should be scheduled for that time." The solver builds a
@@ -30527,12 +33714,25 @@
                 var _lwgT = function (v) { if (v == null) return null; if (typeof v === 'number') return v; try { return parseTimeToMinutes(v); } catch (_e) { return null; } };
                 // Per-grade layer windows + a grade-agnostic ('_all') bucket applied to every grade.
                 var _winByGrade = {}, _winAll = [];
+                // ★ FN-55 SAFETY: grades whose FILL-producing layers (sport / special /
+                //   elective) are OPEN — a count but NO explicit time band — can be placed
+                //   anywhere in the division day, so they do NOT define a narrow window and
+                //   their fills must never be blanked. Track them; their coverage becomes the
+                //   full day below. Without this, a grade where the user set counts but no
+                //   time bands gets an empty/partial union and the gate clears the WHOLE day
+                //   (or every slot outside an unrelated anchor window) — the documented
+                //   "counts set, no time bands → fully clear day" trap.
+                var _openFill = {}, _openFillAll = false;
+                var _isFillType = function (t) { t = String(t || '').toLowerCase(); return t === 'sport' || t === 'sports' || t === 'special' || t === 'elective' || t === 'activity'; };
                 layers.forEach(function (l) {
                     if (!l) return;
                     var s = _lwgT(l.startMin != null ? l.startMin : l.startTime);
                     var e = _lwgT(l.endMin != null ? l.endMin : l.endTime);
-                    if (s == null || e == null || e <= s) return;        // a layer with no usable window can't define coverage
                     var g = String(l.grade || l.division || '_all');
+                    if (s == null || e == null || e <= s) {              // a layer with no usable window can't define coverage
+                        if (_isFillType(l.type)) { if (g === '_all') _openFillAll = true; else _openFill[g] = true; }
+                        return;
+                    }
                     if (g === '_all') { _winAll.push([s, e]); return; }
                     (_winByGrade[g] = _winByGrade[g] || []).push([s, e]);
                 });
@@ -30547,11 +33747,17 @@
                     }
                     return out;
                 };
-                var _mergedFor = {};
+                var _FULLDAY = [[0, 24 * 60]];
+                var _mergedFor = {}, _fellBack = {};
                 var _coverageFor = function (g) {
                     if (_mergedFor[g]) return _mergedFor[g];
+                    // Open fill-layer (sport/special/elective with no time band) → no time
+                    //   restriction for this grade: cover the whole day so nothing is blanked.
+                    if (_openFillAll || _openFill[g]) { _fellBack[g] = 1; return (_mergedFor[g] = _FULLDAY); }
                     var ivs = (_winByGrade[g] || []).concat(_winAll);
-                    return (_mergedFor[g] = _merge(ivs));
+                    var merged = _merge(ivs);
+                    if (!merged.length) { _fellBack[g] = 1; merged = _FULLDAY; }  // no usable windows at all → never clear the day
+                    return (_mergedFor[g] = merged);
                 };
                 // Covered fraction of [s,e] against the grade's merged windows.
                 var _coveredFrac = function (mg, s, e) {
@@ -30603,8 +33809,526 @@
                 if (_blanked) log('  ⛔ [FN-55 LAYER-WINDOW GATE] blanked ' + _blanked + ' activit(y/ies) outside their grade\'s layer windows → Free [' +
                     Object.keys(_gradesCleared).map(function (g) { return g + ':' + _gradesCleared[g]; }).join(', ') + '] — only layer-covered time is scheduled');
                 else log('  ✅ [FN-55 LAYER-WINDOW GATE] all activities fall within their grade\'s layer windows');
+                var _fbKeys = Object.keys(_fellBack);
+                if (_fbKeys.length) log('  ℹ️ [FN-55 LAYER-WINDOW GATE] ' + _fbKeys.length + ' grade(s) have open (window-less) fill layers → full-day coverage, no blanking: [' + _fbKeys.join(', ') + ']');
             })();
         } catch (_eLWG) { try { warn('[FN-55 LAYER-WINDOW GATE] ' + (_eLWG && _eLWG.message)); } catch (_e4) {} }
+
+        // ★ STEP 6.98 — LAYER-FLOOR ENFORCER (special-subcategory floors). GOAL: every
+        //   bunk reaches each demanded subcategory floor (=N → N, >=N → ≥N). For each
+        //   bunk below a floor, reclaim a droppable slot — Free, then a generic
+        //   "Sports"/"Sport 2" filler, then a real SPORT (the user's "drop a sport, not a
+        //   special, to fit a required layer" preference) — and place an available,
+        //   room-free special of the missing subcategory at its CONFIGURED duration (never
+        //   over). Shorter special than the slot → split (special + Free remainder),
+        //   keeping scheduleAssignments and _perBunkSlots index-aligned; split only runs
+        //   when an aligned _perBunkSlots grid exists (else exact-fit only).
+        //   Safe-by-construction: per placement clone→mutate→restore-on-error; ceilings
+        //   (FN-54 room cap, FN-56 subcat cap) respected by placing only up to floor and
+        //   checking room capacity (the post-return repair gate is the final validity
+        //   backstop); single-cell slots only. Floors read from the
+        //   SAME layer grid the audit uses. Kill: globalSettings.app1.layerFloorEnforce='off'.
+        try {
+            var _lfeOff = false;
+            try { var _lfeF = globalSettings && globalSettings.app1 && globalSettings.app1.layerFloorEnforce; if (_lfeF === 'off' || _lfeF === false) _lfeOff = true; } catch (_e) {}
+            var _lfeLBG = (typeof layersByGrade !== 'undefined' && layersByGrade) || (typeof window !== 'undefined' && window._layersByGrade) || {};
+            if (!_lfeOff && _lfeLBG && Object.keys(_lfeLBG).length) {
+                var _lfeNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _lfeCanon = function (v) { var s = _lfeNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _lfeLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                var _lfeSub = {}, _lfeLoc = {}, _lfeCap = {};
+                try {
+                    var _lfeA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_lfeA1 && _lfeA1.specialActivities) || []).forEach(function (s) { if (!s || !s.name) return; var n = _lfeNorm(s.name); _lfeSub[n] = _lfeCanon(s.subcategory); _lfeLoc[n] = s.location || s.name; var sw = s.sharableWith || {}; _lfeCap[n] = parseInt(sw.capacity) || 1; });
+                } catch (_e) {}
+                var _lfeFloors = {};
+                Object.keys(_lfeLBG).forEach(function (grade) {
+                    (_lfeLBG[grade] || []).forEach(function (cl) {
+                        if (!cl || _lfeNorm(cl.type) !== 'special' || !cl.subQuantities || typeof cl.subQuantities !== 'object') return;
+                        var subOps = (cl.subOps && typeof cl.subOps === 'object') ? cl.subOps : {};
+                        Object.keys(cl.subQuantities).forEach(function (subName) {
+                            var q = parseInt(cl.subQuantities[subName], 10) || 0; if (q <= 0) return;
+                            var soKey = Object.keys(subOps).find(function (k) { return k.toLowerCase() === String(subName).toLowerCase(); });
+                            var so = _lfeNorm(soKey ? subOps[soKey] : '=');
+                            var floor = (so === '<' || so === '≤' || so === '<=') ? 0 : q; if (floor <= 0) return;
+                            var sc = _lfeCanon(subName);
+                            _lfeFloors[grade] = _lfeFloors[grade] || {};
+                            _lfeFloors[grade][sc] = Math.max(_lfeFloors[grade][sc] || 0, floor);
+                        });
+                    });
+                });
+                var _lfeSA = window.scheduleAssignments || {};
+                var _LFE_WALL = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+                var _lfeRoomFull = function (loc, cap, s, e, exclB) {
+                    var rl = _lfeNorm(loc); if (!rl) return false; var n = 0; var ks = Object.keys(_lfeSA);
+                    for (var ki = 0; ki < ks.length; ki++) { var b = ks[ki]; if (String(b) === String(exclB)) continue; var ar = _lfeSA[b]; if (!Array.isArray(ar)) continue;
+                        for (var j = 0; j < ar.length; j++) { var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue; var xn = _lfeNorm(x._assignedSpecial || x._activity || x.event); var xr = _lfeNorm(_lfeLoc[xn] || x.field); if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; } } }
+                    return false;
+                };
+                var _lfePlaced = 0, _lfeBunks = {}, _lfeUnmet = 0;
+                allGrades.forEach(function (grade) {
+                    var floors = _lfeFloors[grade]; if (!floors || !Object.keys(floors).length) return;
+                    var bunks = getBunksForGrade(grade, divisions) || [];
+                    var pbsAll = (window._perBunkSlots && window._perBunkSlots[grade]) || (window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots) || null;
+                    bunks.forEach(function (bunk) {
+                        var arr = _lfeSA[bunk]; if (!Array.isArray(arr) || !arr.length) return;
+                        var pbs = pbsAll && pbsAll[String(bunk)];
+                        var pbsAligned = Array.isArray(pbs) && pbs.length === arr.length;
+                        var cnt = {}, today = {};
+                        arr.forEach(function (c) {
+                            if (!c || c.continuation) return;
+                            var nm = _lfeNorm(c._assignedSpecial || c._activity || c.event); if (!nm || nm === 'free') return;
+                            today[nm] = 1;
+                            // Count by NAME first: a configured special placed by a gap-filler /
+                            //   recapture can land as a plain slot (no _assignedSpecial / type!='special');
+                            //   gating the count on the flag undercounts it (the 5a503222 lesson) and
+                            //   made the enforcer chase floors a bunk already satisfies.
+                            var _isSp = (_lfeSub[nm] != null);
+                            if (_isSp) { cnt[_lfeSub[nm]] = (cnt[_lfeSub[nm]] || 0) + 1; }
+                            else if (c._assignedSpecial || c.type === 'special') { var sc = _lfeCanon(c.subcategory); cnt[sc] = (cnt[sc] || 0) + 1; }
+                        });
+                        Object.keys(floors).forEach(function (sk) {
+                            var floor = floors[sk], guard = 0;
+                            while ((cnt[sk] || 0) < floor && guard++ < 8) {
+                                var cands = [];
+                                for (var i = 0; i < arr.length; i++) {
+                                    var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                                    if (arr[i + 1] && arr[i + 1].continuation === true) continue;   // single-cell only (safe)
+                                    if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c._isChinuch || c.type === 'custom' || c._customActivity || c._pinned || c._fixed) continue;
+                                    if (c._assignedSpecial || c.type === 'special') continue;        // never drop a special
+                                    var act = _lfeNorm(c._activity || c.event || c.sport);
+                                    if (_LFE_WALL.test(act)) continue;
+                                    var isFree = (!act || act === 'free'), isFiller = (act === 'sports' || act === 'sport 2' || act === 'sport'), isSport = !!c.sport && !isFree && !isFiller;
+                                    if (!isFree && !isFiller && !isSport) continue;
+                                    cands.push({ i: i, s: c._startMin, e: c._endMin, W: c._endMin - c._startMin, rank: isFree ? 3 : (isFiller ? 2 : 1) });
+                                }
+                                cands.sort(function (a, b) { return b.rank - a.rank; });
+                                var did = false;
+                                for (var ci = 0; ci < cands.length && !did; ci++) {
+                                    var cd = cands[ci], pick = null;
+                                    for (var si = 0; si < todaysSpecials.length; si++) {
+                                        var sp = todaysSpecials[si]; if (!sp || !sp.name) continue; var cn = _lfeNorm(sp.name);
+                                        if (((_lfeSub[cn] != null) ? _lfeSub[cn] : 'uncategorized') !== sk) continue;
+                                        if (today[cn]) continue;
+                                        var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                                        if (!durs.length) { var d1 = 0; try { d1 = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0; } catch (_e) {} if (d1 > 0) durs = [d1]; }
+                                        var d = 0; for (var dj = 0; dj < durs.length; dj++) { if (durs[dj] > 0 && durs[dj] <= cd.W && durs[dj] > d) d = durs[dj]; }
+                                        if (d <= 0) continue;
+                                        if (!pbsAligned && d !== cd.W) continue;   // split needs an aligned slot grid
+                                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, grade, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, grade))) continue; } catch (_e) {}
+                                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, grade, cd.s, cd.s + d)) continue; } catch (_e) { continue; }
+                                        var loc = _lfeLoc[cn] || sp.location || sp.name;
+                                        if (_lfeRoomFull(loc, _lfeCap[cn] || 1, cd.s, cd.s + d, bunk)) continue;
+                                        pick = { name: sp.name, loc: loc, nm: cn, d: d }; break;
+                                    }
+                                    if (!pick) continue;
+                                    var _bakSlot = arr[cd.i], _bakPbs = (pbsAligned && pbs[cd.i]) ? pbs[cd.i] : null;
+                                    try {
+                                        var specialCell = { field: pick.loc, sport: null, _activity: pick.name, event: pick.name, type: 'special', _assignedSpecial: pick.name, _specialLocation: pick.loc, _isSpecialLocation: true, _autoSpecial: true, _autoMode: true, _startMin: cd.s, _endMin: cd.s + pick.d, _source: 'fn-floor-enforce', continuation: false };
+                                        if (pick.d === cd.W) {
+                                            arr[cd.i] = specialCell;
+                                            if (pbsAligned && pbs[cd.i]) { pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                        } else {
+                                            arr[cd.i] = specialCell;
+                                            var freeCell = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _startMin: cd.s + pick.d, _endMin: cd.e, _source: 'fn-floor-enforce-rem', continuation: false };
+                                            var freePbs = { startMin: cd.s + pick.d, endMin: cd.e, startTime: _lfeLabel(cd.s + pick.d), endTime: _lfeLabel(cd.e), event: 'Free', type: 'slot', _bunk: bunk };
+                                            if (pbs[cd.i]) { pbs[cd.i].endMin = cd.s + pick.d; pbs[cd.i].endTime = _lfeLabel(cd.s + pick.d); pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                            arr.splice(cd.i + 1, 0, freeCell);
+                                            pbs.splice(cd.i + 1, 0, freePbs);
+                                            for (var pz = 0; pz < pbs.length; pz++) { if (pbs[pz]) pbs[pz].slotIndex = pz; }
+                                        }
+                                        try { if (typeof claimField === 'function') claimField(pick.loc, cd.s, cd.s + pick.d, bunk, grade, pick.name); } catch (_e) {}
+                                        today[pick.nm] = 1; cnt[sk] = (cnt[sk] || 0) + 1; _lfePlaced++; _lfeBunks[bunk] = 1; did = true;
+                                    } catch (_eApply) {
+                                        try { arr[cd.i] = _bakSlot; if (pbsAligned && _bakPbs) pbs[cd.i] = _bakPbs; } catch (_e) {}
+                                    }
+                                }
+                                if (!did) break;   // no feasible placement → leave shortfall for the audit
+                            }
+                            // DIAGNOSTIC (pure logging, no mutation): still short → classify WHY so the
+                            //   next regen reveals the exact lever (build slot-merge vs config change).
+                            if ((cnt[sk] || 0) < floor) {
+                                var _dropW = [];
+                                for (var _di = 0; _di < arr.length; _di++) {
+                                    var _dc = arr[_di]; if (!_dc || _dc.continuation || _dc._startMin == null || _dc._endMin == null) continue;
+                                    if (arr[_di + 1] && arr[_di + 1].continuation === true) continue;
+                                    if (_dc._league || _dc._leagueGame || _dc._isTrip || _dc._isRotationEvent || _dc._isChinuch || _dc.type === 'custom' || _dc._customActivity || _dc._pinned || _dc._fixed) continue;
+                                    if (_dc._assignedSpecial || _dc.type === 'special') continue;
+                                    var _da = _lfeNorm(_dc._activity || _dc.event || _dc.sport);
+                                    if (_LFE_WALL.test(_da)) continue;
+                                    var _dFree = (!_da || _da === 'free'), _dFill = (_da === 'sports' || _da === 'sport 2' || _da === 'sport'), _dSport = !!_dc.sport && !_dFree && !_dFill;
+                                    if (!_dFree && !_dFill && !_dSport) continue;
+                                    _dropW.push(_dc._endMin - _dc._startMin);
+                                }
+                                var _widest = _dropW.length ? Math.max.apply(null, _dropW) : 0;
+                                var _candNames = [], _minDur = Infinity, _availCount = 0;
+                                for (var _ci2 = 0; _ci2 < todaysSpecials.length; _ci2++) {
+                                    var _sp2 = todaysSpecials[_ci2]; if (!_sp2 || !_sp2.name) continue; var _cn2 = _lfeNorm(_sp2.name);
+                                    if (((_lfeSub[_cn2] != null) ? _lfeSub[_cn2] : 'uncategorized') !== sk) continue;
+                                    if (today[_cn2]) continue;
+                                    var _avail = true; try { if (typeof isSpecialAvailableForBunk === 'function') _avail = !!isSpecialAvailableForBunk(_sp2.name, grade, bunk, globalSettings); } catch (_e) { _avail = false; }
+                                    if (!_avail) continue;
+                                    _availCount++;
+                                    var _dd = []; try { _dd = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(_sp2.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                                    if (!_dd.length) { var _dd1 = 0; try { _dd1 = getSpecialDuration(_sp2.name, activityProperties, globalSettings) || 0; } catch (_e) {} if (_dd1 > 0) _dd = [_dd1]; }
+                                    var _mn = Infinity; for (var _dj2 = 0; _dj2 < _dd.length; _dj2++) { if (_dd[_dj2] > 0 && _dd[_dj2] < _mn) _mn = _dd[_dj2]; }
+                                    if (_mn < _minDur) _minDur = _mn;
+                                    _candNames.push(_sp2.name + '(' + (isFinite(_mn) ? _mn + 'm' : '?') + ')');
+                                }
+                                var _reason;
+                                if (!_dropW.length) _reason = 'NO-RECLAIMABLE-SLOT (no Free/filler/sport left to drop)';
+                                else if (!_availCount) _reason = 'NO-AVAILABLE-SPECIAL (all ' + sk + ' specials used today or access-blocked for this bunk)';
+                                else if (isFinite(_minDur) && _widest < _minDur) _reason = 'SLOT-TOO-NARROW (widest droppable ' + _widest + 'm < shortest ' + sk + ' special ' + _minDur + 'm → needs slot-merge)';
+                                else _reason = 'BLOCKED-BY-CAP/COOLDOWN (slots & specials exist; canUseSpecialAtTime/room-cap rejected all candidate times)';
+                                log('  🔎 [STEP 6.98 UNMET] ' + bunk + ' (' + grade + ') ' + sk + ': need ' + floor + ' got ' + (cnt[sk] || 0) + ' — ' + _reason + (_candNames.length ? ' | specials: ' + _candNames.slice(0, 4).join(', ') : '') + (_dropW.length ? ' | dropSlots: ' + _dropW.slice(0, 6).join('/') + 'm' : ''));
+                                _lfeUnmet++;
+                            }
+                        });
+                    });
+                });
+                if (_lfePlaced) {
+                    log('  🩹 [STEP 6.98 LAYER-FLOOR ENFORCE] placed ' + _lfePlaced + ' missing floor special(s) across ' + Object.keys(_lfeBunks).length + ' bunk(s) by reclaiming Free/filler/sport slots. [kill: globalSettings.app1.layerFloorEnforce=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                } else {
+                    log('  ✅ [STEP 6.98 LAYER-FLOOR ENFORCE] nothing to enforce (or no reclaimable slot).');
+                }
+                if (_lfeUnmet) log('  🔎 [STEP 6.98 LAYER-FLOOR ENFORCE] ' + _lfeUnmet + ' floor(s) still unmet after enforcement — see [STEP 6.98 UNMET] lines above for the per-bunk reason (drives the next fix: slot-merge vs config).');
+            }
+        } catch (_e698) { try { warn('[STEP 6.98 LAYER-FLOOR ENFORCE] ' + (_e698 && _e698.message)); } catch (_e) {} }
+
+        // ★ STEP 6.98b — SPORT + BARE-SPECIAL FLOOR ENFORCER (companion to 6.98).
+        //   6.98 tops up demanded SPECIAL-SUBCATEGORY floors; this pass closes the two
+        //   remaining floor families the 6.99 audit measures but nothing enforced:
+        //     • SPORT layers (=N / >=N): the bunk must end with ≥N real sport blocks.
+        //       Reclaims Free / generic "Sports" fillers (NEVER a real sport, special,
+        //       wall, league, custom, trip, or pinned) and places a real sport on an
+        //       EMPTY, same-grade field that passes the hard config gate
+        //       (_validateWritePlacement) — mirroring STEP 4.97b's proven guarantee-fill.
+        //       Empty-field-only sidesteps the maxPlayers-when-sharing class of bug;
+        //       a single bunk on its own field can't breach a combined cap.
+        //     • BARE-SPECIAL layers (type 'special' with a qty but NO subQuantities grid,
+        //       e.g. "special >= 4"): the bunk must end with ≥N specials of ANY
+        //       subcategory. Reclaims a droppable slot (and, when no sport floor competes,
+        //       a real sport per the user's "drop a sport for a required layer" rule) and
+        //       places any available, room-free special at its configured duration (split
+        //       when _perBunkSlots is index-aligned, else exact-fit).
+        //   Genuinely-impossible floors (no free field, no available activity, every slot
+        //   a wall/league/special) are left for the 6.99 audit to report. SWIM / CUSTOM
+        //   floors stay AUDIT-ONLY (re-placing them needs their change-period / pinned-
+        //   window context). Safe-by-construction: per placement clone→mutate→restore-on-
+        //   error; single-cell slots only. Kill: globalSettings.app1.layerFloorEnforce='off'.
+        try {
+            var _lfsOff = false;
+            try { var _lfsF = globalSettings && globalSettings.app1 && globalSettings.app1.layerFloorEnforce; if (_lfsF === 'off' || _lfsF === false) _lfsOff = true; } catch (_e) {}
+            var _lfsLBG = (typeof layersByGrade !== 'undefined' && layersByGrade) || (typeof window !== 'undefined' && window._layersByGrade) || {};
+            if (!_lfsOff && _lfsLBG && Object.keys(_lfsLBG).length) {
+                var _lfsNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _lfsCanon = function (v) { var s = _lfsNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _lfsLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                // mirror the planner / 6.99-audit qty/op → floor parse exactly
+                var _lfsFloor = function (qRawV, oRawV) {
+                    var qRaw = String(qRawV != null ? qRawV : ''), oRaw = String(oRawV != null ? oRawV : '');
+                    var combined = (qRaw + oRaw).trim();
+                    var m = combined.match(/^(\d*)\s*(>=|<=|≥|≤|>|<|=)\s*(\d*)$/);
+                    var qty, op;
+                    if (m) { qty = parseInt(m[1] || m[3] || '1', 10) || 1; op = (m[2] === '≥' || m[2] === '>') ? '>=' : (m[2] === '≤' || m[2] === '<') ? '<=' : m[2]; }
+                    else { qty = parseInt(qRaw, 10) || 1; op = '>='; }
+                    return (op === '<=') ? 0 : qty;
+                };
+                // specials meta (subcategory / location / capacity), durable source
+                var _lfsSub = {}, _lfsLoc = {}, _lfsCap = {};
+                try {
+                    var _lfsA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_lfsA1 && _lfsA1.specialActivities) || []).forEach(function (s) { if (!s || !s.name) return; var n = _lfsNorm(s.name); _lfsSub[n] = _lfsCanon(s.subcategory); _lfsLoc[n] = s.location || s.name; var sw = s.sharableWith || {}; _lfsCap[n] = parseInt(sw.capacity) || 1; });
+                } catch (_e) {}
+                // per-grade floors: SPORT (=N/>=N) and BARE-SPECIAL total (type special, no subQuantities grid)
+                var _lfsSportFloor = {}, _lfsTotalSpecFloor = {};
+                Object.keys(_lfsLBG).forEach(function (grade) {
+                    (_lfsLBG[grade] || []).forEach(function (cl) {
+                        if (!cl) return;
+                        var t = _lfsNorm(cl.type);
+                        if (t === 'sport' || t === 'sports') {
+                            var f = _lfsFloor(cl.qty != null ? cl.qty : cl.quantity, cl.op != null ? cl.op : cl.operator);
+                            if (f > 0) _lfsSportFloor[grade] = (_lfsSportFloor[grade] || 0) + f;
+                        } else if (t === 'special' && (!cl.subQuantities || typeof cl.subQuantities !== 'object' || !Object.keys(cl.subQuantities).length)) {
+                            var f2 = _lfsFloor(cl.qty != null ? cl.qty : cl.quantity, cl.op != null ? cl.op : cl.operator);
+                            if (f2 > 0) _lfsTotalSpecFloor[grade] = (_lfsTotalSpecFloor[grade] || 0) + f2;
+                        }
+                    });
+                });
+                if (Object.keys(_lfsSportFloor).length || Object.keys(_lfsTotalSpecFloor).length) {
+                    var _lfsSA = window.scheduleAssignments || {};
+                    var _LFS_WALL = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+                    // ---- field data for sport placement (mirror STEP 4.97b's durable source) ----
+                    var _lfsApp1F = (function () { try { return (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {}); } catch (_e) { return {}; } })();
+                    var _lfsAllF = ((_lfsApp1F && _lfsApp1F.fields) || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                    var _lfsBG = {}; Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _lfsBG[String(b)] = d; }); });
+                    var _lfsFCap = {}; ((_lfsApp1F && _lfsApp1F.fields) || []).forEach(function (f) { if (f && f.name) { var sw = f.sharableWith || {}; if (sw.capacity != null) _lfsFCap[f.name] = sw.capacity; } });
+                    var _lfsCapOf = function (fn) { if (_lfsFCap[fn] != null) return _lfsFCap[fn]; try { var g = window.getFieldCapacity && window.getFieldCapacity(fn); if (g != null) return g; } catch (_e) {} return 1; };
+                    var _lfsDT = window.divisionTimes || {};
+                    // NOTE: continuation cells ARE counted (perf-extend writes a spanned sport's
+                    //   later periods as continuation:true carrying `field` but no _startMin/_endMin
+                    //   — fall back to the slot's divisionTimes bounds ds[j]). Skipping them (as the
+                    //   STEP 4.97b _occ does) makes a field look EMPTY in a period covered only by
+                    //   another bunk's continuation → the empty-field sport placement below would
+                    //   double-book it, and nothing repairs field conflicts after this pass.
+                    var _lfsOcc = function (fn, s, e, exclB) { var c = 0, dv = {}; var ks = Object.keys(_lfsSA); for (var ki = 0; ki < ks.length; ki++) { var b = ks[ki]; if (String(b) === String(exclB)) continue; var ar = _lfsSA[b]; if (!Array.isArray(ar)) continue; var ds = _lfsDT[_lfsBG[b]] || []; for (var j = 0; j < ar.length; j++) { var en = ar[j]; if (!en || _lfsNorm(en.field) !== _lfsNorm(fn)) continue; var es = en._startMin != null ? en._startMin : (ds[j] && ds[j].startMin), ee = en._endMin != null ? en._endMin : (ds[j] && ds[j].endMin); if (es != null && ee != null && es < e && ee > s) { c++; dv[_lfsBG[b]] = true; } } } return { count: c, divs: Object.keys(dv) }; };
+                    var _lfsRH = (function () { try { var h = window.loadRotationHistory && window.loadRotationHistory(); return (h && h.bunks) || {}; } catch (_e) { return {}; } })();
+                    var _lfsRotTs = function (b, a) { try { var m = _lfsRH[b]; var t = m && m[a]; return (t == null) ? 0 : t; } catch (_e) { return 0; } };
+                    var _lfsRoomFull = function (loc, cap, s, e, exclB) { var rl = _lfsNorm(loc); if (!rl) return false; var n = 0; var ks = Object.keys(_lfsSA); for (var ki = 0; ki < ks.length; ki++) { var b = ks[ki]; if (String(b) === String(exclB)) continue; var ar = _lfsSA[b]; if (!Array.isArray(ar)) continue; for (var j = 0; j < ar.length; j++) { var x = ar[j]; if (!x || x.continuation || x._startMin == null || x._endMin == null) continue; var xn = _lfsNorm(x._assignedSpecial || x._activity || x.event); var xr = _lfsNorm(_lfsLoc[xn] || x.field); if (xr === rl && x._startMin < e && x._endMin > s) { n++; if (n >= (cap || 1)) return true; } } } return false; };
+                    // reclaimable single-cell slots: Free (rank 3) / generic "Sports" filler (rank 2) /
+                    //   real sport (rank 1, only when allowDropSport). Never a special/wall/league/custom/pinned.
+                    var _lfsReclaim = function (arr, allowDropSport) {
+                        var out = [];
+                        for (var i = 0; i < arr.length; i++) {
+                            var c = arr[i]; if (!c || c.continuation || c._startMin == null || c._endMin == null) continue;
+                            if (arr[i + 1] && arr[i + 1].continuation === true) continue;   // single-cell only (safe)
+                            if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c._isChinuch || c.type === 'custom' || c._customActivity || c._pinned || c._fixed) continue;
+                            if (c._assignedSpecial || c.type === 'special') continue;        // never drop a special
+                            if (c._source === 'layer-window-gate') continue;                  // FN-55 blanked this as OUT-OF-WINDOW → don't refill it
+                            var act = _lfsNorm(c._activity || c.event || c.sport);
+                            if (_LFS_WALL.test(act)) continue;
+                            var isFree = (!act || act === 'free');
+                            var isFiller = (act === 'sports' || act === 'sport 2' || act === 'sport') && !c.sport;
+                            var isSport = !!c.sport && !isFree;
+                            if (isSport && !allowDropSport) continue;
+                            if (!isFree && !isFiller && !isSport) continue;
+                            out.push({ i: i, s: c._startMin, e: c._endMin, W: c._endMin - c._startMin, rank: isFree ? 3 : (isFiller ? 2 : 1) });
+                        }
+                        out.sort(function (a, b) { return b.rank - a.rank; });
+                        return out;
+                    };
+                    // pick a real sport (EMPTY same-grade field + valid activity) for [s,e]
+                    var _lfsPickSport = function (grade, bunk, s, e, doneSet) {
+                        var bestNew = null, bestNewTs = Infinity, bestRep = null, bestRepTs = Infinity;
+                        for (var fi = 0; fi < _lfsAllF.length; fi++) {
+                            var F = _lfsAllF[fi];
+                            var o = _lfsOcc(F.name, s, e, bunk);
+                            if (o.count !== 0) continue;   // empty fields only → no maxPlayers-when-sharing risk
+                            for (var ai = 0; ai < F.activities.length; ai++) {
+                                var A = F.activities[ai];
+                                try { if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue; } catch (_e) { continue; }
+                                var ts = _lfsRotTs(bunk, A);
+                                if (!doneSet[_lfsNorm(A)]) { if (ts < bestNewTs) { bestNew = { field: F.name, act: A }; bestNewTs = ts; } }
+                                else { if (ts < bestRepTs) { bestRep = { field: F.name, act: A }; bestRepTs = ts; } }
+                            }
+                        }
+                        return bestNew || bestRep;
+                    };
+                    // pick any available special (subcategory-agnostic) that fits [slotStart, slotStart+d]
+                    var _lfsPickSpecial = function (grade, bunk, slotStart, slotW, today, pbsAligned) {
+                        for (var si = 0; si < todaysSpecials.length; si++) {
+                            var sp = todaysSpecials[si]; if (!sp || !sp.name) continue; var cn = _lfsNorm(sp.name);
+                            if (today[cn]) continue;
+                            var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                            if (!durs.length) { var d1 = 0; try { d1 = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0; } catch (_e) {} if (d1 > 0) durs = [d1]; }
+                            var d = 0; for (var dj = 0; dj < durs.length; dj++) { if (durs[dj] > 0 && durs[dj] <= slotW && durs[dj] > d) d = durs[dj]; }
+                            if (d <= 0) continue;
+                            if (!pbsAligned && d !== slotW) continue;   // split needs an aligned grid
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, grade, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                            try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, grade))) continue; } catch (_e) {}
+                            try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, grade, slotStart, slotStart + d)) continue; } catch (_e) { continue; }
+                            var loc = _lfsLoc[cn] || sp.location || sp.name;
+                            if (_lfsRoomFull(loc, _lfsCap[cn] || 1, slotStart, slotStart + d, bunk)) continue;
+                            return { name: sp.name, loc: loc, nm: cn, d: d };
+                        }
+                        return null;
+                    };
+                    var _lfsSportPlaced = 0, _lfsSpecPlaced = 0, _lfsBunks = {};
+                    allGrades.forEach(function (grade) {
+                        var sportFloor = _lfsSportFloor[grade] || 0;
+                        var totalSpecFloor = _lfsTotalSpecFloor[grade] || 0;
+                        if (sportFloor <= 0 && totalSpecFloor <= 0) return;
+                        var bunks = getBunksForGrade(grade, divisions) || [];
+                        var pbsAll = (window._perBunkSlots && window._perBunkSlots[grade]) || (window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots) || null;
+                        bunks.forEach(function (bunk) {
+                            var arr = _lfsSA[bunk]; if (!Array.isArray(arr) || !arr.length) return;
+                            var pbs = pbsAll && pbsAll[String(bunk)];
+                            var pbsAligned = Array.isArray(pbs) && pbs.length === arr.length;
+                            var today = {}, sportCnt = 0, specCnt = 0;
+                            arr.forEach(function (c) {
+                                if (!c || c.continuation) return;
+                                if (c._league || c._leagueGame || c._isTrip || c._isRotationEvent || c._isChinuch) return;
+                                var nm = _lfsNorm(c._assignedSpecial || c._activity || c.event || c.sport);
+                                if (!nm || nm === 'free') return;
+                                today[nm] = 1;
+                                // Count EXACTLY as the STEP 6.99 audit does (name-first, then flag):
+                                //   a configured special written as a plain slot by a gap-filler /
+                                //   recapture loses the _assignedSpecial / type flag, so flag-only
+                                //   counting would undercount specials (→ over-enforce, needlessly
+                                //   dropping a sport) and miscount that block as a sport.
+                                if (_lfsSub[nm] != null || c._assignedSpecial || c.type === 'special') specCnt++;
+                                else if (c.sport && c.type !== 'custom') sportCnt++;
+                            });
+                            // ---- BARE-SPECIAL total floor: place ANY available special ----
+                            if (totalSpecFloor > 0 && specCnt < totalSpecFloor) {
+                                var _allowDropSport = (sportFloor <= 0);   // don't rob a sport floor to pay a special floor
+                                var gT = 0;
+                                while (specCnt < totalSpecFloor && gT++ < 8) {
+                                    var cands = _lfsReclaim(arr, _allowDropSport);
+                                    var did = false;
+                                    for (var ci = 0; ci < cands.length && !did; ci++) {
+                                        var cd = cands[ci];
+                                        var pick = _lfsPickSpecial(grade, bunk, cd.s, cd.W, today, pbsAligned);
+                                        if (!pick) continue;
+                                        var _bak = arr[cd.i], _bakP = (pbsAligned && pbs[cd.i]) ? pbs[cd.i] : null;
+                                        try {
+                                            var specialCell = { field: pick.loc, sport: null, _activity: pick.name, event: pick.name, type: 'special', _assignedSpecial: pick.name, _specialLocation: pick.loc, _isSpecialLocation: true, _autoSpecial: true, _autoMode: true, _startMin: cd.s, _endMin: cd.s + pick.d, _source: 'fn-floor-enforce-bare', continuation: false };
+                                            if (pick.d === cd.W) {
+                                                arr[cd.i] = specialCell;
+                                                if (pbsAligned && pbs[cd.i]) { pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                            } else {
+                                                arr[cd.i] = specialCell;
+                                                var freeCell = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _startMin: cd.s + pick.d, _endMin: cd.e, _source: 'fn-floor-enforce-bare-rem', continuation: false };
+                                                var freePbs = { startMin: cd.s + pick.d, endMin: cd.e, startTime: _lfsLabel(cd.s + pick.d), endTime: _lfsLabel(cd.e), event: 'Free', type: 'slot', _bunk: bunk };
+                                                if (pbs && pbs[cd.i]) { pbs[cd.i].endMin = cd.s + pick.d; pbs[cd.i].endTime = _lfsLabel(cd.s + pick.d); pbs[cd.i].event = pick.name; pbs[cd.i].type = 'special'; }
+                                                arr.splice(cd.i + 1, 0, freeCell);
+                                                if (pbs) { pbs.splice(cd.i + 1, 0, freePbs); for (var pz = 0; pz < pbs.length; pz++) { if (pbs[pz]) pbs[pz].slotIndex = pz; } }
+                                            }
+                                            try { if (typeof claimField === 'function') claimField(pick.loc, cd.s, cd.s + pick.d, bunk, grade, pick.name); } catch (_e) {}
+                                            today[pick.nm] = 1; specCnt++; _lfsSpecPlaced++; _lfsBunks[bunk] = 1; did = true;
+                                        } catch (_eApply) {
+                                            try { arr[cd.i] = _bak; if (pbsAligned && _bakP) pbs[cd.i] = _bakP; } catch (_e) {}
+                                        }
+                                    }
+                                    if (!did) break;
+                                }
+                            }
+                            // ---- SPORT floor: place a real sport on an empty same-grade field ----
+                            if (sportFloor > 0 && sportCnt < sportFloor) {
+                                var gS = 0;
+                                while (sportCnt < sportFloor && gS++ < 8) {
+                                    var sCands = _lfsReclaim(arr, false);   // sport floor never drops a real sport
+                                    var sDid = false;
+                                    for (var si2 = 0; si2 < sCands.length && !sDid; si2++) {
+                                        var scd = sCands[si2];
+                                        var spick = _lfsPickSport(grade, bunk, scd.s, scd.e, today);
+                                        if (!spick) continue;
+                                        var _bak2 = arr[scd.i], _bakP2 = (pbsAligned && pbs[scd.i]) ? pbs[scd.i] : null;
+                                        try {
+                                            arr[scd.i] = { field: spick.field, sport: spick.act, _activity: spick.act, event: spick.act, _autoMode: true, _autoSolved: true, _startMin: scd.s, _endMin: scd.e, _source: 'fn-floor-enforce-sport', continuation: false };
+                                            if (pbsAligned && pbs[scd.i]) { pbs[scd.i].event = spick.act; pbs[scd.i].type = 'slot'; }
+                                            try { if (typeof claimField === 'function') claimField(spick.field, scd.s, scd.e, bunk, grade, spick.act); } catch (_e) {}
+                                            today[_lfsNorm(spick.act)] = 1; sportCnt++; _lfsSportPlaced++; _lfsBunks[bunk] = 1; sDid = true;
+                                        } catch (_eApply2) {
+                                            try { arr[scd.i] = _bak2; if (pbsAligned && _bakP2) pbs[scd.i] = _bakP2; } catch (_e) {}
+                                        }
+                                    }
+                                    if (!sDid) break;
+                                }
+                            }
+                        });
+                    });
+                    if (_lfsSportPlaced || _lfsSpecPlaced) {
+                        log('  🩹 [STEP 6.98b SPORT/BARE-SPECIAL FLOOR] placed ' + _lfsSportPlaced + ' sport(s) + ' + _lfsSpecPlaced + ' bare-special(s) across ' + Object.keys(_lfsBunks).length + ' bunk(s) to meet sport / bare-special floors. [kill: globalSettings.app1.layerFloorEnforce=\'off\']');
+                        try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                    } else {
+                        log('  ✅ [STEP 6.98b SPORT/BARE-SPECIAL FLOOR] nothing to enforce (or no reclaimable slot / free field).');
+                    }
+                }
+            }
+        } catch (_e698b) { try { warn('[STEP 6.98b SPORT/BARE-SPECIAL FLOOR] ' + (_e698b && _e698b.message)); } catch (_e) {} }
+
+        // ★ STEP 6.99 — LAYER-FLOOR AUDIT (log-only, never mutates). GOAL: every bunk
+        //   gets EVERY layer at its configured count (=2 → 2; >=N → ≥N; <= has no floor).
+        //   Reports each (bunk, layer) below its floor so a fixable shortfall is told
+        //   apart from a capacity-impossible one. Parsing mirrors the planner's own
+        //   qty/op logic (lines ~5031-5064 + subQuantities ~5081-5103) so floors match
+        //   exactly. Kill: globalSettings.app1.layerFloorAudit='off'.
+        try {
+            var _lfaOff = false;
+            try { var _lfaF = globalSettings && globalSettings.app1 && globalSettings.app1.layerFloorAudit; if (_lfaF === 'off' || _lfaF === false) _lfaOff = true; } catch (_e) {}
+            var _lfaLBG = (typeof layersByGrade !== 'undefined' && layersByGrade) || (typeof window !== 'undefined' && window._layersByGrade) || {};
+            if (!_lfaOff && _lfaLBG && Object.keys(_lfaLBG).length) {
+                var _lfaNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _lfaCanon = function (v) { var s = _lfaNorm(v); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+                var _lfaSubOf = {};
+                try {
+                    var _lfaA1 = (typeof _fn24DurableApp1 === 'function') ? _fn24DurableApp1() : ((globalSettings && globalSettings.app1) || {});
+                    ((_lfaA1 && _lfaA1.specialActivities) || []).forEach(function (s) { if (s && s.name) _lfaSubOf[_lfaNorm(s.name)] = _lfaCanon(s.subcategory); });
+                } catch (_e) {}
+                var _lfaWall = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|davening|league game|specialty league|chinuch|trip)$/i;
+                // mirror planner qty/op parse → floor
+                var _lfaFloor = function (qRawV, oRawV) {
+                    var qRaw = String(qRawV != null ? qRawV : ''), oRaw = String(oRawV != null ? oRawV : '');
+                    var combined = (qRaw + oRaw).trim();
+                    var m = combined.match(/^(\d*)\s*(>=|<=|≥|≤|>|<|=)\s*(\d*)$/);
+                    var qty, op;
+                    if (m) { qty = parseInt(m[1] || m[3] || '1', 10) || 1; op = (m[2] === '≥' || m[2] === '>') ? '>=' : (m[2] === '≤' || m[2] === '<') ? '<=' : m[2]; }
+                    else { qty = parseInt(qRaw, 10) || 1; op = '>='; }
+                    return (op === '<=') ? 0 : qty;
+                };
+                var _lfaShort = [], _lfaChecked = 0, _lfaBunksShort = {};
+                allGrades.forEach(function (grade) {
+                    var bunks = getBunksForGrade(grade, divisions) || [];
+                    var layers = _lfaLBG[grade] || [];
+                    if (!layers.length || !bunks.length) return;
+                    var deliv = {};
+                    bunks.forEach(function (b) {
+                        var d = { byName: {}, sub: {}, sport: 0 };
+                        var arr = (window.scheduleAssignments && window.scheduleAssignments[b]) || [];
+                        arr.forEach(function (s) {
+                            if (!s || s.continuation) return;
+                            if (s._league || s._leagueGame || s._isTrip || s._isRotationEvent || s._isChinuch) return;
+                            var nm = _lfaNorm(s._activity || s.event || s.sport);
+                            if (!nm || nm === 'free') return;
+                            // Count by NAME (not by block type): a custom layer is type:'custom'
+                            // named "Cleanup"/"Main Activity"/"Davening", so name-match is the
+                            // only reliable way — type-bucketing + a wall regex falsely zeroed them.
+                            d.byName[nm] = (d.byName[nm] || 0) + 1;
+                            // Subcat count by NAME first: a configured special written as a plain
+                            //   slot (gap-filler / recapture drops the _assignedSpecial / type flag)
+                            //   must still count toward its subcategory floor — the same name-vs-flag
+                            //   miscount fixed in FN-56 (5a503222). Flag-only gating falsely zeroed
+                            //   e.g. a "?:Theme Activity" block that is on the bunk's schedule.
+                            if (_lfaSubOf[nm] != null) { d.sub[_lfaSubOf[nm]] = (d.sub[_lfaSubOf[nm]] || 0) + 1; }
+                            else if (s._assignedSpecial || s.type === 'special') { var sc = _lfaCanon(s.subcategory); d.sub[sc] = (d.sub[sc] || 0) + 1; }
+                            else if (s.sport && s.type !== 'custom') { d.sport++; }   // generic/real sport (not a custom anchor)
+                        });
+                        deliv[b] = d;
+                    });
+                    layers.forEach(function (cl) {
+                        if (!cl) return;
+                        var t = _lfaNorm(cl.type);
+                        if (t === 'lunch' || t === 'change' || t === 'league' || t === 'specialty_league') return;
+                        var lb = bunks;
+                        if (t === 'custom' && cl.customBunks && cl.customBunks.length) lb = bunks.filter(function (b) { return cl.customBunks.indexOf(String(b)) >= 0; });
+                        // special layer with per-subcategory grid → one floor per subcat
+                        if (t === 'special' && cl.subQuantities && typeof cl.subQuantities === 'object') {
+                            var subOps = (cl.subOps && typeof cl.subOps === 'object') ? cl.subOps : {};
+                            Object.keys(cl.subQuantities).forEach(function (subName) {
+                                var sq = parseInt(cl.subQuantities[subName], 10) || 0; if (sq <= 0) return;
+                                var soKey = Object.keys(subOps).find(function (k) { return k.toLowerCase() === String(subName).toLowerCase(); });
+                                var req = _lfaFloor(sq, soKey ? subOps[soKey] : '='); if (req <= 0) return;
+                                var sc = _lfaCanon(subName);
+                                lb.forEach(function (b) { _lfaChecked++; var got = (deliv[b] && deliv[b].sub[sc]) || 0; if (got < req) { _lfaShort.push({ g: grade, b: b, lbl: 'special/' + subName, req: req, got: got }); _lfaBunksShort[b] = 1; } });
+                            });
+                            return;
+                        }
+                        var req2 = _lfaFloor(cl.qty != null ? cl.qty : cl.quantity, cl.op != null ? cl.op : cl.operator);
+                        if (req2 <= 0) return;
+                        lb.forEach(function (b) {
+                            _lfaChecked++;
+                            var got = 0;
+                            if (t === 'custom') got = (deliv[b] && deliv[b].byName[_lfaNorm(cl.customActivity || cl.event || cl.name)]) || 0;
+                            else if (t === 'sport' || t === 'sports') got = (deliv[b] && deliv[b].sport) || 0;
+                            else if (t === 'swim') got = (deliv[b] && deliv[b].byName['swim']) || 0;
+                            else if (t === 'special') { var tot = 0; if (deliv[b]) Object.keys(deliv[b].sub).forEach(function (k) { tot += deliv[b].sub[k]; }); got = tot; }
+                            else return;
+                            if (got < req2) { _lfaShort.push({ g: grade, b: b, lbl: t + '/' + _lfaNorm(cl.customActivity || cl.event || cl.name || t), req: req2, got: got }); _lfaBunksShort[b] = 1; }
+                        });
+                    });
+                });
+                if (_lfaShort.length) {
+                    log('  ⚠️ [LAYER-FLOOR AUDIT] ' + _lfaShort.length + ' layer-floor shortfall(s) across ' + Object.keys(_lfaBunksShort).length + ' bunk(s) — a bunk should get every layer at its set qty:');
+                    _lfaShort.slice(0, 25).forEach(function (x) { log('    [LAYER-FLOOR] ' + x.b + ' (' + x.g + ') ' + x.lbl + ': got ' + x.got + ' / need ' + x.req); });
+                    if (_lfaShort.length > 25) log('    [LAYER-FLOOR] … and ' + (_lfaShort.length - 25) + ' more');
+                } else {
+                    log('  ✅ [LAYER-FLOOR AUDIT] every bunk got every layer at its configured floor (' + _lfaChecked + ' checks).');
+                }
+            }
+        } catch (_elfa) { try { warn('[LAYER-FLOOR AUDIT] ' + (_elfa && _elfa.message)); } catch (_e) {} }
 
         // ★ FINAL duration-invariant re-run — the post-gate FQ-REOPT / FN-19/21 /
         //   FN-54 / FN-55 above can move or swap a configured-duration sport into a

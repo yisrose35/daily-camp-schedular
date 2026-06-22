@@ -280,11 +280,16 @@
             }
 
             // Not a team member — am I an owner?
-            const { data: ownedCamp } = await window.supabase
+            // A super-admin may own multiple camps (real + debug copies), so
+            // fetch all and pick the real one (id == uid); never .maybeSingle()
+            // which throws on >1 row.
+            const { data: ownedCamps } = await window.supabase
                 .from('camps')
                 .select('id')
-                .eq('owner', _currentUser.id)
-                .maybeSingle();
+                .eq('owner', _currentUser.id);
+            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === _currentUser.id) || ownedCamps[0])
+                : null;
 
             if (ownedCamp) {
                 if (_currentRole !== ROLES.OWNER) {
@@ -692,12 +697,18 @@
         // ⭐ STEP 3: Check if user is a CAMP OWNER
         // =====================================================================
         try {
-            const { data: ownedCamp } = await window.supabase
+            // Multi-camp owners (super-admin with debug copies): fetch all and
+            // pick the real camp (id == uid). This STEP 3 is only reached when
+            // the user is NOT in a copy (no membership), so the real camp is
+            // the right answer here.
+            const { data: ownedCamps } = await window.supabase
                 .from('camps')
                 .select('*')
-                .eq('owner', _currentUser.id)
-                .maybeSingle();
-            
+                .eq('owner', _currentUser.id);
+            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === _currentUser.id) || ownedCamps[0])
+                : null;
+
             if (ownedCamp) {
                 console.log("🔐 User is a camp owner");
                 _currentRole = ROLES.OWNER;
