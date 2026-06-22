@@ -888,13 +888,93 @@
         const _bunkSpecialsToday = {};
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
+        // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
+        //   For a clean TWO-period pair whose mains are a Special category + a
+        //   generic open activity (Sports/Activity) — the canonical "special here,
+        //   sport next" tile — make Period B the exact per-bunk INVERSE of Period A
+        //   (special↔sport). Deterministic → every bunk gets exactly one special and
+        //   one sport, never a double, regardless of capacity luck. The Period-A
+        //   special count k is chosen so NEITHER period runs short: k ∈ [N−C_B, C_A]
+        //   aimed at the capacity-proportional split, so the ratio FLEXES to the two
+        //   periods' capacities (60/40 if that's what fits) rather than a forced
+        //   50/50. Genuine total shortage (C_A+C_B < N) can't seat everyone; it then
+        //   maximizes coverage. These pairs are handled here and EXCLUDED from the
+        //   per-window budget below, so the inverse mapping is authoritative
+        //   (routeActivity applies smartTileBudget: a name → that special, false →
+        //   the fallback sport).
+        const _gsEnabled = (window.__smartTileGuaranteeSwap !== false);
+        const _GENERIC_OPEN = new Set(['sports', 'sport', 'sports slot', 'activity', 'general activity', 'general activity slot', 'activity slot']);
+        const _isGenericOpen = v => _GENERIC_OPEN.has(String(v || '').toLowerCase().trim());
+        function _isGuaranteedSwapPair(job) {
+            if (!_gsEnabled || !job || !job.blockB || _rotationOptions(job)) return false;
+            const m1 = String(job.main1 || '').toLowerCase().trim();
+            const m2 = String(job.main2 || '').toLowerCase().trim();
+            const sp1 = m1.includes('special'), sp2 = m2.includes('special');
+            if (sp1 === sp2) return false;            // exactly one side is the Special category
+            return _isGenericOpen(sp1 ? m2 : m1);     // ...and the other is a generic open (Sports/Activity)
+        }
+        // Seat each bunk (in fairness order) into the least-historical claimable
+        // special in a window; returns { bunk: specialName } for those seated. Uses
+        // the shared claim tracker so cross-division capacity is respected.
+        function _seatSpecials(bunksInOrder, startMin, endMin, divName, avail) {
+            const out = {};
+            bunksInOrder.forEach(bunk => {
+                const hist = historicalCounts[bunk] || {};
+                const cands = [...avail].sort((a, b) => (hist[a.name] || 0) - (hist[b.name] || 0));
+                for (const s of cands) {
+                    if (!_canClaim(s.name, startMin, endMin, s.capacity || 1, divName)) continue;
+                    _registerClaim(s.name, startMin, endMin, divName);
+                    out[bunk] = s.name;
+                    (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(s.name.toLowerCase());
+                    break;
+                }
+            });
+            return out;
+        }
+        filteredJobs.forEach(job => {
+            if (!_isGuaranteedSwapPair(job)) return;
+            const divName = job.division;
+            const bunkList = (divisions[divName] && divisions[divName].bunks) || [];
+            const N = bunkList.length;
+            if (N === 0) return;
+            const A = job.blockA, B = job.blockB;
+            const availA = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(A.startMin, A.endMin, divName, activityProperties, dailyFieldAvailability) || [];
+            const availB = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(B.startMin, B.endMin, divName, activityProperties, dailyFieldAvailability) || [];
+            const C_A = availA.reduce((s, x) => s + (x.capacity || 1), 0);
+            const C_B = availB.reduce((s, x) => s + (x.capacity || 1), 0);
+            // k bunks do the special in Period A (the rest do it in Period B). Clamp
+            // to [N−C_B, C_A] so neither period is asked to seat more specials than it
+            // can hold; aim at the capacity-proportional split within that window.
+            const lo = Math.max(0, N - C_B), hi = Math.min(N, C_A);
+            let k;
+            if (lo <= hi) {
+                const target = Math.round(N * C_A / ((C_A + C_B) || 1));
+                k = Math.max(lo, Math.min(hi, target));
+            } else {
+                k = hi;   // C_A + C_B < N → can't give everyone one; seat the most we can
+            }
+            // Rank bunks by fairness (least special usage first; non-priority after).
+            const divPriority = _globalPriority[divName] || [];
+            const ordered = [...bunkList].map(b => {
+                const h = historicalCounts[b] || {};
+                return { b, score: (divPriority.includes(b) ? 0 : 100) + _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0) };
+            }).sort((x, y) => (x.score - y.score) || (Math.random() - 0.5)).map(r => r.b);
+            const seatA = _seatSpecials(ordered.slice(0, k), A.startMin, A.endMin, divName, availA);   // special in A → sport in B
+            const seatB = _seatSpecials(ordered.slice(k), B.startMin, B.endMin, divName, availB);      // sport in A → special in B
+            bunkList.forEach(b => {
+                smartTileBudget[`${divName}|${b}|${A.startMin}|${A.endMin}`] = seatA[b] || false;
+                smartTileBudget[`${divName}|${b}|${B.startMin}|${B.endMin}`] = seatB[b] || false;
+            });
+            console.log(`[SmartTile GUARANTEE] ${divName}: N=${N} capA=${C_A} capB=${C_B} k=${k} → A-special=${Object.keys(seatA).length}, B-special=${Object.keys(seatB).length}`);
+        });
+
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
 
             // Only process windows where at least one job has a fallback-able special main
             // (rotation-mode jobs place themselves — excluding them keeps the budget's
             // claim registrations from eating capacity the rotation never consumes)
-            const fallbackableJobs = wJobs.filter(j => !_rotationOptions(j) && (_isSpecialLabel(j.fallbackFor) || _isSpecialLabel(j.main2)));
+            const fallbackableJobs = wJobs.filter(j => !_rotationOptions(j) && !_isGuaranteedSwapPair(j) && (_isSpecialLabel(j.fallbackFor) || _isSpecialLabel(j.main2)));
             if (fallbackableJobs.length === 0) return;
 
             // Total special capacity for this window — deduplicated by name
@@ -4518,21 +4598,23 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             else console.log('[STEP 7.6] Empty-field free-fill: no fillable Free slots');
 
             // ─────────────────────────────────────────────────────────────
-            // STEP 7.65: Share-fill. The empty-field pass above only seats a
-            // Free bunk on a COMPLETELY EMPTY field, so a bunk whose only
-            // remaining options are "repeat-on-empty" (blocked by the no-same-
-            // day-repeat filter) or "share a grade-mate's half-full field" was
-            // left Free even though the share is perfectly legal (same_division,
-            // under capacity). Seat each still-Free bunk into an UNDER-CAPACITY
-            // SAME-GRADE field, joining that field's in-progress activity. This
-            // runs after the capacity/validator sweeps (7.55/7.56), so it
-            // self-guarantees a legal share: the field is under its OWN cap,
-            // every current occupant is the SAME grade, the sharing type permits
-            // it (never not_sharable), the window co-starts (no staggered share),
-            // and access + time-rules pass. Round 0 prefers an activity the bunk
-            // has NOT done today; round 1 allows a same-day repeat as the
-            // absolute last resort (a shared repeat still beats a Free). Only
-            // fills Free cells — never displaces an existing placement.
+            // STEP 7.65: Share-fill + special-slot backfill. The empty-field
+            // pass only seats a Free bunk on a COMPLETELY EMPTY sport field, so a
+            // bunk whose only options were a same-day repeat or sharing a
+            // grade-mate's half-full room was left Free — even though the share
+            // is legal (under the room's cap, same grade). Seat every still-Free
+            // bunk by SHARING a grade-mate's under-capacity location (sport OR
+            // special, kind-matched to the slot); for a Special-Activity slot
+            // that has run dry, open/repeat a special the grade can demonstrably
+            // do; and for a sport/general slot, repeat a sport on an empty field.
+            // Runs after the capacity/validator sweeps (7.55/7.56), so it
+            // self-guarantees a legal placement (under the location's cap, same
+            // grade, co-started, never not_sharable, access + time-rules pass)
+            // and a share inherits the grade-mate's eligibility. Leniency
+            // escalates so a clean fill is tried first: (0) non-repeat share,
+            // (1) repeat share, (2) special slot → grade-accessible special on a
+            // free location (non-repeat first), (3) sport slot → any sport on an
+            // empty field. Fill-only — never displaces an existing placement.
             const _norm65 = (sw) => {
                 let ty = (sw && sw.type) || 'not_sharable';
                 const dv = (sw && Array.isArray(sw.divisions)) ? sw.divisions : [];
@@ -4540,10 +4622,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (ty === 'all') ty = 'same_division';
                 return { type: ty, cap: parseInt(sw && sw.capacity) || (ty === 'not_sharable' ? 1 : 2), divs: dv };
             };
-            const _cfg65 = {}, _fByName65 = {};
-            _sportFields76.forEach(f => { const k = String(f.name).toLowerCase().trim(); _cfg65[k] = _norm65(f.sharableWith || {}); _fByName65[k] = f; });
-            // Rich occupancy from the post-empty-fill schedule: field(lc) -> occupants.
-            const _occR65 = {};
+            // Location config + special metadata (field precedence, then the
+            // first special per location — matches the STEP 7.55 sweep).
+            const _loc65 = {}, _specByName65 = {};
+            _fields76.forEach(f => { if (f && f.name) _loc65[String(f.name).toLowerCase().trim()] = _norm65(f.sharableWith || {}); });
+            ((_gs76.app1 && _gs76.app1.specialActivities) || _gs76.specialActivities || []).forEach(s => {
+                if (!s || !s.name) return;
+                const nm = String(s.name).toLowerCase().trim();
+                const loc = String(s.location || s.name).toLowerCase().trim();
+                _specByName65[nm] = { name: s.name, loc: loc, locName: s.location || s.name };
+                if (!_loc65[loc]) _loc65[loc] = _norm65(s.sharableWith || {});
+            });
+            const _isSpecial65 = (a) => !!_specByName65[String(a || '').toLowerCase().trim()];
+            const _kindOf65 = (b, g, idx, e) => { const k = _kindByCell76[String(b) + '|' + idx]; return (k && k !== 'any') ? k : slotKindOf(_slotEvent76(b, g, idx, e)); };
+            const _isFree65 = (e) => { const a = String((e && (e._activity || e.field || e.sport) || '')).toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
+            // Occupancy by location from the post-empty-fill schedule.
+            const _occL65 = {};
             Object.keys(_sa76).forEach(b => {
                 const g = _b2g76[String(b)] || '?';
                 (_sa76[b] || []).forEach((e, idx) => {
@@ -4552,45 +4646,93 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (!fl || _skip76[fl] || e.field === 'Free') return;
                     const act = e._activity || e.sport; if (!act || String(act).toLowerCase() === 'free') return;
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                    (_occR65[fl] = _occR65[fl] || []).push({ bunk: String(b), grade: g, act: act, s: t.s, e: t.e });
+                    (_occL65[fl] = _occL65[fl] || []).push({ bunk: String(b), grade: g, act: act, s: t.s, e: t.e, field: e.field });
                 });
             });
-            let _shared65 = 0;
+            const _occAt65 = (fl, s, e, self) => (_occL65[fl] || []).filter(o => o.bunk !== self && o.s < e && o.e > s);
+            // Grade pool of today's specials — proves grade-accessibility for the backfill.
+            const _gradeSpecials65 = {};
+            Object.keys(_done76).forEach(b => { const g = _b2g76[String(b)]; if (!g) return; Object.keys(_done76[b] || {}).forEach(an => { if (_isSpecial65(an)) (_gradeSpecials65[g] = _gradeSpecials65[g] || {})[an] = 1; }); });
+            const _seat65 = (b, idx, locName, act, s, e) => {
+                const sp = _isSpecial65(act);
+                _sa76[b][idx] = sp
+                    ? { field: locName, sport: null, _activity: act, _specialLocation: locName, _startMin: s, _endMin: e, _fixed: true, _freeFilled: true, _shareFilled: true, continuation: false }
+                    : { field: locName, sport: act, _activity: act, _startMin: s, _endMin: e, _fixed: true, _freeFilled: true, _shareFilled: true, continuation: false };
+                const fl = String(locName).toLowerCase().trim();
+                (_occL65[fl] = _occL65[fl] || []).push({ bunk: String(b), grade: _b2g76[String(b)] || '?', act: act, s: s, e: e, field: locName });
+                (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
+            };
+            let _shared65 = 0, _backfilled65 = 0;
+            // Rounds 0/1 — share into an under-capacity same-grade location (kind-matched).
             for (let _round65 = 0; _round65 < 2; _round65++) {
                 Object.keys(_sa76).forEach(b => {
                     if (_allowed76 && !_allowed76.has(String(b))) return;
                     const g = _b2g76[String(b)] || '?';
                     (_sa76[b] || []).forEach((e, idx) => {
-                        if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
-                        const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
-                        if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
-                        const _ck = _kindByCell76[String(b) + '|' + idx];
-                        if (_ck === 'special' || (!_ck && slotKindOf(_slotEvent76(b, g, idx, e)) === 'special')) return;
+                        if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree65(e)) return;
                         const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                        const flKeys = Object.keys(_occR65);
-                        for (let fi = 0; fi < flKeys.length; fi++) {
-                            const fl = flKeys[fi];
-                            const f = _fByName65[fl]; if (!f) continue;            // real, available sport fields only
-                            const cfg = _cfg65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
-                            const occ = _occR65[fl].filter(o => o.bunk !== String(b) && o.s < t.e && o.e > t.s);
+                        const kind = _kindOf65(b, g, idx, e);
+                        for (const fl of Object.keys(_occL65)) {
+                            const cfg = _loc65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
+                            const occ = _occAt65(fl, t.s, t.e, String(b));
                             if (occ.length === 0 || occ.length >= cfg.cap) continue; // need 1+ occupant AND room under cap
                             if (occ.some(o => o.grade !== g)) continue;             // same-grade share only (always legal)
                             if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-started, no staggered share
                             if (cfg.type === 'custom' && cfg.divs.length > 0 && cfg.divs.indexOf(g) < 0) continue;
-                            if (!_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
-                            const act = occ[0].act; if (!act) continue;            // join the field's in-progress activity
+                            const act = occ[0].act; if (!act) continue;            // join the location's in-progress activity
+                            const actSp = _isSpecial65(act);
+                            if (kind === 'special' && !actSp) continue;            // special slot → join a special only
+                            if (kind === 'sport' && actSp) continue;               // sport slot → join a sport only
                             if (_round65 === 0 && _done76[String(b)] && _done76[String(b)][String(act).toLowerCase()]) continue;
-                            _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, _shareFilled: true, continuation: false };
-                            (_occR65[fl]).push({ bunk: String(b), grade: g, act: act, s: t.s, e: t.e });
-                            (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
-                            _shared65++;
-                            break;
+                            _seat65(b, idx, occ[0].field, act, t.s, t.e); _shared65++; break;
                         }
                     });
                 });
             }
-            if (_shared65 > 0) console.log('[STEP 7.65] share-fill: seated ' + _shared65 + ' Free bunk(s) into under-capacity same-grade field(s)');
-            else console.log('[STEP 7.65] share-fill: no shareable Free slots');
+            // Round 2 — special-slot backfill: a still-Free Special-Activity slot
+            // opens a grade-accessible special on a free location (prefer one the
+            // bunk has NOT done today; a repeat is the last resort).
+            Object.keys(_sa76).forEach(b => {
+                if (_allowed76 && !_allowed76.has(String(b))) return;
+                const g = _b2g76[String(b)] || '?';
+                (_sa76[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree65(e)) return;
+                    if (_kindOf65(b, g, idx, e) !== 'special') return;
+                    const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    const done = _done76[String(b)] || {};
+                    const pool = Object.keys(_gradeSpecials65[g] || {});
+                    const ordered = pool.filter(an => !done[an]).concat(pool.filter(an => done[an])); // non-repeat first
+                    for (const an of ordered) {
+                        const sp = _specByName65[an]; if (!sp) continue;
+                        const cfg = _loc65[sp.loc] || { type: 'same_division', cap: 2 };
+                        const occ = _occAt65(sp.loc, t.s, t.e, String(b));
+                        if (cfg.type === 'not_sharable' ? occ.length > 0 : occ.length >= cfg.cap) continue; // full
+                        if (occ.some(o => o.grade !== g)) continue;             // same-grade only
+                        if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-start
+                        _seat65(b, idx, sp.locName, sp.name, t.s, t.e); _backfilled65++; break;
+                    }
+                });
+            });
+            // Round 3 — sport/general slot: if still Free, repeat a sport on an
+            // empty field (the last-resort twin of STEP 7.6, repeat allowed).
+            Object.keys(_sa76).forEach(b => {
+                if (_allowed76 && !_allowed76.has(String(b))) return;
+                const g = _b2g76[String(b)] || '?';
+                (_sa76[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree65(e)) return;
+                    if (_kindOf65(b, g, idx, e) === 'special') return;     // special slots handled above
+                    const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    for (let fi = 0; fi < _sportFields76.length; fi++) {
+                        const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                        if (_skip76[fl] || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
+                        if (_occAt65(fl, t.s, t.e, String(b)).length > 0) continue;  // empty fields only
+                        const act = (f.activities || [])[0]; if (!act) continue;     // any activity (repeat OK)
+                        _seat65(b, idx, f.name, act, t.s, t.e); _backfilled65++; break;
+                    }
+                });
+            });
+            if (_shared65 + _backfilled65 > 0) console.log('[STEP 7.65] share-fill: seated ' + _shared65 + ' by sharing + ' + _backfilled65 + ' backfill(s)');
+            else console.log('[STEP 7.65] share-fill: no fillable Free slots');
         } catch (_e76) {
             console.warn('[STEP 7.6] Empty-field free-fill failed:', _e76);
         }
