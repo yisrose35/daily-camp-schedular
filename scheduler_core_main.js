@@ -920,6 +920,48 @@
         const _bunkSpecialsToday = {};
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
+        // ★ DAY-WIDE NO-DOUBLE-BOOKING GUARD (per bunk, spans EVERY smart tile job in
+        //   this run — connected OR separate). A bunk must never receive the same
+        //   concrete activity twice in one day. Before this guard, three same-format
+        //   tiles each resolved to the SAME least-used special / same Swim for a bunk
+        //   (rotation tiles all share offset 0; A/B open-sides were only deduped WITHIN
+        //   a connected pairGroup), producing a repeat. Now every concrete smart-tile
+        //   placement (special, specific sport, direct-fill label) records here, and
+        //   every concrete placement is gated on it — a would-be repeat is diverted to
+        //   a generic Sports/General slot that the total solver fills WITHOUT repeating.
+        //   Generic slots themselves are NOT recorded (the solver resolves + dedupes
+        //   them). Keyed by bunk (globally unique, like historicalCounts).
+        const _bunkActivitiesToday = {};
+        const _normActToday = a => String(a == null ? '' : a).toLowerCase().trim();
+        function _bunkHasToday(bunk, act) {
+            const k = _normActToday(act);
+            if (!k) return false;
+            const s = _bunkActivitiesToday[bunk];
+            return !!(s && s.has(k));
+        }
+        function _markBunkToday(bunk, act) {
+            const k = _normActToday(act);
+            if (!k) return;
+            (_bunkActivitiesToday[bunk] = _bunkActivitiesToday[bunk] || new Set()).add(k);
+        }
+        // Seed from activities ALREADY on each bunk's day from non-smart-tile sources
+        // (pinned events, fixed skeleton tiles, league fills placed earlier in the run)
+        // so smart tiles never re-hand an activity the bunk already has. Generic
+        // placeholders (Free / transitions / continuations) never count.
+        Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+            (window.scheduleAssignments[bunk] || []).forEach(e => {
+                if (!e || e.continuation || e._isTransition) return;
+                const a = _normActToday(e._activity || e.field || e.sport);
+                if (!a || a === 'free' || a === 'free play' || a === 'free (timeout)') return;
+                _markBunkToday(bunk, a);
+            });
+        });
+        // Per-division running index of UNGROUPED rotation tiles, so separate tiles in
+        // the same division start their option cycle at different offsets (they used to
+        // all share offset 0 → every separate tile handed a bunk the same option). The
+        // day-wide guard still prevents repeats; this just spreads scarce capacity.
+        const _divRotSeq = {};
+
         // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
         //   For a TWO-period Smart pair the user ticked "Guarantee each bunk gets
         //   both" on (smartData.guaranteeSwap) — Main 1 = the limited/special side,
@@ -1222,30 +1264,36 @@
                 //   in the group so each bunk gets a DIFFERENT option per connected tile
                 //   (→ all options across the group); _usedOpts blocks any repeat.
                 const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
-                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
+                // Spread UNGROUPED tiles: each separate rotation tile in a division gets
+                // its own starting offset so they don't all hand a bunk the same option.
+                const _seqOff = _grp ? 0 : (_divRotSeq[divName] = (_divRotSeq[divName] || 0) + 1) - 1;
+                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : (_seqOff ? ' (tile #' + _seqOff + ')' : '')}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff + _seqOff) % _rotOpts.length}`);
                 bunkList.forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
                     const _usedOpts = _grp ? ((_groupOptsUsed[_grp] = _groupOptsUsed[_grp] || {})[bunk] = _groupOptsUsed[_grp][bunk] || new Set()) : null;
                     let _placed = false, _placedOpt = null;
                     for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
-                        const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
+                        const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _seqOff + _o) % _rotOpts.length];
                         const optNorm = opt.toLowerCase().trim();
                         if (_usedOpts && _usedOpts.has(optNorm)) continue; // already got this option in the group
                         _placedOpt = optNorm;
                         if (needsGeneration(opt)) {
                             if (optNorm.includes('special')) {
-                                // Category SPECIAL → this bunk's least-done claimable special
-                                // it hasn't already had TODAY (day-wide, across all groups).
+                                // Category SPECIAL → this bunk's least-done claimable special.
+                                // Skip any special the bunk already has TODAY (no double
+                                // booking) and any that fails its per-bunk gates (maxUsage /
+                                // exact-frequency / access / multi-part), so the rotation
+                                // never exceeds a special's allowed amount.
                                 const _avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(_rStart, _rEnd, divName, activityProperties, dailyFieldAvailability) || [];
                                 const _h = historicalCounts[bunk] || {};
-                                const _had = _bunkSpecialsToday[bunk];
                                 _avail.sort((a, b) => (_h[a.name] || 0) - (_h[b.name] || 0));
                                 for (const sp of _avail) {
-                                    if (_had && _had.has(sp.name.toLowerCase())) continue; // already had this special today
+                                    if (_bunkHasToday(bunk, sp.name)) continue; // already has it today
+                                    if (window.SmartLogicAdapter?.canBunkUseSpecial && !window.SmartLogicAdapter.canBunkUseSpecial(bunk, divName, sp, historicalCounts, activityProperties, _rotSlots)) continue;
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
-                                    (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(sp.name.toLowerCase());
+                                    _markBunkToday(bunk, sp.name);
                                     console.log(`[SmartTile] ${bunk} -> ROTATION special: ${sp.name}`);
                                     window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                     _placed = true; break;
@@ -1257,25 +1305,27 @@
                                 _placed = true;
                             }
                         } else if (knownSpecialNames.has(optNorm)) {
-                            const _had2 = _bunkSpecialsToday[bunk];
-                            if (!(_had2 && _had2.has(optNorm))) { // skip if already had this special today
-                                const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
-                                if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
-                                    _registerClaim(opt, _rStart, _rEnd, divName);
-                                    (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(optNorm);
-                                    console.log(`[SmartTile] ${bunk} -> ROTATION specific special: ${opt}`);
-                                    window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                                    _placed = true;
-                                }
+                            if (_bunkHasToday(bunk, opt)) continue; // would repeat today → try next option
+                            const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
+                            if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
+                                _registerClaim(opt, _rStart, _rEnd, divName);
+                                _markBunkToday(bunk, opt);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific special: ${opt}`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
                             }
                         } else if (knownSportNames.has(optNorm) && !optNorm.includes('swim')) {
+                            if (_bunkHasToday(bunk, opt)) continue; // restricted block forces one sport → don't repeat it
                             console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                             schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
+                            _markBunkToday(bunk, opt);
                             _placed = true;
                         } else {
-                            // Direct-fill label (Swim etc.) — always placeable
+                            // Direct-fill label (Swim etc.)
+                            if (_bunkHasToday(bunk, opt)) continue; // would repeat today → try next option
                             console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
                             window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            _markBunkToday(bunk, opt);
                             _placed = true;
                         }
                     }
@@ -1364,16 +1414,23 @@
                     // the budget system uses; falls back when at capacity.
                     const _sw = _getSharableWith(activityLabel);
                     const _swCap = (_sw && _sw.capacity) || 1;
-                    if (_canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
+                    // No double booking: if the bunk already has this special today, fall
+                    // through to the fallback branches instead of placing it a second time.
+                    if (!_bunkHasToday(bunk, activityLabel) && _canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
                         _registerClaim(activityLabel, startMin, endMin, divName);
+                        _markBunkToday(bunk, activityLabel);
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special: ${activityLabel}`);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     } else if (_fbAct && needsGeneration(_fbAct)) {
                         const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity → ${_fbT}`);
                         schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                    } else if (_fbAct && _bunkHasToday(bunk, _fbAct)) {
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity, "${_fbAct}" would REPEAT today → Sports Slot`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
                     } else if (_fbAct) {
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity → DIRECT FILL: ${_fbAct}`);
+                        _markBunkToday(bunk, _fbAct);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     }
                     return;
@@ -1383,8 +1440,17 @@
                     // activity so it resolves a real hosting field (capacity, sharing,
                     // rotation all enforced). If no hosting field is feasible, the
                     // solver drops the restriction and picks generally.
+                    // No double booking: a restricted block forces this one sport, so if
+                    // the bunk already has it today, hand the solver an UNRESTRICTED slot
+                    // and let it pick a non-repeating activity instead.
+                    if (_bunkHasToday(bunk, activityLabel)) {
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC sport "${activityLabel}" would REPEAT today → generic Sports Slot`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        return;
+                    }
                     console.log(`[SmartTile] ${bunk} -> SPECIFIC sport: ${activityLabel} (solver-placed, restricted)`);
                     schedulableSlotBlocks.push({ divName, bunk, event: activityLabel, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, allowedActivities: [activityLabel] });
+                    _markBunkToday(bunk, activityLabel);
                     return;
                 }
 
@@ -1394,12 +1460,12 @@
                         console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
                         schedulableSlotBlocks.push({ divName, bunk, event: fbSlotType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
                     } else if (_fbAct) {
-                        // ★ CONNECTED-GROUP AWARENESS: don't direct-fill the SAME open
-                        //   activity (e.g. swim) twice for a bunk across connected tiles
-                        //   — give a fresh sport instead so connected periods vary.
+                        // ★ DAY-WIDE NO-DOUBLE-BOOKING: don't direct-fill the SAME open
+                        //   activity (e.g. Swim) twice for a bunk in one day — across
+                        //   connected OR separate tiles. Give a fresh sport instead.
                         const _grp = job.pairGroup, _fbKey = String(_fbAct).toLowerCase().trim();
-                        if (_grp && _groupOpenUsed[_grp] && _groupOpenUsed[_grp][bunk] && _groupOpenUsed[_grp][bunk].has(_fbKey)) {
-                            console.log(`[SmartTile] ${bunk} -> "${_fbAct}" would REPEAT in connected group ${_grp} → Sports Slot instead`);
+                        if (_bunkHasToday(bunk, _fbAct)) {
+                            console.log(`[SmartTile] ${bunk} -> "${_fbAct}" would REPEAT today${_grp ? ' (group ' + _grp + ')' : ''} → Sports Slot instead`);
                             schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
                         } else {
                             if (_grp) {
@@ -1407,6 +1473,7 @@
                                 _groupOpenUsed[_grp][bunk] = _groupOpenUsed[_grp][bunk] || new Set();
                                 _groupOpenUsed[_grp][bunk].add(_fbKey);
                             }
+                            _markBunkToday(bunk, _fbAct);
                             console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
                             window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                         }
@@ -1414,13 +1481,24 @@
                     return;
                 }
              if (typeof _budgetVal === 'string' && !_isDirectFill) {
+                    // No double booking: the budget pre-calc dedupes specials WITHIN its
+                    // own pass, but a rotation tile (excluded from the budget) may already
+                    // have handed this bunk the same special today. If so, divert to the
+                    // fallback sport instead of placing the special twice.
+                    if (_bunkHasToday(bunk, _budgetVal)) {
+                        const _fbT = (_fbAct && _fbAct.toLowerCase().includes('sport')) ? 'Sports Slot' : 'General Activity Slot';
+                        console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED "${_budgetVal}" would REPEAT today → ${_fbT}`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        return;
+                    }
                     console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
                     _registerClaim(_budgetVal, startMin, endMin, divName);
+                    _markBunkToday(bunk, _budgetVal);
                     window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     return;
-                
-                
-                
+
+
+
                 }
 
                // ★★★ FULL GRADE: Fill ALL bunks in division ★★★
@@ -1431,6 +1509,7 @@
                     bunkList.forEach(fgBunk => {
                         const fgEx = window.scheduleAssignments[fgBunk]?.[slots[0]];
                         if (fgEx && fgEx._bunkOverride) return;
+                        _markBunkToday(fgBunk, activityLabel);
                         window.fillBlock({
                             divName, bunk: fgBunk, startTime: startMin, endTime: endMin, slots
                         }, {
@@ -1478,7 +1557,13 @@
                             placed = true;
                             break;
                         } else {
+                            // No double booking: skip an alternative the bunk already has today.
+                            if (_bunkHasToday(bunk, alt)) {
+                                console.log(`[SmartTile] ${bunk} - alt "${alt}" would REPEAT today, trying next`);
+                                continue;
+                            }
                             console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${alt} (fallback from locked "${activityLabel}")`);
+                            _markBunkToday(bunk, alt);
                             window.fillBlock({
                                 divName,
                                 bunk,
@@ -1538,8 +1623,12 @@
                                     fromSmartTile: true,
                                     _smartTileFallback: true
                                 });
+                            } else if (_bunkHasToday(bunk, _fbAct)) {
+                                console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET, "${_fbAct}" would REPEAT today → Sports Slot`);
+                                schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
                             } else {
                                 console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → DIRECT FILL: ${_fbAct}`);
+                                _markBunkToday(bunk, _fbAct);
                                 window.fillBlock({
                                     divName, bunk, startTime: startMin, endTime: endMin, slots
                                 }, {
@@ -1550,8 +1639,18 @@
                         }
 
                         if (typeof budgetVal === 'string') {
+                            // No double booking: if a rotation tile (excluded from the
+                            // budget) already gave this bunk the same special today,
+                            // divert to the fallback sport instead of placing it twice.
+                            if (_bunkHasToday(bunk, budgetVal)) {
+                                const _fbT = (_fbAct && _fbAct.toLowerCase().includes('sport')) ? 'Sports Slot' : 'General Activity Slot';
+                                console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED "${budgetVal}" would REPEAT today → ${_fbT}`);
+                                schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                                return;
+                            }
                             // Pre-assigned specific special — fill directly, solver never touches it
                             console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${budgetVal}`);
+                            _markBunkToday(bunk, budgetVal);
                             window.fillBlock({
                                 divName, bunk, startTime: startMin, endTime: endMin, slots
                             }, {
@@ -1571,6 +1670,16 @@
                     });
 
               } else {
+                    // No double booking: if the bunk already has this exact activity
+                    // today (from another tile / the budget / a pre-placed source),
+                    // divert to the fallback sport rather than placing it a second time.
+                    if (_bunkHasToday(bunk, activityLabel)) {
+                        const _fbDup = job.fallbackActivity || '';
+                        const _fbDupType = (_fbDup && _fbDup.toLowerCase().includes('sport')) ? 'Sports Slot' : 'General Activity Slot';
+                        console.log(`[SmartTile] ${bunk} -> "${activityLabel}" would REPEAT today → ${_fbDupType}`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbDupType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        return;
+                    }
                     if (knownSpecialNames.has(activityLabel.toLowerCase().trim())) {
                         const _maxCap = (() => {
                             const props = activityProperties[activityLabel] || activityProperties[Object.keys(activityProperties).find(k => k.toLowerCase() === activityLabel.toLowerCase())] || {};
@@ -1594,6 +1703,7 @@
                         }
                       _registerClaim(activityLabel, startMin, endMin, divName);
                     }
+                    _markBunkToday(bunk, activityLabel);
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
                    window.fillBlock({

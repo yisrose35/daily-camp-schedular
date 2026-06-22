@@ -1101,7 +1101,12 @@
         isSwimOrPool: isSwimOrPool,
         getCanonicalSwimName: getCanonicalSwimName,
         // ★ V44.3: Exposed for camp-wide budget calculation
-        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock
+        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock,
+        // ★ Exposed so the rotation path in scheduler_core_main can enforce the SAME
+        //   per-bunk gates the A/B path already does (access restrictions, maxUsage /
+        //   exact-frequency ceilings, multi-part eligibility, elective locks). Without
+        //   this the rotation "Special" pick could exceed a special's allowed amount.
+        canBunkUseSpecial: canBunkUseSpecial
     };
 
     // =========================================================================
