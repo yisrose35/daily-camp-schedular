@@ -4063,16 +4063,28 @@ function buildPolishedWorkbook(sel) {
         : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
 
     sheetSpecs.forEach(function (spec) {
-        var rows = sanitizeRows(spec.rows || []);
+        var srcRows = spec.rows || [];
+        // Metadata for the increment two-tier grid (attached by buildExcelRows).
+        var extraMerges = srcRows._merges || null;
+        var headerRowsSet = srcRows._headerRows || null;   // [periodRowIdx, incRowIdx]
+        var freezeRowOverride = srcRows._freezeRow;         // ySplit
+        var rows = sanitizeRows(srcRows);
         if (!rows.length) return;
 
         // Find the column-header row (first cell is the axis label).
         // Division/bunk/location grids lead with 'Time'; the week grid leads
         // with 'Bunk'. Detecting either keeps freeze-panes + header styling.
         var headerRowIdx = -1;
-        for (var ri = 0; ri < rows.length; ri++) {
-            if (rows[ri] && (rows[ri][0] === 'Time' || rows[ri][0] === 'Bunk')) { headerRowIdx = ri; break; }
+        if (headerRowsSet && headerRowsSet.length) {
+            headerRowIdx = headerRowsSet[headerRowsSet.length - 1]; // last header row (increment labels)
+        } else {
+            for (var ri = 0; ri < rows.length; ri++) {
+                if (rows[ri] && (rows[ri][0] === 'Time' || rows[ri][0] === 'Bunk')) { headerRowIdx = ri; break; }
+            }
         }
+        var isHeaderRow = function (idx) {
+            return headerRowsSet ? headerRowsSet.indexOf(idx) >= 0 : (idx === headerRowIdx);
+        };
         // NOTE: deliberately NO empty-cell backfill. A blank slot in the
         // schedule must export as a blank cell — stamping a '-' placeholder
         // injected characters the schedule never had (camps reported the
@@ -4084,9 +4096,25 @@ function buildPolishedWorkbook(sel) {
         // for merges to span correctly.
         if (numCols < 2) numCols = 2;
 
-        // Column widths — Time col 14, every data col ~22 chars
+        // Column widths — size each column to its widest cell so names
+        // (incl. non-Latin/Hebrew) are never clipped. Clamp to a sane range.
+        // In increment-grid mode, only the bunk axis (col 0) auto-sizes; the
+        // increment sub-columns stay compact and even (period/activity text
+        // flows across the merged span).
         var cols = [];
-        for (var c = 0; c < numCols; c++) cols.push({ wch: c === 0 ? 14 : 22 });
+        for (var c = 0; c < numCols; c++) {
+            if (headerRowsSet && c > 0) { cols.push({ wch: 8 }); continue; }
+            var maxLen = 0;
+            for (var rw = 0; rw < rows.length; rw++) {
+                if (rw <= 1) continue; // skip merged title/subtitle rows
+                // In increment mode, ignore the merged header rows for col 0 sizing.
+                if (headerRowsSet && isHeaderRow(rw)) continue;
+                var cellv = rows[rw] && rows[rw][c] != null ? String(rows[rw][c]) : '';
+                if (cellv.length > maxLen) maxLen = cellv.length;
+            }
+            // +2 padding; min 12 so short bunk names still read, max 40 to avoid runaway.
+            cols.push({ wch: Math.max(12, Math.min(40, maxLen + 2)) });
+        }
         ws['!cols'] = cols;
 
         // Row heights
@@ -4094,20 +4122,23 @@ function buildPolishedWorkbook(sel) {
         for (var rIdx = 0; rIdx < rows.length; rIdx++) {
             if (rIdx === 0) rowsMeta.push({ hpt: 28 });
             else if (rIdx === 1) rowsMeta.push({ hpt: 18 });
-            else if (rIdx === headerRowIdx) rowsMeta.push({ hpt: 22 });
+            else if (isHeaderRow(rIdx)) rowsMeta.push({ hpt: 22 });
             else rowsMeta.push({ hpt: 20 });
         }
         ws['!rows'] = rowsMeta;
 
-        // Merge title AND subtitle across all columns
+        // Merge title AND subtitle across all columns, plus any period/activity
+        // merges from the increment two-tier grid.
         ws['!merges'] = [
             { s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } },
             { s: { r: 1, c: 0 }, e: { r: 1, c: numCols - 1 } }
         ];
+        if (extraMerges && extraMerges.length) ws['!merges'] = ws['!merges'].concat(extraMerges);
 
-        // Freeze header + time column
-        if (headerRowIdx >= 0) {
-            ws['!views'] = [{ state: 'frozen', ySplit: headerRowIdx + 1, xSplit: 1 }];
+        // Freeze header(s) + time column
+        var ySplit = (freezeRowOverride != null) ? freezeRowOverride : (headerRowIdx >= 0 ? headerRowIdx + 1 : -1);
+        if (ySplit >= 0) {
+            ws['!views'] = [{ state: 'frozen', ySplit: ySplit, xSplit: 1 }];
         }
 
         // Styled cells (only takes effect with xlsx-js-style)
@@ -4118,7 +4149,7 @@ function buildPolishedWorkbook(sel) {
             if (ws[subtitleAddr]) ws[subtitleAddr].s = STY.subtitle;
             for (var rr = 2; rr < rows.length; rr++) {
                 var rowVals = rows[rr] || [];
-                var isHeader = (rr === headerRowIdx);
+                var isHeader = isHeaderRow(rr);
                 for (var cc = 0; cc < numCols; cc++) {
                     var addr = XLSX.utils.encode_cell({ r: rr, c: cc });
                     if (!ws[addr]) {
@@ -4308,6 +4339,7 @@ function buildExcelRows(item) {
         // Build the schedule in time-row orientation, then transpose so the
         // sheet matches the website: time across the top (X), bunks down (Y).
         var grid = [];
+        var slotMeta = []; // aligned 1:1 with grid data rows — { startMin, endMin, label }
         if (isAutoMode()) {
             // ★★★ AUTO MODE: Per-bunk schedule with unified time axis ★★★
             // Build unified time axis from all bunks' slots
@@ -4383,6 +4415,7 @@ function buildExcelRows(item) {
                     });
                 }
                 grid.push(row);
+                slotMeta.push({ startMin: ts.startMin, endMin: ts.endMin, label: ts.label });
             });
         } else {
             // ★★★ MANUAL MODE: Skeleton-based slot grid ★★★
@@ -4407,11 +4440,70 @@ function buildExcelRows(item) {
                     });
                 }
                 grid.push(row);
+                slotMeta.push({ startMin: eb.startMin, endMin: eb.endMin, label: eb.label });
             });
         }
 
         // ─── Transpose: time on the X axis, bunks on the Y axis ───
-        if (grid.length > 1) {
+        // When increments are ON (fixed-increment mode, not activity-aligned),
+        // each period is split into sub-columns: a merged period super-header on
+        // top, the increment times beneath, and each activity merged across the
+        // increments it spans — mirroring the on-screen grid.
+        var incOn = !_activityAligned && _timeIncrement > 0 &&
+                    slotMeta.some(function (s) { return (s.endMin - s.startMin) > _timeIncrement; });
+        if (grid.length > 1 && incOn) {
+            var inc = _timeIncrement;
+            // Compact HH:MM (no AM/PM — the period header carries the full range).
+            var incLabel = function (min) {
+                var h = Math.floor(min / 60), m = min % 60;
+                var h12 = ((h + 11) % 12) + 1;
+                return h12 + ':' + (m < 10 ? '0' + m : m);
+            };
+            var merges = [];
+            var periodRowIdx = rows.length;      // tier-1 (period super-header)
+            var incRowIdx = periodRowIdx + 1;    // tier-2 (increment labels)
+            var firstBunkRow = incRowIdx + 1;
+
+            var periodRow = ['Bunk'];
+            var incRow = [''];
+            var slotCols = []; // per slot: { colStart, colEnd, count }
+            var colCursor = 1;
+            slotMeta.forEach(function (sm) {
+                var times = [];
+                for (var t = sm.startMin; t < sm.endMin; t += inc) times.push(t);
+                if (!times.length) times.push(sm.startMin);
+                var colStart = colCursor;
+                times.forEach(function (t, k) {
+                    periodRow.push(k === 0 ? sm.label : '');
+                    incRow.push(incLabel(t));
+                });
+                var colEnd = colStart + times.length - 1;
+                slotCols.push({ colStart: colStart, colEnd: colEnd, count: times.length });
+                if (times.length > 1) merges.push({ s: { r: periodRowIdx, c: colStart }, e: { r: periodRowIdx, c: colEnd } });
+                colCursor = colEnd + 1;
+            });
+            // Vertical merge for the 'Bunk' corner across both header rows.
+            merges.push({ s: { r: periodRowIdx, c: 0 }, e: { r: incRowIdx, c: 0 } });
+
+            rows.push(periodRow);
+            rows.push(incRow);
+
+            bunks.forEach(function (bk, bi) {
+                var rowAbs = rows.length;
+                var line = [bk];
+                slotMeta.forEach(function (sm, si2) {
+                    var val = grid[si2 + 1][bi + 1] || '';
+                    var sc = slotCols[si2];
+                    for (var k = 0; k < sc.count; k++) line.push(k === 0 ? val : '');
+                    if (sc.count > 1) merges.push({ s: { r: rowAbs, c: sc.colStart }, e: { r: rowAbs, c: sc.colEnd } });
+                });
+                rows.push(line);
+            });
+
+            rows._merges = merges;
+            rows._headerRows = [periodRowIdx, incRowIdx];
+            rows._freezeRow = firstBunkRow;
+        } else if (grid.length > 1) {
             var timeLabels = grid.slice(1).map(function (r) { return r[0]; });
             rows.push(['Bunk'].concat(timeLabels));
             bunks.forEach(function (bk, bi) {
@@ -4879,7 +4971,9 @@ function initPrintCenter() {
     try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
     // Columns are activity-aligned by default (each activity sized to its real
     // duration); the increment picker switches to uniform fixed columns on demand.
+    // Restore the saved choice so increment mode (and its Excel layout) persists.
     _activityAligned = true;
+    try { var savedAA = localStorage.getItem('campistry_pc3_activityAligned'); if (savedAA !== null) _activityAligned = savedAA === '1'; } catch (e) {}
     try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
     try { var savedHG = localStorage.getItem('campistry_pc3_highlightGaps'); if (savedHG !== null) _highlightGaps = savedHG === '1'; } catch (e) {}
