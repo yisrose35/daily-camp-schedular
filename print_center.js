@@ -4331,14 +4331,23 @@ function exportExcel() {
     var dateStr = window.currentScheduleDate || new Date().toISOString().split('T')[0];
     readDesignValues();
 
-    if (typeof XLSX === 'undefined') {
+    var csvFallback = function () {
         var csv = buildCSV(sel);
         downloadFile(csv, 'schedule_' + dateStr + '.csv', 'text/csv');
-        return;
-    }
+    };
+
+    // ALWAYS try to load SheetJS first — the Print Center page does not include
+    // it statically, so checking `typeof XLSX` before loading would force every
+    // export down the CSV path (and never produce a styled .xlsx).
     loadStyledXLSX().then(function () {
-        var wb = buildPolishedWorkbook(sel);
-        XLSX.writeFile(wb, 'schedule_' + dateStr + '.xlsx');
+        if (typeof XLSX === 'undefined') { csvFallback(); return; } // CDN unreachable
+        try {
+            var wb = buildPolishedWorkbook(sel);
+            XLSX.writeFile(wb, 'schedule_' + dateStr + '.xlsx');
+        } catch (e) {
+            try { console.error('[PrintCenter] Excel export failed, falling back to CSV:', e); } catch (_e) {}
+            csvFallback();
+        }
     });
 }
 
@@ -4843,12 +4852,19 @@ function csvSafeCell(v) {
 }
 function buildCSV(sel) {
     var lines = [];
-    // Mirror the Excel sheet structure: one block per item, or a single block
-    // for the combined week grid. Unicode is normalised the same way as the
-    // .xlsx path so the CSV is just as "crisp" (no en-dashes / mojibake).
-    var specs = (_activeView === 'week')
-        ? [{ rows: buildWeekExcelRows(sel) }]
-        : sel.map(function (item) { return { rows: buildExcelRows(item) }; });
+    // Mirror the Excel sheet structure: one block per item, the combined
+    // whole-camp grid, or the week grid. Unicode is normalised the same way as
+    // the .xlsx path so the CSV is just as "crisp" (no en-dashes / mojibake).
+    var combinedAllBunks = (_activeView === 'division' && _currentTemplate.layoutMode === 'all-bunks');
+    var specs;
+    if (_activeView === 'week') {
+        specs = [{ rows: buildWeekExcelRows(sel) }];
+    } else if (combinedAllBunks) {
+        var cs = buildCombinedSheetSpecs(Object.keys(getDivisions()));
+        specs = (cs && cs.length) ? cs : sel.map(function (item) { return { rows: buildExcelRows(item) }; });
+    } else {
+        specs = sel.map(function (item) { return { rows: buildExcelRows(item) }; });
+    }
     specs.forEach(function (spec, idx) {
         if (idx > 0) lines.push(''); // blank separator between blocks
         (spec.rows || []).forEach(function (row) {
