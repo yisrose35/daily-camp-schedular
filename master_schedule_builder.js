@@ -2176,11 +2176,22 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         _ovDots += `</div>`;
       }
 
-      html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
-        data-id="${layer.id}" data-type="${layer.type}" data-grade="${_mbEsc(gradeKey)}"
-        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
+      // ★ Grade connection glow: linked custom activities (shared connectionId)
+      //   get a colored inner ring + 🔗 marker so the cross-grade "same time"
+      //   link is visible. Hue is derived from the group id so groups read apart.
+      let _connRing = '', _connClass = '', _connVar = '';
+      if (layer.connectionId) {
+        _connClass = ' ms-daw-band-connected';
+        _connVar = ` --conn-hue:${_dawConnHue(layer.connectionId)};`;
+        _connRing = `<div class="ms-daw-band-conn"></div><span class="ms-daw-band-conn-link" title="Connected across grades — scheduled at the same time">🔗</span>`;
+      }
+
+      html += `<div class="ms-daw-band${_connClass} ${dawSelectedBand === layer.id ? 'selected' : ''}"
+        data-id="${layer.id}" data-type="${layer.type}" data-grade="${_mbEsc(gradeKey)}"${layer.connectionId ? ' data-conn="' + _mbEsc(layer.connectionId) + '"' : ''}
+        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}${_connVar}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
+        ${_connRing}
         <span class="band-label">${_mbEsc(layer.customActivity || layer.leagueName || typeDef?.name || layer.type)}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         ${_ovDots}
@@ -2551,6 +2562,10 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
             startMin: Math.max(globalStart, newStart),
             endMin: Math.min(globalEnd, newEnd),
           };
+          // ★ A cross-grade copy must NOT inherit the source's connection group —
+          //   the user links grades explicitly via the layer editor.
+          delete _copyLayer.connectionId;
+          delete _copyLayer._connectionAnchor;
           _mbRemapLeagueForGrade(_copyLayer, grade);
           layerSource[grade].push(_copyLayer);
         } else {
@@ -2671,9 +2686,55 @@ function _dawFacilitySharingDefaults(activityName, fieldName) {
   } catch (_e) { return null; }
 }
 
+// ★ GRADE CONNECTION ("same time across grades"). A connection links the SAME
+//   custom activity across several grades so the auto builder places it at the
+//   IDENTICAL start time for all of them. Membership is stored as a shared
+//   `layer.connectionId` on each grade's matching custom layer.
+//
+// _dawConnHue(connId)  — deterministic hue (0-359) so each group glows a
+//   distinct, stable color across renders.
+function _dawConnHue(connId) {
+  let h = 0; const s = String(connId || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+// _dawApplyGradeConnection — rebuild a connection group from the popover's
+//   checked grades. `checkedGrades` is the set of OTHER grades to lock to the
+//   same time as `layer` (a custom layer in `grade`). Matching is by activity
+//   name; the closest-window layer in each grade is chosen. A resulting group
+//   of <2 members is cleared entirely (a link needs two grades).
+function _dawApplyGradeConnection(layer, grade, checkedGrades, layerSource) {
+  if (!layer || (layer.type || '').toLowerCase() !== 'custom') return;
+  const actLow = String(layer.customActivity || '').toLowerCase().trim();
+  const oldId = layer.connectionId || null;
+  // Tear down any existing group sharing this layer's id, so we rebuild cleanly.
+  if (oldId) {
+    Object.keys(layerSource).forEach(g => (layerSource[g] || []).forEach(l => {
+      if (l && l.connectionId === oldId) delete l.connectionId;
+    }));
+  }
+  const members = [layer];
+  if (actLow) {
+    (checkedGrades || []).forEach(g => {
+      const cands = (layerSource[g] || []).filter(l =>
+        l && (l.type || '').toLowerCase() === 'custom' &&
+        String(l.customActivity || '').toLowerCase().trim() === actLow);
+      if (!cands.length) return;
+      cands.sort((a, b) => Math.abs((a.startMin || 0) - (layer.startMin || 0)) - Math.abs((b.startMin || 0) - (layer.startMin || 0)));
+      if (members.indexOf(cands[0]) < 0) members.push(cands[0]);
+    });
+  }
+  if (members.length >= 2 && actLow) {
+    const id = oldId || ('conn_' + Math.random().toString(36).slice(2, 9));
+    members.forEach(l => { l.connectionId = id; });
+  }
+}
+
 function showDAWPopover(bandEl, layer, grade, opts) {
   const onSave = opts?.onSave || saveDAWLayers;
   const onRender = opts?.onRender || renderDAWGrid;
+  const layerSource = opts?.layerSource || dawLayers;
   // Pre-fill sharing from the facility general-activity config when this layer has
   //   no override of its own yet (so the inter-grade-sharing grades show the same
   //   way name/location already do, and a blind Save can't silently clear them).
@@ -2990,6 +3051,36 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         </div>
         <div class="ms-daw-pop-hint">Check the grades that may use this activity at the SAME time (up to the cap above). Grades you leave unchecked still get the activity, but never at the same time as a different grade. Leave all unchecked for no grade restriction.</div>
       </div>
+      ${(() => {
+        // ★ Connect Across Grades — link this custom activity to the same activity
+        //   in other grades so the auto builder schedules them all at the SAME
+        //   start time (whatever time it picks). Connected bands glow.
+        const actLow = String(layer.customActivity || '').toLowerCase().trim();
+        const divsC = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+        const allGc = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(Object.keys(divsC)) : Object.keys(divsC);
+        const matches = allGc.filter(g => String(g) !== String(grade) && actLow &&
+          (layerSource[g] || []).some(l => l && (l.type || '').toLowerCase() === 'custom' &&
+            String(l.customActivity || '').toLowerCase().trim() === actLow));
+        const head = `<div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Connect Across Grades <span style="font-weight:400;font-size:10px;letter-spacing:0;text-transform:none;color:#cbd5e1;">same time</span></div>`;
+        if (!actLow) {
+          return head + `<div class="ms-daw-pop-hint">Name this activity above first, then you can lock it to the same time as the same activity in other grades.</div>`;
+        }
+        if (matches.length === 0) {
+          return head + `<div class="ms-daw-pop-hint">No other grade has a "${_mbEsc(layer.customActivity)}" activity yet. Add it to another grade to connect them.</div>`;
+        }
+        const curId = layer.connectionId || null;
+        const cbs = matches.map(g => {
+          const checked = !!(curId && (layerSource[g] || []).some(l => l && l.connectionId === curId));
+          return '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (checked ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-conn-grade-cb" value="' + _mbEsc(String(g)) + '"' + (checked ? ' checked' : '') + ' style="width:13px;height:13px;">' + _mbEsc(String(g)) + '</label>';
+        }).join('');
+        return head + `
+      <div class="ms-daw-pop-field">
+        <label>Lock to the same time as</label>
+        <div id="daw-pop-conn-grades" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${cbs}</div>
+        <div class="ms-daw-pop-hint">Checked grades all get "${_mbEsc(layer.customActivity)}" at the SAME start time — whatever time the auto builder chooses. Their bands glow to show the link.</div>
+      </div>`;
+      })()}
       ` : ''}
     </div>
     <div class="ms-daw-pop-actions">
@@ -3077,6 +3168,9 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     };
   }
   popover.querySelectorAll('.daw-bunk-cb').forEach(cb => {
+    cb.onchange = function() { this.closest('label').style.background = this.checked ? '#dbeafe' : '#fff'; };
+  });
+  popover.querySelectorAll('.daw-conn-grade-cb').forEach(cb => {
     cb.onchange = function() { this.closest('label').style.background = this.checked ? '#dbeafe' : '#fff'; };
   });
 
@@ -3193,6 +3287,10 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       } else {
         layer.customSharing = null;
       }
+      // ★ Connect Across Grades: rebuild this activity's connection group from
+      //   the checked grades so they all schedule at the SAME start time.
+      const connGrades = Array.from(popover.querySelectorAll('.daw-conn-grade-cb:checked')).map(cb => cb.value);
+      _dawApplyGradeConnection(layer, grade, connGrades, layerSource);
     }
     document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
     popover.remove();

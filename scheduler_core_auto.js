@@ -1570,6 +1570,46 @@
             if (!layersByGrade[grade]) layersByGrade[grade] = [];
             layersByGrade[grade].push(layer);
         });
+
+        // ★ GRADE CONNECTION ("same time across grades"): custom layers in
+        //   different grades that the user linked (shared layer.connectionId)
+        //   must all START at the IDENTICAL minute — whatever the solver picks,
+        //   every connected grade gets it together (e.g. grades 1/2/3 all do
+        //   "Main Activity" at 11:20). We compute ONE shared anchor per group —
+        //   the earliest 5-min start that fits the activity inside EVERY member
+        //   grade's window (the intersection) — and stamp it on each member as
+        //   `_connectionAnchor`. computeStaggeredCustomSlot then returns that as a
+        //   single shared `alignAnchor` for all members, so the existing custom
+        //   anchor machinery (front-of-list + +100000 placement bonus in the
+        //   Phase-3 CSP) lands them on the same minute. A group of <2 members or
+        //   one whose windows can't overlap by `dur` is left unanchored (no-op).
+        try {
+            var _connGroups = {};
+            Object.keys(layersByGrade).forEach(function (g) {
+                (layersByGrade[g] || []).forEach(function (l) {
+                    if (l && l.connectionId && String(l.type || '').toLowerCase() === 'custom') {
+                        (_connGroups[l.connectionId] = _connGroups[l.connectionId] || []).push(l);
+                    }
+                    if (l) delete l._connectionAnchor; // clear any stale stamp from a prior run
+                });
+            });
+            Object.keys(_connGroups).forEach(function (cid) {
+                var members = _connGroups[cid];
+                if (!members || members.length < 2) return;           // a group needs ≥2 grades
+                var lo = -Infinity, hi = Infinity, dur = 0;
+                members.forEach(function (l) {
+                    lo = Math.max(lo, l.startMin || 0);
+                    hi = Math.min(hi, l.endMin || 1440);
+                    dur = Math.max(dur, l.durationMin || l.periodMin || ((l.endMin || 0) - (l.startMin || 0)));
+                });
+                if (!(dur > 0) || hi - lo < dur) return;               // windows can't align by dur
+                var anchor = Math.round(lo / 5) * 5;
+                if (anchor < lo) anchor += 5;
+                if (anchor + dur > hi) return;                          // earliest common start doesn't fit
+                members.forEach(function (l) { l._connectionAnchor = anchor; });
+            });
+        } catch (_eConn) {}
+
         // Debug exposure for swim_debug.js
         try {
             window._layersByGrade = layersByGrade;
@@ -1880,6 +1920,21 @@
         function computeStaggeredCustomSlot(cl, grade, dur, winStart, winEnd) {
             var result = { alignAnchor: null, staggerReserved: false, isShareableRoom: false,
                            crossGradeOk: true, shareGrades: [], dur: dur };
+            // ★ GRADE CONNECTION: a user-linked custom layer carries a precomputed
+            //   group anchor (`_connectionAnchor`) shared by every connected grade.
+            //   Return it as a single shared alignAnchor (clamped into THIS grade's
+            //   window) so all connected grades target the same minute. crossGradeOk
+            //   keeps it on the Phase-3 CSP single-anchor path (not a per-grade lane).
+            if (cl && cl._connectionAnchor != null) {
+                var _ca = cl._connectionAnchor;
+                if (_ca < winStart) { _ca = Math.round(winStart / 5) * 5; if (_ca < winStart) _ca += 5; }
+                if (_ca + dur > winEnd) _ca = winEnd - dur;
+                result.alignAnchor = (_ca >= winStart && _ca + dur <= winEnd) ? _ca : null;
+                result.crossGradeOk = true;
+                result.staggerReserved = false;
+                result.isShareableRoom = false;
+                return result;
+            }
             try {
                 var _clFld = cl.customField || null;
                 if (!_clFld) return result;
