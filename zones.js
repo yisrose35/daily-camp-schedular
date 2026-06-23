@@ -883,6 +883,29 @@ window.seamMergeTravelTime = function(assignments) {
     return cleared;
 };
 
+// =========================================================================
+// AWAY ZONES — off-campus zones usable as an "Away" destination for a tile.
+// A tile marked Away is restricted to one of these zones' fields, and the
+// zone's travelTimeMin drives the required to/from travel time.
+// =========================================================================
+window.getAwayZones = function() {
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    const out = [];
+    Object.entries(zones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
+        if (zone.isOffCampus !== true) return;
+        out.push({
+            name: zone.name || zoneName,
+            travelTimeMin: parseInt(zone.travelTimeMin) || 0,
+            travelMode: (zone.travelMode === 'extend') ? 'extend' : 'deduct',
+            fields: Array.isArray(zone.fields) ? [...zone.fields] : []
+        });
+    });
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+};
+
 // Batch check multiple fields for zone membership
 window.getZonesForFields = function(fieldNames) {
     if (!Array.isArray(fieldNames)) return {};

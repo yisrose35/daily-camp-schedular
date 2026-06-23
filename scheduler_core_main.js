@@ -639,6 +639,23 @@
                     //   all-but-one bunk — breaking the full-division cell merge.
                     _pinned: pick._pinned || false
                 };
+                // ★ Away (off-campus) tile (e.g. an away league game): stamp travel
+                //   to/from on the lead slot so grids + print render the 🚶 Travel
+                //   buffers. Field is in the away zone → getTravelForField returns its
+                //   travel; fall back to the zone's configured travel for label fields.
+                if (i === 0 && block._isAway && block._awayZone) {
+                    let _lt = (fName && fName !== 'Free') ? window.getTravelForField?.(fName, true) : null;
+                    if (!_lt) {
+                        const _zaway = (window.getAwayZones?.() || []).find(z => z.name === block._awayZone);
+                        if (_zaway && _zaway.travelTimeMin > 0) _lt = { preMin: _zaway.travelTimeMin, postMin: _zaway.travelTimeMin, zoneName: _zaway.name };
+                    }
+                    if (_lt) {
+                        _entry._travelPre = _lt.preMin;
+                        _entry._travelPost = _lt.postMin;
+                        _entry._travelZone = _lt.zoneName;
+                        _entry._travelMode = 'deduct';
+                    }
+                }
                 if (_specFeat) {
                     // part label on every slot (so continuations also display it)
                     if (_specFeat._partLabel) {
@@ -3806,7 +3823,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     bunks: bunkList,
                     type: 'league',
                     leagueName: item.leagueName || null,
-                    _doubleHeaderPairId: item._doubleHeaderPairId || null
+                    _doubleHeaderPairId: item._doubleHeaderPairId || null,
+                    _isAway: item.isAway === true,
+                    _awayZone: item.isAway === true ? (item.awayZone || null) : null
                 });
                 return;
             }
@@ -3835,7 +3854,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         type: 'slot',
                         startTime: sMin,
                         endTime: eMin,
-                        slots
+                        slots,
+                        // ★ Away (off-campus): restrict the solver to the zone's fields + travel.
+                        _isAway: item.isAway === true,
+                        _awayZone: item.isAway === true ? (item.awayZone || null) : null
                     });
                 });
             }

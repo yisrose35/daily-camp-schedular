@@ -490,6 +490,64 @@ function _mbSmartSwapPostRender(overlay, defaultOn) {
   _gsSync();
 }
 
+// ★ "Away" (off-campus) control for Sports + League tile edit dialogs.
+//   Injects a checkbox; when ticked it reveals a zone picker listing the
+//   off-campus zones (window.getAwayZones). A tile marked Away is restricted at
+//   generation to the chosen zone's fields, and the zone's travel time is added
+//   to/from the tile. Carries the boolean out of the modal via a hidden
+//   [data-field="isAway"] input (same pattern as the smart-swap control); the
+//   zone <select> carries data-field="awayZone" so showModal collects it too.
+function _mbTileSupportsAway(ev) {
+  if (!ev) return false;
+  if (ev.type === 'league' || ev.type === 'specialty_league') return true;
+  return /\bsport/i.test(String(ev.event || ''));
+}
+
+function _mbAwayPostRender(overlay, ev) {
+  if (!overlay) return;
+  const zones = (typeof window.getAwayZones === 'function') ? window.getAwayZones() : [];
+  const fields = overlay.querySelector('.ms-modal-fields');
+  if (!fields || zones.length === 0) return;
+  const esc = (s) => window.CampUtils.escapeHtml(String(s == null ? '' : s));
+
+  const curZone = (ev.awayZone && zones.some(z => z.name === ev.awayZone)) ? ev.awayZone : (zones[0] ? zones[0].name : '');
+  const defaultOn = !!ev.isAway && !!curZone;
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'isAway');
+  hidden.value = defaultOn ? 'true' : 'false';
+
+  const optsHtml = zones.map(z => {
+    const t = z.travelTimeMin > 0 ? ' — ' + z.travelTimeMin + ' min travel each way' : '';
+    return '<option value="' + esc(z.name) + '"' + (z.name === curZone ? ' selected' : '') + '>' + esc(z.name) + esc(t) + '</option>';
+  }).join('');
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;';
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#9a3412;">'
+    + '<input type="checkbox" class="mb-away-cb"' + (defaultOn ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;flex:none;">'
+    + 'Away (off-campus)</label>'
+    + '<div class="mb-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
+    + '<div style="font-size:11px;color:#9a3412;margin-bottom:6px;line-height:1.5;">Runs at an off-campus zone. The scheduler uses only that zone\'s fields and adds the required travel time to and from.</div>'
+    + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
+    + '<select class="ms-modal-input mb-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
+    + '</div>';
+  fields.appendChild(wrap);
+  fields.appendChild(hidden);
+
+  const cb = wrap.querySelector('.mb-away-cb');
+  const body = wrap.querySelector('.mb-away-body');
+  function _awaySync() {
+    const on = !!cb.checked;
+    hidden.value = on ? 'true' : 'false';
+    if (body) body.style.display = on ? 'block' : 'none';
+  }
+  cb.addEventListener('change', _awaySync);
+  _awaySync();
+}
+
 // ★ Delete button for the Smart Tile EDIT dialog — it previously had none (you had
 //   to cancel and use the tile's action bar). Injected into the modal footer;
 //   deletes the tile via the existing deleteTile() and closes the dialog.
@@ -1255,29 +1313,50 @@ async function editTile(id) {
     if (hasLocations) {
       modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups, default: ev.reservedFields || [] });
     }
-    const result = await showModal({ title: 'Edit Event', fields: modalFields });
+    const _supportsAway = _mbTileSupportsAway(ev);
+    const result = await showModal({ title: 'Edit Event', fields: modalFields, postRender: _supportsAway ? (ov) => _mbAwayPostRender(ov, ev) : undefined });
     if (!result || !result.eventName?.trim()) return;
     const reservedFields = result.reservedFields || [];
     ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.reservedFields = reservedFields;
     ev.location = reservedFields.length === 1 ? reservedFields[0] : (reservedFields.length > 1 ? null : ev.location);
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+    // ★ Away (off-campus) flag — restricts generation to the chosen zone's fields + travel.
+    if (_supportsAway) {
+      const _awayOn = (result.isAway === 'true' || result.isAway === true);
+      if (_awayOn && result.awayZone) { ev.isAway = true; ev.awayZone = result.awayZone; }
+      else { delete ev.isAway; delete ev.awayZone; }
+    }
   }
 
-  // Re-stamp travel info since location may have changed
-  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
-  if (_editTravelLoc) {
-    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
-    if (_eti) {
-      ev._travelPre = _eti.preMin;
-      ev._travelPost = _eti.postMin;
-      ev._travelZone = _eti.zoneName;
-      ev._travelMode = _eti.mode;
+  // Re-stamp travel info. An Away tile draws travel straight from its chosen
+  // off-campus zone (the actual field is decided at generation time); otherwise
+  // travel is inferred from the tile's reserved location/field.
+  if (ev.isAway && ev.awayZone) {
+    const _az = (window.getAwayZones?.() || []).find(z => z.name === ev.awayZone);
+    if (_az && _az.travelTimeMin > 0) {
+      ev._travelPre = _az.travelTimeMin;
+      ev._travelPost = _az.travelTimeMin;
+      ev._travelZone = _az.name;
+      ev._travelMode = 'deduct';
     } else {
       delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
     }
   } else {
-    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+    if (_editTravelLoc) {
+      const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+      if (_eti) {
+        ev._travelPre = _eti.preMin;
+        ev._travelPost = _eti.postMin;
+        ev._travelZone = _eti.zoneName;
+        ev._travelMode = _eti.mode;
+      } else {
+        delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+      }
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
   }
 
   markUnsavedChanges();

@@ -1673,6 +1673,31 @@
                     timeKey,
                     slots
                 );
+                // ★ Away (off-campus) league tile: if this league's block(s) for this
+                //   period are marked Away, restrict the field pool to the chosen
+                //   zone's fields. Travel is stamped per-block in fillBlock.
+                var _awayZoneForPeriod = null;
+                filteredLeagueDivisions.forEach(function (divName) {
+                    (timeData.byDivision[divName] || []).forEach(function (b) {
+                        if (!b || b._isAway !== true || !b._awayZone) return;
+                        if (b.leagueName && b.leagueName !== league.name) return;
+                        var _bk = (typeof b.startTime === 'number')
+                            ? b.startTime
+                            : (window.SchedulerCoreUtils?.parseTimeToMinutes?.(b.startTime) ?? b.startTime);
+                        if (Number(_bk) !== Number(timeKey)) return;
+                        _awayZoneForPeriod = b._awayZone;
+                    });
+                });
+                if (_awayZoneForPeriod && typeof window.getFieldsInZone === 'function') {
+                    var _azSet = new Set(window.getFieldsInZone(_awayZoneForPeriod) || []);
+                    var _filteredPool = availablePool.filter(function (p) { return _azSet.has(p.field); });
+                    if (_filteredPool.length > 0) {
+                        console.log('   🚌 Away league "' + league.name + '" @' + timeKey + ' → restricting to zone "' + _awayZoneForPeriod + '" (' + _filteredPool.length + ' field/sport combos)');
+                        availablePool = _filteredPool;
+                    } else {
+                        console.warn('   ⚠️ Away league "' + league.name + '" @' + timeKey + ' → zone "' + _awayZoneForPeriod + '" has no available fields; keeping full pool.');
+                    }
+                }
                 // ★ Multi-game-per-day: exclude sports already used by this
                 // league EARLIER today so games get distinct sports even when
                 // the matchup is identical (e.g., 2-team league).
