@@ -246,3 +246,65 @@ describe('enforceFrequencyLimitsSweep — final backstop', () => {
         assert.equal(r.count, 1);
     });
 });
+
+describe('enforceFieldCombosSweep — combined-field backstop', () => {
+    // Stub FieldCombos so the sweep's combo math is driven deterministically:
+    // any entry whose field is in `blockedFields` is reported as a combo clash.
+    function withCombos(sb, blockedFields) {
+        const set = new Set(blockedFields.map(s => s.toLowerCase()));
+        sb.window.FieldCombos = {
+            isBlockedByCombo: (field, s, e, exclude) =>
+                set.has(String(field).toLowerCase())
+                    ? { blocked: true, blocker: 'partner', blockerBunk: 'X' }
+                    : { blocked: false }
+        };
+    }
+
+    it('demotes a combined-field double-booking and clears its continuations', () => {
+        const sb = setup();
+        withCombos(sb, ['Full Gym']);
+        sb.window.scheduleAssignments = { B1: [
+            { _activity: 'Basketball', field: 'Full Gym', _startMin: 540, _endMin: 600, continuation: false },
+            { _activity: 'Basketball', field: 'Full Gym', _startMin: 600, _endMin: 645, continuation: true },
+            { _activity: 'Soccer', field: 'Soccer Field', _startMin: 645, _endMin: 690, continuation: false },
+        ] };
+        const r = sb.window.SchedulerCoreUtils.enforceFieldCombosSweep();
+        assert.equal(r.count, 1);
+        const arr = sb.window.scheduleAssignments.B1;
+        assert.equal(arr[0]._activity, 'Free');     // demoted
+        assert.equal(arr[1]._activity, 'Free');     // continuation cleared
+        assert.equal(arr[2]._activity, 'Soccer');   // untouched (not a combo field)
+    });
+
+    it('never demotes protected entries (pins, league, trips)', () => {
+        const sb = setup();
+        withCombos(sb, ['Full Gym']);
+        sb.window.scheduleAssignments = { B1: [
+            { _activity: 'Game', field: 'Full Gym', _startMin: 540, _endMin: 600, continuation: false, _league: true },
+            { _activity: 'X', field: 'Full Gym', _startMin: 600, _endMin: 645, continuation: false, _pinned: true },
+        ] };
+        const r = sb.window.SchedulerCoreUtils.enforceFieldCombosSweep();
+        assert.equal(r.count, 0);
+    });
+
+    it('skips entries without resolved start/end times', () => {
+        const sb = setup();
+        withCombos(sb, ['Full Gym']);
+        sb.window.scheduleAssignments = { B1: [
+            { _activity: 'Basketball', field: 'Full Gym', continuation: false }, // no _startMin/_endMin
+        ] };
+        const r = sb.window.SchedulerCoreUtils.enforceFieldCombosSweep();
+        assert.equal(r.count, 0);
+    });
+
+    it('is a no-op when FieldCombos is unavailable', () => {
+        const sb = setup();
+        // no sb.window.FieldCombos
+        sb.window.scheduleAssignments = { B1: [
+            { _activity: 'Basketball', field: 'Full Gym', _startMin: 540, _endMin: 600, continuation: false },
+        ] };
+        const r = sb.window.SchedulerCoreUtils.enforceFieldCombosSweep();
+        assert.equal(r.count, 0);
+        assert.equal(sb.window.scheduleAssignments.B1[0]._activity, 'Basketball');
+    });
+});

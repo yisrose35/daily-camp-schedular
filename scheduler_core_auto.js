@@ -32854,6 +32854,20 @@
             }
         } catch (_eFreqSweep) { try { warn('[STEP 6.88 FREQ-SWEEP] error: ' + (_eFreqSweep && _eFreqSweep.message)); } catch (_x) {} }
 
+        // ★ STEP 6.89 — FINAL FIELD-COMBO BACKSTOP. Combos are enforced at pick/
+        //   write time but no final sweep (FN-15/FN-19/21/auto_validator) checks
+        //   them, so a writer that bypasses the trust points (e.g. flex-prep) could
+        //   leave a combined-field double-booking. Demote-only; runs before STEP 6.9.
+        try {
+            if (window.SchedulerCoreUtils?.enforceFieldCombosSweep) {
+                var _comboSweep = window.SchedulerCoreUtils.enforceFieldCombosSweep();
+                if (_comboSweep && _comboSweep.count > 0) {
+                    log('[STEP 6.89 COMBO-SWEEP] demoted ' + _comboSweep.count + ' combined-field double-booking(s) → Free');
+                    try { warnings.push({ type: 'field_combo_demotions', count: _comboSweep.count, items: _comboSweep.demotions }); } catch (_ewc) {}
+                }
+            }
+        } catch (_eComboSweep) { try { warn('[STEP 6.89 COMBO-SWEEP] error: ' + (_eComboSweep && _eComboSweep.message)); } catch (_x) {} }
+
         // ★ STEP 6.9 — AUTHORITATIVE ROTATION COUNT (relocated from STEP 5). Runs AFTER every
         //   post-complete pass mutated window.scheduleAssignments, so rotation counts reflect
         //   the ACTUAL final schedule — not the pre-pass grid the solver "intended". Refreshes

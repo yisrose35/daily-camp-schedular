@@ -5352,6 +5352,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
         } catch (_eFreqSweep) { console.warn('[STEP 7.9 FREQ-SWEEP] error:', _eFreqSweep && _eFreqSweep.message); }
 
+        // STEP 7.95: FINAL FIELD-COMBO BACKSTOP — combined-field double-booking.
+        // Combos are enforced at pick/write time but no final manual sweep checks
+        // them; this is the manual analog of auto's STEP 6.89. Demote-only.
+        try {
+            if (window.SchedulerCoreUtils?.enforceFieldCombosSweep) {
+                const _comboSweep = window.SchedulerCoreUtils.enforceFieldCombosSweep();
+                if (_comboSweep && _comboSweep.count > 0) {
+                    console.warn('[STEP 7.95 COMBO-SWEEP] demoted ' + _comboSweep.count + ' combined-field double-booking(s) → Free');
+                }
+            }
+        } catch (_eComboSweep) { console.warn('[STEP 7.95 COMBO-SWEEP] error:', _eComboSweep && _eComboSweep.message); }
+
         // =========================================================================
         // STEP 8: Update History
         // =========================================================================

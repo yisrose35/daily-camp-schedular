@@ -2780,6 +2780,80 @@
     };
 
     // =========================================================================
+    // ★ FINAL FIELD-COMBO BACKSTOP SWEEP — combined-field double-booking ★
+    // =========================================================================
+    // Field combos (e.g. "Full Gym" = "Gym 1" + "Gym 2" — using one physically
+    // blocks the others) are enforced at PICK time (canBlockFit / the field
+    // ledger) and at the write trust points (commitWriteIfLegal /
+    // commitManualWriteIfLegal). But NO final sweep checks them: auto_validator
+    // (which powers the cross-builder capacity-repair gate), FN-15, FN-19/21 and
+    // the manual STEP 7.55 sweep all enforce sharing-type/capacity/stagger —
+    // none look at combos. So a writer that bypasses the trust points (e.g. the
+    // flexible-prep writer, which writes at its location and only locks the
+    // field AFTER) could leave a combined-field double-booking that no final
+    // pass catches.
+    //
+    // This DEMOTE-ONLY sweep closes that gap symmetrically for both builders,
+    // reusing the proven FieldCombos.isBlockedByCombo so the combo math stays in
+    // one place. It processes slots in order and frees only ONE side of each
+    // conflict (the next pass sees the first already freed), so it resolves the
+    // physical clash without double-holing. Never touches user pins, league,
+    // trips, chinuch, reserved staggers, bunk-overrides, or post-edit slots.
+    //
+    // Returns { demotions:[{bunk,slot,field,blocker,blockerBunk}], count }.
+    Utils.enforceFieldCombosSweep = function(opts) {
+        opts = opts || {};
+        var result = { demotions: [], count: 0 };
+        try {
+            if (!(window.FieldCombos && typeof window.FieldCombos.isBlockedByCombo === 'function')) return result;
+            var sa = window.scheduleAssignments || {};
+            function freeEntry(reason) {
+                return { field: 'Free', sport: null, _activity: 'Free', _autoMode: true,
+                    _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
+            }
+            Object.keys(sa).forEach(function(bunk) {
+                var arr = sa[bunk];
+                if (!Array.isArray(arr)) return;
+                for (var i = 0; i < arr.length; i++) {
+                    var e = arr[i];
+                    if (!e || e.continuation) continue;
+                    // Protected / out-of-scope (leagues self-manage their fields).
+                    if (e._pinned || e._league || e._isTrip || e._isChinuch
+                        || e._staggerReserved || e._bunkOverride || e._postEdit) continue;
+                    var field = e.field;
+                    if (!field || field === 'Free') continue;
+                    var s = (e._startMin != null) ? e._startMin : null;
+                    var en = (e._endMin != null) ? e._endMin : null;
+                    if (s == null || en == null) continue;
+                    var res = window.FieldCombos.isBlockedByCombo(field, s, en, bunk);
+                    if (res && res.blocked) {
+                        var reason = 'field_combo_sweep';
+                        arr[i] = freeEntry(reason);
+                        for (var k = i + 1; k < arr.length; k++) {
+                            if (arr[k] && arr[k].continuation) arr[k] = freeEntry(reason);
+                            else break;
+                        }
+                        result.demotions.push({ bunk: String(bunk), slot: i, field: field,
+                            blocker: res.blocker, blockerBunk: res.blockerBunk });
+                        result.count++;
+                    }
+                }
+            });
+            if (result.count > 0) {
+                try {
+                    console.warn('[COMBO-SWEEP] demoted ' + result.count + ' combined-field double-booking(s) → Free: '
+                        + result.demotions.slice(0, 8).map(function(d) {
+                            return d.bunk + ' ' + d.field + ' vs ' + d.blocker;
+                        }).join(', ') + (result.demotions.length > 8 ? ', …' : ''));
+                } catch (_) {}
+            }
+        } catch (e) {
+            try { console.warn('[enforceFieldCombosSweep] non-fatal:', e && e.message); } catch (_) {}
+        }
+        return result;
+    };
+
+    // =========================================================================
     // ★ FLOOR SHORTFALL REPORT — minimum / exact-floor "best-effort + report" ★
     // =========================================================================
     // Ceilings and cooldowns are hard-gated at the write trust points
