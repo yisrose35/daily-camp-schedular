@@ -24985,8 +24985,34 @@
                 const pbs = window._perBunkSlots?.[lb.divName] || window.divisionTimes?.[lb.divName]?._perBunkSlots;
                 if (!pbs) return;
                 Object.entries(pbs).forEach(([bk, bs]) => {
-                    const fi = bs.findIndex(s => s.startMin === lb.startMin);
-                    if (fi === -1 || !window.scheduleAssignments[bk]) return;
+                    // ★ Resolve the per-bunk slot for this league game. Prefer an EXACT
+                    //   startMin match (the normal case). If the bunk's grid was reshaped
+                    //   (pinned activities / custom durations) so no boundary lands on the
+                    //   league start, fall back to the slot that best OVERLAPS the league
+                    //   window — but only an empty / Free / already-league slot, never
+                    //   clobbering a committed sport/special. Without this a participating
+                    //   bunk is SILENTLY dropped from its league game (it shows in the
+                    //   matchup list but is missing from its own schedule grid).
+                    let fi = bs.findIndex(s => s && s.startMin === lb.startMin);
+                    if (fi === -1) {
+                        const _bkArr = window.scheduleAssignments[bk] || [];
+                        let _bestOv = 0;
+                        for (let _si = 0; _si < bs.length; _si++) {
+                            const _s = bs[_si];
+                            if (!_s || _s.startMin == null || _s.endMin == null || lb.endMin == null) continue;
+                            const _ov = Math.min(_s.endMin, lb.endMin) - Math.max(_s.startMin, lb.startMin);
+                            if (_ov <= 0) continue; // must overlap the league time window
+                            const _ex = _bkArr[_si];
+                            const _usable = !_ex || _ex.field === 'Free' || _ex._activity === 'Free' || _ex._league === true;
+                            if (_usable && _ov > _bestOv) { _bestOv = _ov; fi = _si; }
+                        }
+                        if (fi === -1) {
+                            warn('[league writeback] ' + bk + ' has no free slot overlapping ' + leagueName + ' @ ' + lb.startMin + '-' + lb.endMin + ' — game NOT placed on its grid (slot misalignment / slot occupied)');
+                            try { warnings.push({ type: 'league_bunk_unplaced', bunk: bk, league: leagueName, startMin: lb.startMin }); } catch (_elw) {}
+                            return;
+                        }
+                    }
+                    if (!window.scheduleAssignments[bk]) return;
                     const slotMeta = bs[fi];
 
                     // ★ CHINUCH: If this bunk is assigned to chinuch at this league period, write chinuch
