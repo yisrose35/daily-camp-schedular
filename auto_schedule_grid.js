@@ -226,7 +226,11 @@
                 }
             }
             if (needsRealign) {
-                var realigned = new Array(divSlots.length).fill(null);
+                // Size to the LONGER of the two — a date switch can rebuild a
+                // _perBunkSlots grid shorter than scheduleAssignments; sizing to
+                // divSlots.length here would TRUNCATE (and then persist) the
+                // afternoon entries. Max-length keeps every entry.
+                var realigned = new Array(Math.max(divSlots.length, assignments.length)).fill(null);
                 for (var _i = 0; _i < assignments.length; _i++) {
                     var _e = assignments[_i];
                     if (!_e) continue;
@@ -252,8 +256,14 @@
         var segmentsByBunk = (window.scheduleSegments || {})[bunk];
         var toRenderEntry = window.AutoSegmentModel?.toRenderEntry || (function (s) { return s?._source || s || null; });
 
+        // ★ Iterate ALL assignments — NOT capped at divSlots.length. The renderer
+        //   positions blocks by each entry's own _startMin/_endMin (time-based), so
+        //   it does not need a matching slot. Capping at divSlots.length dropped
+        //   every entry past a SHORT/reverted _perBunkSlots grid (e.g. after a date
+        //   switch), leaving a full schedule rendered as "+ Add" gaps even though
+        //   scheduleAssignments still held all the activities.
         var out = [], i = 0;
-        while (i < assignments.length && i < divSlots.length) {
+        while (i < assignments.length) {
             var slotSegs = Array.isArray(segmentsByBunk?.[i]) ? segmentsByBunk[i] : null;
 
             // Multi-segment period — emit one block per segment, no cross-slot merge.
@@ -265,8 +275,9 @@
                     // ★ Free / empty is not a real activity — never render it as a block
                     //   (a no-layer grade is all-Free; it must show as nothing, not "Free").
                     if (segEntry.field === 'Free' || segEntry._activity === 'Free' || segEntry.event === 'Free') continue;
-                    var segStart = (seg.startMin != null) ? seg.startMin : divSlots[i].startMin;
-                    var segEnd   = (seg.endMin   != null) ? seg.endMin   : divSlots[i].endMin;
+                    var segStart = (seg.startMin != null) ? seg.startMin : (divSlots[i] ? divSlots[i].startMin : segEntry._startMin);
+                    var segEnd   = (seg.endMin   != null) ? seg.endMin   : (divSlots[i] ? divSlots[i].endMin   : segEntry._endMin);
+                    if (segStart == null || segEnd == null) continue;
                     out.push({
                         startMin: segStart,
                         endMin:   segEnd,
@@ -289,20 +300,22 @@
             if (entry.field === 'Free' || entry._activity === 'Free' || entry.event === 'Free') { i++; continue; }
 
             var end = i;
-            while (end + 1 < assignments.length && end + 1 < divSlots.length && assignments[end + 1]?.continuation) end++;
+            while (end + 1 < assignments.length && assignments[end + 1]?.continuation) end++;
 
-            if (!divSlots[i] || !divSlots[end]) { i = end + 1; continue; }
-
-            // ★★★ FIX: Prefer entry's own _startMin/_endMin over divSlot times.
+            // ★★★ Prefer the entry's own _startMin/_endMin over divSlot times.
             // The bell-schedule slot grid is fixed period boundaries; pinned
             // walls (lunch, change, swim) and SA-placed activities carry their
             // OWN absolute times. Reading from divSlots paints the block at the
-            // period boundary instead of where the activity actually is, which
-            // makes lunch (13:00) appear under the 12:20 column when its slot
-            // index happens to be the Period 3 slot. Fall back to divSlots
-            // only when the entry doesn't carry explicit times.
-            var entryStart = (typeof entry._startMin === 'number') ? entry._startMin : divSlots[i].startMin;
-            var entryEnd   = (typeof entry._endMin   === 'number') ? entry._endMin   : divSlots[end].endMin;
+            // period boundary instead of where the activity actually is.
+            // Fall back to divSlots ONLY when the entry lacks times AND a slot
+            // exists. Previously this bailed (`continue`) whenever divSlots[i]
+            // was missing — which, with a short/reverted _perBunkSlots grid,
+            // dropped every afternoon entry that had no slot, rendering a full
+            // schedule as "+ Add". Now we draw it from its own times instead.
+            var _dsI = divSlots[i], _dsE = divSlots[end];
+            var entryStart = (typeof entry._startMin === 'number') ? entry._startMin : (_dsI ? _dsI.startMin : null);
+            var entryEnd   = (typeof entry._endMin   === 'number') ? entry._endMin   : (_dsE ? _dsE.endMin   : null);
+            if (entryStart == null || entryEnd == null) { i = end + 1; continue; }
 
             out.push({
                 startMin: entryStart,
