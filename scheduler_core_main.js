@@ -3607,6 +3607,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         _splitPostChange: parseInt(item._postChangeMin) || 0
                     } : null;
 
+                    // ★ Custom/pinned tile with specific fields: stamp the reserved
+                    //   fields (and any explicit location) onto each bunk's entry so
+                    //   ENTRY-based renderers (print center, Excel export) can show
+                    //   "Basketball – Field 1, Field 2". The on-screen unified grid
+                    //   already shows them because renderBunkCell reads them straight
+                    //   off the skeleton block, but the entry itself only carried the
+                    //   event name. Reuses hybridExtras' stamping loop below.
+                    let pinnedExtras = hybridExtras;
+                    if (!pinnedExtras) {
+                        const _pinRF = Array.isArray(item.reservedFields)
+                            ? item.reservedFields.filter(Boolean) : [];
+                        const _pinLoc = (typeof item.location === 'string') ? item.location.trim() : '';
+                        if (_pinRF.length || _pinLoc) {
+                            pinnedExtras = {};
+                            if (_pinRF.length) pinnedExtras._reservedFields = _pinRF;
+                            if (_pinLoc) pinnedExtras._location = _pinLoc;
+                        }
+                    }
+
                     bunkList.forEach(bunk => {
                         const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                         if (existing && existing._bunkOverride) return;
@@ -3631,7 +3650,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         // from findSlotsForRange + transition rules), so scan the
                         // bunk's full slot array and stamp anywhere matching the
                         // event name and time range.
-                        if (hybridExtras) {
+                        if (pinnedExtras) {
                             const ba = window.scheduleAssignments?.[bunk];
                             if (Array.isArray(ba)) {
                                 for (let _si = 0; _si < ba.length; _si++) {
@@ -3640,7 +3659,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                     const matchesEvent = (a.field === eventName) || (a._activity === eventName);
                                     const matchesTime = (a._startMin === sMin) || (a._startMin == null);
                                     if (matchesEvent && matchesTime) {
-                                        Object.assign(a, hybridExtras);
+                                        Object.assign(a, pinnedExtras);
                                     }
                                 }
                             }

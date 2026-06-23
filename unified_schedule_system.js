@@ -2797,11 +2797,17 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         if (container._zoomWired) return;
         container._zoomWired = true;
         container.addEventListener('wheel', function (e) {
-            if (!e.ctrlKey) return;
+            // Two ways to zoom the schedule itself (not the page):
+            //   • Ctrl+scroll / trackpad pinch — arrives as a wheel event w/ ctrlKey.
+            //   • Mouse without a trackpad: hold the LEFT button and scroll. During
+            //     a wheel event, e.buttons bit 0 (value 1) means left is held.
+            var _leftHeld = (e.buttons & 1) === 1;
+            if (!e.ctrlKey && !_leftHeld) return;
             e.preventDefault();   // keep the BROWSER from page-zooming; we zoom the schedule instead
             var z = _getScheduleZoom();
             // Exponential step: equal pinch effort = equal relative change,
             // smooth on trackpads, ~±25% per notch on a ctrl+scroll mouse.
+            // Scroll up (deltaY < 0) → zoom IN; scroll down → zoom OUT.
             z *= Math.exp(-e.deltaY * 0.0025);
             z = Math.max(0.4, Math.min(2.5, z));
             z = Math.round(z * 100) / 100;
