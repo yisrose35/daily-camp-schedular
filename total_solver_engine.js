@@ -1718,6 +1718,18 @@
     var _wField = (_specFeat && _specFeat._partLocation) ? _specFeat._partLocation : fName;
     for (var i = 0; i < slots.length; i++) {
         var _ent = { field: _wField, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        // ★ Away (off-campus) tile: stamp travel to/from on the lead slot so the
+        //   grids + print render the 🚶 Travel buffers. Field is in the away zone,
+        //   so getTravelForField returns that zone's travel (manual = deduct).
+        if (i === 0 && block._isAway && fName && fName !== 'Free' && typeof window.getTravelForField === 'function') {
+            var _awayTravel = window.getTravelForField(fName, true);
+            if (_awayTravel) {
+                _ent._travelPre = _awayTravel.preMin;
+                _ent._travelPost = _awayTravel.postMin;
+                _ent._travelZone = _awayTravel.zoneName;
+                _ent._travelMode = 'deduct';
+            }
+        }
         if (_specFeat) {
             if (_specFeat._partLabel) { _ent._partNumber = _specFeat._partNumber; _ent._totalParts = _specFeat._totalParts; _ent._partLabel = _specFeat._partLabel; }
             if (_specFeat._partLocation) _ent._partLocation = _specFeat._partLocation;
@@ -1891,6 +1903,20 @@
                 _allowSet = new Set();
                 for (var _aai = 0; _aai < block.allowedActivities.length; _aai++) _allowSet.add(normName(block.allowedActivities[_aai]));
             }
+            // ★ Away (off-campus) tile: hard-restrict the field domain to the chosen
+            //   zone's fields. Unlike _allowSet this is NEVER dropped — an away tile
+            //   must stay in its zone (it goes Free rather than land on campus).
+            //   In 'mixed' mode the restriction is skipped — the zone's fields are
+            //   still available (and travel still shows per-field), but on-campus
+            //   fields stay in play so games can spill back home.
+            var _awayFieldSet = null;
+            if (block._isAway && block._awayMode !== 'mixed' && block._awayZone && typeof window.getFieldsInZone === 'function') {
+                var _azFields = window.getFieldsInZone(block._awayZone) || [];
+                if (_azFields.length) {
+                    _awayFieldSet = new Set();
+                    for (var _afi = 0; _afi < _azFields.length; _afi++) _awayFieldSet.add(normName(_azFields[_afi]));
+                }
+            }
             for (var _domPass = 0; _domPass < 2; _domPass++) {
             if (_domPass === 1) {
                 if (!_allowSet || domain.size > 0) break;
@@ -1900,6 +1926,7 @@
             for (var ci2 = 0; ci2 < numCands; ci2++) {
                 if (!globallyValid[ci2]) continue;
                 var c2 = allCands[ci2], fn = c2.field, fnorm = c2._fieldNorm;
+                if (_awayFieldSet && !_awayFieldSet.has(fnorm || normName(fn))) continue;
                 if (_allowSet && !_allowSet.has(c2._actNorm)) continue;
                 // ★ Tile-kind gate: Sports tile → sports only, Special tile → specials only.
                 if (_blkKind === 'sport' && c2.type === 'special') continue;

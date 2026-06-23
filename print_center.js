@@ -2479,8 +2479,12 @@ function _pcExpandZoneBuffers(schedule, bunk, dn) {
             ? (typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name) || entry._activity || '')
             : '';
         var trans = fld ? SCU.getTransitionRules(fld, window.activityProperties) : null;
-        var pre = (trans && trans.preMin > 0) ? trans.preMin : 0;
-        var post = (trans && trans.postMin > 0) ? trans.postMin : 0;
+        // ★ Prefer the slot's own travel annotation (Away/off-campus tiles stamp
+        //   _travelPre/_travelPost) over the zone transition default.
+        var _entPre = (entry && !entry.continuation) ? (parseInt(entry._travelPre) || 0) : 0;
+        var _entPost = (entry && !entry.continuation) ? (parseInt(entry._travelPost) || 0) : 0;
+        var pre = _entPre > 0 ? _entPre : ((trans && trans.preMin > 0) ? trans.preMin : 0);
+        var post = _entPost > 0 ? _entPost : ((trans && trans.postMin > 0) ? trans.postMin : 0);
         if (entry && !entry.continuation && (pre > 0 || post > 0) && (slot.endMin - slot.startMin) > (pre + post + 4)) {
             var effS = slot.startMin + pre, effE = slot.endMin - post;
             if (pre > 0) out.push({ startMin: slot.startMin, endMin: effS, label: fmt(slot.startMin) + ' - ' + fmt(effS), _travelBuffer: true });

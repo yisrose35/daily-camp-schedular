@@ -187,6 +187,74 @@ function _daInjectDeleteButton(overlay, tileId) {
   footer.insertBefore(btn, footer.firstChild);
 }
 
+// ★ "Away" (off-campus) control for Sports + League tile edit dialogs in Daily
+//   Adjustments. Mirrors the skeleton builder's _mbAwayPostRender: a checkbox
+//   that, when ticked, restricts the tile at (re)generation to the chosen
+//   off-campus zone's fields and adds the zone's travel time to/from. Carries
+//   the boolean out via a hidden [data-field="isAway"]; the zone <select>
+//   carries data-field="awayZone".
+function _daTileSupportsAway(ev) {
+  if (!ev) return false;
+  if (ev.type === 'league' || ev.type === 'specialty_league') return true;
+  if (ev.type === 'sports') return true;
+  return /\bsport/i.test(String(ev.event || ''));
+}
+
+function _daAwayPostRender(overlay, ev) {
+  if (!overlay) return;
+  const fields = overlay.querySelector('.da-modal-fields-container');
+  if (!fields) return;
+  const esc = (s) => (window.CampUtils?.escapeHtml ? window.CampUtils.escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s));
+  const zones = (typeof window.getAwayZones === 'function') ? window.getAwayZones() : [];
+
+  const curZone = (ev.awayZone && zones.some(z => z.name === ev.awayZone)) ? ev.awayZone : (zones[0] ? zones[0].name : '');
+  const defaultOn = !!ev.isAway && !!curZone;
+  const hasZones = zones.length > 0;
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'isAway');
+  hidden.value = defaultOn ? 'true' : 'false';
+
+  const optsHtml = zones.map(z => {
+    const t = z.travelTimeMin > 0 ? ' — ' + z.travelTimeMin + ' min travel each way' : '';
+    return '<option value="' + esc(z.name) + '"' + (z.name === curZone ? ' selected' : '') + '>' + esc(z.name) + esc(t) + '</option>';
+  }).join('');
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;';
+  const _mode = (ev.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+  const bodyHtml = hasZones
+    ? ('<div class="da-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
+        + '<select class="da-modal-input da-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin:10px 0 4px;">How many go away?</label>'
+        + '<select class="da-modal-input da-away-mode" data-field="awayMode" style="width:100%;">'
+        + '<option value="exclusive"' + (_mode === 'exclusive' ? ' selected' : '') + '>All away — only off-campus fields</option>'
+        + '<option value="mixed"' + (_mode === 'mixed' ? ' selected' : '') + '>Either / or — some away, some stay on campus</option>'
+        + '</select>'
+        + '<div style="font-size:11px;color:#9a3412;margin-top:6px;line-height:1.5;">Adds the zone\'s travel time to and from. <strong>All away</strong> forces every game to the off-campus fields; <strong>Either/or</strong> also allows on-campus fields, so games spill back home once the zone fills.</div>'
+        + '</div>')
+    : ('<div style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.5;">No off-campus zones yet. Add one in <strong>Setup → Location Zones</strong> (mark it “Off-campus” and set a travel time), then re-open this tile.</div>');
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';font-size:13px;font-weight:600;color:#9a3412;">'
+    + '<input type="checkbox" class="da-away-cb"' + (defaultOn ? ' checked' : '') + (hasZones ? '' : ' disabled') + ' style="width:16px;height:16px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';flex:none;">'
+    + 'Away (off-campus)</label>'
+    + bodyHtml;
+  fields.appendChild(wrap);
+  fields.appendChild(hidden);
+
+  const cb = wrap.querySelector('.da-away-cb');
+  const body = wrap.querySelector('.da-away-body');
+  function _awaySync() {
+    const on = !!(cb && cb.checked);
+    hidden.value = on ? 'true' : 'false';
+    if (body) body.style.display = on ? 'block' : 'none';
+  }
+  if (cb) cb.addEventListener('change', _awaySync);
+  _awaySync();
+}
+
 function daShowModal(config) {
   return new Promise((resolve) => {
     const existing = document.getElementById('da-modal-input-overlay');
@@ -4147,7 +4215,8 @@ async function editTile(id) {
         });
       }
     }
-    const result = await daShowModal({ title: 'Edit Event', fields: modalFields });
+    const _supportsAway = _daTileSupportsAway(ev);
+    const result = await daShowModal({ title: 'Edit Event', fields: modalFields, postRender: _supportsAway ? (ov) => _daAwayPostRender(ov, ev) : undefined });
     if (!result || !result.eventName?.trim()) return;
     ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
     if (result.reservedFields !== undefined) {
@@ -4155,22 +4224,44 @@ async function editTile(id) {
       ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
     }
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+    // ★ Away (off-campus) flag — restricts (re)generation to the chosen zone's fields + travel.
+    if (_supportsAway) {
+      const _awayOn = (result.isAway === 'true' || result.isAway === true);
+      if (_awayOn && result.awayZone) {
+        ev.isAway = true; ev.awayZone = result.awayZone;
+        ev.awayMode = (result.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+      } else { delete ev.isAway; delete ev.awayZone; delete ev.awayMode; }
+    }
   }
 
-  // Re-stamp travel info since location may have changed
-  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
-  if (_editTravelLoc) {
-    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
-    if (_eti) {
-      ev._travelPre = _eti.preMin;
-      ev._travelPost = _eti.postMin;
-      ev._travelZone = _eti.zoneName;
-      ev._travelMode = _eti.mode;
+  // Re-stamp travel info. An Away tile draws travel straight from its chosen
+  // off-campus zone (the actual field is decided at generation time); otherwise
+  // travel is inferred from the tile's reserved location/field.
+  if (ev.isAway && ev.awayZone) {
+    const _az = (window.getAwayZones?.() || []).find(z => z.name === ev.awayZone);
+    if (_az && _az.travelTimeMin > 0) {
+      ev._travelPre = _az.travelTimeMin;
+      ev._travelPost = _az.travelTimeMin;
+      ev._travelZone = _az.name;
+      ev._travelMode = 'deduct';
     } else {
       delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
     }
   } else {
-    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+    if (_editTravelLoc) {
+      const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+      if (_eti) {
+        ev._travelPre = _eti.preMin;
+        ev._travelPost = _eti.postMin;
+        ev._travelZone = _eti.zoneName;
+        ev._travelMode = _eti.mode;
+      } else {
+        delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+      }
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
   }
 
   // ★★★ CB-51: bail if the date changed during the edit modal — `ev` is now a

@@ -2875,6 +2875,76 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return true;
     }
 
+    // ★ Off-campus travel badge (render-time, field-based). Any game/activity on
+    //   a field that belongs to an off-campus zone shows a 🚐 travel pill driven by
+    //   the zone's travelTimeMin — independent of how it was placed. Works for
+    //   league overlays AND per-bunk sports, and is per-field so a mixed away tile
+    //   (some games off-campus, some on) badges only the off-campus ones.
+    // ★ Orientation flag: in the transposed view time runs left→right (time =
+    //   columns), so travel bands sit on the LEFT/RIGHT of a cell; in the standard
+    //   table time runs top→bottom, so they sit TOP/BOTTOM. renderBunkCell is shared
+    //   by both views, so it reads this flag set by the active renderer.
+    var _usTransposed = false;
+
+    function _usFieldTravel(fieldName) {
+        if (!fieldName || typeof window.getTravelForField !== 'function') return null;
+        // Try the raw field, then a court-number-stripped name ("TABC Bball (2)"
+        // → "TABC Bball") so per-court game fields still resolve to their zone.
+        var names = [String(fieldName)];
+        var stripped = String(fieldName).replace(/\s*\(\d+\)\s*$/, '').trim();
+        if (stripped && stripped !== names[0]) names.push(stripped);
+        for (var i = 0; i < names.length; i++) {
+            var t = window.getTravelForField(names[i], true)
+                  || (typeof window.getTravelForSpecialActivity === 'function' ? window.getTravelForSpecialActivity(names[i], true) : null);
+            if (t && ((t.preMin || 0) > 0 || (t.postMin || 0) > 0)) return t;
+        }
+        return null;
+    }
+    // Aggregate the off-campus travel for a cell from one or more fields. Returns
+    // { pre, post, zone } using the largest travel found, or null if all on-campus.
+    function _usCellTravel(fields) {
+        var best = null;
+        for (var i = 0; i < (fields || []).length; i++) {
+            var t = _usFieldTravel(fields[i]);
+            if (!t) continue;
+            var mx = Math.max(t.preMin || 0, t.postMin || 0);
+            if (!best || mx > best._mx) best = { pre: t.preMin || 0, post: t.postMin || 0, zone: t.zoneName || '', _mx: mx };
+        }
+        return best;
+    }
+    // A "Travel" band layer (mirrors the swim Change band) shown above/below a cell
+    //   (standard / time-vertical view).
+    function _usTravelBand(ct, pos) {
+        if (!ct) return '';
+        var m = pos === 'pre' ? ct.pre : ct.post;
+        if (!m) return '';
+        var border = pos === 'pre' ? 'border-bottom:1px solid #F59E0B;' : 'border-top:1px solid #F59E0B;';
+        return '<div title="Travel ' + (pos === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:700;' + border + 'text-align:center;white-space:nowrap;">🚐 Travel ' + m + 'm</div>';
+    }
+    // Vertical "Travel" strip on the LEFT/RIGHT of a cell (transposed / time-horizontal
+    //   view — time runs left→right so travel sits beside the activity).
+    function _usTravelStripLR(ct, side) {
+        if (!ct) return '';
+        var m = side === 'pre' ? ct.pre : ct.post;
+        if (!m) return '';
+        var border = side === 'pre' ? 'border-right:1px solid #F59E0B;' : 'border-left:1px solid #F59E0B;';
+        return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="flex:0 0 auto;background:#FEF3C7;color:#92400E;' + border + 'display:flex;align-items:center;justify-content:center;padding:2px;writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;font-weight:700;white-space:nowrap;">🚐 ' + m + 'm</div>';
+    }
+    // Wrap a cell's inner HTML with travel layers in the correct orientation.
+    function _usApplyTravel(td, innerHtml, ct, pad, horizontal) {
+        if (!ct) { td.innerHTML = innerHtml; return; }
+        td.style.padding = '0';
+        if (horizontal) {
+            td.innerHTML = '<div style="display:flex;align-items:stretch;min-height:100%;height:100%;">'
+                + _usTravelStripLR(ct, 'pre')
+                + '<div style="flex:1 1 auto;padding:' + pad + ';display:flex;flex-direction:column;justify-content:center;">' + innerHtml + '</div>'
+                + _usTravelStripLR(ct, 'post')
+                + '</div>';
+        } else {
+            td.innerHTML = _usTravelBand(ct, 'pre') + '<div style="padding:' + pad + ';">' + innerHtml + '</div>' + _usTravelBand(ct, 'post');
+        }
+    }
+
     function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
         var td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
@@ -2890,17 +2960,23 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">' + escapeHtml(title) + '</div>';
 
         var matchups = leagueInfo.matchups || [];
+        var _tFields = [];
         if (matchups.length > 0) {
             html += '<div style="display: flex; flex-direction: column; gap: 3px;">';
             matchups.forEach(function (m) {
-                var line;
+                var line, _mField = '';
                 if (typeof m === 'string') {
                     line = m;
+                    var _atP = m.split(' @ ');
+                    var _fp = _atP[1] || '';
+                    var _pm = _fp.match(/^(.+?)\s*\((.+?)\)\s*$/);
+                    _mField = _pm ? _pm[1].trim() : _fp.trim();
                 } else if (m && (m.teamA || m.team1)) {
                     var a = m.teamA || m.team1 || '';
                     var b = m.teamB || m.team2 || '';
                     var sport = m.sport || leagueInfo.sport || '';
                     var field = m.field || '';
+                    _mField = field;
                     line = a + ' vs ' + b;
                     if (sport) line += ' — ' + (sport.charAt(0).toUpperCase() + sport.slice(1));
                     if (field) line += ' (' + field + ')';
@@ -2909,17 +2985,21 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 } else {
                     line = JSON.stringify(m);
                 }
+                if (_mField) _tFields.push(_mField);
                 html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
         }
-        td.innerHTML = html;
+        // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
+        //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell.
+        _usApplyTravel(td, html, _usCellTravel(_tFields), '8px 10px', true);
         return td;
     }
 
     function renderTransposedView(container) {
+        _usTransposed = true; // time runs left→right here → travel sits left/right
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
 
         // ★★★ PERF FIX: Skip render when the schedule tab is hidden.
@@ -3300,6 +3380,7 @@ const isAutoSchedule = currentBuilderMode === 'auto';
     }
 
     function renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable) {
+        _usTransposed = false; // standard table → time runs top→bottom → travel top/bottom
         // *** v4.1.0: Use divisionTimes directly ***
         const divSlots = window.divisionTimes?.[divName] || [];
         
@@ -3534,10 +3615,11 @@ divBlocks.forEach((block, blockIdx) => {
 
         let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">${escapeHtml(title)}</div>`;
         
+        const _tFields = [];
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
-                let matchText;
+                let matchText, _mField = '';
                 if (typeof m === 'string') {
                     const atParts = m.split(' @ ');
                     const teams = atParts[0] || '';
@@ -3546,20 +3628,25 @@ divBlocks.forEach((block, blockIdx) => {
                     const parenMatch = fieldPart.match(/^(.+?)\s*\((.+?)\)\s*$/);
                     if (parenMatch) { field = parenMatch[1].trim(); sport = parenMatch[2].trim(); }
                     else { field = fieldPart.trim(); }
+                    _mField = field;
                     matchText = teams + (sport || field ? ' - ' : '') + (sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : '') + (field ? ' (' + field + ')' : '');
                 } else {
                     const sport = m.sport || leagueInfo.sport || '';
                     const field = m.field || '';
+                    _mField = field;
                     matchText = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}${sport || field ? ' - ' : ''}${sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : ''}${field ? ' (' + field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m)));
                 }
+                if (_mField) _tFields.push(_mField);
                 html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic;">No matchups scheduled yet</div>';
         }
-        
-        td.innerHTML = html;
+
+        // ★ Off-campus travel layer (mirrors swim Change). Standard table → time
+        //   runs top→bottom, so the bands sit ABOVE/BELOW the cell.
+        _usApplyTravel(td, html, _usCellTravel(_tFields), '12px 16px', false);
         
         if (isEditable && bunks.length > 0) { 
             td.style.cursor = 'pointer'; 
@@ -3747,7 +3834,15 @@ divBlocks.forEach((block, blockIdx) => {
             td.style.background = bgColor;
             td.style.textAlign = 'left';
         } else {
-            td.textContent = displayText;
+            // ★ Off-campus sports: wrap the cell in 🚐 Travel layers (mirrors the swim
+            //   Change band) when the assigned field sits in an off-campus zone. Side
+            //   follows the active view orientation (transposed → left/right).
+            const _ct = (entry && !entry.continuation && entry.field) ? _usCellTravel([entry.field]) : null;
+            if (_ct) {
+                _usApplyTravel(td, escapeHtml(displayText), _ct, '8px 10px', _usTransposed);
+            } else {
+                td.textContent = displayText;
+            }
             td.style.background = bgColor;
         }
 
