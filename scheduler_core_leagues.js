@@ -403,15 +403,14 @@
         return score;
     }
 
-    // ★ HARD no-3-in-a-row: returns true if giving `team` this `sport` on the
-    //   date being generated (_activeDayId) would put it in the SAME sport for
-    //   3 consecutive game-days. Reads the date-keyed gameLog (robust to
-    //   regenerating dates out of order) and checks both directions, so it
-    //   blocks  X X [X],  [X] X X,  and  X [X] X. The most a team can get is
-    //   back-to-back; never 3 (and therefore never 4) in a row.
-    function _streakBlocked(leagueName, team, sport, history) {
+    // ★ Longest consecutive run of `sport` for `team` that would result from
+    //   assigning it on the date being generated (_activeDayId): counts the
+    //   contiguous same-sport game-days immediately BEFORE and AFTER today (from
+    //   the date-keyed gameLog, robust to regenerating out of order) plus today.
+    //   1-2 = fine (back-to-back ok), 3 = discouraged, 4+ = forbidden.
+    function _runIfAssigned(leagueName, team, sport, history) {
         const gl = history.gameLog && history.gameLog[leagueName];
-        if (!gl || _activeDayId == null || !sport) return false;
+        if (!gl || _activeDayId == null || !sport) return 1;
         const tk = String(team);
         const sportOn = (date) => {
             const recs = gl[date] || [];
@@ -422,14 +421,46 @@
         };
         const before = Object.keys(gl).filter(d => d < _activeDayId).sort();
         const after = Object.keys(gl).filter(d => d > _activeDayId).sort();
-        const p1 = before.length ? sportOn(before[before.length - 1]) : null;
-        const p2 = before.length > 1 ? sportOn(before[before.length - 2]) : null;
-        const n1 = after.length ? sportOn(after[0]) : null;
-        const n2 = after.length > 1 ? sportOn(after[1]) : null;
-        if (p1 === sport && p2 === sport) return true;   // X X [X]
-        if (p1 === sport && n1 === sport) return true;   // X [X] X
-        if (n1 === sport && n2 === sport) return true;   // [X] X X
-        return false;
+        let prev = 0;
+        for (let i = before.length - 1; i >= 0; i--) { if (sportOn(before[i]) === sport) prev++; else break; }
+        let next = 0;
+        for (let i = 0; i < after.length; i++) { if (sportOn(after[i]) === sport) next++; else break; }
+        return prev + 1 + next;
+    }
+
+    // true if assigning `sport` to `team` today would make 3-or-more in a row.
+    function _streakBlocked(leagueName, team, sport, history) {
+        return _runIfAssigned(leagueName, team, sport, history) >= 3;
+    }
+
+    // ★ HARD no-4 guarantee (final safety): after a slot's games are assigned,
+    //   any team still on 4-in-a-row gets that game's sport+field SWAPPED with
+    //   another game in the same slot — but only when the swap does not create a
+    //   new 4 elsewhere. A 4 can only survive when BOTH games' teams are on
+    //   opposite 3-streaks at once, which is genuinely impossible to avoid with
+    //   only 2 sports (the cure there is a 3rd sport, not code).
+    function _repairFourStreaks(assignments, leagueName, history) {
+        if (!Array.isArray(assignments) || assignments.length < 2) return;
+        const run = (team, sport) => _runIfAssigned(leagueName, team, sport, history);
+        for (let i = 0; i < assignments.length; i++) {
+            const a = assignments[i];
+            if (!a || !a.sport) continue;
+            if (run(a.team1, a.sport) < 4 && run(a.team2, a.sport) < 4) continue;
+            for (let j = 0; j < assignments.length; j++) {
+                if (j === i) continue;
+                const b = assignments[j];
+                if (!b || !b.sport || b.sport === a.sport) continue;
+                const aFixed = run(a.team1, b.sport) < 4 && run(a.team2, b.sport) < 4;
+                const bStillOk = run(b.team1, a.sport) < 4 && run(b.team2, a.sport) < 4;
+                if (aFixed && bStillOk) {
+                    const s = a.sport, f = a.field;
+                    a.sport = b.sport; a.field = b.field;
+                    b.sport = s; b.field = f;
+                    console.log(`   🔧 [no-4] swapped sport+field to break a 4-in-a-row: ${a.team1} vs ${a.team2} ↔ ${b.team1} vs ${b.team2}`);
+                    break;
+                }
+            }
+        }
     }
 
     function recordTeamSport(leagueName, team, sport, history) {
@@ -848,6 +879,18 @@
                     score -= 2500;
                 }
 
+                // ★ Streak control (the no-3 / no-4 backbone): heavy penalty per
+                //   day over 2-in-a-row, so the lowest-streak field ALWAYS wins.
+                //   A run of 3 costs −100000, a 4 costs −200000 — both dwarf
+                //   every other term, so a 3 is taken only when no ≤2 option
+                //   exists, and a 4 only when no ≤3 exists. _repairFourStreaks
+                //   then removes any 4 that still slips through.
+                const _run = Math.max(
+                    _runIfAssigned(leagueName, t1, option.sport, history),
+                    _runIfAssigned(leagueName, t2, option.sport, history)
+                );
+                if (_run >= 3) score -= 100000 * (_run - 2);
+
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
@@ -973,6 +1016,18 @@
                     score -= 2500;
                 }
 
+                // ★ Streak control (the no-3 / no-4 backbone): heavy penalty per
+                //   day over 2-in-a-row, so the lowest-streak field ALWAYS wins.
+                //   A run of 3 costs −100000, a 4 costs −200000 — both dwarf
+                //   every other term, so a 3 is taken only when no ≤2 option
+                //   exists, and a 4 only when no ≤3 exists. _repairFourStreaks
+                //   then removes any 4 that still slips through.
+                const _run = Math.max(
+                    _runIfAssigned(leagueName, t1, option.sport, history),
+                    _runIfAssigned(leagueName, t2, option.sport, history)
+                );
+                if (_run >= 3) score -= 100000 * (_run - 2);
+
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
@@ -1015,11 +1070,12 @@
 
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
-        if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
-        } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
-        }
+        const assignments = (mode === 'matchup_variety')
+            ? assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules)
+            : assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
+        // ★ Final no-4 guarantee: swap-repair any team left on 4-in-a-row.
+        _repairFourStreaks(assignments, leagueName, history);
+        return assignments;
     }
 
     // =========================================================================

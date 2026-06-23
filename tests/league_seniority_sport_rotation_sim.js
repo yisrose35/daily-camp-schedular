@@ -24,25 +24,37 @@ function freshness(lg, team, sport, h) {
     return score;
 }
 
-// HARD no-3-in-a-row guard (file copy) — reads the date-keyed gameLog
-function streakBlocked(lg, team, sport, h, dayId) {
+// run length if `sport` assigned today (file copy) — before+today+after
+function runIfAssigned(lg, team, sport, h, dayId) {
     const gl = h.gameLog && h.gameLog[lg];
-    if (!gl || dayId == null || !sport) return false;
+    if (!gl || dayId == null || !sport) return 1;
     const tk = String(team);
     const sportOn = d => { for (const g of (gl[d] || [])) { if (String(g.t1) === tk || String(g.t2) === tk) return g.sport || null; } return null; };
     const before = Object.keys(gl).filter(d => d < dayId).sort();
     const after = Object.keys(gl).filter(d => d > dayId).sort();
-    const p1 = before.length ? sportOn(before[before.length - 1]) : null;
-    const p2 = before.length > 1 ? sportOn(before[before.length - 2]) : null;
-    const n1 = after.length ? sportOn(after[0]) : null;
-    const n2 = after.length > 1 ? sportOn(after[1]) : null;
-    if (p1 === sport && p2 === sport) return true;
-    if (p1 === sport && n1 === sport) return true;
-    if (n1 === sport && n2 === sport) return true;
-    return false;
+    let prev = 0; for (let i = before.length - 1; i >= 0; i--) { if (sportOn(before[i]) === sport) prev++; else break; }
+    let next = 0; for (let i = 0; i < after.length; i++) { if (sportOn(after[i]) === sport) next++; else break; }
+    return prev + 1 + next;
+}
+function streakBlocked(lg, team, sport, h, dayId) { return runIfAssigned(lg, team, sport, h, dayId) >= 3; }
+
+// final no-4 swap repair (file copy)
+function repairFourStreaks(assignments, lg, h, dayId) {
+    if (!Array.isArray(assignments) || assignments.length < 2) return;
+    const run = (t, s) => runIfAssigned(lg, t, s, h, dayId);
+    for (let i = 0; i < assignments.length; i++) {
+        const a = assignments[i]; if (!a || !a.sport) continue;
+        if (run(a.team1, a.sport) < 4 && run(a.team2, a.sport) < 4) continue;
+        for (let j = 0; j < assignments.length; j++) {
+            if (j === i) continue; const b = assignments[j]; if (!b || !b.sport || b.sport === a.sport) continue;
+            if (run(a.team1, b.sport) < 4 && run(a.team2, b.sport) < 4 && run(b.team1, a.sport) < 4 && run(b.team2, a.sport) < 4) {
+                const s = a.sport, f = a.field; a.sport = b.sport; a.field = b.field; b.sport = s; b.field = f; break;
+            }
+        }
+    }
 }
 
-// assignment inner sport pick: no-3 filter (hard) → freshness + spread + cap
+// assignment inner sport pick: no-3 filter → freshness + spread + cap + run penalty
 function pickSport(lg, t1, t2, pool, h, used, slotCap, dayId) {
     let p = pool.filter(o => !streakBlocked(lg, t1, o.sport, h, dayId) && !streakBlocked(lg, t2, o.sport, h, dayId));
     if (p.length === 0) p = pool;             // fallback: forced repeat beats a bye
@@ -52,6 +64,8 @@ function pickSport(lg, t1, t2, pool, h, used, slotCap, dayId) {
         const u = used[o.sport] || 0;
         score += u === 0 ? 500 : -u * 100;
         if (slotCap && slotCap[o.sport] != null && u >= slotCap[o.sport]) score -= 2500;
+        const run = Math.max(runIfAssigned(lg, t1, o.sport, h, dayId), runIfAssigned(lg, t2, o.sport, h, dayId));
+        if (run >= 3) score -= 100000 * (run - 2); // crush 3, annihilate 4
         if (score > bestScore) { bestScore = score; best = o; }
     }
     return best;
@@ -153,4 +167,44 @@ function sortByOptions(leagues, fbs) {
     console.log('TEST 9 PASS — no-3 centered block + fallback (no bye)');
 })();
 
-console.log('\nALL 9 LEAGUE-ROTATION TESTS PASS');
+// 10: the T4 bug — when forced to a streak, NEVER pick 4 over 3
+(function () {
+    // A played Dodgeball the last 3 days (DB would be 4); B played Kickball the
+    // last 2 (KB would be 3). Both sports are "blocked" by no-3 → fallback. The
+    // run penalty must pick KB (run 3) over DB (run 4) so A never hits 4.
+    const h = {
+        teamSports: {}, gameLog: {
+            L: {
+                '2026-06-21': [{ t1: 'A', t2: 'X', sport: 'Dodgeball' }],
+                '2026-06-23': [{ t1: 'A', t2: 'Y', sport: 'Dodgeball' }, { t1: 'B', t2: 'Z', sport: 'Kickball' }],
+                '2026-06-24': [{ t1: 'A', t2: 'W', sport: 'Dodgeball' }, { t1: 'B', t2: 'V', sport: 'Kickball' }],
+            }
+        }
+    };
+    const pick = pickSport('L', 'A', 'B', [{ sport: 'Dodgeball' }, { sport: 'Kickball' }], h, {}, null, '2026-06-25').sport;
+    assert.strictEqual(pick, 'Kickball', 'forced repeat must be 3 (B), never 4 (A)');
+    console.log('TEST 10 PASS — never-4: forced fallback took the 3-streak, not the 4');
+})();
+
+// 11: final repair swaps two games to break a 4-in-a-row
+(function () {
+    const h = {
+        teamSports: {}, gameLog: {
+            L: {
+                '2026-06-21': [{ t1: 'A', t2: 'X', sport: 'Dodgeball' }],
+                '2026-06-23': [{ t1: 'A', t2: 'Y', sport: 'Dodgeball' }],
+                '2026-06-24': [{ t1: 'A', t2: 'W', sport: 'Dodgeball' }],
+            }
+        }
+    };
+    const assignments = [
+        { team1: 'A', team2: 'B', sport: 'Dodgeball', field: 'F1' }, // A → 4th Dodgeball
+        { team1: 'C', team2: 'D', sport: 'Kickball', field: 'F2' },
+    ];
+    repairFourStreaks(assignments, 'L', h, '2026-06-25');
+    assert.strictEqual(assignments[0].sport, 'Kickball', 'A\'s game swapped off Dodgeball to break the 4');
+    assert.strictEqual(assignments[1].sport, 'Dodgeball', 'the other game absorbed the Dodgeball');
+    console.log('TEST 11 PASS — repair: swapped sports to break a 4-in-a-row');
+})();
+
+console.log('\nALL 11 LEAGUE-ROTATION TESTS PASS');
