@@ -2880,6 +2880,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     //   the zone's travelTimeMin — independent of how it was placed. Works for
     //   league overlays AND per-bunk sports, and is per-field so a mixed away tile
     //   (some games off-campus, some on) badges only the off-campus ones.
+    // ★ Orientation flag: in the transposed view time runs left→right (time =
+    //   columns), so travel bands sit on the LEFT/RIGHT of a cell; in the standard
+    //   table time runs top→bottom, so they sit TOP/BOTTOM. renderBunkCell is shared
+    //   by both views, so it reads this flag set by the active renderer.
+    var _usTransposed = false;
+
     function _usFieldTravel(fieldName) {
         if (!fieldName || typeof window.getTravelForField !== 'function') return null;
         // Try the raw field, then a court-number-stripped name ("TABC Bball (2)"
@@ -2906,13 +2912,37 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         }
         return best;
     }
-    // A "Travel" band layer (mirrors the swim Change band) shown above/below a cell.
+    // A "Travel" band layer (mirrors the swim Change band) shown above/below a cell
+    //   (standard / time-vertical view).
     function _usTravelBand(ct, pos) {
         if (!ct) return '';
         var m = pos === 'pre' ? ct.pre : ct.post;
         if (!m) return '';
         var border = pos === 'pre' ? 'border-bottom:1px solid #F59E0B;' : 'border-top:1px solid #F59E0B;';
         return '<div title="Travel ' + (pos === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:700;' + border + 'text-align:center;white-space:nowrap;">🚐 Travel ' + m + 'm</div>';
+    }
+    // Vertical "Travel" strip on the LEFT/RIGHT of a cell (transposed / time-horizontal
+    //   view — time runs left→right so travel sits beside the activity).
+    function _usTravelStripLR(ct, side) {
+        if (!ct) return '';
+        var m = side === 'pre' ? ct.pre : ct.post;
+        if (!m) return '';
+        var border = side === 'pre' ? 'border-right:1px solid #F59E0B;' : 'border-left:1px solid #F59E0B;';
+        return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="flex:0 0 auto;background:#FEF3C7;color:#92400E;' + border + 'display:flex;align-items:center;justify-content:center;padding:2px;writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;font-weight:700;white-space:nowrap;">🚐 ' + m + 'm</div>';
+    }
+    // Wrap a cell's inner HTML with travel layers in the correct orientation.
+    function _usApplyTravel(td, innerHtml, ct, pad, horizontal) {
+        if (!ct) { td.innerHTML = innerHtml; return; }
+        td.style.padding = '0';
+        if (horizontal) {
+            td.innerHTML = '<div style="display:flex;align-items:stretch;min-height:100%;height:100%;">'
+                + _usTravelStripLR(ct, 'pre')
+                + '<div style="flex:1 1 auto;padding:' + pad + ';display:flex;flex-direction:column;justify-content:center;">' + innerHtml + '</div>'
+                + _usTravelStripLR(ct, 'post')
+                + '</div>';
+        } else {
+            td.innerHTML = _usTravelBand(ct, 'pre') + '<div style="padding:' + pad + ';">' + innerHtml + '</div>' + _usTravelBand(ct, 'post');
+        }
     }
 
     function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
@@ -2962,18 +2992,14 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         } else {
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
         }
-        // ★ Off-campus travel band layer (mirrors swim Change), wrapping the cell.
-        var _ct = _usCellTravel(_tFields);
-        if (_ct) {
-            td.style.padding = '0';
-            td.innerHTML = _usTravelBand(_ct, 'pre') + '<div style="padding:8px 10px;">' + html + '</div>' + _usTravelBand(_ct, 'post');
-        } else {
-            td.innerHTML = html;
-        }
+        // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
+        //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell.
+        _usApplyTravel(td, html, _usCellTravel(_tFields), '8px 10px', true);
         return td;
     }
 
     function renderTransposedView(container) {
+        _usTransposed = true; // time runs left→right here → travel sits left/right
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
 
         // ★★★ PERF FIX: Skip render when the schedule tab is hidden.
@@ -3354,6 +3380,7 @@ const isAutoSchedule = currentBuilderMode === 'auto';
     }
 
     function renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable) {
+        _usTransposed = false; // standard table → time runs top→bottom → travel top/bottom
         // *** v4.1.0: Use divisionTimes directly ***
         const divSlots = window.divisionTimes?.[divName] || [];
         
@@ -3617,14 +3644,9 @@ divBlocks.forEach((block, blockIdx) => {
             html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic;">No matchups scheduled yet</div>';
         }
 
-        // ★ Off-campus travel band layer (mirrors swim Change), wrapping the cell.
-        const _ct = _usCellTravel(_tFields);
-        if (_ct) {
-            td.style.padding = '0';
-            td.innerHTML = _usTravelBand(_ct, 'pre') + `<div style="padding:12px 16px;">${html}</div>` + _usTravelBand(_ct, 'post');
-        } else {
-            td.innerHTML = html;
-        }
+        // ★ Off-campus travel layer (mirrors swim Change). Standard table → time
+        //   runs top→bottom, so the bands sit ABOVE/BELOW the cell.
+        _usApplyTravel(td, html, _usCellTravel(_tFields), '12px 16px', false);
         
         if (isEditable && bunks.length > 0) { 
             td.style.cursor = 'pointer'; 
@@ -3812,12 +3834,12 @@ divBlocks.forEach((block, blockIdx) => {
             td.style.background = bgColor;
             td.style.textAlign = 'left';
         } else {
-            // ★ Off-campus sports: wrap the cell in 🚐 Travel band layers (mirrors the
-            //   swim Change band) when the assigned field sits in an off-campus zone.
+            // ★ Off-campus sports: wrap the cell in 🚐 Travel layers (mirrors the swim
+            //   Change band) when the assigned field sits in an off-campus zone. Side
+            //   follows the active view orientation (transposed → left/right).
             const _ct = (entry && !entry.continuation && entry.field) ? _usCellTravel([entry.field]) : null;
             if (_ct) {
-                td.style.padding = '0';
-                td.innerHTML = _usTravelBand(_ct, 'pre') + '<div style="padding:8px 10px;">' + escapeHtml(displayText) + '</div>' + _usTravelBand(_ct, 'post');
+                _usApplyTravel(td, escapeHtml(displayText), _ct, '8px 10px', _usTransposed);
             } else {
                 td.textContent = displayText;
             }
