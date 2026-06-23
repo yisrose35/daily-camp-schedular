@@ -1358,8 +1358,23 @@ function shouldHighlightBunk(bunkName) {
                 activities: f.activities || []
             });
         });
-        (app1.specialActivities || []).forEach(s => {
-            if (s.name) locations.push({
+        // Specials feed the edit-modal activity dropdown. Reading ONLY
+        // app1.specialActivities left it empty when the specials lived in another
+        // copy (the live list / top-level key). Prefer the canonical live list,
+        // fall back to app1 then top-level, so the dropdown is always populated.
+        let specials = (Array.isArray(app1.specialActivities) && app1.specialActivities.length)
+            ? app1.specialActivities : null;
+        if (!specials) {
+            try {
+                if (typeof window.getAllSpecialActivities === 'function') {
+                    const live = window.getAllSpecialActivities();
+                    if (Array.isArray(live) && live.length) specials = live;
+                }
+            } catch (e) { /* fall through */ }
+        }
+        if (!specials) specials = settings.specialActivities || window.specialActivities || [];
+        (specials || []).forEach(s => {
+            if (s && s.name) locations.push({
                 name: s.name, type: 'special',
                 capacity: s.sharableWith?.capacity || 1,
                 activities: [s.name]
@@ -4764,8 +4779,15 @@ if (bypassStatus.highlight) {
         const modal = createModal();
         const locations = getAllLocations();
         const divName = getDivisionForBunk(bunk);
+        const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
         let currentActivity = currentValue || '', currentField = '', resolutionChoice = 'notify';
-        const slots = findSlotsForRange(startMin, endMin, divName);
+        // ★ Pass the bunk in auto mode. Without it findSlotsForRange falls through
+        //   to DIVISION-level slots and returns an index that points at the WRONG
+        //   per-bunk entry — pre-filling the activity box with a stale/foreign
+        //   value, which then filters the activity dropdown down to nothing. For a
+        //   fresh gap this must resolve to the empty materialized slot so the box
+        //   stays blank and the dropdown shows every activity.
+        const slots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
             if (entry) {
@@ -4774,7 +4796,6 @@ if (bypassStatus.highlight) {
             }
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
-        const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
