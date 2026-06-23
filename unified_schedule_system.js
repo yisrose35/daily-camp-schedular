@@ -4773,11 +4773,15 @@ if (bypassStatus.highlight) {
             <div style="display:flex;flex-direction:column;gap:14px;">
                 <div>
                     <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">What activity?</label>
-                    <input type="text" id="post-edit-activity" list="post-edit-activity-list"
-                        value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball"
-                        style="width:100%;padding:10px 12px;border:1.5px solid #6366f1;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;">
-                    <datalist id="post-edit-activity-list">${allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('')}</datalist>
-                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Type an activity — the system will find a free court. Enter CLEAR to empty.</div>
+                    <select id="post-edit-activity"
+                        style="width:100%;padding:10px 12px;border:1.5px solid #6366f1;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;cursor:pointer;">
+                        <option value="">— Choose an activity —</option>
+                        ${(currentActivity && currentActivity.toLowerCase() !== 'free' && !allActivities.includes(currentActivity))
+                            ? `<option value="${escapeHtml(currentActivity)}" selected>${escapeHtml(currentActivity)} (current)</option>` : ''}
+                        ${allActivities.map(a => `<option value="${escapeHtml(a)}" ${a === currentActivity ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('')}
+                        <option value="Free">— Leave empty (Free) —</option>
+                    </select>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court.</div>
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -4832,7 +4836,6 @@ if (bypassStatus.highlight) {
         }
 
         // ── Activity-first field search ───────────────────────────────────────
-        let _searchTimer;
         function runActivitySearch() {
             const actVal = actInput.value.trim();
             const isClear = !actVal || ['clear','free'].includes(actVal.toLowerCase());
@@ -4903,10 +4906,10 @@ if (bypassStatus.highlight) {
             }
         }
 
-        actInput.addEventListener('input', () => {
-            clearTimeout(_searchTimer);
-            _searchTimer = setTimeout(runActivitySearch, 380);
-        });
+        // #post-edit-activity is a <select> — react to selection changes directly.
+        // (It used to be a text input + <datalist>, which would not reliably reopen
+        //  after the first use; a real dropdown opens every time.)
+        actInput.addEventListener('change', runActivitySearch);
         locationSelect.addEventListener('change', () => renderConflictArea(locationSelect.value));
 
         // Run search on open if there's already an activity set
@@ -4934,7 +4937,6 @@ if (bypassStatus.highlight) {
             closeModal();
         };
         actInput.focus();
-        actInput.select();
     }
 
     // =========================================================================
@@ -5778,9 +5780,11 @@ function minutesToTimeString(mins) {
             <div style="display: grid; gap: 14px;">
                 <div>
                     <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">What activity?</label>
-                    <input type="text" id="multi-edit-activity" placeholder="e.g., Basketball, Soccer…"
-                        style="width: 100%; padding: 10px; border: 1.5px solid #6366f1; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem;">
-                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Type an activity — the system will find a free court for all bunks.</div>
+                    <select id="multi-edit-activity"
+                        style="width: 100%; padding: 10px; border: 1.5px solid #6366f1; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem; background:white; cursor:pointer;">
+                        <option value="">— Choose an activity —</option>
+                    </select>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court for all bunks.</div>
                 </div>
                 <div id="multi-field-result" style="display:none;"></div>
                 <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -5823,12 +5827,12 @@ function minutesToTimeString(mins) {
         const multiActInput = document.getElementById('multi-edit-activity');
         const multiFieldResult = document.getElementById('multi-field-result');
         if (multiActInput) {
+            // #multi-edit-activity is a <select> — fill it with the activity options
+            // (a real dropdown reopens every time; the old <datalist> did not).
             const allMultiActs = [...new Set(allLocations.flatMap(l => l.activities || []))].sort();
-            const multiDl = document.createElement('datalist');
-            multiDl.id = 'multi-edit-activity-list';
-            multiDl.innerHTML = allMultiActs.map(a => `<option value="${escapeHtml(a)}">`).join('');
-            multiActInput.setAttribute('list', 'multi-edit-activity-list');
-            multiActInput.after(multiDl);
+            multiActInput.insertAdjacentHTML('beforeend',
+                allMultiActs.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('') +
+                `<option value="Free">— Leave empty (Free) —</option>`);
 
             const { slots: ctxSlots, divName: ctxDiv, timeStartMin: ctxStart, timeEndMin: ctxEnd, isAutoMode: ctxAuto } = _multiBunkEditContext;
             // Use representative slots from first bunk for the search
@@ -5836,7 +5840,6 @@ function minutesToTimeString(mins) {
                 ? findSlotsForRange(ctxStart, ctxEnd, ctxDiv, bunks[0])
                 : (ctxSlots || []);
 
-            let multiSearchTimer;
             function runMultiActivitySearch() {
                 const actVal = multiActInput.value.trim();
                 if (!actVal || ['clear','free'].includes(actVal.toLowerCase())) {
@@ -5900,10 +5903,7 @@ function minutesToTimeString(mins) {
                 }
             }
 
-            multiActInput.addEventListener('input', () => {
-                clearTimeout(multiSearchTimer);
-                multiSearchTimer = setTimeout(runMultiActivitySearch, 380);
-            });
+            multiActInput.addEventListener('change', runMultiActivitySearch);
             if (multiLocSel) multiLocSel.addEventListener('change', () => {
                 if (multiLocSel.value) {
                     previewMultiBunkEdit();
