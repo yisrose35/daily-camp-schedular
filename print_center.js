@@ -18,7 +18,7 @@
 (function () {
 'use strict';
 
-var VERSION = '3.0';
+var VERSION = '3.1';   // bumped to force a fresh print_center.js bundle (stale-cache bust) — also confirms the getSkeleton-delegate fix is loaded
 
 // =========================================================================
 // ICONS (inline SVG)
@@ -462,6 +462,23 @@ function isAutoMode() {
 }
 
 function getSkeleton() {
+    // ★ Use the EXACT skeleton the unified view uses, so the print center and unified can
+    //   never disagree. Unified's getSkeleton reads the per-date board (campDailyData_v1
+    //   [date], which survives the pre-generation wipe that nukes campManualSkeleton_<date>)
+    //   and treats it as authoritative; the volatile window.manualSkeleton holds the Master
+    //   Scheduler day-of-week TEMPLATE. Delegating means print draws exactly the day's board.
+    try {
+        if (window.UnifiedScheduleSystem && typeof window.UnifiedScheduleSystem.getSkeleton === 'function') {
+            var _u = window.UnifiedScheduleSystem.getSkeleton(window.currentScheduleDate);
+            if (Array.isArray(_u)) return _u;
+        }
+    } catch (e) { }
+    // Fallback when the unified system isn't loaded: per-date board first, then legacy chain.
+    var _dk = window.currentScheduleDate;
+    if (_dk) {
+        try { var _raw = localStorage.getItem('campManualSkeleton_' + _dk); if (_raw) { var _p = JSON.parse(_raw); if (Array.isArray(_p) && _p.length) return _p; } } catch (e) { }
+        try { var _ms = window.loadGlobalSettings ? window.loadGlobalSettings() : null; var _c = _ms && _ms.app1 && _ms.app1.dailySkeletons ? _ms.app1.dailySkeletons[_dk] : null; if (Array.isArray(_c) && _c.length) return _c; } catch (e) { }
+    }
     var daily = (window.loadCurrentDailyData ? window.loadCurrentDailyData() : null) || {};
     var sk = daily.manualSkeleton || daily.skeleton || window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
     if (!sk.length) { try { var dk = window.currentScheduleDate; var s = dk ? localStorage.getItem('campManualSkeleton_' + dk) : null; if (s) sk = JSON.parse(s) || []; } catch (e) { } }
