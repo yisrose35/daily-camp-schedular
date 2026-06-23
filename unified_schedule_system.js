@@ -514,6 +514,11 @@ function disableBypassRBACView() {
 }
 
     function shouldShowDivision(divName) {
+    // ★ Per-day presence: hide a division/grade whose column is marked absent on
+    //   the viewed date's weekday (Campistry Me grade editor). No-op when no
+    //   restriction is set or the helper isn't loaded yet.
+    if (typeof window.isDivisionPresentOnDate === 'function'
+        && !window.isDivisionPresentOnDate(divName)) return false;
     return true;
 }
 

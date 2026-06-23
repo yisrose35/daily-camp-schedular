@@ -1849,6 +1849,8 @@ function populateSidebar() {
         available = (typeof window.getUserDivisionOrder === 'function')
             ? window.getUserDivisionOrder(available)
             : available.slice().sort(naturalSort);
+        // ★ Per-day presence: drop grades not around on the selected date.
+        if (typeof window.filterDivisionsByDate === 'function') available = window.filterDivisionsByDate(available);
         available.forEach(function (d) {
             var bunkCount = divs[d] && divs[d].bunks ? divs[d].bunks.length : 0;
             items.push({ id: d, label: d, count: bunkCount + ' bunks' });
@@ -1860,6 +1862,8 @@ function populateSidebar() {
         available2 = (typeof window.getUserDivisionOrder === 'function')
             ? window.getUserDivisionOrder(available2)
             : available2.slice().sort(naturalSort);
+        // ★ Per-day presence: drop grades not around on the selected date.
+        if (typeof window.filterDivisionsByDate === 'function') available2 = window.filterDivisionsByDate(available2);
         available2.forEach(function (d) {
             var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
             if (!bunks.length) return;
@@ -3894,6 +3898,8 @@ function _liveContentSignature(nowMin) {
     var available = (typeof window.getUserDivisionOrder === 'function')
         ? window.getUserDivisionOrder(getAvailableDivisions())
         : getAvailableDivisions().sort(naturalSort);
+    // ★ Per-day presence: keep the signature in sync with renderLiveContent.
+    if (typeof window.filterDivisionsByDate === 'function') available = window.filterDivisionsByDate(available);
     var inc = _timeIncrement || 15;
     // tphase changes every increment → keeps the header "current column" highlight live.
     var parts = [
@@ -3939,6 +3945,8 @@ function renderLiveContent() {
     var nowMin = getNowMinutes();
     var divs = getDivisions();
     var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
+    // ★ Per-day presence: hide grades not around on the viewed date.
+    if (typeof window.filterDivisionsByDate === 'function') available = window.filterDivisionsByDate(available);
 
     // Skip the (expensive) rebuild when nothing the viewer can see has changed.
     // The page-rotation timer drives "showing different parts of the schedule"
