@@ -5032,6 +5032,38 @@ if (bypassStatus.highlight) {
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
 
+        // Auto-pick: score every available activity by rotation fairness then return the best
+        function _pickAutoCandidate() {
+            const _todayActs = new Set();
+            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
+            _bunkSlots.forEach((entry, i) => {
+                if (!entry || slots.indexOf(i) !== -1) return;
+                const act = (entry._activity || '').toLowerCase();
+                if (act && act !== 'free') _todayActs.add(act);
+            });
+            const _seen = new Set();
+            const _cands = [];
+            locations.forEach(loc => {
+                (loc.activities || []).forEach(actName => {
+                    if (_seen.has(actName.toLowerCase())) return;
+                    _seen.add(actName.toLowerCase());
+                    if (_todayActs.has(actName.toLowerCase())) return;
+                    const { open, none } = findFieldsForActivity(actName, slots, divName, bunk, startMin, endMin);
+                    if (none || open.length === 0) return;
+                    const usageCount = window.RotationEngine?.getActivityCount?.(bunk, actName) || 0;
+                    const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, actName, 0) ?? null;
+                    let score = 100 - usageCount;
+                    if (daysSince === null) score += 20;
+                    else if (daysSince >= 7) score += 10;
+                    else if (daysSince >= 3) score += 5;
+                    const bestField = open.find(f => !f.shared) || open[0];
+                    _cands.push({ activity: actName, field: bestField.name, score });
+                });
+            });
+            _cands.sort((a, b) => b.score - a.score);
+            return _cands[0] || null;
+        }
+
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
                 <h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Edit Schedule</h2>
@@ -5064,7 +5096,8 @@ if (bypassStatus.highlight) {
                     </select>
                 </details>
                 <div id="post-edit-conflict" style="display:none;"></div>
-                <div style="display:flex;gap:10px;margin-top:12px;">
+                <button id="post-edit-autochange" style="width:100%;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;margin-top:4px;">⚡ Auto Change</button>
+                <div style="display:flex;gap:10px;margin-top:10px;">
                     <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
                 </div>
@@ -5072,6 +5105,28 @@ if (bypassStatus.highlight) {
 
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
+
+        document.getElementById('post-edit-autochange').onclick = () => {
+            const pick = _pickAutoCandidate();
+            if (!pick) {
+                showIntegratedToast('No suitable activity found — all options are unavailable or already done today.', 'warning', 3500);
+                return;
+            }
+            const _autoSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
+            const _fieldVal = (pick.field && pick.field !== pick.activity) ? pick.field : null;
+            const _cc = _fieldVal ? checkLocationConflict(_fieldVal, _autoSlots, bunk) : null;
+            closeModal();
+            onSave({
+                activity: pick.activity, location: _fieldVal,
+                startMin, endMin,
+                hasConflict: !!_cc?.hasConflict,
+                conflicts: _cc?.conflicts || [],
+                editableConflicts: _cc?.editableConflicts || [],
+                nonEditableConflicts: _cc?.nonEditableConflicts || [],
+                resolutionChoice: 'notify'
+            });
+            showIntegratedToast('Auto-filled: ' + pick.activity, 'success', 3000);
+        };
 
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea  = document.getElementById('post-edit-conflict');
