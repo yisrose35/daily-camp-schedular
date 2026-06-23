@@ -791,12 +791,17 @@ function shouldHighlightBunk(bunkName) {
                 && (window.currentScheduleDate || getDateKey()) === dk) {
                 daily = window.dailyOverrideSkeleton;
             }
-            if (Array.isArray(daily) && daily.length && daily !== base) {
-                const keyOf = b => [b && b.division, b && b.startTime, b && b.endTime, b && b.event, b && b.type, b && b._bunk].join('|');
-                const seen = new Set(base.map(keyOf));
-                const merged = base.slice();
-                daily.forEach(b => { const k = keyOf(b); if (b && !seen.has(k)) { seen.add(k); merged.push(b); } });
-                base = merged;
+            if (Array.isArray(daily) && daily.length) {
+                // ★ The per-date Daily-Adjustments board (campManualSkeleton_<date>) is the
+                //   AUTHORITATIVE, COMPLETE board — saveDailySkeleton writes the entire day to
+                //   it on every edit — so use it AS-IS. We used to UNION it into `base`
+                //   (dateData.manualSkeleton, which comes from campDailyData_v1), but that base
+                //   can still hold a STALE day-of-week TEMPLATE; on reload the template's tiles
+                //   resurfaced and merged back in (e.g. 1 real tile + 39 template tiles = 40
+                //   columns the user never placed). Taking `daily` as-is still includes any tile
+                //   that exists only in Daily Adjustments (the original reason for the union — it
+                //   lives in `daily`) while dropping the stale template that was only in `base`.
+                base = daily;
             }
         } catch (_eMerge) {}
         return base;
