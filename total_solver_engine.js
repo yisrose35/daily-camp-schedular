@@ -1906,8 +1906,11 @@
             // ★ Away (off-campus) tile: hard-restrict the field domain to the chosen
             //   zone's fields. Unlike _allowSet this is NEVER dropped — an away tile
             //   must stay in its zone (it goes Free rather than land on campus).
+            //   In 'mixed' mode the restriction is skipped — the zone's fields are
+            //   still available (and travel still shows per-field), but on-campus
+            //   fields stay in play so games can spill back home.
             var _awayFieldSet = null;
-            if (block._isAway && block._awayZone && typeof window.getFieldsInZone === 'function') {
+            if (block._isAway && block._awayMode !== 'mixed' && block._awayZone && typeof window.getFieldsInZone === 'function') {
                 var _azFields = window.getFieldsInZone(block._awayZone) || [];
                 if (_azFields.length) {
                     _awayFieldSet = new Set();

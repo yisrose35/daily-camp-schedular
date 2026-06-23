@@ -2875,6 +2875,25 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return true;
     }
 
+    // ★ Off-campus travel badge (render-time, field-based). Any game/activity on
+    //   a field that belongs to an off-campus zone shows a 🚐 travel pill driven by
+    //   the zone's travelTimeMin — independent of how it was placed. Works for
+    //   league overlays AND per-bunk sports, and is per-field so a mixed away tile
+    //   (some games off-campus, some on) badges only the off-campus ones.
+    function _usFieldTravel(fieldName) {
+        if (!fieldName || typeof window.getTravelForField !== 'function') return null;
+        var t = window.getTravelForField(fieldName, true)
+              || (typeof window.getTravelForSpecialActivity === 'function' ? window.getTravelForSpecialActivity(fieldName, true) : null);
+        if (t && ((t.preMin || 0) > 0 || (t.postMin || 0) > 0)) return t;
+        return null;
+    }
+    function _usTravelBadge(fieldName) {
+        var t = _usFieldTravel(fieldName);
+        if (!t) return '';
+        var mins = t.preMin || t.postMin || 0;
+        return '<span title="Off-campus travel: ' + escapeHtml(String(t.zoneName || '')) + ' — ' + mins + ' min each way" style="display:inline-block;margin-left:6px;background:#F59E0B;color:#78350F;font-size:0.7rem;font-weight:700;padding:0 6px;border-radius:999px;white-space:nowrap;vertical-align:middle;">🚐 ' + mins + 'm</span>';
+    }
+
     function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
         var td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
@@ -2893,14 +2912,19 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         if (matchups.length > 0) {
             html += '<div style="display: flex; flex-direction: column; gap: 3px;">';
             matchups.forEach(function (m) {
-                var line;
+                var line, _mField = '';
                 if (typeof m === 'string') {
                     line = m;
+                    var _atP = m.split(' @ ');
+                    var _fp = _atP[1] || '';
+                    var _pm = _fp.match(/^(.+?)\s*\((.+?)\)\s*$/);
+                    _mField = _pm ? _pm[1].trim() : _fp.trim();
                 } else if (m && (m.teamA || m.team1)) {
                     var a = m.teamA || m.team1 || '';
                     var b = m.teamB || m.team2 || '';
                     var sport = m.sport || leagueInfo.sport || '';
                     var field = m.field || '';
+                    _mField = field;
                     line = a + ' vs ' + b;
                     if (sport) line += ' — ' + (sport.charAt(0).toUpperCase() + sport.slice(1));
                     if (field) line += ' (' + field + ')';
@@ -2909,7 +2933,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 } else {
                     line = JSON.stringify(m);
                 }
-                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + _usTravelBadge(_mField) + '</div>';
             });
             html += '</div>';
         } else {
@@ -3537,7 +3561,7 @@ divBlocks.forEach((block, blockIdx) => {
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
-                let matchText;
+                let matchText, _mField = '';
                 if (typeof m === 'string') {
                     const atParts = m.split(' @ ');
                     const teams = atParts[0] || '';
@@ -3546,13 +3570,15 @@ divBlocks.forEach((block, blockIdx) => {
                     const parenMatch = fieldPart.match(/^(.+?)\s*\((.+?)\)\s*$/);
                     if (parenMatch) { field = parenMatch[1].trim(); sport = parenMatch[2].trim(); }
                     else { field = fieldPart.trim(); }
+                    _mField = field;
                     matchText = teams + (sport || field ? ' - ' : '') + (sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : '') + (field ? ' (' + field + ')' : '');
                 } else {
                     const sport = m.sport || leagueInfo.sport || '';
                     const field = m.field || '';
+                    _mField = field;
                     matchText = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}${sport || field ? ' - ' : ''}${sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : ''}${field ? ' (' + field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m)));
                 }
-                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
+                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}${_usTravelBadge(_mField)}</div>`;
             });
             html += '</div>';
         } else {
@@ -3747,7 +3773,14 @@ divBlocks.forEach((block, blockIdx) => {
             td.style.background = bgColor;
             td.style.textAlign = 'left';
         } else {
-            td.textContent = displayText;
+            // ★ Off-campus sports: append a 🚐 travel pill when the assigned field
+            //   sits in an off-campus zone (render-time, field-based).
+            const _bcBadge = (entry && !entry.continuation && entry.field) ? _usTravelBadge(entry.field) : '';
+            if (_bcBadge) {
+                td.innerHTML = escapeHtml(displayText) + _bcBadge;
+            } else {
+                td.textContent = displayText;
+            }
             td.style.background = bgColor;
         }
 

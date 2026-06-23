@@ -3825,7 +3825,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     leagueName: item.leagueName || null,
                     _doubleHeaderPairId: item._doubleHeaderPairId || null,
                     _isAway: item.isAway === true,
-                    _awayZone: item.isAway === true ? (item.awayZone || null) : null
+                    _awayZone: item.isAway === true ? (item.awayZone || null) : null,
+                    _awayMode: item.isAway === true ? (item.awayMode === 'mixed' ? 'mixed' : 'exclusive') : null
                 });
                 return;
             }
@@ -3857,7 +3858,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         slots,
                         // ★ Away (off-campus): restrict the solver to the zone's fields + travel.
                         _isAway: item.isAway === true,
-                        _awayZone: item.isAway === true ? (item.awayZone || null) : null
+                        _awayZone: item.isAway === true ? (item.awayZone || null) : null,
+                        _awayMode: item.isAway === true ? (item.awayMode === 'mixed' ? 'mixed' : 'exclusive') : null
                     });
                 });
             }

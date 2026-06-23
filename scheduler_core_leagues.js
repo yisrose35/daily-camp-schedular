@@ -1676,10 +1676,14 @@
                 // ★ Away (off-campus) league tile: if this league's block(s) for this
                 //   period are marked Away, restrict the field pool to the chosen
                 //   zone's fields. Travel is stamped per-block in fillBlock.
+                //   Only the 'exclusive' mode restricts the pool; 'mixed' leaves the
+                //   full pool so some games can stay on campus (travel still shows
+                //   per-field for whichever land off-campus).
                 var _awayZoneForPeriod = null;
                 filteredLeagueDivisions.forEach(function (divName) {
                     (timeData.byDivision[divName] || []).forEach(function (b) {
                         if (!b || b._isAway !== true || !b._awayZone) return;
+                        if (b._awayMode === 'mixed') return;
                         if (b.leagueName && b.leagueName !== league.name) return;
                         var _bk = (typeof b.startTime === 'number')
                             ? b.startTime

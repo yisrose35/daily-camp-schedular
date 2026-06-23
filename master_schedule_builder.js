@@ -527,11 +527,17 @@ function _mbAwayPostRender(overlay, ev) {
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'margin:10px 0;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;';
+  const _mode = (ev.awayMode === 'mixed') ? 'mixed' : 'exclusive';
   const bodyHtml = hasZones
     ? ('<div class="mb-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
-        + '<div style="font-size:11px;color:#9a3412;margin-bottom:6px;line-height:1.5;">Runs at an off-campus zone. The scheduler uses only that zone\'s fields and adds the required travel time to and from.</div>'
         + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
         + '<select class="ms-modal-input mb-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin:10px 0 4px;">How many go away?</label>'
+        + '<select class="ms-modal-input mb-away-mode" data-field="awayMode" style="width:100%;">'
+        + '<option value="exclusive"' + (_mode === 'exclusive' ? ' selected' : '') + '>All away — only off-campus fields</option>'
+        + '<option value="mixed"' + (_mode === 'mixed' ? ' selected' : '') + '>Either / or — some away, some stay on campus</option>'
+        + '</select>'
+        + '<div style="font-size:11px;color:#9a3412;margin-top:6px;line-height:1.5;">Adds the zone\'s travel time to and from. <strong>All away</strong> forces every game to the off-campus fields; <strong>Either/or</strong> also allows on-campus fields, so games spill back home once the zone fills.</div>'
         + '</div>')
     : ('<div style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.5;">No off-campus zones yet. Add one in <strong>Setup → Location Zones</strong> (mark it “Off-campus” and set a travel time), then re-open this tile.</div>');
   wrap.innerHTML =
@@ -1329,8 +1335,10 @@ async function editTile(id) {
     // ★ Away (off-campus) flag — restricts generation to the chosen zone's fields + travel.
     if (_supportsAway) {
       const _awayOn = (result.isAway === 'true' || result.isAway === true);
-      if (_awayOn && result.awayZone) { ev.isAway = true; ev.awayZone = result.awayZone; }
-      else { delete ev.isAway; delete ev.awayZone; }
+      if (_awayOn && result.awayZone) {
+        ev.isAway = true; ev.awayZone = result.awayZone;
+        ev.awayMode = (result.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+      } else { delete ev.isAway; delete ev.awayZone; delete ev.awayMode; }
     }
   }
 
