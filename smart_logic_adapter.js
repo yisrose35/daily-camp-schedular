@@ -634,10 +634,23 @@
                     log(`Created job for ${div} [group ${sd.pairGroup || 'auto'}${extra && extra.groupIndex != null ? ' #' + extra.groupIndex : ''}]: ${sd.main1}/${sd.main2}`);
                 };
 
-                // Connected groups → one ROTATION job per tile (tagged with its index).
+                // Connected groups → how the user wants the linked tiles handled:
+                //   • guaranteeSwap + EXACTLY 2 tiles → emit as ONE A/B pair so the
+                //     hard guaranteed-swap pre-pass runs on the user-CHOSEN pair.
+                //     This is how you guarantee-swap two tiles that AREN'T adjacent
+                //     by time (e.g. link tile 1 ↔ tile 3 via the same pair group);
+                //     "Auto" can only pair neighbors (1&2, 3&4). blockB present →
+                //     _rotationOptions() returns null → _isGuaranteedSwapPair() true.
+                //   • otherwise → one ROTATION job per tile (each bunk walks through
+                //     every option, the right behavior for 3+ connected tiles).
                 Object.keys(groups).forEach(g => {
                     const gt = groups[g];
-                    gt.forEach((t, idx) => _emit(t, null, { groupIndex: idx, groupSize: gt.length }));
+                    const guaranteePair = gt.length === 2 && gt.some(t => t.smartData && t.smartData.guaranteeSwap);
+                    if (guaranteePair) {
+                        _emit(gt[0], gt[1], { guaranteeSwap: true });   // gt is time-sorted: A = earlier, B = later
+                    } else {
+                        gt.forEach((t, idx) => _emit(t, null, { groupIndex: idx, groupSize: gt.length }));
+                    }
                 });
                 // Ungrouped → classic 2-at-a-time A/B pairs.
                 for (let i = 0; i < auto.length; i += 2) _emit(auto[i], auto[i + 1] || null, null);
