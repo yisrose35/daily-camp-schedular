@@ -460,6 +460,19 @@ function isAutoMode() {
 }
 
 function getSkeleton() {
+    // ★ The per-date Daily-Adjustments board is authoritative for what's actually on a
+    //   given day — read it BY DATE first, exactly like loadDailySkeleton + the unified
+    //   view (campManualSkeleton_<date> -> app1.dailySkeletons[date]). Previously the
+    //   volatile window.manualSkeleton / loadCurrentDailyData().manualSkeleton (which the
+    //   Master Scheduler overwrites with the day-of-week TEMPLATE when that page loads)
+    //   could win — leaking the template's league/other tiles into the print for a date
+    //   that doesn't have them, while unified (reading the per-date board) showed only the
+    //   real tiles. Fixes "print center shows league tiles that aren't in Daily Adjustments".
+    var _dk = window.currentScheduleDate;
+    if (_dk) {
+        try { var _raw = localStorage.getItem('campManualSkeleton_' + _dk); if (_raw) { var _p = JSON.parse(_raw); if (Array.isArray(_p) && _p.length) return _p; } } catch (e) { }
+        try { var _ms = window.loadGlobalSettings ? window.loadGlobalSettings() : null; var _c = _ms && _ms.app1 && _ms.app1.dailySkeletons ? _ms.app1.dailySkeletons[_dk] : null; if (Array.isArray(_c) && _c.length) return _c; } catch (e) { }
+    }
     var daily = (window.loadCurrentDailyData ? window.loadCurrentDailyData() : null) || {};
     var sk = daily.manualSkeleton || daily.skeleton || window.dailyOverrideSkeleton || window.manualSkeleton || window.skeleton || [];
     if (!sk.length) { try { var dk = window.currentScheduleDate; var s = dk ? localStorage.getItem('campManualSkeleton_' + dk) : null; if (s) sk = JSON.parse(s) || []; } catch (e) { } }
