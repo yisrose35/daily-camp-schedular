@@ -1018,7 +1018,16 @@ window.isOffCampusFieldAvailableForGrade = function(fieldName, grade, startMin, 
     const zone = window.getZoneForField?.(fieldName);
     if (!zone || zone.isOffCampus !== true) return true;
     const gw = zone.gradeWindows || {};
-    const wins = gw[grade] || gw[String(grade)] || [];
+    const gradeStr = String(grade);
+    // Exact match first; fall back to case-insensitive scan (guards against
+    // minor UI vs solver key variations like "6th" vs "6th Grade").
+    let wins = gw[gradeStr] || gw[grade];
+    if (!wins) {
+        const gradeLower = gradeStr.toLowerCase();
+        for (const k of Object.keys(gw)) {
+            if (k.toLowerCase() === gradeLower) { wins = gw[k]; break; }
+        }
+    }
     if (!Array.isArray(wins) || wins.length === 0) return true; // unrestricted for this grade
     if (startMin == null || endMin == null) return true;
     for (let i = 0; i < wins.length; i++) {
@@ -1026,6 +1035,7 @@ window.isOffCampusFieldAvailableForGrade = function(fieldName, grade, startMin, 
         if (ws == null || we == null) continue;
         if (startMin >= ws && endMin <= we) return true;
     }
+    console.log(`[ZoneWindow] Blocked: "${fieldName}" for grade "${gradeStr}" @${startMin}-${endMin} (zone "${zone.name || fieldName}", windows: ${JSON.stringify(wins)})`);
     return false;
 };
 

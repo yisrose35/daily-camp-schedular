@@ -581,15 +581,18 @@
     // ★★★ FIELD AVAILABILITY - WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
 
-    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey, slots) {
+    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey, slots, blockEndMin) {
         const pool = [];
         const { fields, disabledFields, activityProperties } = context;
 
         const allFields = fields || [];
 
         const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
-        const _poolStartMin = (slots && slots.length > 0) ? _poolDivSlots[slots[0]]?.startMin : undefined;
-        const _poolEndMin = (slots && slots.length > 0) ? _poolDivSlots[slots[slots.length - 1]]?.endMin : undefined;
+        let _poolStartMin = (slots && slots.length > 0) ? _poolDivSlots[slots[0]]?.startMin : undefined;
+        let _poolEndMin = (slots && slots.length > 0) ? _poolDivSlots[slots[slots.length - 1]]?.endMin : undefined;
+        // Fallback: timeKey IS the startMin (always available); blockEndMin is passed explicitly.
+        if (_poolStartMin == null && timeKey != null) _poolStartMin = Number(timeKey) || undefined;
+        if (_poolEndMin == null && blockEndMin != null) _poolEndMin = Number(blockEndMin) || undefined;
 
         for (const field of allFields) {
             if (!field || !field.name) continue;
@@ -1427,9 +1430,11 @@
                 var ocDivs = league.divisions.filter(function(d) { return Object.keys(blocksByTime[timeKey1]?.byDivision||{}).includes(d); });
                 var s1 = blocksByTime[timeKey1].allBlocks[0]?.slots || [];
                 var s2 = blocksByTime[timeKey2].allBlocks[0]?.slots || [];
+                var _oc1End = blocksByTime[timeKey1].allBlocks[0]?.endTime;
+                var _oc2End = blocksByTime[timeKey2].allBlocks[0]?.endTime;
                 var zoneF = window.getFieldsInZone?.(league.offCampus.zone) || [];
-                var fp1 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey1, s1);
-                var fp2 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey2, s2);
+                var fp1 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey1, s1, _oc1End);
+                var fp2 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey2, s2, _oc2End);
 
                 var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority);
                 var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority);
@@ -1683,7 +1688,8 @@
                     context,
                     leagueDivisions,
                     timeKey,
-                    slots
+                    slots,
+                    sampleBlock?.endTime
                 );
                 // ★ Away (off-campus) league tile: if this league's block(s) for this
                 //   period are marked Away, restrict the field pool to the chosen
