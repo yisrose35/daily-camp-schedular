@@ -5032,35 +5032,92 @@ if (bypassStatus.highlight) {
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
 
-        // Auto-pick: score every available activity by rotation fairness then return the best
+        // ── Auto Change: pick the best activity for this slot, honoring EVERY
+        //    gate the auto-scheduler enforces. This is a mini single-bunk
+        //    generation. It reuses the real engine functions rather than
+        //    re-implementing the rules, so it can never drift from the solver:
+        //
+        //    • calculateRotationPenalty → RotationEngine.calculateRotationScore
+        //      (Infinity = hard-blocked): availableDays weekday gate,
+        //      frequencyDays cooldown, maxUsage (+per-grade), exactFrequency,
+        //      multiPart daysBetween/totalParts, rotationCohort, available=false,
+        //      recency, and same-day-before. Also ranks (lower = better).
+        //    • findFieldsForActivity: field/location gates — capacity & time
+        //      conflict (checkFieldAvailableByTime + checkLocationConflict),
+        //      access restrictions, league locks, field-combo exclusivity.
+        //    • _doneTodayFull: same-day no-repeat across the WHOLE day (the
+        //      rotation engine only looks at slots BEFORE this one).
+        //    • _rainyBlocks / _accessBlocks: rainy-day gating and bunk-level
+        //      access, mirroring findAlternativeForBunk's own guards.
         function _pickAutoCandidate() {
-            const _todayActs = new Set();
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            _bunkSlots.forEach((entry, i) => {
-                if (!entry || slots.indexOf(i) !== -1) return;
-                const act = (entry._activity || '').toLowerCase();
-                if (act && act !== 'free') _todayActs.add(act);
+            const _settings = window.loadGlobalSettings?.() || {};
+            const _app1 = _settings.app1 || {};
+            const _props = getActivityProperties();
+            const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+
+            // Same-day no-repeat across the full day, excluding the slot(s) being edited.
+            const _editedSlots = new Set(slots);
+            const _doneTodayFull = new Set();
+            (window.scheduleAssignments?.[bunk] || []).forEach((entry, i) => {
+                if (!entry || _editedSlots.has(i) || entry.continuation || entry._isTransition) return;
+                const a = (entry._activity || '').toLowerCase().trim();
+                if (a && a !== 'free') _doneTodayFull.add(a);
             });
+
+            // Rainy-day gate — mirrors findAlternativeForBunk (lines ~5610/5634).
+            function _rainyBlocks(name) {
+                const p = _props[name] || _props[name.toLowerCase()] || {};
+                const sp = window.getSpecialActivityByName?.(name)
+                    || (_app1.specialActivities || []).find(s => s.name === name) || {};
+                const rainyOnly = p.rainyDayOnly === true || p.rainyDayExclusive === true
+                    || sp.rainyDayOnly === true || sp.rainyDayExclusive === true;
+                if (!_isRainy && rainyOnly) return true;
+                if (_isRainy) {
+                    const notRainyOk = p.rainyDayAvailable === false || p.availableOnRainyDay === false || p.isIndoor === false
+                        || sp.rainyDayAvailable === false || sp.availableOnRainyDay === false || sp.isIndoor === false;
+                    if (notRainyOk) return true;
+                }
+                return false;
+            }
+
+            // Bunk + grade access gate — mirrors findAlternativeForBunk._isBunkBlockedByAccess.
+            function _accessBlocks(name) {
+                let p = _props[name] || _props[name.toLowerCase()] || {};
+                if (!p.accessRestrictions?.enabled) {
+                    const sd = window.getSpecialActivityByName?.(name)
+                        || (_app1.specialActivities || []).find(s => s.name === name);
+                    if (sd?.accessRestrictions?.enabled) p = sd; else return false;
+                }
+                const allowed = p.accessRestrictions.divisions || {};
+                if (!(divName in allowed)) return true;
+                const bl = allowed[divName];
+                if (Array.isArray(bl) && bl.length > 0) {
+                    const bStr = String(bunk), bNum = parseInt(bunk);
+                    if (!bl.some(b => String(b) === bStr || parseInt(b) === bNum)) return true;
+                }
+                return false;
+            }
+
             const _seen = new Set();
             const _cands = [];
-            locations.forEach(loc => {
-                (loc.activities || []).forEach(actName => {
-                    if (_seen.has(actName.toLowerCase())) return;
-                    _seen.add(actName.toLowerCase());
-                    if (_todayActs.has(actName.toLowerCase())) return;
-                    const { open, none } = findFieldsForActivity(actName, slots, divName, bunk, startMin, endMin);
-                    if (none || open.length === 0) return;
-                    const usageCount = window.RotationEngine?.getActivityCount?.(bunk, actName) || 0;
-                    const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, actName, 0) ?? null;
-                    let score = 100 - usageCount;
-                    if (daysSince === null) score += 20;
-                    else if (daysSince >= 7) score += 10;
-                    else if (daysSince >= 3) score += 5;
-                    const bestField = open.find(f => !f.shared) || open[0];
-                    _cands.push({ activity: actName, field: bestField.name, score });
-                });
-            });
-            _cands.sort((a, b) => b.score - a.score);
+            for (const actName of allActivities) {
+                const al = actName.toLowerCase().trim();
+                if (_seen.has(al)) continue;
+                _seen.add(al);
+                if (!al || al === 'free') continue;
+                if (_doneTodayFull.has(al)) continue;            // same-day no-repeat (full day)
+                if (_rainyBlocks(actName)) continue;             // rainy-day gating
+                if (_accessBlocks(actName)) continue;            // bunk/grade access
+                // Rotation hard-gates (freq cooldown, availableDays, maxUsage, exactFreq, multiPart, cohort, …)
+                const penalty = calculateRotationPenalty(bunk, actName, slots);
+                if (penalty === Infinity) continue;
+                // Field/location gates: capacity, time conflict, access, league locks, combos
+                const { open, none } = findFieldsForActivity(actName, slots, divName, bunk, startMin, endMin);
+                if (none || open.length === 0) continue;
+                const bestField = open.find(f => !f.shared) || open[0];
+                _cands.push({ activity: actName, field: bestField.name, penalty });
+            }
+            _cands.sort((a, b) => a.penalty - b.penalty);   // lower rotation score = better
             return _cands[0] || null;
         }
 
