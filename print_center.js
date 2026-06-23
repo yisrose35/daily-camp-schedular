@@ -654,7 +654,15 @@ function formatEntry(entry) {
     var parts = [];
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
-    var field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    // ★ Custom/pinned tile with specific fields → list every reserved field
+    //   ("Field 1, Field 2"), matching the unified grid. Skip swim+elective
+    //   (handled above); otherwise fall back to the entry's single field.
+    var field;
+    if (!entry._swimElective && Array.isArray(entry._reservedFields) && entry._reservedFields.filter(Boolean).length) {
+        field = entry._reservedFields.filter(Boolean).join(', ');
+    } else {
+        field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    }
     if (act && field && act !== field && field.indexOf(act) === -1 && act.indexOf(field) === -1) {
         parts.push(label); parts.push(field);
     } else if (field) { parts.push(entry._partLabel ? label : field); }
@@ -1693,6 +1701,8 @@ function populateSidebar() {
         available = (typeof window.getUserDivisionOrder === 'function')
             ? window.getUserDivisionOrder(available)
             : available.slice().sort(naturalSort);
+        // ★ Per-day presence: drop grades not around on the selected date.
+        if (typeof window.filterDivisionsByDate === 'function') available = window.filterDivisionsByDate(available);
         available.forEach(function (d) {
             var bunkCount = divs[d] && divs[d].bunks ? divs[d].bunks.length : 0;
             items.push({ id: d, label: d, count: bunkCount + ' bunks' });
@@ -1704,6 +1714,8 @@ function populateSidebar() {
         available2 = (typeof window.getUserDivisionOrder === 'function')
             ? window.getUserDivisionOrder(available2)
             : available2.slice().sort(naturalSort);
+        // ★ Per-day presence: drop grades not around on the selected date.
+        if (typeof window.filterDivisionsByDate === 'function') available2 = window.filterDivisionsByDate(available2);
         available2.forEach(function (d) {
             var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
             if (!bunks.length) return;
@@ -2483,7 +2495,12 @@ function renderBunkSheet(bunk) {
         var act = '', loc = '';
         if (entry && !entry.continuation) {
             act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
-            loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+            // ★ Custom/pinned tile with specific fields → show "Field 1, Field 2".
+            if (!entry._swimElective && Array.isArray(entry._reservedFields) && entry._reservedFields.filter(Boolean).length) {
+                loc = entry._reservedFields.filter(Boolean).join(', ');
+            } else {
+                loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+            }
             if (!act && loc) { act = loc; loc = ''; }
         }
         var actDisplay = act || '\u2014';
@@ -3803,6 +3820,8 @@ function renderLiveContent() {
     var nowMin = getNowMinutes();
     var divs = getDivisions();
     var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
+    // ★ Per-day presence: hide grades not around on the viewed date.
+    if (typeof window.filterDivisionsByDate === 'function') available = window.filterDivisionsByDate(available);
 
     // 1. Render all section wraps into body so we can measure their heights
     var sectHtml = '';
@@ -5235,6 +5254,10 @@ function doWeekStackPrint(keys) {
 window._pc3ExportExcel = exportExcel;
 window._pc3OpenLive = openLiveWindow;
 window._pc3RunLiveStandalone = runLiveStandalone;
+// The live-view pagination arrows use inline onclick="livePageNav(±1)", which
+// resolves against the (popup) window's GLOBAL scope. livePageNav is defined
+// inside this file's IIFE, so without this export the arrows silently no-op.
+window.livePageNav = livePageNav;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');

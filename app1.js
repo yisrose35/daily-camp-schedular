@@ -187,7 +187,30 @@
             return String(a).localeCompare(String(b));
         });
     };
-    
+
+    // ★ Per-day division/grade presence. A grade can be marked present only on
+    //   certain weekdays (Campistry Me grade editor → daysPresent). On a date
+    //   when it's absent, its column is dropped from the date-specific schedule
+    //   views (Master Scheduler, Unified, Daily, Print). daysPresent absent or
+    //   non-array → present every day (backward compatible). [] → present no day.
+    window.isDivisionPresentOnDate = function (divKey, dateStr) {
+        try {
+            var d = (window.divisions || {})[divKey];
+            var dp = d && d.daysPresent;
+            if (!Array.isArray(dp)) return true;            // no restriction
+            var ds = dateStr || window.currentScheduleDate || '';
+            var p = String(ds).split('-').map(Number);
+            if (!(p[0] && p[1] && p[2])) return true;        // unknown date → show
+            var dow = new Date(p[0], p[1] - 1, p[2]).getDay();
+            var names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            return dp.indexOf(names[dow]) !== -1;
+        } catch (e) { return true; }
+    };
+    window.filterDivisionsByDate = function (keys, dateStr) {
+        if (!Array.isArray(keys)) return keys;
+        return keys.filter(function (k) { return window.isDivisionPresentOnDate(k, dateStr); });
+    };
+
     // ★ FN-51: canonical AGE order — division/grade names OLDEST FIRST, from
     //   the Camp Structure order (Campistry Me drag order) + the Me page's
     //   "Grade age order" direction (app1.divisionAgeDirection). This is the
@@ -999,6 +1022,12 @@
                             color: parentColor,
                             parentDivision: divName
                         };
+                        // ★ Per-day presence (set per grade in the Campistry Me grade
+                        //   editor). When present, the grade's column is hidden in the
+                        //   date-specific schedule views on weekdays not in the list.
+                        if (Array.isArray(gradeData.daysPresent)) {
+                            gradeBasedDivisions[key].daysPresent = gradeData.daysPresent.slice();
+                        }
 
                         divGroups[divName].grades.push(key);
                     });
