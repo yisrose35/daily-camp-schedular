@@ -2882,16 +2882,37 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     //   (some games off-campus, some on) badges only the off-campus ones.
     function _usFieldTravel(fieldName) {
         if (!fieldName || typeof window.getTravelForField !== 'function') return null;
-        var t = window.getTravelForField(fieldName, true)
-              || (typeof window.getTravelForSpecialActivity === 'function' ? window.getTravelForSpecialActivity(fieldName, true) : null);
-        if (t && ((t.preMin || 0) > 0 || (t.postMin || 0) > 0)) return t;
+        // Try the raw field, then a court-number-stripped name ("TABC Bball (2)"
+        // → "TABC Bball") so per-court game fields still resolve to their zone.
+        var names = [String(fieldName)];
+        var stripped = String(fieldName).replace(/\s*\(\d+\)\s*$/, '').trim();
+        if (stripped && stripped !== names[0]) names.push(stripped);
+        for (var i = 0; i < names.length; i++) {
+            var t = window.getTravelForField(names[i], true)
+                  || (typeof window.getTravelForSpecialActivity === 'function' ? window.getTravelForSpecialActivity(names[i], true) : null);
+            if (t && ((t.preMin || 0) > 0 || (t.postMin || 0) > 0)) return t;
+        }
         return null;
     }
-    function _usTravelBadge(fieldName) {
-        var t = _usFieldTravel(fieldName);
-        if (!t) return '';
-        var mins = t.preMin || t.postMin || 0;
-        return '<span title="Off-campus travel: ' + escapeHtml(String(t.zoneName || '')) + ' — ' + mins + ' min each way" style="display:inline-block;margin-left:6px;background:#F59E0B;color:#78350F;font-size:0.7rem;font-weight:700;padding:0 6px;border-radius:999px;white-space:nowrap;vertical-align:middle;">🚐 ' + mins + 'm</span>';
+    // Aggregate the off-campus travel for a cell from one or more fields. Returns
+    // { pre, post, zone } using the largest travel found, or null if all on-campus.
+    function _usCellTravel(fields) {
+        var best = null;
+        for (var i = 0; i < (fields || []).length; i++) {
+            var t = _usFieldTravel(fields[i]);
+            if (!t) continue;
+            var mx = Math.max(t.preMin || 0, t.postMin || 0);
+            if (!best || mx > best._mx) best = { pre: t.preMin || 0, post: t.postMin || 0, zone: t.zoneName || '', _mx: mx };
+        }
+        return best;
+    }
+    // A "Travel" band layer (mirrors the swim Change band) shown above/below a cell.
+    function _usTravelBand(ct, pos) {
+        if (!ct) return '';
+        var m = pos === 'pre' ? ct.pre : ct.post;
+        if (!m) return '';
+        var border = pos === 'pre' ? 'border-bottom:1px solid #F59E0B;' : 'border-top:1px solid #F59E0B;';
+        return '<div title="Travel ' + (pos === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:700;' + border + 'text-align:center;white-space:nowrap;">🚐 Travel ' + m + 'm</div>';
     }
 
     function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
@@ -2909,6 +2930,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">' + escapeHtml(title) + '</div>';
 
         var matchups = leagueInfo.matchups || [];
+        var _tFields = [];
         if (matchups.length > 0) {
             html += '<div style="display: flex; flex-direction: column; gap: 3px;">';
             matchups.forEach(function (m) {
@@ -2933,13 +2955,21 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 } else {
                     line = JSON.stringify(m);
                 }
-                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + _usTravelBadge(_mField) + '</div>';
+                if (_mField) _tFields.push(_mField);
+                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
         }
-        td.innerHTML = html;
+        // ★ Off-campus travel band layer (mirrors swim Change), wrapping the cell.
+        var _ct = _usCellTravel(_tFields);
+        if (_ct) {
+            td.style.padding = '0';
+            td.innerHTML = _usTravelBand(_ct, 'pre') + '<div style="padding:8px 10px;">' + html + '</div>' + _usTravelBand(_ct, 'post');
+        } else {
+            td.innerHTML = html;
+        }
         return td;
     }
 
@@ -3558,6 +3588,7 @@ divBlocks.forEach((block, blockIdx) => {
 
         let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">${escapeHtml(title)}</div>`;
         
+        const _tFields = [];
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
@@ -3578,14 +3609,22 @@ divBlocks.forEach((block, blockIdx) => {
                     _mField = field;
                     matchText = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}${sport || field ? ' - ' : ''}${sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : ''}${field ? ' (' + field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m)));
                 }
-                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}${_usTravelBadge(_mField)}</div>`;
+                if (_mField) _tFields.push(_mField);
+                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic;">No matchups scheduled yet</div>';
         }
-        
-        td.innerHTML = html;
+
+        // ★ Off-campus travel band layer (mirrors swim Change), wrapping the cell.
+        const _ct = _usCellTravel(_tFields);
+        if (_ct) {
+            td.style.padding = '0';
+            td.innerHTML = _usTravelBand(_ct, 'pre') + `<div style="padding:12px 16px;">${html}</div>` + _usTravelBand(_ct, 'post');
+        } else {
+            td.innerHTML = html;
+        }
         
         if (isEditable && bunks.length > 0) { 
             td.style.cursor = 'pointer'; 
@@ -3773,11 +3812,12 @@ divBlocks.forEach((block, blockIdx) => {
             td.style.background = bgColor;
             td.style.textAlign = 'left';
         } else {
-            // ★ Off-campus sports: append a 🚐 travel pill when the assigned field
-            //   sits in an off-campus zone (render-time, field-based).
-            const _bcBadge = (entry && !entry.continuation && entry.field) ? _usTravelBadge(entry.field) : '';
-            if (_bcBadge) {
-                td.innerHTML = escapeHtml(displayText) + _bcBadge;
+            // ★ Off-campus sports: wrap the cell in 🚐 Travel band layers (mirrors the
+            //   swim Change band) when the assigned field sits in an off-campus zone.
+            const _ct = (entry && !entry.continuation && entry.field) ? _usCellTravel([entry.field]) : null;
+            if (_ct) {
+                td.style.padding = '0';
+                td.innerHTML = _usTravelBand(_ct, 'pre') + '<div style="padding:8px 10px;">' + escapeHtml(displayText) + '</div>' + _usTravelBand(_ct, 'post');
             } else {
                 td.textContent = displayText;
             }
