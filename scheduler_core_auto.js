@@ -15105,17 +15105,24 @@
                                 if ((window.__cbGeneralNamesLow || []).indexOf(_nmS) >= 0) return;
                                 var _fldS = cl.customField || null;
                                 var _info = null; try { _info = getCustomActivitySharingInfo(cl.customActivity || cl.event, _fldS, cl.customSharing, globalSettings); } catch (_e) {}
-                                // Only EXPLICIT cross-division sharing qualifies (user listed the
-                                //   co-occupying grades → shareType 'cross_division'). not_sharable /
-                                //   same_division / default 'all' never force a synchronized session.
-                                if (!_info || _info.shareType !== 'cross_division') return;
-                                var _keyS = _nmS + '||' + String(_fldS || '').toLowerCase();
-                                if (!_syncGroups[_keyS]) _syncGroups[_keyS] = { act: cl.customActivity || cl.event || 'Custom', field: _fldS, dur: (cl.durationMin || cl.periodMin || 30), info: _info, entries: [] };
+                                // A layer joins a sync group two ways:
+                                //   1) EXPLICIT cross-division sharing — the user listed the
+                                //      co-occupying grades → shareType 'cross_division'.
+                                //   2) ★ GLOW CONNECTION — the layer carries a connectionId set in
+                                //      the layer editor. The connection IS the permission: connected
+                                //      grades must run the activity at one shared time, so a connected
+                                //      group (forced:true) bypasses the allowedPairs + capacity gates
+                                //      below. not_sharable / same_division / default 'all' with NO
+                                //      connectionId never force a synchronized session.
+                                var _connId = cl.connectionId || null;
+                                if (!_connId && (!_info || _info.shareType !== 'cross_division')) return;
+                                var _keyS = _connId ? ('conn:' + _connId) : (_nmS + '||' + String(_fldS || '').toLowerCase());
+                                if (!_syncGroups[_keyS]) _syncGroups[_keyS] = { act: cl.customActivity || cl.event || 'Custom', field: _fldS, dur: (cl.durationMin || cl.periodMin || 30), info: _info, entries: [], forced: !!_connId };
                                 _syncGroups[_keyS].entries.push({ grade: grade, cl: cl });
                             });
                         });
                         var _syncRoomLedger = [];   // {field,s,e,act} of joint sessions placed here — prevents two DIFFERENT activities sharing one room at the same time
-                        try { log('[Phase1.45-DIAG] groups=' + Object.keys(_syncGroups).length + (Object.keys(_syncGroups).length ? ': ' + Object.keys(_syncGroups).map(function (k) { var gg = _syncGroups[k]; var gset = {}; gg.entries.forEach(function (e) { gset[String(e.grade)] = 1; }); return '"' + gg.act + '"(grades=' + Object.keys(gset).length + ',share=' + (gg.info && gg.info.shareType) + ',dur=' + gg.dur + ',field=' + (gg.field || 'none') + ')'; }).join(' | ') : ' — NO custom layers resolved to cross_division sharing (check that the layer lists ≥2 allowed grades)')); } catch (_eDg) {}
+                        try { log('[Phase1.45-DIAG] groups=' + Object.keys(_syncGroups).length + (Object.keys(_syncGroups).length ? ': ' + Object.keys(_syncGroups).map(function (k) { var gg = _syncGroups[k]; var gset = {}; gg.entries.forEach(function (e) { gset[String(e.grade)] = 1; }); return '"' + gg.act + '"(grades=' + Object.keys(gset).length + ',share=' + (gg.forced ? 'CONNECTED' : (gg.info && gg.info.shareType)) + ',dur=' + gg.dur + ',field=' + (gg.field || 'none') + ')'; }).join(' | ') : ' — NO custom layers resolved to cross_division sharing (check that the layer lists ≥2 allowed grades)')); } catch (_eDg) {}
                         Object.keys(_syncGroups).forEach(function (_keyS) {
                             var g = _syncGroups[_keyS];
                             var _gradeSet = {}; g.entries.forEach(function (en) { _gradeSet[String(en.grade)] = 1; });
@@ -15124,15 +15131,19 @@
                             // every participating-grade PAIR must be allowed to co-occupy, else a joint
                             //   session would be illegal — verify with EACH grade's OWN sharing config
                             //   (configs can be asymmetric). Skip the group if any pair fails.
-                            var _pairsOk = true;
-                            g.entries.forEach(function (en) {
-                                if (!_pairsOk) return;
-                                var _gi2 = null; try { _gi2 = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
-                                var _ap = (_gi2 && _gi2.allowedPairs) || {};
-                                var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
-                                if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
-                            });
-                            if (!_pairsOk) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: participating grades not all allowed to co-occupy (allowedPairs)'); } catch (_e) {} return; }
+                            // ★ Connected (glow) groups bypass the co-occupy gate — the
+                            //   connection IS the permission for these grades to run together.
+                            if (!g.forced) {
+                                var _pairsOk = true;
+                                g.entries.forEach(function (en) {
+                                    if (!_pairsOk) return;
+                                    var _gi2 = null; try { _gi2 = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
+                                    var _ap = (_gi2 && _gi2.allowedPairs) || {};
+                                    var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
+                                    if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
+                                });
+                                if (!_pairsOk) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: participating grades not all allowed to co-occupy (allowedPairs)'); } catch (_e) {} return; }
+                            }
                             // consensus DURATION — a joint session has ONE length. If the participating
                             //   layers disagree, skip the group (a single slot can't satisfy all).
                             var _durList = g.entries.map(function (en) { return (en.cl.durationMin || en.cl.periodMin || 30); });
@@ -15158,7 +15169,7 @@
                                 _tbS.forEach(function (b) { _parts.push({ bunk: b, grade: en.grade, cl: en.cl }); });
                             });
                             if (!_parts.length || !(isFinite(_winS) && isFinite(_winE)) || _winE - _winS < _durS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: no common window (win ' + _winS + '-' + _winE + ' < dur ' + _durS + ', parts ' + _parts.length + ')'); } catch (_e) {} return; }
-                            if (isFinite(_capS) && _parts.length > _capS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: ' + _parts.length + ' bunks > capacity ' + _capS); } catch (_e) {} return; }   // can't all fit the room at once
+                            if (!g.forced && isFinite(_capS) && _parts.length > _capS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: ' + _parts.length + ' bunks > capacity ' + _capS); } catch (_e) {} return; }   // can't all fit the room at once (connected groups override: all grades do it together by design)
                             // ALL-OR-NOTHING: if ANY participating bunk ALREADY has this activity (e.g. a
                             //   Phase-0 pin), abort the whole group — a partial sync would re-stagger the rest.
                             var _actLow = String(g.act).toLowerCase().trim();
@@ -15214,7 +15225,11 @@
                             });
                             if (_fldLow) _syncRoomLedger.push({ field: _fldLow, s: _slotS, e: _e2S, act: _actLow });
                             _syncHandled[_keyS] = true;
-                            log('[Phase1.45] ★ SYNC shared custom "' + g.act + '" → one joint session for ' + _parts.length + ' bunk(s) across ' + _gradeList.length + ' grades at ' + _slotS + '-' + _e2S);
+                            // The per-bunk fallback loop keys _syncHandled by name||field — set
+                            //   that too (a connected group is keyed by connectionId) so it isn't
+                            //   re-placed independently.
+                            try { _syncHandled[_actLow + '||' + (_fldLow || '')] = true; } catch (_e) {}
+                            log('[Phase1.45] ★ SYNC ' + (g.forced ? 'CONNECTED ' : 'shared ') + 'custom "' + g.act + '" → one joint session for ' + _parts.length + ' bunk(s) across ' + _gradeList.length + ' grades at ' + _slotS + '-' + _e2S);
                         });
                     }
                 } catch (_e145) { try { warn('[Phase1.45] sync-shared-custom error (skipped, non-fatal): ' + (_e145 && _e145.message)); } catch (_x) {} }
@@ -15966,47 +15981,131 @@
                         var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
                         if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
 
-                        var _bestAnchor = null, _bestPlaced = -1, _bestPlan = null;
-                        for (var _ai = 0; _ai < _anchors.length; _ai++) {
-                            var _t0 = _anchors[_ai];
-                            var _plan = [], _placed = 0;
-                            var _pool = _bunks.slice();
-                            var _cursor = _t0;
-                            var _guard = 0;
-                            while (_placed < _bunks.length && _guard++ < 300) {
-                                // find the first period that can contain a full slice at/after cursor
-                                var _per = null, _s = null;
-                                for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
-                                    var _p3 = _walkPeriods[_wp];
-                                    var _cand = Math.max(_cursor, _p3.startMin);
-                                    if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                        // One full anchor sweep against the CURRENT bunkTimelines.
+                        // Pure read (no mutation) → safe to call repeatedly while we
+                        // probe flexible-wall slides below. Returns the best result.
+                        function _walkOnce() {
+                            var bestAnchor = null, bestPlaced = -1, bestPlan = null;
+                            for (var _ai = 0; _ai < _anchors.length; _ai++) {
+                                var _t0 = _anchors[_ai];
+                                var _plan = [], _placed = 0;
+                                var _pool = _bunks.slice();
+                                var _cursor = _t0;
+                                var _guard = 0;
+                                while (_placed < _bunks.length && _guard++ < 300) {
+                                    // first period that can contain a full slice at/after cursor
+                                    var _per = null, _s = null;
+                                    for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                        var _p3 = _walkPeriods[_wp];
+                                        var _cand = Math.max(_cursor, _p3.startMin);
+                                        if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                    }
+                                    if (!_per) break;
+                                    var _e = _s + _sDur;
+                                    if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)
+                                        || (_spCfgWin && isSpecialUnavailableForGrade(_spCfgWin, grade, _s, _e))
+                                        || _fieldTimeBlocked(grade, _s, _e)) { _cursor = _s + 5; continue; }
+                                    var _take = [];
+                                    for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
+                                        if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
+                                    }
+                                    if (_take.length === 0) { _cursor = _s + 5; continue; }
+                                    for (var _tk = 0; _tk < _take.length; _tk++) {
+                                        _pool.splice(_pool.indexOf(_take[_tk]), 1);
+                                    }
+                                    _plan.push({ start: _s, end: _e, bunks: _take });
+                                    _placed += _take.length;
+                                    _cursor = _e;
                                 }
-                                if (!_per) break;
-                                var _e = _s + _sDur;
-                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)
-                                    || (_spCfgWin && isSpecialUnavailableForGrade(_spCfgWin, grade, _s, _e))
-                                    || _fieldTimeBlocked(grade, _s, _e)) { _cursor = _s + 5; continue; }
-                                var _take = [];
-                                for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
-                                    if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
+                                // Prefer: most bunks placed, then the TIGHTEST run.
+                                var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
+                                var _bestSpan = bestPlan && bestPlan.length > 0 ? (bestPlan[bestPlan.length - 1].end - bestPlan[0].start) : Infinity;
+                                if (_placed > bestPlaced || (_placed === bestPlaced && _span < _bestSpan)) {
+                                    bestPlaced = _placed; bestAnchor = _t0; bestPlan = _plan;
                                 }
-                                if (_take.length === 0) { _cursor = _s + 5; continue; }
-                                for (var _tk = 0; _tk < _take.length; _tk++) {
-                                    _pool.splice(_pool.indexOf(_take[_tk]), 1);
-                                }
-                                _plan.push({ start: _s, end: _e, bunks: _take });
-                                _placed += _take.length;
-                                _cursor = _e;
                             }
-                            // Prefer: most bunks placed, then the TIGHTEST run (smallest
-                            // span from first to last slice) so the chain is as close to
-                            // literally back-to-back as the day's geometry allows.
-                            var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
-                            var _bestSpan = _bestPlan && _bestPlan.length > 0 ? (_bestPlan[_bestPlan.length - 1].end - _bestPlan[0].start) : Infinity;
-                            if (_placed > _bestPlaced || (_placed === _bestPlaced && _span < _bestSpan)) {
-                                _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan;
-                            }
+                            return { placed: bestPlaced, anchor: bestAnchor, plan: bestPlan };
                         }
+
+                        var _walkRes = _walkOnce();
+
+                        // ★ FLEX-NUDGE — when the run can't seat the whole grade, the
+                        //   blocker is often a FLEXIBLE full-grade wall (lunch/snack) that
+                        //   has slack inside its own layer window. Slide that wall
+                        //   grade-wide (all bunks together) to other positions inside its
+                        //   window and re-walk; keep the slide that seats the most bunks.
+                        //   Moving a wall WITHIN [layer.startMin, layer.endMin] is
+                        //   integrity-safe (Pass-3 only snaps a block back when it leaves
+                        //   its layer window), and we only try positions that don't collide
+                        //   with another pinned wall on any bunk.
+                        if (_walkRes.placed < _bunks.length) {
+                          try {
+                            var _FLEX_TYPES = { lunch: 1, snacks: 1, snack: 1, dinner: 1 };
+                            // True if sliding `wall` to [pos,pos+dur] clears every other
+                            // pinned/locked block on every bunk (ignores the wall itself
+                            // and travel pads).
+                            var _wallSlideClear = function(wall, pos) {
+                                var ns = pos, ne = pos + wall.dur;
+                                for (var _bi = 0; _bi < wall.blocks.length; _bi++) {
+                                    var _tl = bunkTimelines[wall.blocks[_bi].bunk] || [];
+                                    for (var _i = 0; _i < _tl.length; _i++) {
+                                        var _x = _tl[_i];
+                                        if (!_x || _x === wall.blocks[_bi].blk) continue;
+                                        if (!(_x._activityLocked || _x._fixed || _x._classification === 'pinned')) continue;
+                                        var _xt = (_x.type || '').toLowerCase();
+                                        if (_xt === 'pre-change' || _xt === 'post-change') continue;
+                                        if (_x.startMin < ne && _x.endMin > ns) return false;
+                                    }
+                                }
+                                return true;
+                            };
+                            // Discover grade-wide flexible walls overlapping the window.
+                            var _flexWalls = [];
+                            (bunkTimelines[_bunks[0]] || []).forEach(function(b) {
+                                if (!b) return;
+                                var bt = (b.type || '').toLowerCase();
+                                if (!_FLEX_TYPES[bt]) return;
+                                if (!(b.startMin < _gEnd && b.endMin > _gStart)) return;
+                                var _dur = b.endMin - b.startMin;
+                                var _winLo = (b.layer && b.layer.startMin != null) ? b.layer.startMin : b.startMin;
+                                var _winHi = (b.layer && b.layer.endMin != null) ? b.layer.endMin : b.endMin;
+                                if (_winHi - _winLo <= _dur) return; // no slack to slide
+                                var _blocks = [], _ok = true;
+                                _bunks.forEach(function(bk) {
+                                    var _tl = bunkTimelines[bk] || [], _hit = null;
+                                    for (var _i = 0; _i < _tl.length; _i++) {
+                                        var _y = _tl[_i];
+                                        if (_y && (_y.type || '').toLowerCase() === bt && _y.startMin === b.startMin && _y.endMin === b.endMin) { _hit = _y; break; }
+                                    }
+                                    if (!_hit) _ok = false; else _blocks.push({ bunk: bk, blk: _hit });
+                                });
+                                if (_ok && _blocks.length === _bunks.length) {
+                                    _flexWalls.push({ type: bt, s: b.startMin, e: b.endMin, dur: _dur, winLo: _winLo, winHi: _winHi, blocks: _blocks });
+                                }
+                            });
+                            for (var _fw = 0; _fw < _flexWalls.length && _walkRes.placed < _bunks.length; _fw++) {
+                                var _wall = _flexWalls[_fw];
+                                var _origS = _wall.s, _origE = _wall.e, _bestNudge = null;
+                                for (var _pos = _wall.winLo; _pos + _wall.dur <= _wall.winHi; _pos += 5) {
+                                    if (_pos === _origS) continue;
+                                    if (!_wallSlideClear(_wall, _pos)) continue;
+                                    _wall.blocks.forEach(function(rec) { rec.blk.startMin = _pos; rec.blk.endMin = _pos + _wall.dur; });
+                                    var _r = _walkOnce();
+                                    if (!_bestNudge || _r.placed > _bestNudge.res.placed) _bestNudge = { pos: _pos, res: _r };
+                                    _wall.blocks.forEach(function(rec) { rec.blk.startMin = _origS; rec.blk.endMin = _origE; });
+                                    if (_bestNudge.res.placed >= _bunks.length) break;
+                                }
+                                if (_bestNudge && _bestNudge.res.placed > _walkRes.placed) {
+                                    _wall.blocks.forEach(function(rec) { rec.blk.startMin = _bestNudge.pos; rec.blk.endMin = _bestNudge.pos + _wall.dur; });
+                                    _wall.s = _bestNudge.pos; _wall.e = _bestNudge.pos + _wall.dur;
+                                    _walkRes = _bestNudge.res;
+                                    log('[Phase2.35] ↔ ' + grade + '/' + _sName + ' — slid ' + _wall.type + ' to ' + minutesToTimeLabel(_bestNudge.pos) + '-' + minutesToTimeLabel(_bestNudge.pos + _wall.dur) + ' (within its window) to open room; now ' + _walkRes.placed + '/' + _bunks.length);
+                                }
+                            }
+                          } catch (_eNudge) { warn('[Phase2.35] flex-nudge error (skipped, non-fatal): ' + (_eNudge && _eNudge.message)); }
+                        }
+
+                        var _bestAnchor = _walkRes.anchor, _bestPlaced = _walkRes.placed, _bestPlan = _walkRes.plan;
                         var _needSpan = Math.ceil(_bunks.length / _sCap) * _sDur; // for the ✗ log only
                         if (!_bestPlan || _bestPlaced <= 0) {
                             log('[Phase2.35] ✗ ' + grade + '/' + _sName + ' — no anchor fits the run (bunks=' + _bunks.length + ', dur=' + _sDur + ', span=' + _needSpan + ')');
