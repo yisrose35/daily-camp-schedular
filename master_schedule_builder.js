@@ -4237,6 +4237,55 @@ function renderGrid() {
 
 
 
+// Click a tile → floating action bar with Edit + Delete (mirrors the Daily
+// Adjustments tile action bar so the delete affordance is identical across
+// both builders).
+function _msShowTileActionBar(tileEl) {
+  const existing = document.getElementById('ms-tile-action-bar');
+  if (existing) existing.remove();
+
+  const id = tileEl.dataset.id;
+  if (!id) return;
+  selectTile(id);
+
+  const bar = document.createElement('div');
+  bar.id = 'ms-tile-action-bar';
+  bar.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:4px;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px;';
+
+  const rect = tileEl.getBoundingClientRect();
+  bar.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+  bar.style.left = Math.max(rect.left, 8) + 'px';
+
+  const btnStyle = 'padding:5px 12px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;';
+
+  const editBtn = document.createElement('button');
+  editBtn.textContent = 'Edit';
+  editBtn.style.cssText = btnStyle + 'background:#f1f5f9;color:#374151;';
+  editBtn.onmouseenter = () => { editBtn.style.background = '#e2e8f0'; };
+  editBtn.onmouseleave = () => { editBtn.style.background = '#f1f5f9'; };
+  editBtn.onclick = () => { bar.remove(); editTile(id); };
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'Delete';
+  delBtn.style.cssText = btnStyle + 'background:#fef2f2;color:#dc2626;';
+  delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
+  delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
+  delBtn.onclick = () => { bar.remove(); deleteTile(id); };
+
+  bar.appendChild(editBtn);
+  bar.appendChild(delBtn);
+  document.body.appendChild(bar);
+
+  const closeHandler = (e) => {
+    if (!bar.contains(e.target) && e.target !== tileEl && !tileEl.contains(e.target)) {
+      bar.remove();
+      deselectAllTiles();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
     let _downX, _downY, _clickTimer;
@@ -4248,14 +4297,14 @@ function addClickToSelectListeners() {
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(el.dataset.id); return; }
       clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => { editTile(el.dataset.id); }, 280);
+      _clickTimer = setTimeout(() => { _msShowTileActionBar(el); }, 280);
     };
 
-    el.ondblclick = async (e) => {
+    el.ondblclick = (e) => {
       e.stopPropagation();
       clearTimeout(_clickTimer);
       if (e.target.classList.contains('resize-handle')) return;
-      await deleteTile(el.dataset.id);
+      _msShowTileActionBar(el);
     };
   });
 
