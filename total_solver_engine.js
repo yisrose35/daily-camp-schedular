@@ -1927,6 +1927,10 @@
                 if (!globallyValid[ci2]) continue;
                 var c2 = allCands[ci2], fn = c2.field, fnorm = c2._fieldNorm;
                 if (_awayFieldSet && !_awayFieldSet.has(fnorm || normName(fn))) continue;
+                // ★ Off-campus zone per-grade availability windows: a grade may only
+                //   use an off-campus facility inside its configured window.
+                if (hasTime && typeof window.isOffCampusFieldAvailableForGrade === 'function'
+                    && !window.isOffCampusFieldAvailableForGrade(fn, blockDiv, startMin, endMin)) continue;
                 if (_allowSet && !_allowSet.has(c2._actNorm)) continue;
                 // ★ Tile-kind gate: Sports tile → sports only, Special tile → specials only.
                 if (_blkKind === 'sport' && c2.type === 'special') continue;

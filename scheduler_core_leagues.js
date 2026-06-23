@@ -644,6 +644,18 @@
                 }
             }
 
+            // ★ Off-campus zone per-grade availability windows: drop the field if any
+            //   covered grade is outside its configured window for this zone (a grade
+            //   with no window stays unrestricted).
+            if (typeof window.isOffCampusFieldAvailableForGrade === 'function' && _poolStartMin != null && _poolEndMin != null) {
+                const _ocOk = (divisionNames || []).every(d =>
+                    window.isOffCampusFieldAvailableForGrade(field.name, String(d), _poolStartMin, _poolEndMin));
+                if (!_ocOk) {
+                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" off-campus window blocks grades [${(divisionNames||[]).join(',')}] @${_poolStartMin}-${_poolEndMin}`);
+                    continue;
+                }
+            }
+
             // Check division restrictions
             if (field.accessRestrictions?.enabled) {
                 const allowedDivs = Object.keys(field.accessRestrictions.divisions || {});
