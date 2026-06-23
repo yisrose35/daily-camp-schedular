@@ -388,28 +388,44 @@
             if (_fl && !_fl.ok) return null;
 
             // ── SCORING ─────────────────────────────────────────────────────
-            let score = 0;
-            const count = countsByAct[act] || 0;   // lifetime count — correct for the fairness tiers below
-
-            if (count === 0) score -= 5000;           // never done — strong bonus
-            else if (count === 1) score -= 2000;
-            else if (count === 2) score -= 500;
-
+            // ★ ROTATION FIRST: use the authoritative rotation score (recency,
+            //   streaks, frequency, variety, cross-bunk distribution, coverage,
+            //   limits) so a silent free-slot fill rotates exactly like the main
+            //   generator. Falls back to the legacy count+recency heuristic only
+            //   if the engine is unavailable. lower = better.
+            const count = countsByAct[act] || 0;   // lifetime count (fallback + reporting)
             const last = lastDoneByAct[act];
-            if (last) {
-                const diff = Math.round((new Date(today) - new Date(last)) / 86_400_000);
-                if (diff === 1) score += 9000;        // yesterday — heavy penalty
-                else if (diff === 2) score += 5000;
-                else if (diff === 3) score += 2500;
-                else if (diff >= 7) score -= 2000;    // long time ago — bonus
-            }
-
-            // Escalating bonus for exact frequency: pull harder as period deadline nears
-            if (c.exactFrequency > 0) {
-                const needed = c.exactFrequency - _exactCount;  // ★ FN-4: per-period count, not lifetime
-                if (needed > 0) {
-                    const esc = window.SchedulerCoreUtils?.getEscalationBonus?.(c.exactFrequencyPeriod || '1week', needed);
-                    score -= esc || (needed * 100);
+            let score;
+            const _rot = window.RotationEngine?.calculateRotationScore
+                ? window.RotationEngine.calculateRotationScore({
+                    bunkName: bunk, activityName: act, divisionName: getDivision(bunk),
+                    beforeSlotIndex: 0, allActivities: null, activityProperties: (window.activityProperties || {})
+                })
+                : null;
+            if (_rot === Infinity) return null;            // rotation hard-block (same-day / limit)
+            if (typeof _rot === 'number' && isFinite(_rot)) {
+                score = _rot;                              // full rotation score
+            } else {
+                // Engine unavailable — legacy heuristic.
+                score = 0;
+                if (count === 0) score -= 5000;
+                else if (count === 1) score -= 2000;
+                else if (count === 2) score -= 500;
+                if (last) {
+                    const diff = Math.round((new Date(today) - new Date(last)) / 86_400_000);
+                    if (diff === 1) score += 9000;
+                    else if (diff === 2) score += 5000;
+                    else if (diff === 3) score += 2500;
+                    else if (diff >= 7) score -= 2000;
+                }
+                // Exact-frequency escalation (rotation's limitScore covers this when the
+                // engine is available, so it's only needed on the fallback path).
+                if (c.exactFrequency > 0) {
+                    const needed = c.exactFrequency - _exactCount;
+                    if (needed > 0) {
+                        const esc = window.SchedulerCoreUtils?.getEscalationBonus?.(c.exactFrequencyPeriod || '1week', needed);
+                        score -= esc || (needed * 100);
+                    }
                 }
             }
 

@@ -1553,6 +1553,24 @@
         const allProps = window.SchedulerCoreUtils?.getActivityProperties?.() ||
                          window.activityProperties || {};
 
+        // ★ ROTATION FAIRNESS: score auto-fill candidates with the FULL rotation
+        //   score (recency, streaks, frequency, variety, cross-bunk distribution,
+        //   coverage, limits) so a post-edit auto-fill rotates exactly like the main
+        //   generator — not the old count+recency approximation. Returns a
+        //   higher-is-better score (negated rotation, since this list sorts desc),
+        //   or null when the engine is unavailable so the caller falls back to the
+        //   legacy heuristic. Infinity (same-day / over-limit) is already pre-filtered
+        //   above; if it slips through, it sinks to the bottom.
+        const _peiRotScore = (b, act) => {
+            if (!(window.RotationEngine && typeof window.RotationEngine.calculateRotationScore === 'function')) return null;
+            const r = window.RotationEngine.calculateRotationScore({
+                bunkName: b, activityName: act, divisionName: divName,
+                beforeSlotIndex: 0, allActivities: null, activityProperties: window.activityProperties || {}
+            });
+            if (r === Infinity || r === 999999) return -1e9;
+            return (typeof r === 'number' && isFinite(r)) ? -r : null;
+        };
+
         (app1.fields || []).forEach(f => {
             if (!f.name || f.available === false) return;
             if (todayFields.has(f.name.toLowerCase())) return;
@@ -1578,11 +1596,15 @@
                 //   cooldown before).
                 const _flF = window.SchedulerCoreUtils?.checkFrequencyLimits?.(bunk, sn, divName, { date: currentDate });
                 if (_flF && !_flF.ok) return;
-                const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, sn, 0);
-                let score = 100 - usageCount;
-                if (daysSince === null) score += 20;
-                else if (daysSince >= 7) score += 10;
-                else if (daysSince >= 3) score += 5;
+                let score = _peiRotScore(bunk, sn);
+                if (score === null) {
+                    // Engine unavailable — legacy count+recency heuristic.
+                    const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, sn, 0);
+                    score = 100 - usageCount;
+                    if (daysSince === null) score += 20;
+                    else if (daysSince >= 7) score += 10;
+                    else if (daysSince >= 3) score += 5;
+                }
                 candidates.push({ activity: sn, field: f.name, score });
             });
         });
@@ -1615,11 +1637,16 @@
             //   cooldown before).
             const _flS = window.SchedulerCoreUtils?.checkFrequencyLimits?.(bunk, s.name, divName, { date: currentDate });
             if (_flS && !_flS.ok) return;
-            const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
-            let score = 100 - usageCount + _exactEscBonus;
-            if (daysSince === null) score += 20;
-            else if (daysSince >= 7) score += 10;
-            else if (daysSince >= 3) score += 5;
+            let score = _peiRotScore(bunk, s.name);
+            if (score === null) {
+                // Engine unavailable — legacy heuristic (rotation's limitScore already
+                // covers exact-frequency escalation when the engine is available).
+                const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
+                score = 100 - usageCount + _exactEscBonus;
+                if (daysSince === null) score += 20;
+                else if (daysSince >= 7) score += 10;
+                else if (daysSince >= 3) score += 5;
+            }
             candidates.push({ activity: s.name, field: s.name, score });
         });
 
