@@ -726,7 +726,46 @@
                 currentActivity = entry._activity || currentField || currentValue;
             }
         }
-        
+
+        // Compute per-location availability at this time slot
+        const locationAvailMap = {};
+        for (const loc of locations) {
+            const check = checkLocationConflict(loc.name, slots, bunk);
+            locationAvailMap[loc.name] = {
+                status: check.hasConflict ? (check.canShare ? 'partial' : 'busy') : 'free',
+                usage: check.currentUsage,
+                max: check.maxCapacity
+            };
+        }
+        const _avOrd = { free: 0, partial: 1, busy: 2 };
+        const fieldLocsSorted = [...locations.filter(l => l.type === 'field')].sort((a, b) =>
+            (_avOrd[(locationAvailMap[a.name] || {}).status] ?? 0) -
+            (_avOrd[(locationAvailMap[b.name] || {}).status] ?? 0)
+        );
+        const specialLocsSorted = [...locations.filter(l => l.type === 'special')].sort((a, b) =>
+            (_avOrd[(locationAvailMap[a.name] || {}).status] ?? 0) -
+            (_avOrd[(locationAvailMap[b.name] || {}).status] ?? 0)
+        );
+        function _locOptHtml(loc) {
+            const av = locationAvailMap[loc.name] || { status: 'free', usage: 0, max: 1 };
+            let label = escHtml(loc.name);
+            if (av.status === 'free') {
+                if (loc.capacity > 1) label += ` (cap:${loc.capacity})`;
+                label += ' ✓';
+            } else if (av.status === 'partial') {
+                label += ` — ${av.usage}/${av.max} in use`;
+            } else {
+                label += ' — in use';
+            }
+            return `<option value="${escHtml(loc.name)}" ${loc.name === currentField ? 'selected' : ''}>${label}</option>`;
+        }
+        const divName_ = peiGetDivForBunk(bunk);
+        const quickCandidates = peiAutoFillCandidates(bunk, divName_, startMin, endMin).slice(0, 5);
+        const quickPickHtml = quickCandidates.length > 0 ? `<div id="post-edit-quickpick" style="margin-top:2px;">
+            <label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;font-size:0.875rem;">Quick Pick <span style="font-weight:400;color:#9ca3af;font-size:0.75rem;">— best available for this slot</span></label>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">${quickCandidates.map(c => `<button class="pe-quick-btn" data-activity="${escHtml(c.activity)}" data-field="${escHtml(c.field || '')}" style="padding:5px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;white-space:nowrap;">${escHtml(c.activity)}${c.field && c.field !== c.activity ? ` <span style="font-size:0.7rem;color:#9ca3af">@ ${escHtml(c.field)}</span>` : ''}</button>`).join('')}</div>
+            </div>` : '';
+
         const minutesToTimeLabel = window.SchedulerCoreUtils?.minutesToTimeLabel || 
             function(mins) {
                 if (mins === null || mins === undefined) return '';
@@ -757,21 +796,14 @@
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label>
                     <select id="post-edit-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;">
                         <option value="">-- No specific location --</option>
-                        <optgroup label="Fields">
-                            ${locations.filter(l => l.type === 'field').map(l =>
-                                `<option value="${escHtml(l.name)}" ${l.name === currentField ? 'selected' : ''}>${escHtml(l.name)}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`
-                            ).join('')}
-                        </optgroup>
-                        <optgroup label="Special Activities">
-                            ${locations.filter(l => l.type === 'special').map(l =>
-                                `<option value="${escHtml(l.name)}" ${l.name === currentField ? 'selected' : ''}>${escHtml(l.name)}</option>`
-                            ).join('')}
-                        </optgroup>
+                        <optgroup label="Fields">${fieldLocsSorted.map(_locOptHtml).join('')}</optgroup>
+                        <optgroup label="Special Activities">${specialLocsSorted.map(_locOptHtml).join('')}</optgroup>
                     </select>
                 </div>
                 <div id="post-edit-conflict" style="display:none;"></div>
+                ${quickPickHtml}
                 <div style="display:flex;gap:10px;margin-top:4px;">
-                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
+                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill &amp; Apply</button>
                 </div>
                 <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button>
@@ -784,20 +816,40 @@
         document.getElementById('post-edit-cancel').onclick = closeModal;
 
         document.getElementById('post-edit-autofill').onclick = () => {
-            const divName = peiGetDivForBunk(bunk);
-            const pick = peiAutoFill(bunk, divName, startMin, endMin);
+            const pick = quickCandidates[0] || peiAutoFill(bunk, divName_, startMin, endMin);
             if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
-            document.getElementById('post-edit-activity').value = pick.activity;
-            const loc = document.getElementById('post-edit-location');
-            if (pick.field) {
-                for (let i = 0; i < loc.options.length; i++) {
-                    if (loc.options[i].value === pick.field) { loc.selectedIndex = i; break; }
-                }
-            } else {
-                loc.selectedIndex = 0;
-            }
-            checkAndShowConflicts();
+            const locationVal = (pick.field && pick.field !== pick.activity) ? pick.field : null;
+            const conflictCheck = locationVal ? checkLocationConflict(locationVal, slots, bunk) : null;
+            closeModal();
+            onSave({
+                activity: pick.activity, location: locationVal,
+                startMin, endMin,
+                hasConflict: !!conflictCheck?.hasConflict,
+                conflicts: conflictCheck?.conflicts || [],
+                editableConflicts: conflictCheck?.editableConflicts || [],
+                nonEditableConflicts: conflictCheck?.nonEditableConflicts || [],
+                resolutionChoice: 'notify'
+            });
+            peiShowBanner('Auto-filled: ' + pick.activity, 'success', true);
         };
+
+        modal.querySelectorAll('.pe-quick-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.getElementById('post-edit-activity').value = btn.dataset.activity;
+                const loc = document.getElementById('post-edit-location');
+                const fieldVal = btn.dataset.field;
+                if (fieldVal) {
+                    for (let i = 0; i < loc.options.length; i++) {
+                        if (loc.options[i].value === fieldVal) { loc.selectedIndex = i; break; }
+                    }
+                } else {
+                    loc.selectedIndex = 0;
+                }
+                modal.querySelectorAll('.pe-quick-btn').forEach(b => { b.style.background = '#fff'; b.style.borderColor = '#d1d5db'; });
+                btn.style.background = '#dbeafe'; btn.style.borderColor = '#3b82f6';
+                checkAndShowConflicts();
+            };
+        });
 
         // Delete button
         document.getElementById('post-edit-delete').onclick = () => {
