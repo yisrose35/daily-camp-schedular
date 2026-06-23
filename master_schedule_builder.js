@@ -2047,16 +2047,20 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
   const divisions = window.divisions || {};
   const _gradesRaw = Object.keys(divisions).filter(d => !divisions[d].isParent);
-  const grades = (typeof window.getUserDivisionOrder === 'function')
+  let grades = (typeof window.getUserDivisionOrder === 'function')
     ? window.getUserDivisionOrder(_gradesRaw)
     : _gradesRaw.sort((a, b) => {
         const na = parseInt(a), nb = parseInt(b);
         if (!isNaN(na) && !isNaN(nb)) return na - nb;
         return a.localeCompare(b);
       });
+  // ★ Per-day presence: hide grades not around on the viewed date's weekday.
+  if (typeof window.filterDivisionsByDate === 'function') grades = window.filterDivisionsByDate(grades);
 
   if (grades.length === 0) {
-    gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
+    gridEl.innerHTML = _gradesRaw.length > 0
+      ? '<div style="padding:40px;text-align:center;color:#8888aa;">No grades are scheduled to be here on this day.</div>'
+      : '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
     return;
   }
 
@@ -4140,10 +4144,16 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = getColumnOrder();
+  // ★ Per-day presence: hide grades not around on the viewed date's weekday.
+  //   getColumnOrder() stays unfiltered (it also feeds order persistence).
+  let availableDivisions = getColumnOrder();
+  const _allColCount = availableDivisions.length;
+  if (typeof window.filterDivisionsByDate === 'function') availableDivisions = window.filterDivisionsByDate(availableDivisions);
 
   if (availableDivisions.length === 0) {
-    grid.innerHTML = `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">
+    grid.innerHTML = _allColCount > 0
+      ? `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">No grades are scheduled to be here on this day. Adjust "Days present" in Setup.</div>`
+      : `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">
       No divisions found. Please go to Setup to create divisions.
     </div>`;
     return;

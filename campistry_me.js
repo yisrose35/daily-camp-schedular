@@ -1118,12 +1118,32 @@ function _renderBunkChipsHTML(bunks){
         +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" class="fi me-bunk-input" placeholder="Add bunk and press Enter" style="flex:1"><button type="button" class="me-btn me-btn--sec me-btn--sm me-bunk-add">+ Add</button></div>'
         +'</div>';
 }
-function _renderGradeRowHTML(gn,bunks){
+// Days-of-week a grade is present. Per-grade picker in the division editor;
+// unchecked days hide that grade's column in the Master Scheduler, Unified
+// view, Daily grid and Print Center on those weekdays.
+var DM_DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function _styleDayChip(btn){
+    var on=btn.getAttribute('data-on')==='1';
+    btn.style.cssText='width:24px;height:24px;border-radius:50%;padding:0;line-height:1;font-size:.7rem;font-weight:700;cursor:pointer;user-select:none;border:1px solid '
+        +(on?'var(--accent,#00C896)':'var(--s300,#cbd5e1)')+';background:'
+        +(on?'var(--accent,#00C896)':'var(--s100,#f1f5f9)')+';color:'
+        +(on?'#fff':'var(--s400,#94a3b8)');
+}
+function _renderGradeRowHTML(gn,bunks,daysPresent){
+    var present=Array.isArray(daysPresent)?daysPresent:null; // null → present all days
+    var dayChips=DM_DAYS.map(function(d){
+        var on=!present||present.indexOf(d)!==-1;
+        return '<button type="button" class="dm-day-chip" data-day="'+d+'" data-on="'+(on?'1':'0')+'" title="'+d+'">'+d.charAt(0)+'</button>';
+    }).join('');
     return '<div class="fg dm-grade-row" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px;cursor:grab">'
         +'<div class="fr" style="align-items:center;gap:6px">'
             +'<span class="me-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
             +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" data-orig="'+esc(gn||'')+'" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
             +'<button type="button" class="me-btn me-btn--ghost me-btn--sm dm-grade-remove" title="Remove grade" style="color:var(--danger,#dc2626)">×</button>'
+        +'</div>'
+        +'<div class="dm-grade-days" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0 2px">'
+            +'<span style="font-size:.7rem;color:var(--s400);user-select:none" title="Days this grade is around. Unchecked days hide its column in the Master Scheduler, Unified view and Print Center.">Days present:</span>'
+            +dayChips
         +'</div>'
         +_renderBunkChipsHTML(bunks)
         +'</div>';
@@ -1131,6 +1151,14 @@ function _renderGradeRowHTML(gn,bunks){
 function _wireGradeRow(rowEl){
     if(!rowEl)return;
     _meAttachItemDrag(rowEl);
+    // Per-day presence toggles — click flips on/off and restyles.
+    rowEl.querySelectorAll('.dm-day-chip').forEach(function(chip){
+        _styleDayChip(chip);
+        chip.onclick=function(){
+            chip.setAttribute('data-on',chip.getAttribute('data-on')==='1'?'0':'1');
+            _styleDayChip(chip);
+        };
+    });
     var rmBtn=rowEl.querySelector('.dm-grade-remove');
     if(rmBtn)rmBtn.onclick=function(){if(confirm('Remove this grade?'))rowEl.remove()};
     var bunkList=rowEl.querySelector('.me-bunk-list');
@@ -1203,7 +1231,7 @@ function openDivForm(name){
     // Grades + Bunks
     h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
     _sortedGrades(d).forEach(function([gn,gd]){
-        h+=_renderGradeRowHTML(gn,gd.bunks||[]);
+        h+=_renderGradeRowHTML(gn,gd.bunks||[],gd.daysPresent);
     });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
     document.getElementById('dmBody').innerHTML=h;
@@ -1250,6 +1278,14 @@ function saveDiv(){
         if(!gn)return;
         var bunks=Array.prototype.map.call(row.querySelectorAll('.me-bunk-chip .me-bunk-name'),function(s){return s.textContent.trim()}).filter(Boolean);
         grades[gn]={bunks:bunks};
+        // ★ Per-day presence: store the checked weekdays only when it's an actual
+        //   restriction (fewer than all 7). All 7 = present every day → omit (clean +
+        //   backward compatible). [] (none checked) IS stored → grade hidden every day.
+        var _chips=row.querySelectorAll('.dm-day-chip');
+        if(_chips.length){
+            var _days=Array.prototype.map.call(_chips,function(c){return c.getAttribute('data-on')==='1'?c.getAttribute('data-day'):null}).filter(Boolean);
+            if(_days.length<_chips.length)grades[gn].daysPresent=_days;
+        }
     });
     if(editingDiv&&editingDiv!==name){
         // Rename: update roster references AND propagate to schedule records

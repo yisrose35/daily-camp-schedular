@@ -2344,9 +2344,15 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = getColumnOrder();
+  let availableDivisions = getColumnOrder();
+  const _allColCount = availableDivisions.length;
+  // ★ Per-day presence: hide grades not around on the viewed date's weekday.
+  //   getColumnOrder() stays unfiltered (it also feeds order persistence).
+  if (typeof window.filterDivisionsByDate === 'function') availableDivisions = window.filterDivisionsByDate(availableDivisions);
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
+    gridEl.innerHTML = _allColCount > 0
+      ? `<div class="da-empty-state">No grades are scheduled to be here on this day.</div>`
+      : `<div class="da-empty-state">No divisions found.</div>`;
     return;
   }
   
