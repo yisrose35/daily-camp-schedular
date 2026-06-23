@@ -15105,17 +15105,24 @@
                                 if ((window.__cbGeneralNamesLow || []).indexOf(_nmS) >= 0) return;
                                 var _fldS = cl.customField || null;
                                 var _info = null; try { _info = getCustomActivitySharingInfo(cl.customActivity || cl.event, _fldS, cl.customSharing, globalSettings); } catch (_e) {}
-                                // Only EXPLICIT cross-division sharing qualifies (user listed the
-                                //   co-occupying grades → shareType 'cross_division'). not_sharable /
-                                //   same_division / default 'all' never force a synchronized session.
-                                if (!_info || _info.shareType !== 'cross_division') return;
-                                var _keyS = _nmS + '||' + String(_fldS || '').toLowerCase();
-                                if (!_syncGroups[_keyS]) _syncGroups[_keyS] = { act: cl.customActivity || cl.event || 'Custom', field: _fldS, dur: (cl.durationMin || cl.periodMin || 30), info: _info, entries: [] };
+                                // A layer joins a sync group two ways:
+                                //   1) EXPLICIT cross-division sharing — the user listed the
+                                //      co-occupying grades → shareType 'cross_division'.
+                                //   2) ★ GLOW CONNECTION — the layer carries a connectionId set in
+                                //      the layer editor. The connection IS the permission: connected
+                                //      grades must run the activity at one shared time, so a connected
+                                //      group (forced:true) bypasses the allowedPairs + capacity gates
+                                //      below. not_sharable / same_division / default 'all' with NO
+                                //      connectionId never force a synchronized session.
+                                var _connId = cl.connectionId || null;
+                                if (!_connId && (!_info || _info.shareType !== 'cross_division')) return;
+                                var _keyS = _connId ? ('conn:' + _connId) : (_nmS + '||' + String(_fldS || '').toLowerCase());
+                                if (!_syncGroups[_keyS]) _syncGroups[_keyS] = { act: cl.customActivity || cl.event || 'Custom', field: _fldS, dur: (cl.durationMin || cl.periodMin || 30), info: _info, entries: [], forced: !!_connId };
                                 _syncGroups[_keyS].entries.push({ grade: grade, cl: cl });
                             });
                         });
                         var _syncRoomLedger = [];   // {field,s,e,act} of joint sessions placed here — prevents two DIFFERENT activities sharing one room at the same time
-                        try { log('[Phase1.45-DIAG] groups=' + Object.keys(_syncGroups).length + (Object.keys(_syncGroups).length ? ': ' + Object.keys(_syncGroups).map(function (k) { var gg = _syncGroups[k]; var gset = {}; gg.entries.forEach(function (e) { gset[String(e.grade)] = 1; }); return '"' + gg.act + '"(grades=' + Object.keys(gset).length + ',share=' + (gg.info && gg.info.shareType) + ',dur=' + gg.dur + ',field=' + (gg.field || 'none') + ')'; }).join(' | ') : ' — NO custom layers resolved to cross_division sharing (check that the layer lists ≥2 allowed grades)')); } catch (_eDg) {}
+                        try { log('[Phase1.45-DIAG] groups=' + Object.keys(_syncGroups).length + (Object.keys(_syncGroups).length ? ': ' + Object.keys(_syncGroups).map(function (k) { var gg = _syncGroups[k]; var gset = {}; gg.entries.forEach(function (e) { gset[String(e.grade)] = 1; }); return '"' + gg.act + '"(grades=' + Object.keys(gset).length + ',share=' + (gg.forced ? 'CONNECTED' : (gg.info && gg.info.shareType)) + ',dur=' + gg.dur + ',field=' + (gg.field || 'none') + ')'; }).join(' | ') : ' — NO custom layers resolved to cross_division sharing (check that the layer lists ≥2 allowed grades)')); } catch (_eDg) {}
                         Object.keys(_syncGroups).forEach(function (_keyS) {
                             var g = _syncGroups[_keyS];
                             var _gradeSet = {}; g.entries.forEach(function (en) { _gradeSet[String(en.grade)] = 1; });
@@ -15124,15 +15131,19 @@
                             // every participating-grade PAIR must be allowed to co-occupy, else a joint
                             //   session would be illegal — verify with EACH grade's OWN sharing config
                             //   (configs can be asymmetric). Skip the group if any pair fails.
-                            var _pairsOk = true;
-                            g.entries.forEach(function (en) {
-                                if (!_pairsOk) return;
-                                var _gi2 = null; try { _gi2 = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
-                                var _ap = (_gi2 && _gi2.allowedPairs) || {};
-                                var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
-                                if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
-                            });
-                            if (!_pairsOk) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: participating grades not all allowed to co-occupy (allowedPairs)'); } catch (_e) {} return; }
+                            // ★ Connected (glow) groups bypass the co-occupy gate — the
+                            //   connection IS the permission for these grades to run together.
+                            if (!g.forced) {
+                                var _pairsOk = true;
+                                g.entries.forEach(function (en) {
+                                    if (!_pairsOk) return;
+                                    var _gi2 = null; try { _gi2 = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
+                                    var _ap = (_gi2 && _gi2.allowedPairs) || {};
+                                    var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
+                                    if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
+                                });
+                                if (!_pairsOk) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: participating grades not all allowed to co-occupy (allowedPairs)'); } catch (_e) {} return; }
+                            }
                             // consensus DURATION — a joint session has ONE length. If the participating
                             //   layers disagree, skip the group (a single slot can't satisfy all).
                             var _durList = g.entries.map(function (en) { return (en.cl.durationMin || en.cl.periodMin || 30); });
@@ -15158,7 +15169,7 @@
                                 _tbS.forEach(function (b) { _parts.push({ bunk: b, grade: en.grade, cl: en.cl }); });
                             });
                             if (!_parts.length || !(isFinite(_winS) && isFinite(_winE)) || _winE - _winS < _durS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: no common window (win ' + _winS + '-' + _winE + ' < dur ' + _durS + ', parts ' + _parts.length + ')'); } catch (_e) {} return; }
-                            if (isFinite(_capS) && _parts.length > _capS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: ' + _parts.length + ' bunks > capacity ' + _capS); } catch (_e) {} return; }   // can't all fit the room at once
+                            if (!g.forced && isFinite(_capS) && _parts.length > _capS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: ' + _parts.length + ' bunks > capacity ' + _capS); } catch (_e) {} return; }   // can't all fit the room at once (connected groups override: all grades do it together by design)
                             // ALL-OR-NOTHING: if ANY participating bunk ALREADY has this activity (e.g. a
                             //   Phase-0 pin), abort the whole group — a partial sync would re-stagger the rest.
                             var _actLow = String(g.act).toLowerCase().trim();
@@ -15214,7 +15225,11 @@
                             });
                             if (_fldLow) _syncRoomLedger.push({ field: _fldLow, s: _slotS, e: _e2S, act: _actLow });
                             _syncHandled[_keyS] = true;
-                            log('[Phase1.45] ★ SYNC shared custom "' + g.act + '" → one joint session for ' + _parts.length + ' bunk(s) across ' + _gradeList.length + ' grades at ' + _slotS + '-' + _e2S);
+                            // The per-bunk fallback loop keys _syncHandled by name||field — set
+                            //   that too (a connected group is keyed by connectionId) so it isn't
+                            //   re-placed independently.
+                            try { _syncHandled[_actLow + '||' + (_fldLow || '')] = true; } catch (_e) {}
+                            log('[Phase1.45] ★ SYNC ' + (g.forced ? 'CONNECTED ' : 'shared ') + 'custom "' + g.act + '" → one joint session for ' + _parts.length + ' bunk(s) across ' + _gradeList.length + ' grades at ' + _slotS + '-' + _e2S);
                         });
                     }
                 } catch (_e145) { try { warn('[Phase1.45] sync-shared-custom error (skipped, non-fatal): ' + (_e145 && _e145.message)); } catch (_x) {} }
