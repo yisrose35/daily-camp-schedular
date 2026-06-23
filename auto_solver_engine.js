@@ -1177,9 +1177,22 @@
         } catch (_) { return 0; }
     }
     function _sortCandidatesByPressure(candidates, fb, fieldIndex) {
-        // Stable: lower pressure first; preserves caller's prior ordering.
-        const indexed = candidates.map((c, i) => ({ c, i, p: _crossGradePressure(c, fb, fieldIndex) }));
-        indexed.sort((a, b) => a.p !== b.p ? a.p - b.p : a.i - b.i);
+        // ★ ROTATION FIRST: this last-resort repair sort used to order purely by
+        //   cross-grade field pressure, so it could hand a bunk a recently-done
+        //   activity. Lead with the authoritative rotation score (lower = better,
+        //   Infinity → deprioritize) so even the fallback rotates; break ties by
+        //   field pressure, then the caller's stable order. The caller still tries
+        //   candidates in order and commits the first that passes commitWriteIfLegal,
+        //   so a rotation-best pick that can't fit simply yields to the next.
+        const indexed = candidates.map((c, i) => {
+            let r = 0;
+            try {
+                const _rs = getRotationScore(fb && fb.bunk, (c && (c.sport || c.field)), fb && fb.grade);
+                r = (typeof _rs === 'number' && isFinite(_rs)) ? _rs : (_rs === 999999 ? 1e9 : 0);
+            } catch (_) { r = 0; }
+            return { c, i, p: _crossGradePressure(c, fb, fieldIndex), r };
+        });
+        indexed.sort((a, b) => (a.r !== b.r ? a.r - b.r : (a.p !== b.p ? a.p - b.p : a.i - b.i)));
         return indexed.map(x => x.c);
     }
 

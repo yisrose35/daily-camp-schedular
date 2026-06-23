@@ -2911,20 +2911,38 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             items = items.filter(it => it && it.name);
             if (!items.length) return null;
             const _size = _ovBunkSize(bunk);
-            const getCount = (nm) => (window.RotationEngine && typeof window.RotationEngine.getActivityCount === 'function')
-                ? (window.RotationEngine.getActivityCount(bunk, nm) || 0) : 0;
+            // ★ ROTATION FAIRNESS: rank the pool by the FULL rotation score (recency,
+            //   streaks, frequency, variety, cross-bunk distribution, coverage) instead
+            //   of the old lifetime-count-only tiebreak — so the either/or pool truly
+            //   rotates. Normalize finite scores to [0, 900] so rotation stays a
+            //   sub-avail (1000) tier selector, preserving the documented hierarchy
+            //   (fit under maxPlayers > any-open-field > rotation > stable order).
+            //   A rotation hard-block (same-day / over-limit) gets a large penalty so
+            //   the other option wins unless both are blocked.
+            const _rotRaw = items.map(it => {
+                if (window.RotationEngine && typeof window.RotationEngine.calculateRotationScore === 'function') {
+                    const s = window.RotationEngine.calculateRotationScore({
+                        bunkName: bunk, activityName: it.name, divisionName: divName,
+                        beforeSlotIndex: 0, allActivities: null, activityProperties: window.activityProperties || {}
+                    });
+                    return s;
+                }
+                // Fallback: lifetime count (least-done preferred).
+                const c = (window.RotationEngine && typeof window.RotationEngine.getActivityCount === 'function')
+                    ? (window.RotationEngine.getActivityCount(bunk, it.name) || 0) : 0;
+                return c * 100;
+            });
+            const _finite = _rotRaw.filter(r => typeof r === 'number' && isFinite(r) && r !== 999999);
+            const _rMin = _finite.length ? Math.min(..._finite) : 0;
+            const _rMax = _finite.length ? Math.max(..._finite) : 1;
+            const _rSpan = (_rMax - _rMin) || 1;
+            const _rotPenalty = (r) => (typeof r !== 'number' || !isFinite(r) || r === 999999)
+                ? 1e7 : ((r - _rMin) / _rSpan) * 900;
             let best = null, bestScore = -Infinity;
             items.forEach((it, idx) => {
                 const fit = _poolCandidatePlayerFit(it, divName, slots, bunk, _size); // open field UNDER maxPlayers
                 const avail = _poolCandidateAvailable(it, divName, slots, bunk);       // any open accessible field
-                const count = getCount(it.name);
-                // ★ MIN/MAX FIRST: a candidate that fits under maxPlayers (+5000) far
-                // outranks one that doesn't — so once a sport's fields are full at max,
-                // the pool routes the bunk to the other option instead of overfilling.
-                // Then any-open-field (+1000), then rotation FAIRNESS (least-done wins,
-                // -count*10), then stable order. (The old even-split balancer is gone:
-                // distribution now comes from real capacity + rotation, not a forced 50/50.)
-                const score = (fit ? 5000 : 0) + (avail ? 1000 : 0) - count * 10 - idx * 0.01;
+                const score = (fit ? 5000 : 0) + (avail ? 1000 : 0) - _rotPenalty(_rotRaw[idx]) - idx * 0.01;
                 if (score > bestScore) { bestScore = score; best = it; }
             });
             return best;
