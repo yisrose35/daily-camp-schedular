@@ -15966,47 +15966,131 @@
                         var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
                         if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
 
-                        var _bestAnchor = null, _bestPlaced = -1, _bestPlan = null;
-                        for (var _ai = 0; _ai < _anchors.length; _ai++) {
-                            var _t0 = _anchors[_ai];
-                            var _plan = [], _placed = 0;
-                            var _pool = _bunks.slice();
-                            var _cursor = _t0;
-                            var _guard = 0;
-                            while (_placed < _bunks.length && _guard++ < 300) {
-                                // find the first period that can contain a full slice at/after cursor
-                                var _per = null, _s = null;
-                                for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
-                                    var _p3 = _walkPeriods[_wp];
-                                    var _cand = Math.max(_cursor, _p3.startMin);
-                                    if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                        // One full anchor sweep against the CURRENT bunkTimelines.
+                        // Pure read (no mutation) → safe to call repeatedly while we
+                        // probe flexible-wall slides below. Returns the best result.
+                        function _walkOnce() {
+                            var bestAnchor = null, bestPlaced = -1, bestPlan = null;
+                            for (var _ai = 0; _ai < _anchors.length; _ai++) {
+                                var _t0 = _anchors[_ai];
+                                var _plan = [], _placed = 0;
+                                var _pool = _bunks.slice();
+                                var _cursor = _t0;
+                                var _guard = 0;
+                                while (_placed < _bunks.length && _guard++ < 300) {
+                                    // first period that can contain a full slice at/after cursor
+                                    var _per = null, _s = null;
+                                    for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                        var _p3 = _walkPeriods[_wp];
+                                        var _cand = Math.max(_cursor, _p3.startMin);
+                                        if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                    }
+                                    if (!_per) break;
+                                    var _e = _s + _sDur;
+                                    if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)
+                                        || (_spCfgWin && isSpecialUnavailableForGrade(_spCfgWin, grade, _s, _e))
+                                        || _fieldTimeBlocked(grade, _s, _e)) { _cursor = _s + 5; continue; }
+                                    var _take = [];
+                                    for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
+                                        if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
+                                    }
+                                    if (_take.length === 0) { _cursor = _s + 5; continue; }
+                                    for (var _tk = 0; _tk < _take.length; _tk++) {
+                                        _pool.splice(_pool.indexOf(_take[_tk]), 1);
+                                    }
+                                    _plan.push({ start: _s, end: _e, bunks: _take });
+                                    _placed += _take.length;
+                                    _cursor = _e;
                                 }
-                                if (!_per) break;
-                                var _e = _s + _sDur;
-                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)
-                                    || (_spCfgWin && isSpecialUnavailableForGrade(_spCfgWin, grade, _s, _e))
-                                    || _fieldTimeBlocked(grade, _s, _e)) { _cursor = _s + 5; continue; }
-                                var _take = [];
-                                for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
-                                    if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
+                                // Prefer: most bunks placed, then the TIGHTEST run.
+                                var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
+                                var _bestSpan = bestPlan && bestPlan.length > 0 ? (bestPlan[bestPlan.length - 1].end - bestPlan[0].start) : Infinity;
+                                if (_placed > bestPlaced || (_placed === bestPlaced && _span < _bestSpan)) {
+                                    bestPlaced = _placed; bestAnchor = _t0; bestPlan = _plan;
                                 }
-                                if (_take.length === 0) { _cursor = _s + 5; continue; }
-                                for (var _tk = 0; _tk < _take.length; _tk++) {
-                                    _pool.splice(_pool.indexOf(_take[_tk]), 1);
-                                }
-                                _plan.push({ start: _s, end: _e, bunks: _take });
-                                _placed += _take.length;
-                                _cursor = _e;
                             }
-                            // Prefer: most bunks placed, then the TIGHTEST run (smallest
-                            // span from first to last slice) so the chain is as close to
-                            // literally back-to-back as the day's geometry allows.
-                            var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
-                            var _bestSpan = _bestPlan && _bestPlan.length > 0 ? (_bestPlan[_bestPlan.length - 1].end - _bestPlan[0].start) : Infinity;
-                            if (_placed > _bestPlaced || (_placed === _bestPlaced && _span < _bestSpan)) {
-                                _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan;
-                            }
+                            return { placed: bestPlaced, anchor: bestAnchor, plan: bestPlan };
                         }
+
+                        var _walkRes = _walkOnce();
+
+                        // ★ FLEX-NUDGE — when the run can't seat the whole grade, the
+                        //   blocker is often a FLEXIBLE full-grade wall (lunch/snack) that
+                        //   has slack inside its own layer window. Slide that wall
+                        //   grade-wide (all bunks together) to other positions inside its
+                        //   window and re-walk; keep the slide that seats the most bunks.
+                        //   Moving a wall WITHIN [layer.startMin, layer.endMin] is
+                        //   integrity-safe (Pass-3 only snaps a block back when it leaves
+                        //   its layer window), and we only try positions that don't collide
+                        //   with another pinned wall on any bunk.
+                        if (_walkRes.placed < _bunks.length) {
+                          try {
+                            var _FLEX_TYPES = { lunch: 1, snacks: 1, snack: 1, dinner: 1 };
+                            // True if sliding `wall` to [pos,pos+dur] clears every other
+                            // pinned/locked block on every bunk (ignores the wall itself
+                            // and travel pads).
+                            var _wallSlideClear = function(wall, pos) {
+                                var ns = pos, ne = pos + wall.dur;
+                                for (var _bi = 0; _bi < wall.blocks.length; _bi++) {
+                                    var _tl = bunkTimelines[wall.blocks[_bi].bunk] || [];
+                                    for (var _i = 0; _i < _tl.length; _i++) {
+                                        var _x = _tl[_i];
+                                        if (!_x || _x === wall.blocks[_bi].blk) continue;
+                                        if (!(_x._activityLocked || _x._fixed || _x._classification === 'pinned')) continue;
+                                        var _xt = (_x.type || '').toLowerCase();
+                                        if (_xt === 'pre-change' || _xt === 'post-change') continue;
+                                        if (_x.startMin < ne && _x.endMin > ns) return false;
+                                    }
+                                }
+                                return true;
+                            };
+                            // Discover grade-wide flexible walls overlapping the window.
+                            var _flexWalls = [];
+                            (bunkTimelines[_bunks[0]] || []).forEach(function(b) {
+                                if (!b) return;
+                                var bt = (b.type || '').toLowerCase();
+                                if (!_FLEX_TYPES[bt]) return;
+                                if (!(b.startMin < _gEnd && b.endMin > _gStart)) return;
+                                var _dur = b.endMin - b.startMin;
+                                var _winLo = (b.layer && b.layer.startMin != null) ? b.layer.startMin : b.startMin;
+                                var _winHi = (b.layer && b.layer.endMin != null) ? b.layer.endMin : b.endMin;
+                                if (_winHi - _winLo <= _dur) return; // no slack to slide
+                                var _blocks = [], _ok = true;
+                                _bunks.forEach(function(bk) {
+                                    var _tl = bunkTimelines[bk] || [], _hit = null;
+                                    for (var _i = 0; _i < _tl.length; _i++) {
+                                        var _y = _tl[_i];
+                                        if (_y && (_y.type || '').toLowerCase() === bt && _y.startMin === b.startMin && _y.endMin === b.endMin) { _hit = _y; break; }
+                                    }
+                                    if (!_hit) _ok = false; else _blocks.push({ bunk: bk, blk: _hit });
+                                });
+                                if (_ok && _blocks.length === _bunks.length) {
+                                    _flexWalls.push({ type: bt, s: b.startMin, e: b.endMin, dur: _dur, winLo: _winLo, winHi: _winHi, blocks: _blocks });
+                                }
+                            });
+                            for (var _fw = 0; _fw < _flexWalls.length && _walkRes.placed < _bunks.length; _fw++) {
+                                var _wall = _flexWalls[_fw];
+                                var _origS = _wall.s, _origE = _wall.e, _bestNudge = null;
+                                for (var _pos = _wall.winLo; _pos + _wall.dur <= _wall.winHi; _pos += 5) {
+                                    if (_pos === _origS) continue;
+                                    if (!_wallSlideClear(_wall, _pos)) continue;
+                                    _wall.blocks.forEach(function(rec) { rec.blk.startMin = _pos; rec.blk.endMin = _pos + _wall.dur; });
+                                    var _r = _walkOnce();
+                                    if (!_bestNudge || _r.placed > _bestNudge.res.placed) _bestNudge = { pos: _pos, res: _r };
+                                    _wall.blocks.forEach(function(rec) { rec.blk.startMin = _origS; rec.blk.endMin = _origE; });
+                                    if (_bestNudge.res.placed >= _bunks.length) break;
+                                }
+                                if (_bestNudge && _bestNudge.res.placed > _walkRes.placed) {
+                                    _wall.blocks.forEach(function(rec) { rec.blk.startMin = _bestNudge.pos; rec.blk.endMin = _bestNudge.pos + _wall.dur; });
+                                    _wall.s = _bestNudge.pos; _wall.e = _bestNudge.pos + _wall.dur;
+                                    _walkRes = _bestNudge.res;
+                                    log('[Phase2.35] ↔ ' + grade + '/' + _sName + ' — slid ' + _wall.type + ' to ' + minutesToTimeLabel(_bestNudge.pos) + '-' + minutesToTimeLabel(_bestNudge.pos + _wall.dur) + ' (within its window) to open room; now ' + _walkRes.placed + '/' + _bunks.length);
+                                }
+                            }
+                          } catch (_eNudge) { warn('[Phase2.35] flex-nudge error (skipped, non-fatal): ' + (_eNudge && _eNudge.message)); }
+                        }
+
+                        var _bestAnchor = _walkRes.anchor, _bestPlaced = _walkRes.placed, _bestPlan = _walkRes.plan;
                         var _needSpan = Math.ceil(_bunks.length / _sCap) * _sDur; // for the ✗ log only
                         if (!_bestPlan || _bestPlaced <= 0) {
                             log('[Phase2.35] ✗ ' + grade + '/' + _sName + ' — no anchor fits the run (bunks=' + _bunks.length + ', dur=' + _sDur + ', span=' + _needSpan + ')');
