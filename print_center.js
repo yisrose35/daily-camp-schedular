@@ -667,6 +667,14 @@ function pcResolveLocation(entry) {
     if (!entry) return '';
     var act = entry._activity || entry.sport || '';
     var loc = entry._specialLocation || entry._customField || entry._location || '';
+    // ★ Custom/pinned tile with specific fields → list every reserved field
+    //   ("Field 1, Field 2"), matching the unified grid (renderBunkCell). Skip
+    //   swim+elective entries, which carry _reservedFields for a different
+    //   purpose and already have their own dedicated label path.
+    if (!loc && !entry._swimElective && Array.isArray(entry._reservedFields) && entry._reservedFields.length) {
+        var _rf = entry._reservedFields.filter(Boolean);
+        if (_rf.length) loc = _rf.join(', ');
+    }
     if (!loc) {
         var f = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
         if (f && f !== 'Free') loc = f;
@@ -5696,6 +5704,10 @@ function doWeekStackPrint(keys) {
 window._pc3ExportExcel = exportExcel;
 window._pc3OpenLive = openLiveWindow;
 window._pc3RunLiveStandalone = runLiveStandalone;
+// The live-view pagination arrows use inline onclick="livePageNav(±1)", which
+// resolves against the (popup) window's GLOBAL scope. livePageNav is defined
+// inside this file's IIFE, so without this export the arrows silently no-op.
+window.livePageNav = livePageNav;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');
