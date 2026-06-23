@@ -500,18 +500,20 @@ function _mbSmartSwapPostRender(overlay, defaultOn) {
 function _mbTileSupportsAway(ev) {
   if (!ev) return false;
   if (ev.type === 'league' || ev.type === 'specialty_league') return true;
+  if (ev.type === 'sports') return true;
   return /\bsport/i.test(String(ev.event || ''));
 }
 
 function _mbAwayPostRender(overlay, ev) {
   if (!overlay) return;
-  const zones = (typeof window.getAwayZones === 'function') ? window.getAwayZones() : [];
   const fields = overlay.querySelector('.ms-modal-fields');
-  if (!fields || zones.length === 0) return;
-  const esc = (s) => window.CampUtils.escapeHtml(String(s == null ? '' : s));
+  if (!fields) return;
+  const esc = (s) => (window.CampUtils?.escapeHtml ? window.CampUtils.escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s));
+  const zones = (typeof window.getAwayZones === 'function') ? window.getAwayZones() : [];
 
   const curZone = (ev.awayZone && zones.some(z => z.name === ev.awayZone)) ? ev.awayZone : (zones[0] ? zones[0].name : '');
   const defaultOn = !!ev.isAway && !!curZone;
+  const hasZones = zones.length > 0;
 
   const hidden = document.createElement('input');
   hidden.type = 'hidden';
@@ -525,26 +527,29 @@ function _mbAwayPostRender(overlay, ev) {
 
   const wrap = document.createElement('div');
   wrap.style.cssText = 'margin:10px 0;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;';
+  const bodyHtml = hasZones
+    ? ('<div class="mb-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
+        + '<div style="font-size:11px;color:#9a3412;margin-bottom:6px;line-height:1.5;">Runs at an off-campus zone. The scheduler uses only that zone\'s fields and adds the required travel time to and from.</div>'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
+        + '<select class="ms-modal-input mb-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
+        + '</div>')
+    : ('<div style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.5;">No off-campus zones yet. Add one in <strong>Setup → Location Zones</strong> (mark it “Off-campus” and set a travel time), then re-open this tile.</div>');
   wrap.innerHTML =
-    '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#9a3412;">'
-    + '<input type="checkbox" class="mb-away-cb"' + (defaultOn ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;flex:none;">'
+    '<label style="display:flex;align-items:center;gap:8px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';font-size:13px;font-weight:600;color:#9a3412;">'
+    + '<input type="checkbox" class="mb-away-cb"' + (defaultOn ? ' checked' : '') + (hasZones ? '' : ' disabled') + ' style="width:16px;height:16px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';flex:none;">'
     + 'Away (off-campus)</label>'
-    + '<div class="mb-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
-    + '<div style="font-size:11px;color:#9a3412;margin-bottom:6px;line-height:1.5;">Runs at an off-campus zone. The scheduler uses only that zone\'s fields and adds the required travel time to and from.</div>'
-    + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
-    + '<select class="ms-modal-input mb-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
-    + '</div>';
+    + bodyHtml;
   fields.appendChild(wrap);
   fields.appendChild(hidden);
 
   const cb = wrap.querySelector('.mb-away-cb');
   const body = wrap.querySelector('.mb-away-body');
   function _awaySync() {
-    const on = !!cb.checked;
+    const on = !!(cb && cb.checked);
     hidden.value = on ? 'true' : 'false';
     if (body) body.style.display = on ? 'block' : 'none';
   }
-  cb.addEventListener('change', _awaySync);
+  if (cb) cb.addEventListener('change', _awaySync);
   _awaySync();
 }
 
