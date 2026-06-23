@@ -1570,6 +1570,46 @@
             if (!layersByGrade[grade]) layersByGrade[grade] = [];
             layersByGrade[grade].push(layer);
         });
+
+        // ★ GRADE CONNECTION ("same time across grades"): custom layers in
+        //   different grades that the user linked (shared layer.connectionId)
+        //   must all START at the IDENTICAL minute — whatever the solver picks,
+        //   every connected grade gets it together (e.g. grades 1/2/3 all do
+        //   "Main Activity" at 11:20). We compute ONE shared anchor per group —
+        //   the earliest 5-min start that fits the activity inside EVERY member
+        //   grade's window (the intersection) — and stamp it on each member as
+        //   `_connectionAnchor`. computeStaggeredCustomSlot then returns that as a
+        //   single shared `alignAnchor` for all members, so the existing custom
+        //   anchor machinery (front-of-list + +100000 placement bonus in the
+        //   Phase-3 CSP) lands them on the same minute. A group of <2 members or
+        //   one whose windows can't overlap by `dur` is left unanchored (no-op).
+        try {
+            var _connGroups = {};
+            Object.keys(layersByGrade).forEach(function (g) {
+                (layersByGrade[g] || []).forEach(function (l) {
+                    if (l && l.connectionId && String(l.type || '').toLowerCase() === 'custom') {
+                        (_connGroups[l.connectionId] = _connGroups[l.connectionId] || []).push(l);
+                    }
+                    if (l) delete l._connectionAnchor; // clear any stale stamp from a prior run
+                });
+            });
+            Object.keys(_connGroups).forEach(function (cid) {
+                var members = _connGroups[cid];
+                if (!members || members.length < 2) return;           // a group needs ≥2 grades
+                var lo = -Infinity, hi = Infinity, dur = 0;
+                members.forEach(function (l) {
+                    lo = Math.max(lo, l.startMin || 0);
+                    hi = Math.min(hi, l.endMin || 1440);
+                    dur = Math.max(dur, l.durationMin || l.periodMin || ((l.endMin || 0) - (l.startMin || 0)));
+                });
+                if (!(dur > 0) || hi - lo < dur) return;               // windows can't align by dur
+                var anchor = Math.round(lo / 5) * 5;
+                if (anchor < lo) anchor += 5;
+                if (anchor + dur > hi) return;                          // earliest common start doesn't fit
+                members.forEach(function (l) { l._connectionAnchor = anchor; });
+            });
+        } catch (_eConn) {}
+
         // Debug exposure for swim_debug.js
         try {
             window._layersByGrade = layersByGrade;
@@ -1880,6 +1920,21 @@
         function computeStaggeredCustomSlot(cl, grade, dur, winStart, winEnd) {
             var result = { alignAnchor: null, staggerReserved: false, isShareableRoom: false,
                            crossGradeOk: true, shareGrades: [], dur: dur };
+            // ★ GRADE CONNECTION: a user-linked custom layer carries a precomputed
+            //   group anchor (`_connectionAnchor`) shared by every connected grade.
+            //   Return it as a single shared alignAnchor (clamped into THIS grade's
+            //   window) so all connected grades target the same minute. crossGradeOk
+            //   keeps it on the Phase-3 CSP single-anchor path (not a per-grade lane).
+            if (cl && cl._connectionAnchor != null) {
+                var _ca = cl._connectionAnchor;
+                if (_ca < winStart) { _ca = Math.round(winStart / 5) * 5; if (_ca < winStart) _ca += 5; }
+                if (_ca + dur > winEnd) _ca = winEnd - dur;
+                result.alignAnchor = (_ca >= winStart && _ca + dur <= winEnd) ? _ca : null;
+                result.crossGradeOk = true;
+                result.staggerReserved = false;
+                result.isShareableRoom = false;
+                return result;
+            }
             try {
                 var _clFld = cl.customField || null;
                 if (!_clFld) return result;
@@ -15738,6 +15793,37 @@
                     if (_sCap < 1) _sCap = 1;
                     var _sField = getLocationForSpecial(_sName, activityProperties, globalSettings) || null;
 
+                    // Resolve the hosting field object so the walk can honor the
+                    // FACILITY's own availability (timeRules) — not just the special's.
+                    // The user sets "this facility is only open 11:00–1:40" on the
+                    // field; without this the consecutive run ignored it (live bug).
+                    var _sFieldObj = null;
+                    if (_sField) {
+                        try {
+                            var _fldsP235 = (globalSettings.app1 && globalSettings.app1.fields) || globalSettings.fields || [];
+                            var _sFieldLow = String(_sField).toLowerCase().trim();
+                            _sFieldObj = _fldsP235.find(function(f) { return f && f.name && String(f.name).toLowerCase().trim() === _sFieldLow; }) || null;
+                        } catch (_eFld) {}
+                    }
+                    // True if [s,e) violates the field's own time rules for `grade`.
+                    function _fieldTimeBlocked(grade, s, e) {
+                        var trs = (_sFieldObj && _sFieldObj.timeRules) || [];
+                        for (var i = 0; i < trs.length; i++) {
+                            var r = trs[i];
+                            if (!r) continue;
+                            var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.startTime);
+                            var re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.endTime);
+                            if (rs == null || re == null) continue;
+                            var divs = Array.isArray(r.divisions) ? r.divisions : [];
+                            var applies = divs.length === 0 || divs.indexOf(grade) >= 0 || divs.indexOf(String(grade)) >= 0;
+                            if (!applies) continue;
+                            var t = String(r.type || 'unavailable').toLowerCase();
+                            if (t === 'available' || t === 'only') { if (!(s >= rs && e <= re)) return true; }
+                            else { if (rs < e && re > s) return true; }
+                        }
+                        return false;
+                    }
+
                     // Station busy-check across ALL already-placed bunks (any grade),
                     // so two grades can't both claim a single station at once.
                     function _stationBusy(s, e) {
@@ -15793,6 +15879,62 @@
                         var _gObj = divisions[grade] || divisions[String(grade)];
                         var _gStart = parseTimeToMinutes(_gObj && _gObj.startTime) || 540;
                         var _gEnd   = parseTimeToMinutes(_gObj && _gObj.endTime)   || 960;
+
+                        // ★ WINDOW CLAMP — a consecutive-bunk special must land ONLY
+                        //   where it's actually allowed: inside the special's own
+                        //   availability window AND inside the custom layer band(s)
+                        //   that host it for this grade. Without this the cursor walk
+                        //   used the WHOLE grade day and could seat bunks hours outside
+                        //   the configured window (live bug: an 11:00–1:40 "Shiur"
+                        //   placed at 9:40–10:00). _spCfgWin is also used by the walk
+                        //   below to reject any slice landing in an Unavailable window.
+                        var _spCfgWin = null;
+                        try {
+                            _spCfgWin = getSpecialConfig(_sName, globalSettings);
+                            var _availWin = getSpecialTimeWindowForGrade(_spCfgWin, grade);
+                            if (_availWin && _availWin.startMin != null && _availWin.endMin != null) {
+                                _gStart = Math.max(_gStart, _availWin.startMin);
+                                _gEnd   = Math.min(_gEnd,   _availWin.endMin);
+                            }
+                            // Intersect with the union of CUSTOM layer bands naming this
+                            // special (unambiguous hosts). Generic 'special' rotation
+                            // bands are left to the availability clamp — a grade can have
+                            // several at different times, so unioning them would re-widen.
+                            var _hostLo = Infinity, _hostHi = -Infinity;
+                            _gLayers.forEach(function(l) {
+                                var _lt = (l.type || '').toLowerCase();
+                                if (!(_lt === 'custom' && (l.event === _sName || l.name === _sName))) return;
+                                if (l.startMin != null && l.startMin < _hostLo) _hostLo = l.startMin;
+                                if (l.endMin   != null && l.endMin   > _hostHi) _hostHi = l.endMin;
+                            });
+                            if (_hostLo < Infinity && _hostHi > -Infinity) {
+                                _gStart = Math.max(_gStart, _hostLo);
+                                _gEnd   = Math.min(_gEnd,   _hostHi);
+                            }
+                            // Intersect with the field's own "available/only" window so
+                            // the anchor search starts inside the facility's open hours.
+                            var _fldTrs = (_sFieldObj && _sFieldObj.timeRules) || [];
+                            _fldTrs.forEach(function(r) {
+                                if (!r) return;
+                                var t = String(r.type || 'unavailable').toLowerCase();
+                                if (t !== 'available' && t !== 'only') return;
+                                var divs = Array.isArray(r.divisions) ? r.divisions : [];
+                                if (!(divs.length === 0 || divs.indexOf(grade) >= 0 || divs.indexOf(String(grade)) >= 0)) return;
+                                var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.startTime);
+                                var re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.endTime);
+                                if (rs == null || re == null) return;
+                                _gStart = Math.max(_gStart, rs);
+                                _gEnd   = Math.min(_gEnd,   re);
+                            });
+                        } catch (_eWin) {}
+                        // If the clamp leaves no room for even one slice, this grade
+                        // can't host the run inside its window — skip it (bunks fall
+                        // through to normal fill rather than landing out of window).
+                        if (_gEnd - _gStart < _sDur) {
+                            log('[Phase2.35] ✗ ' + grade + '/' + _sName + ' — configured window (' + minutesToTimeLabel(_gStart) + '–' + minutesToTimeLabel(_gEnd) + ') too small for one ' + _sDur + 'min slice');
+                            return;
+                        }
+
                         var _band = staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
 
                         // Candidate anchors = period starts in the grade day (plus the
@@ -15841,7 +15983,9 @@
                                 }
                                 if (!_per) break;
                                 var _e = _s + _sDur;
-                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)) { _cursor = _s + 5; continue; }
+                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)
+                                    || (_spCfgWin && isSpecialUnavailableForGrade(_spCfgWin, grade, _s, _e))
+                                    || _fieldTimeBlocked(grade, _s, _e)) { _cursor = _s + 5; continue; }
                                 var _take = [];
                                 for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
                                     if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
