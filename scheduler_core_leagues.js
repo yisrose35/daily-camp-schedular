@@ -1641,8 +1641,12 @@
                     const cap = {};
                     Object.keys(usingCount).forEach(sp => {
                         const nFields = Array.isArray(fbs[sp]) ? fbs[sp].length : 0;
-                        // cap only when the sport is contended (few fields per league)
-                        if (nFields > 0 && usingCount[sp] > 1 && nFields < usingCount[sp] * 2) {
+                        // Cap a sport whose fair share is under 3 fields/league —
+                        // i.e. anything genuinely contended (Hockey 4, Baseball 5,
+                        // Football 8, Volleyball 10 for 4 leagues). Truly abundant
+                        // sports (Basketball 15) stay uncapped as the overflow
+                        // valve for leagues with more games than sports.
+                        if (nFields > 0 && usingCount[sp] > 1 && nFields < usingCount[sp] * 3) {
                             cap[sp] = Math.max(1, Math.floor(nFields / usingCount[sp]));
                         }
                     });

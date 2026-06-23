@@ -47,7 +47,7 @@ function computeCap(fieldsBySport, leagues) {
     const cap = {};
     Object.keys(usingCount).forEach(sp => {
         const n = Array.isArray(fieldsBySport[sp]) ? fieldsBySport[sp].length : 0;
-        if (n > 0 && usingCount[sp] > 1 && n < usingCount[sp] * 2) cap[sp] = Math.max(1, Math.floor(n / usingCount[sp]));
+        if (n > 0 && usingCount[sp] > 1 && n < usingCount[sp] * 3) cap[sp] = Math.max(1, Math.floor(n / usingCount[sp]));
     });
     return Object.keys(cap).length ? cap : null;
 }
@@ -109,8 +109,9 @@ function sortLeaguesBySeniority(leagues, ageOrder) {
     const fbs = { Hockey: Array(4), Baseball: Array(5), Football: Array(8), Volleyball: Array(10), Basketball: Array(15) };
     const leagues = Array.from({ length: 4 }, () => ({ sports: ['Hockey', 'Baseball', 'Football', 'Volleyball', 'Basketball'] }));
     const cap = computeCap(fbs, leagues);
-    assert.deepStrictEqual(cap, { Hockey: 1, Baseball: 1 }, 'only Hockey(4) and Baseball(5) are contended for 4 leagues');
-    console.log('TEST 6 PASS — cap formula: ' + JSON.stringify(cap) + ' (abundant sports uncapped)');
+    assert.deepStrictEqual(cap, { Hockey: 1, Baseball: 1, Football: 2, Volleyball: 2 },
+        'all contended sports capped at fields/leagues; only abundant Basketball(15) uncapped');
+    console.log('TEST 6 PASS — cap formula: ' + JSON.stringify(cap) + ' (Basketball uncapped = overflow valve)');
 })();
 
 // 7: cap EFFECT — at cap, the league leaves the scarce sport for others
