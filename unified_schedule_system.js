@@ -3652,11 +3652,11 @@ divBlocks.forEach((block, blockIdx) => {
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             // ★ Sports only: if other bunks share this field at this time, show
-            //   "vs Bunk 2, Bunk 3" (no extra dash).
+            //   "Activity – Location – vs Bunk 2, Bunk 3".
             const _sharers = findFieldSharers(bunk, slotIdx, divName);
             if (_sharers.length) {
                 const _names = _sharers.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
-                displayText += ' vs ' + _names.join(', ');
+                displayText += ' – vs ' + _names.join(', ');
             }
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed

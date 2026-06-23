@@ -2293,7 +2293,7 @@ function renderAutoDivisionTable(divName, bunks) {
             var sharers = '';
             if (a.slotIdx != null && !_hideLocations) {
                 var sh = pcFindFieldSharers(bunk, a.slotIdx, divName);
-                if (sh.length) sharers = ' vs ' + sh.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; }).join(', ');
+                if (sh.length) sharers = ' – vs ' + sh.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; }).join(', ');
             }
             var subTxt = (!_hideLocations && locText) ? locText : '';
 
@@ -2374,7 +2374,7 @@ function renderManualBunksTop(divName, bunks, blocks) {
                     var _sh = pcFindFieldSharers(b, si, divName);
                     if (_sh.length) {
                         var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                        text += ' vs ' + _names.join(', ');
+                        text += ' – vs ' + _names.join(', ');
                     }
                 }
                 if (!text && type === 'free') text = '\u2014';
@@ -2425,7 +2425,7 @@ function renderManualTimeTop(divName, bunks, blocks) {
                 var _sh = pcFindFieldSharers(b, si, divName);
                 if (_sh.length) {
                     var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                    text += ' vs ' + _names.join(', ');
+                    text += ' – vs ' + _names.join(', ');
                 }
             }
             if (!text && type === 'free') text = '\u2014';
@@ -2581,7 +2581,9 @@ function renderBunkSheet(bunk) {
         var act = '', loc = '';
         if (entry && !entry.continuation) {
             act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
-            loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+            // Resolve through the shared location resolver so specials (whose `field`
+            // is just their own name) and sports both surface their real room/field.
+            loc = pcResolveLocation(entry);
             if (!act && loc) { act = loc; loc = ''; }
         }
         var actDisplay = act || '\u2014';
@@ -2590,7 +2592,7 @@ function renderBunkSheet(bunk) {
             var _sh = pcFindFieldSharers(bunk, slotIdx, dn);
             if (_sh.length) {
                 var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                locDisplay = (loc ? loc + ' ' : '') + 'vs ' + _names.join(', ');
+                locDisplay = (loc ? loc + ' – ' : '') + 'vs ' + _names.join(', ');
             }
         }
         var actInner = pcCellInnerHtml(actDisplay, type, {
@@ -3786,7 +3788,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                             var _liveSh = pcFindFieldSharers(bunk, mAct.slotIdx, divName);
                             if (_liveSh.length) {
                                 var _liveNames = _liveSh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                                txt += ' vs ' + _liveNames.join(', ');
+                                txt += ' – vs ' + _liveNames.join(', ');
                             }
                         }
                     }
@@ -3858,7 +3860,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
                     if (_sh.length) {
                         var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                        text += ' vs ' + _names.join(', ');
+                        text += ' – vs ' + _names.join(', ');
                     }
                 }
                 var cls = 'cell-' + type;

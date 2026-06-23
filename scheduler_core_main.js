@@ -229,11 +229,21 @@
     function getLocationForActivity(activityName) {
         if (!activityName) return null;
         const globalSettings = window.loadGlobalSettings?.() || {};
-        // Prefer live in-memory cache from special_activities.js over stale storage snapshot
-        const specials = window.getGlobalSpecialActivities?.() || globalSettings.app1?.specialActivities || [];
+        // Prefer the live in-memory cache from special_activities.js, BUT fall back
+        // to the stored settings snapshot when the live list is empty. On the Flow
+        // page the specials module is loaded yet its in-memory array stays [] until
+        // the Me-page specials tab is opened — and since an empty array is truthy,
+        // `getGlobalSpecialActivities() || stored` would never reach the fallback,
+        // so every special resolved to no location. Guard on length explicitly.
+        let specials = window.getGlobalSpecialActivities?.();
+        if (!Array.isArray(specials) || specials.length === 0) {
+            specials = globalSettings.app1?.specialActivities
+                || globalSettings.specialActivities || [];
+        }
 
+        const target = String(activityName).toLowerCase().trim();
         const special = specials.find(s =>
-            s.name.toLowerCase() === activityName.toLowerCase()
+            s && s.name && String(s.name).toLowerCase().trim() === target
         );
 
         return special?.location || null;
