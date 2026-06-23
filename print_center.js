@@ -460,14 +460,20 @@ function isAutoMode() {
 }
 
 function getSkeleton() {
-    // ★ The per-date Daily-Adjustments board is authoritative for what's actually on a
-    //   given day — read it BY DATE first, exactly like loadDailySkeleton + the unified
-    //   view (campManualSkeleton_<date> -> app1.dailySkeletons[date]). Previously the
-    //   volatile window.manualSkeleton / loadCurrentDailyData().manualSkeleton (which the
-    //   Master Scheduler overwrites with the day-of-week TEMPLATE when that page loads)
-    //   could win — leaking the template's league/other tiles into the print for a date
-    //   that doesn't have them, while unified (reading the per-date board) showed only the
-    //   real tiles. Fixes "print center shows league tiles that aren't in Daily Adjustments".
+    // ★ Use the EXACT skeleton the unified view uses, so the print center and unified can
+    //   never disagree. Unified's getSkeleton reads the per-date board from
+    //   campDailyData_v1[date] (via loadDailyData) — which SURVIVES the pre-generation wipe
+    //   that nukes campManualSkeleton_<date> — whereas the volatile window.manualSkeleton
+    //   holds the Master Scheduler day-of-week TEMPLATE. Delegating means the print center
+    //   draws exactly the tiles that are on the day's board (Daily Adjustments), not the
+    //   template. Fixes "print shows league tiles that aren't in Daily Adjustments".
+    try {
+        if (window.UnifiedScheduleSystem && typeof window.UnifiedScheduleSystem.getSkeleton === 'function') {
+            var _u = window.UnifiedScheduleSystem.getSkeleton(window.currentScheduleDate);
+            if (Array.isArray(_u)) return _u;
+        }
+    } catch (e) { }
+    // Fallback when the unified system isn't loaded: per-date board first, then legacy chain.
     var _dk = window.currentScheduleDate;
     if (_dk) {
         try { var _raw = localStorage.getItem('campManualSkeleton_' + _dk); if (_raw) { var _p = JSON.parse(_raw); if (Array.isArray(_p) && _p.length) return _p; } } catch (e) { }

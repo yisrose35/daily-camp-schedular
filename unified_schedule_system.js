@@ -7456,6 +7456,7 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
         findSlotsForRange,
         getLeagueMatchups, 
         getEntryForBlock,
+        getSkeleton,
         getDivisionForBunk,
         getSlotTimeRange,
         buildDivisionTimesFromSkeleton, 
