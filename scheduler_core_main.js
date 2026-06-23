@@ -820,7 +820,7 @@
         //   loop; keep them OUT of the scarce-special budget pre-calc so its
         //   claims don't consume capacity the rotation never uses.
         const _rotationOptions = (job) => {
-            if (!job || job.blockB) return null;
+            if (!job || job.blockB || job.multiGuarantee) return null;
             const seen = new Set(); const opts = [];
             [job.main1, job.main2, job.fallbackActivity].forEach(v => {
                 const t = String(v || '').trim(); const k = t.toLowerCase();
@@ -832,6 +832,7 @@
         // Group jobs by time window key so we can pool capacity across divisions
         const _windowJobs = {};
         filteredJobs.forEach(job => {
+            if (job.multiGuarantee) return;   // self-handled by the multi-tile guarantee pre-pass + placement branch
             [job.blockA, job.blockB].forEach(block => {
                 if (!block) return;
                 const wk = `${block.startMin}|${block.endMin}`;
@@ -1048,6 +1049,51 @@
             console.log(`[SmartTile GUARANTEE] ${divName}: N=${N} capA=${C_A} capB=${C_B} k=${k} → A-special=${Object.keys(seatA).length}, B-special=${Object.keys(seatB).length}`);
         });
 
+        // ★ MULTI-TILE GUARANTEE (3+ connected tiles). The A/B swap above only covers
+        //   a 2-tile pair. When the user links 3+ smart tiles into one group with
+        //   "Guarantee both" on, seat exactly ONE special per bunk across ALL the
+        //   group's periods — placed in the period with the most remaining special
+        //   capacity that can still claim a room — and mark every other period as the
+        //   sport fallback. Reserves rooms in the SAME claim tracker BEFORE the
+        //   per-window budget runs, so cross-division capacity stays honest. Every
+        //   bunk gets a special whenever capacity allows, regardless of tile count.
+        const _mgGroups = {};
+        filteredJobs.forEach(job => {
+            if (!job.multiGuarantee) return;
+            const gid = job.guaranteeGroupId || (job.division + '|' + (job.pairGroup || '?'));
+            (_mgGroups[gid] = _mgGroups[gid] || { div: job.division, blocks: [] }).blocks.push(job.blockA);
+        });
+        Object.values(_mgGroups).forEach(grp => {
+            const divName = grp.div;
+            const bunkList = (divisions[divName] && divisions[divName].bunks) || [];
+            const N = bunkList.length;
+            if (N === 0) return;
+            const blocks = grp.blocks.slice().sort((a, b) => a.startMin - b.startMin);
+            const avail = blocks.map(b => window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || []);
+            const cap = avail.map(a => a.reduce((s, x) => s + (x.capacity || 1), 0));
+            const divPriority = _globalPriority[divName] || [];
+            const ordered = [...bunkList].map(b => {
+                const h = historicalCounts[b] || {};
+                return { b, score: (divPriority.includes(b) ? 0 : 100) + _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0) };
+            }).sort((x, y) => (x.score - y.score) || (Math.random() - 0.5)).map(r => r.b);
+            const seated = blocks.map(() => 0);
+            let total = 0;
+            ordered.forEach(bunk => {
+                // try the period with the most remaining special headroom first
+                const tryOrder = blocks.map((_, i) => i).sort((i, j) => (cap[j] - seated[j]) - (cap[i] - seated[i]));
+                let gotName = null, gotIdx = -1;
+                for (const i of tryOrder) {
+                    const s = _seatSpecials([bunk], blocks[i].startMin, blocks[i].endMin, divName, avail[i]);
+                    if (s[bunk]) { gotName = s[bunk]; gotIdx = i; break; }
+                }
+                blocks.forEach((b, i) => {
+                    smartTileBudget[`${divName}|${bunk}|${b.startMin}|${b.endMin}`] = (i === gotIdx) ? gotName : false;
+                });
+                if (gotIdx >= 0) { seated[gotIdx]++; total++; }
+            });
+            console.log(`[SmartTile GUARANTEE-MULTI] ${divName}: N=${N} tiles=${blocks.length} caps=[${cap.join(',')}] seated=${total}/${N} perTile=[${seated.join(',')}]`);
+        });
+
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
 
@@ -1141,6 +1187,7 @@
         // A time window can have multiple divisions running smart tiles simultaneously
         const jobsByTimeWindow = {};
         filteredJobs.forEach(job => {
+            if (job.multiGuarantee) return;   // self-handled by the multi-tile guarantee pre-pass + placement branch
             // Block A window
             const keyA = `${job.blockA.startMin}|${job.blockA.endMin}`;
             if (!jobsByTimeWindow[keyA]) jobsByTimeWindow[keyA] = [];
@@ -1249,6 +1296,38 @@
 
             if (bunkList.length === 0) {
                 console.warn(`[SmartTile] No bunks in division ${divName}`);
+                return;
+            }
+
+            // ★ MULTI-TILE GUARANTEE placement: this tile is one period of a 3+ tile
+            //   connected group. The pre-pass already chose (and claimed) each bunk's
+            //   single special period; here we lay down THIS period — the reserved
+            //   special, or the sport fallback — and self-handle the job (like the
+            //   rotation branch does) so the 2-block A/B machinery is skipped.
+            if (job.multiGuarantee) {
+                const _mgSlots = Utils.findSlotsForRange(job.blockA.startMin, job.blockA.endMin, divName);
+                if (_mgSlots.length === 0) {
+                    console.warn(`[SmartTile] MULTI-GUARANTEE: no slots for ${divName} at ${job.blockA.startMin}-${job.blockA.endMin}`);
+                    return;
+                }
+                const _mgFb = String(job.fallbackActivity || 'Sport');
+                const _mgFbEvent = _mgFb.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                bunkList.forEach(bunk => {
+                    const _ex = window.scheduleAssignments[bunk]?.[_mgSlots[0]];
+                    if (_ex && _ex._bunkOverride) return;
+                    const _bv = smartTileBudget[`${divName}|${bunk}|${job.blockA.startMin}|${job.blockA.endMin}`];
+                    if (typeof _bv === 'string' && _bv) {
+                        console.log(`[SmartTile] ${bunk} -> MULTI-GUARANTEE special: ${_bv}`);
+                        window.fillBlock({ divName, bunk, startTime: job.blockA.startMin, endTime: job.blockA.endMin, slots: _mgSlots }, { field: _bv, sport: null, _fixed: true, _activity: _bv }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        const _mgLoc = getLocationForActivity(_bv);
+                        if (_mgLoc && window.GlobalFieldLocks) {
+                            window.GlobalFieldLocks.lockField(_mgLoc, _mgSlots, { lockedBy: 'smart_tile_multi_guarantee', division: divName, activity: `${_bv} (multi-guarantee)` });
+                        }
+                    } else {
+                        console.log(`[SmartTile] ${bunk} -> MULTI-GUARANTEE ${_mgFbEvent}`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _mgFbEvent, startTime: job.blockA.startMin, endTime: job.blockA.endMin, slots: _mgSlots, fromSmartTile: true, _smartTileFallback: true });
+                    }
+                });
                 return;
             }
 

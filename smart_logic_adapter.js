@@ -641,13 +641,21 @@
                 //     by time (e.g. link tile 1 ↔ tile 3 via the same pair group);
                 //     "Auto" can only pair neighbors (1&2, 3&4). blockB present →
                 //     _rotationOptions() returns null → _isGuaranteedSwapPair() true.
-                //   • otherwise → one ROTATION job per tile (each bunk walks through
-                //     every option, the right behavior for 3+ connected tiles).
+                //   • guaranteeSwap + 3+ tiles → each tile emitted as a single-block
+                //     "multiGuarantee" job sharing a group id; a dedicated pre-pass
+                //     (scheduler_core_main) seats ONE special per bunk across ALL the
+                //     group's periods so everyone gets a special no matter how many
+                //     tiles are connected (the rest of the periods become the sport).
+                //   • connected but NO guarantee → one ROTATION job per tile (each
+                //     bunk walks through every option).
                 Object.keys(groups).forEach(g => {
                     const gt = groups[g];
-                    const guaranteePair = gt.length === 2 && gt.some(t => t.smartData && t.smartData.guaranteeSwap);
-                    if (guaranteePair) {
+                    const wantGuarantee = gt.some(t => t.smartData && t.smartData.guaranteeSwap);
+                    if (gt.length === 2 && wantGuarantee) {
                         _emit(gt[0], gt[1], { guaranteeSwap: true });   // gt is time-sorted: A = earlier, B = later
+                    } else if (gt.length > 2 && wantGuarantee) {
+                        const gid = div + '|' + g;
+                        gt.forEach(t => _emit(t, null, { guaranteeSwap: true, multiGuarantee: true, guaranteeGroupId: gid, groupSize: gt.length }));
                     } else {
                         gt.forEach((t, idx) => _emit(t, null, { groupIndex: idx, groupSize: gt.length }));
                     }
