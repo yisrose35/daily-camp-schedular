@@ -960,86 +960,97 @@
             });
             return out;
         }
-        filteredJobs.forEach(job => {
-            if (!_isGuaranteedSwapPair(job)) return;
-            const divName = job.division;
-            const bunkList = (divisions[divName] && divisions[divName].bunks) || [];
-            const N = bunkList.length;
-            if (N === 0) return;
-            const A = job.blockA, B = job.blockB;
-            const availA = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(A.startMin, A.endMin, divName, activityProperties, dailyFieldAvailability) || [];
-            const availB = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(B.startMin, B.endMin, divName, activityProperties, dailyFieldAvailability) || [];
-            const C_A = availA.reduce((s, x) => s + (x.capacity || 1), 0);
-            const C_B = availB.reduce((s, x) => s + (x.capacity || 1), 0);
-            // k bunks do the special in Period A (the rest do it in Period B). Clamp
-            // to [N−C_B, C_A] so neither period is asked to seat more specials than it
-            // can hold; aim at the capacity-proportional split within that window.
-            const lo = Math.max(0, N - C_B), hi = Math.min(N, C_A);
-            let k;
-            if (lo <= hi) {
-                const target = Math.round(N * C_A / ((C_A + C_B) || 1));
-                k = Math.max(lo, Math.min(hi, target));
-            } else {
-                k = hi;   // C_A + C_B < N → can't give everyone one; seat the most we can
-            }
-            // Rank bunks by fairness (least special usage first; non-priority after).
-            const divPriority = _globalPriority[divName] || [];
-            const ordered = [...bunkList].map(b => {
-                const h = historicalCounts[b] || {};
-                return { b, score: (divPriority.includes(b) ? 0 : 100) + _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0) };
-            }).sort((x, y) => (x.score - y.score) || (Math.random() - 0.5)).map(r => r.b);
-            const seatA = _seatSpecials(ordered.slice(0, k), A.startMin, A.endMin, divName, availA);   // special in A → sport in B
-            const seatB = _seatSpecials(ordered.slice(k), B.startMin, B.endMin, divName, availB);      // sport in A → special in B
-            bunkList.forEach(b => {
-                smartTileBudget[`${divName}|${b}|${A.startMin}|${A.endMin}`] = seatA[b] || false;
-                smartTileBudget[`${divName}|${b}|${B.startMin}|${B.endMin}`] = seatB[b] || false;
-            });
-            console.log(`[SmartTile GUARANTEE] ${divName}: N=${N} capA=${C_A} capB=${C_B} k=${k} → A-special=${Object.keys(seatA).length}, B-special=${Object.keys(seatB).length}`);
-        });
-
-        // ★ MULTI-TILE GUARANTEE (3+ connected tiles). The A/B swap above only covers
-        //   a 2-tile pair. When the user links 3+ smart tiles into one group with
-        //   "Guarantee both" on, seat exactly ONE special per bunk across ALL the
-        //   group's periods — placed in the period with the most remaining special
-        //   capacity that can still claim a room — and mark every other period as the
-        //   sport fallback. Reserves rooms in the SAME claim tracker BEFORE the
-        //   per-window budget runs, so cross-division capacity stays honest. Every
-        //   bunk gets a special whenever capacity allows, regardless of tile count.
+        // ★ DEPRIVATION-ORDERED GUARANTEE PRE-PASS. Both the 2-tile swap and the 3+
+        //   tile multi-guarantee reserve scarce special rooms BEFORE the per-window
+        //   budget. When rooms are tighter than camp-wide demand, whichever divisions
+        //   are processed FIRST win them — so a fixed order starves the SAME divisions
+        //   every day. Instead, order the guarantee divisions by cumulative deprivation
+        //   (avg specials-per-bunk so far, from the cloud rotation history): the
+        //   division that has gone longest without specials reserves FIRST. Because the
+        //   history is cumulative, a division starved today drops to the front
+        //   tomorrow → "didn't get it today, gets it tomorrow", rotating the shortage
+        //   across divisions instead of pinning it on one. Within a unit, bunks are
+        //   still ranked by their own fairness score (least-used first).
         const _mgGroups = {};
         filteredJobs.forEach(job => {
             if (!job.multiGuarantee) return;
             const gid = job.guaranteeGroupId || (job.division + '|' + (job.pairGroup || '?'));
             (_mgGroups[gid] = _mgGroups[gid] || { div: job.division, blocks: [] }).blocks.push(job.blockA);
         });
-        Object.values(_mgGroups).forEach(grp => {
-            const divName = grp.div;
+        const _divDeprivation = (div) => {
+            const bunks = (divisions[div] && divisions[div].bunks) || [];
+            if (!bunks.length) return Infinity;
+            let tot = 0;
+            bunks.forEach(b => { const h = historicalCounts[b] || {}; tot += _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0); });
+            return tot / bunks.length;
+        };
+        const _guaranteeUnits = [];
+        filteredJobs.forEach(job => { if (_isGuaranteedSwapPair(job)) _guaranteeUnits.push({ kind: 'pair', div: job.division, job }); });
+        Object.values(_mgGroups).forEach(grp => { _guaranteeUnits.push({ kind: 'multi', div: grp.div, grp }); });
+        // Most-deprived division first; stable tiebreak by name (deprivation itself —
+        // which changes day to day — is what drives the rotation, so ties need not be random).
+        _guaranteeUnits.sort((a, b) => (_divDeprivation(a.div) - _divDeprivation(b.div)) || String(a.div).localeCompare(String(b.div)));
+        if (_guaranteeUnits.length) console.log(`[SmartTile FAIR-ORDER] ${_guaranteeUnits.map(u => `${u.div}(${_divDeprivation(u.div).toFixed(1)})`).join(' < ')}`);
+
+        _guaranteeUnits.forEach(unit => {
+            const divName = unit.div;
             const bunkList = (divisions[divName] && divisions[divName].bunks) || [];
             const N = bunkList.length;
             if (N === 0) return;
-            const blocks = grp.blocks.slice().sort((a, b) => a.startMin - b.startMin);
-            const avail = blocks.map(b => window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || []);
-            const cap = avail.map(a => a.reduce((s, x) => s + (x.capacity || 1), 0));
+            // Rank bunks by fairness (least special usage first; non-priority after).
             const divPriority = _globalPriority[divName] || [];
             const ordered = [...bunkList].map(b => {
                 const h = historicalCounts[b] || {};
                 return { b, score: (divPriority.includes(b) ? 0 : 100) + _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0) };
             }).sort((x, y) => (x.score - y.score) || (Math.random() - 0.5)).map(r => r.b);
-            const seated = blocks.map(() => 0);
-            let total = 0;
-            ordered.forEach(bunk => {
-                // try the period with the most remaining special headroom first
-                const tryOrder = blocks.map((_, i) => i).sort((i, j) => (cap[j] - seated[j]) - (cap[i] - seated[i]));
-                let gotName = null, gotIdx = -1;
-                for (const i of tryOrder) {
-                    const s = _seatSpecials([bunk], blocks[i].startMin, blocks[i].endMin, divName, avail[i]);
-                    if (s[bunk]) { gotName = s[bunk]; gotIdx = i; break; }
+
+            if (unit.kind === 'pair') {
+                const job = unit.job;
+                const A = job.blockA, B = job.blockB;
+                const availA = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(A.startMin, A.endMin, divName, activityProperties, dailyFieldAvailability) || [];
+                const availB = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(B.startMin, B.endMin, divName, activityProperties, dailyFieldAvailability) || [];
+                const C_A = availA.reduce((s, x) => s + (x.capacity || 1), 0);
+                const C_B = availB.reduce((s, x) => s + (x.capacity || 1), 0);
+                // k bunks do the special in Period A (the rest do it in Period B). Clamp
+                // to [N−C_B, C_A] so neither period is asked to seat more specials than it
+                // can hold; aim at the capacity-proportional split within that window.
+                const lo = Math.max(0, N - C_B), hi = Math.min(N, C_A);
+                let k;
+                if (lo <= hi) {
+                    const target = Math.round(N * C_A / ((C_A + C_B) || 1));
+                    k = Math.max(lo, Math.min(hi, target));
+                } else {
+                    k = hi;   // C_A + C_B < N → can't give everyone one; seat the most we can
                 }
-                blocks.forEach((b, i) => {
-                    smartTileBudget[`${divName}|${bunk}|${b.startMin}|${b.endMin}`] = (i === gotIdx) ? gotName : false;
+                const seatA = _seatSpecials(ordered.slice(0, k), A.startMin, A.endMin, divName, availA);   // special in A → sport in B
+                const seatB = _seatSpecials(ordered.slice(k), B.startMin, B.endMin, divName, availB);      // sport in A → special in B
+                bunkList.forEach(b => {
+                    smartTileBudget[`${divName}|${b}|${A.startMin}|${A.endMin}`] = seatA[b] || false;
+                    smartTileBudget[`${divName}|${b}|${B.startMin}|${B.endMin}`] = seatB[b] || false;
                 });
-                if (gotIdx >= 0) { seated[gotIdx]++; total++; }
-            });
-            console.log(`[SmartTile GUARANTEE-MULTI] ${divName}: N=${N} tiles=${blocks.length} caps=[${cap.join(',')}] seated=${total}/${N} perTile=[${seated.join(',')}]`);
+                console.log(`[SmartTile GUARANTEE] ${divName}: N=${N} capA=${C_A} capB=${C_B} k=${k} → A-special=${Object.keys(seatA).length}, B-special=${Object.keys(seatB).length}`);
+            } else {
+                const grp = unit.grp;
+                const blocks = grp.blocks.slice().sort((a, b) => a.startMin - b.startMin);
+                const avail = blocks.map(b => window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || []);
+                const cap = avail.map(a => a.reduce((s, x) => s + (x.capacity || 1), 0));
+                const seated = blocks.map(() => 0);
+                let total = 0;
+                ordered.forEach(bunk => {
+                    // try the period with the most remaining special headroom first
+                    const tryOrder = blocks.map((_, i) => i).sort((i, j) => (cap[j] - seated[j]) - (cap[i] - seated[i]));
+                    let gotName = null, gotIdx = -1;
+                    for (const i of tryOrder) {
+                        const s = _seatSpecials([bunk], blocks[i].startMin, blocks[i].endMin, divName, avail[i]);
+                        if (s[bunk]) { gotName = s[bunk]; gotIdx = i; break; }
+                    }
+                    blocks.forEach((b, i) => {
+                        smartTileBudget[`${divName}|${bunk}|${b.startMin}|${b.endMin}`] = (i === gotIdx) ? gotName : false;
+                    });
+                    if (gotIdx >= 0) { seated[gotIdx]++; total++; }
+                });
+                console.log(`[SmartTile GUARANTEE-MULTI] ${divName}: N=${N} tiles=${blocks.length} caps=[${cap.join(',')}] seated=${total}/${N} perTile=[${seated.join(',')}]`);
+            }
         });
 
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
