@@ -375,16 +375,28 @@
         return history.teamSports[key] || [];
     }
 
+    // ★ Per-time-slot scarce-sport fair-share caps (sport → max games ONE
+    //   league may put on it), set by processRegularLeagues for the slot being
+    //   processed and read by the assignment scorers below. null = no caps.
+    let _activeSlotSportCap = null;
+
     // ★ Cross-day sport freshness for ONE team: 1000 if this team has never
     //   played the sport (across ALL prior dates — history.teamSports is a
-    //   cumulative aggregate), else a small decaying bonus. Shared by BOTH
-    //   assignment modes so sports actually rotate day to day and we don't
-    //   "keep having the same sports around and around."
+    //   cumulative aggregate), else a small decaying bonus. PLUS an anti-streak
+    //   penalty so a team doesn't get the same sport several days running even
+    //   in a league with few sports. Shared by BOTH assignment modes so sports
+    //   actually rotate day to day instead of going "around and around."
     function _sportFreshnessScore(leagueName, team, sport, history) {
         const teamHistory = getTeamSportHistory(leagueName, team, history);
         const sportCount = teamHistory.filter(s => s === sport).length;
-        if (sportCount === 0) return 1000;
-        return Math.max(0, 100 - sportCount * 20);
+        let score = (sportCount === 0) ? 1000 : Math.max(0, 100 - sportCount * 20);
+        // Anti-streak: avoid the exact sport this team played most recently.
+        // A never-played sport still scores 1000, so this only breaks ties
+        // among already-played sports — which is where day-to-day streaks form.
+        if (sportCount > 0 && teamHistory[teamHistory.length - 1] === sport) {
+            score -= 350;
+        }
+        return score;
     }
 
     function recordTeamSport(leagueName, team, sport, history) {
@@ -779,6 +791,15 @@
                     score -= sportUsageThisSlot * 100;
                 }
 
+                // ★ Scarce-sport fair share: once this league hits its cap for a
+                //   low-field sport at this slot, strongly avoid taking more of
+                //   it so later (younger) leagues still get a turn. Soft — if it
+                //   is the only field left it still wins (no bye).
+                if (_activeSlotSportCap && _activeSlotSportCap[option.sport] != null &&
+                    sportUsageThisSlot >= _activeSlotSportCap[option.sport]) {
+                    score -= 2500;
+                }
+
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
@@ -879,6 +900,14 @@
                     score += 500;
                 } else {
                     score -= sportUsageThisSlot * 100;
+                }
+
+                // ★ Scarce-sport fair share: once this league hits its cap for a
+                //   low-field sport at this slot, strongly avoid taking more so
+                //   later (younger) leagues still get a turn. Soft (no bye).
+                if (_activeSlotSportCap && _activeSlotSportCap[option.sport] != null &&
+                    sportUsageThisSlot >= _activeSlotSportCap[option.sport]) {
+                    score -= 2500;
                 }
 
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
@@ -1179,6 +1208,8 @@
             console.log("[RegularLeagues] No regular leagues configured.");
             return;
         }
+
+        _activeSlotSportCap = null;   // ★ recomputed per time slot below
 
         const history = loadLeagueHistory();
 
@@ -1593,6 +1624,34 @@
             if (specifiedLeagueNames.size > 0) {
                 console.log(`   ★ Filtered by block leagueName: [${[...specifiedLeagueNames].join(', ')}]`);
             }
+
+            // ★ SCARCE-SPORT FAIR SHARE: when several leagues share this time
+            //   slot and a sport has few fields, cap how many games EACH league
+            //   may put on it (fields ÷ leagues-using-it) so an older league
+            //   processed first doesn't grab every field of a scarce sport and
+            //   leave the younger leagues none — e.g. 4 Hockey fields shared by
+            //   4 leagues → 1 each, so the youngest still gets a Hockey game.
+            //   Only genuinely-contended sports are capped; soft penalty in the
+            //   scorer (never a hard filter) so it can never create a bye.
+            _activeSlotSportCap = (function () {
+                try {
+                    const fbs = context.fieldsBySport || window.fieldsBySport || {};
+                    const usingCount = {};
+                    applicableLeagues.forEach(l => (l.sports || []).forEach(sp => { usingCount[sp] = (usingCount[sp] || 0) + 1; }));
+                    const cap = {};
+                    Object.keys(usingCount).forEach(sp => {
+                        const nFields = Array.isArray(fbs[sp]) ? fbs[sp].length : 0;
+                        // cap only when the sport is contended (few fields per league)
+                        if (nFields > 0 && usingCount[sp] > 1 && nFields < usingCount[sp] * 2) {
+                            cap[sp] = Math.max(1, Math.floor(nFields / usingCount[sp]));
+                        }
+                    });
+                    if (Object.keys(cap).length) {
+                        console.log('   ★ [ScarceSportCap] per-league caps this slot: ' + JSON.stringify(cap));
+                    }
+                    return Object.keys(cap).length ? cap : null;
+                } catch (e) { return null; }
+            })();
 
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
