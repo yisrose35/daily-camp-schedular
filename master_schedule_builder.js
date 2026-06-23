@@ -1196,7 +1196,7 @@ async function editTile(id) {
         { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
         { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
       ],
-      postRender: function(overlay) { _buildSplitBunkPicker(overlay, _editDivName, _editExistingG1); }
+      postRender: function(overlay) { _buildSplitBunkPicker(overlay, _editDivName, _editExistingG1); _mbInjectDeleteButton(overlay, ev.id); }
     });
     if (!result || !result.main1 || !result.main2) return;
     const event1 = mapEventNameForOptimizer(result.main1);
@@ -1221,6 +1221,7 @@ async function editTile(id) {
         { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locationOptions, default: ev.electiveActivities || [] }
       ],
       postRender: (overlay) => {
+        _mbInjectDeleteButton(overlay, ev.id);
         const sportSel = overlay.querySelector('[data-field="sport"]');
         if (!sportSel) return;
         sportSel.addEventListener('change', () => {
@@ -1266,6 +1267,7 @@ async function editTile(id) {
         { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: seLocOptions, default: ev.electiveActivities || [] }
       ],
       postRender: (overlay) => {
+        _mbInjectDeleteButton(overlay, ev.id);
         const sportSel = overlay.querySelector('[data-field="sport"]');
         if (!sportSel) return;
         sportSel.addEventListener('change', () => {
@@ -1325,7 +1327,7 @@ async function editTile(id) {
       modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups, default: ev.reservedFields || [] });
     }
     const _supportsAway = _mbTileSupportsAway(ev);
-    const result = await showModal({ title: 'Edit Event', fields: modalFields, postRender: _supportsAway ? (ov) => _mbAwayPostRender(ov, ev) : undefined });
+    const result = await showModal({ title: 'Edit Event', fields: modalFields, postRender: (ov) => { if (_supportsAway) _mbAwayPostRender(ov, ev); _mbInjectDeleteButton(ov, ev.id); } });
     if (!result || !result.eventName?.trim()) return;
     const reservedFields = result.reservedFields || [];
     ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
