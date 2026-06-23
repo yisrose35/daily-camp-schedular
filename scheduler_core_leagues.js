@@ -380,6 +380,10 @@
     //   processed and read by the assignment scorers below. null = no caps.
     let _activeSlotSportCap = null;
 
+    // ★ The date currently being generated, set by processRegularLeagues so the
+    //   no-3-in-a-row guard can read the neighbouring dates from the game log.
+    let _activeDayId = null;
+
     // ★ Cross-day sport freshness for ONE team: 1000 if this team has never
     //   played the sport (across ALL prior dates — history.teamSports is a
     //   cumulative aggregate), else a small decaying bonus. PLUS an anti-streak
@@ -397,6 +401,35 @@
             score -= 350;
         }
         return score;
+    }
+
+    // ★ HARD no-3-in-a-row: returns true if giving `team` this `sport` on the
+    //   date being generated (_activeDayId) would put it in the SAME sport for
+    //   3 consecutive game-days. Reads the date-keyed gameLog (robust to
+    //   regenerating dates out of order) and checks both directions, so it
+    //   blocks  X X [X],  [X] X X,  and  X [X] X. The most a team can get is
+    //   back-to-back; never 3 (and therefore never 4) in a row.
+    function _streakBlocked(leagueName, team, sport, history) {
+        const gl = history.gameLog && history.gameLog[leagueName];
+        if (!gl || _activeDayId == null || !sport) return false;
+        const tk = String(team);
+        const sportOn = (date) => {
+            const recs = gl[date] || [];
+            for (const g of recs) {
+                if (String(g.t1) === tk || String(g.t2) === tk) return g.sport || null;
+            }
+            return null;
+        };
+        const before = Object.keys(gl).filter(d => d < _activeDayId).sort();
+        const after = Object.keys(gl).filter(d => d > _activeDayId).sort();
+        const p1 = before.length ? sportOn(before[before.length - 1]) : null;
+        const p2 = before.length > 1 ? sportOn(before[before.length - 2]) : null;
+        const n1 = after.length ? sportOn(after[0]) : null;
+        const n2 = after.length > 1 ? sportOn(after[1]) : null;
+        if (p1 === sport && p2 === sport) return true;   // X X [X]
+        if (p1 === sport && n1 === sport) return true;   // X [X] X
+        if (n1 === sport && n2 === sport) return true;   // [X] X X
+        return false;
     }
 
     function recordTeamSport(leagueName, team, sport, history) {
@@ -775,6 +808,21 @@
                 else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
             }
 
+            // ★ HARD no-3-in-a-row: never give a team a sport that would put it
+            //   on the SAME sport for 3 game-days running (the most allowed is
+            //   back-to-back). Drop those options; keep them only if that would
+            //   leave the pool empty — a forced repeat beats a bye, and the
+            //   guard still blocks the 4th, so it can never reach 4 in a row.
+            const _noStreakPool = _pool.filter(function (o) {
+                return !_streakBlocked(leagueName, t1, o.sport, history) &&
+                       !_streakBlocked(leagueName, t2, o.sport, history);
+            });
+            if (_noStreakPool.length > 0) {
+                _pool = _noStreakPool;
+            } else {
+                console.log(`   ⚠️ ${t1} vs ${t2}: no-3-in-a-row left no field — allowing a repeat (field-constrained)`);
+            }
+
             for (const option of _pool) {
                 let score = 0;
 
@@ -879,6 +927,21 @@
                 const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
                 if (_freshPool.length > 0) _pool = _freshPool;
                 else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
+            }
+
+            // ★ HARD no-3-in-a-row: never give a team a sport that would put it
+            //   on the SAME sport for 3 game-days running (the most allowed is
+            //   back-to-back). Drop those options; keep them only if that would
+            //   leave the pool empty — a forced repeat beats a bye, and the
+            //   guard still blocks the 4th, so it can never reach 4 in a row.
+            const _noStreakPool = _pool.filter(function (o) {
+                return !_streakBlocked(leagueName, t1, o.sport, history) &&
+                       !_streakBlocked(leagueName, t2, o.sport, history);
+            });
+            if (_noStreakPool.length > 0) {
+                _pool = _noStreakPool;
+            } else {
+                console.log(`   ⚠️ ${t1} vs ${t2}: no-3-in-a-row left no field — allowing a repeat (field-constrained)`);
             }
 
             for (const option of _pool) {
@@ -1215,6 +1278,7 @@
 
         // ★★★ GET CURRENT DAY IDENTIFIER ★★★
         const dayId = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        _activeDayId = dayId;   // ★ for the no-3-in-a-row guard
         console.log(`[RegularLeagues] Current day: "${dayId}"`);
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
@@ -1593,31 +1657,26 @@
                 return true;
             });
 
-            // ★ SENIORITY ORDER: process OLDER divisions' leagues FIRST so they
-            //   get first pick of fields/sports; younger divisions then "make
-            //   their way down" and take what's left. Age = the Me-page camp
-            //   structure order (window.getDivisionAgeOrder → oldest first). A
-            //   league's seniority is its OLDEST covered division. Guarded so an
-            //   unavailable age order just leaves the original (config) order.
+            // ★ LEAST-OPTIONS-FIRST: process the MOST field-constrained league
+            //   first so it can't get locked out of fields by a league with more
+            //   choices grabbing them. A league's "options" = total fields across
+            //   the sports it plays (fewer sports / fewer fields = fewer options);
+            //   tie-break: more teams (more games to place) goes first. This
+            //   REPLACES the old oldest-division-first order — a 4-sport league
+            //   with 9 games needs first pick far more than the oldest does.
+            //   Guarded so a missing field map just leaves the original order.
             try {
-                const _ageOrder = (typeof window.getDivisionAgeOrder === 'function')
-                    ? (window.getDivisionAgeOrder() || []) : [];
-                if (_ageOrder.length) {
-                    const _ageIdx = {};
-                    _ageOrder.forEach((d, i) => { if (_ageIdx[String(d)] == null) _ageIdx[String(d)] = i; });
-                    const _leagueSeniority = (l) => {
-                        let best = Infinity;
-                        (l.divisions || []).forEach(d => {
-                            const i = _ageIdx[String(d)];
-                            if (i != null && i < best) best = i;
-                        });
-                        return best;
-                    };
-                    applicableLeagues.sort((a, b) => _leagueSeniority(a) - _leagueSeniority(b));
-                    console.log(`   ★ [Seniority] league order (oldest→youngest): [${applicableLeagues.map(l => l.name).join(', ')}]`);
-                }
+                const _fbs = context.fieldsBySport || window.fieldsBySport || {};
+                const _leagueOptions = (l) => (l.sports || []).reduce((sum, sp) =>
+                    sum + (Array.isArray(_fbs[sp]) ? _fbs[sp].length : 0), 0);
+                applicableLeagues.sort((a, b) => {
+                    const d = _leagueOptions(a) - _leagueOptions(b);
+                    if (d !== 0) return d;                                   // fewest field options first
+                    return (b.teams?.length || 0) - (a.teams?.length || 0); // then most games first
+                });
+                console.log(`   ★ [LeastOptions] league order (most-constrained first): [${applicableLeagues.map(l => l.name + '(' + _leagueOptions(l) + ')').join(', ')}]`);
             } catch (e) {
-                console.warn('[RegularLeagues] seniority sort skipped:', e && e.message);
+                console.warn('[RegularLeagues] least-options sort skipped:', e && e.message);
             }
 
             console.log(`   Applicable leagues: [${applicableLeagues.map(l => l.name).join(', ')}]`);

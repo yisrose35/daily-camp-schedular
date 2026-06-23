@@ -1,46 +1,62 @@
-/* Seniority ordering + sport-rotation simulation.
- * Replicates the logic added to scheduler_core_leagues.js and proves:
+/* League rotation simulation — replicates the scheduler_core_leagues.js logic:
  *   1. cross-day rotation (a team rotates off a sport it has played a lot)
  *   2. within-slot spread (one slot doesn't stack the same sport)
- *   3. seniority sort (leagues run OLDEST division first)
- *   4. qualified division keys ("Camp Agudah > 6") order by Me position
- *   5. RECENCY / anti-streak — with ≥3 sports, the pick steers to the sport
- *      NEITHER team played most recently (kills back-to-back repeats)
- *   6. scarce-sport cap FORMULA (fields ÷ leagues-using-it, contended only)
+ *   3. LEAST-OPTIONS-FIRST ordering (most field-constrained league picks first)
+ *   4. HARD no-3-in-a-row blocks the 3rd consecutive same sport
+ *   5. recency — with ≥3 sports, steer to the sport NEITHER team played last
+ *   6. scarce-sport cap FORMULA (fields ÷ leagues, contended sports only)
  *   7. scarce-sport cap EFFECT — a league at its cap leaves the scarce sport
  *   8. under-cap is NOT penalized (the league still gets its fair 1 game)
+ *   9. no-3-in-a-row: centered X[X]X blocked + fallback allows (never a bye)
  *
- * Mirrors the file's scoring exactly; Math.random()*10 is dropped here (all
- * decisive gaps are >> 10, so it can never flip these outcomes).
+ * Mirrors the file's logic exactly; Math.random()*10 is dropped here.
  */
 'use strict';
 const assert = require('assert');
 
 function getTeamSportHistory(lg, team, h) { return (h.teamSports[`${lg}|${team}`]) || []; }
 
-// _sportFreshnessScore — freshness + anti-streak recency penalty (file copy)
 function freshness(lg, team, sport, h) {
     const hist = getTeamSportHistory(lg, team, h);
     const c = hist.filter(s => s === sport).length;
     let score = (c === 0) ? 1000 : Math.max(0, 100 - c * 20);
-    if (c > 0 && hist[hist.length - 1] === sport) score -= 350; // anti-streak
+    if (c > 0 && hist[hist.length - 1] === sport) score -= 350; // anti-streak (soft)
     return score;
 }
 
-// assignment inner sport pick (indoor=0, random=0) — with scarce cap
-function pickSport(lg, t1, t2, pool, h, usedSportsThisSlot, slotCap) {
+// HARD no-3-in-a-row guard (file copy) — reads the date-keyed gameLog
+function streakBlocked(lg, team, sport, h, dayId) {
+    const gl = h.gameLog && h.gameLog[lg];
+    if (!gl || dayId == null || !sport) return false;
+    const tk = String(team);
+    const sportOn = d => { for (const g of (gl[d] || [])) { if (String(g.t1) === tk || String(g.t2) === tk) return g.sport || null; } return null; };
+    const before = Object.keys(gl).filter(d => d < dayId).sort();
+    const after = Object.keys(gl).filter(d => d > dayId).sort();
+    const p1 = before.length ? sportOn(before[before.length - 1]) : null;
+    const p2 = before.length > 1 ? sportOn(before[before.length - 2]) : null;
+    const n1 = after.length ? sportOn(after[0]) : null;
+    const n2 = after.length > 1 ? sportOn(after[1]) : null;
+    if (p1 === sport && p2 === sport) return true;
+    if (p1 === sport && n1 === sport) return true;
+    if (n1 === sport && n2 === sport) return true;
+    return false;
+}
+
+// assignment inner sport pick: no-3 filter (hard) → freshness + spread + cap
+function pickSport(lg, t1, t2, pool, h, used, slotCap, dayId) {
+    let p = pool.filter(o => !streakBlocked(lg, t1, o.sport, h, dayId) && !streakBlocked(lg, t2, o.sport, h, dayId));
+    if (p.length === 0) p = pool;             // fallback: forced repeat beats a bye
     let best = null, bestScore = -Infinity;
-    for (const o of pool) {
+    for (const o of p) {
         let score = freshness(lg, t1, o.sport, h) + freshness(lg, t2, o.sport, h);
-        const used = usedSportsThisSlot[o.sport] || 0;
-        score += used === 0 ? 500 : -used * 100;
-        if (slotCap && slotCap[o.sport] != null && used >= slotCap[o.sport]) score -= 2500;
+        const u = used[o.sport] || 0;
+        score += u === 0 ? 500 : -u * 100;
+        if (slotCap && slotCap[o.sport] != null && u >= slotCap[o.sport]) score -= 2500;
         if (score > bestScore) { bestScore = score; best = o; }
     }
     return best;
 }
 
-// scarce-sport cap formula (file copy)
 function computeCap(fieldsBySport, leagues) {
     const usingCount = {};
     leagues.forEach(l => (l.sports || []).forEach(sp => { usingCount[sp] = (usingCount[sp] || 0) + 1; }));
@@ -52,10 +68,10 @@ function computeCap(fieldsBySport, leagues) {
     return Object.keys(cap).length ? cap : null;
 }
 
-function sortLeaguesBySeniority(leagues, ageOrder) {
-    const idx = {}; ageOrder.forEach((d, i) => { if (idx[String(d)] == null) idx[String(d)] = i; });
-    const seniority = (l) => { let b = Infinity; (l.divisions || []).forEach(d => { const i = idx[String(d)]; if (i != null && i < b) b = i; }); return b; };
-    return leagues.slice().sort((a, b) => seniority(a) - seniority(b));
+// least-options-first sort (file copy)
+function sortByOptions(leagues, fbs) {
+    const opt = l => (l.sports || []).reduce((s, sp) => s + (Array.isArray(fbs[sp]) ? fbs[sp].length : 0), 0);
+    return leagues.slice().sort((a, b) => { const d = opt(a) - opt(b); if (d) return d; return (b.teams?.length || 0) - (a.teams?.length || 0); });
 }
 
 // 1: cross-day rotation
@@ -63,7 +79,7 @@ function sortLeaguesBySeniority(leagues, ageOrder) {
     const h = { teamSports: { 'L|A': ['Basketball', 'Basketball'], 'L|B': [] } };
     const pool = [{ sport: 'Basketball' }, { sport: 'Volleyball' }, { sport: 'Baseball' }];
     assert.notStrictEqual(pickSport('L', 'A', 'B', pool, h, {}).sport, 'Basketball');
-    console.log('TEST 1 PASS — cross-day rotation: A rotated off Basketball');
+    console.log('TEST 1 PASS — cross-day rotation');
 })();
 
 // 2: within-slot spread
@@ -72,65 +88,69 @@ function sortLeaguesBySeniority(leagues, ageOrder) {
     const pool = [{ sport: 'Volleyball' }, { sport: 'Baseball' }];
     const used = {}; const g1 = pickSport('L', 'A', 'B', pool, h, used); used[g1.sport] = 1;
     assert.notStrictEqual(pickSport('L', 'C', 'D', pool, h, used).sport, g1.sport);
-    console.log('TEST 2 PASS — within-slot spread: two games, two sports');
+    console.log('TEST 2 PASS — within-slot spread');
 })();
 
-// 3: seniority order
+// 3: LEAST-OPTIONS-FIRST ordering
 (function () {
-    const order = sortLeaguesBySeniority([
-        { name: 'Young', divisions: ['1', '2'] }, { name: 'Old', divisions: ['8', '9'] }, { name: 'Mid', divisions: ['5', '6'] },
-    ], ['9', '8', '7', '6', '5', '4', '3', '2', '1']).map(l => l.name);
-    assert.deepStrictEqual(order, ['Old', 'Mid', 'Young']);
-    console.log('TEST 3 PASS — seniority order: ' + order.join(' → '));
+    const fbs = { Hockey: Array(4), Baseball: Array(5), Football: Array(8), Volleyball: Array(10), Basketball: Array(15) };
+    const leagues = [
+        { name: '5sport', sports: ['Baseball', 'Basketball', 'Football', 'Hockey', 'Volleyball'], teams: Array(10) },
+        { name: '4sport(8&9)', sports: ['Baseball', 'Football', 'Volleyball', 'Hockey'], teams: Array(18) },
+    ];
+    const order = sortByOptions(leagues, fbs).map(l => l.name);
+    assert.deepStrictEqual(order, ['4sport(8&9)', '5sport'], 'fewest field options goes first');
+    console.log('TEST 3 PASS — least-options-first: ' + order.join(' → '));
 })();
 
-// 4: qualified keys
+// 4: HARD no-3-in-a-row blocks the 3rd
 (function () {
-    const order = sortLeaguesBySeniority([
-        { name: 'DayCamp6', divisions: ['Day Camp > 6'] }, { name: 'Agudah6', divisions: ['Camp Agudah > 6'] },
-    ], ['9', '8', '7', 'Camp Agudah > 6', 'Day Camp > 6', '3']).map(l => l.name);
-    assert.deepStrictEqual(order, ['Agudah6', 'DayCamp6']);
-    console.log('TEST 4 PASS — qualified keys: ' + order.join(' → '));
+    const h = { teamSports: {}, gameLog: { L: { '2026-06-21': [{ t1: 'A', t2: 'B', sport: 'Volleyball' }], '2026-06-23': [{ t1: 'A', t2: 'C', sport: 'Volleyball' }] } } };
+    const pool = [{ sport: 'Volleyball' }, { sport: 'Football' }];
+    const pick = pickSport('L', 'A', 'B', pool, h, {}, null, '2026-06-24').sport;
+    assert.strictEqual(pick, 'Football', 'A played VB the last 2 days → VB blocked on day 3');
+    console.log('TEST 4 PASS — no-3-in-a-row: 3rd consecutive Volleyball blocked');
 })();
 
-// 5: RECENCY — with 3 sports all played once, pick the one neither played LAST
+// 5: recency — pick the sport NEITHER team played last
 (function () {
-    // A's most recent = Basketball, B's most recent = Volleyball; Hockey is the
-    // sport neither played most recently → recency should steer the pick to it.
     const h = { teamSports: { 'L|A': ['Hockey', 'Volleyball', 'Basketball'], 'L|B': ['Basketball', 'Hockey', 'Volleyball'] } };
     const pool = [{ sport: 'Basketball' }, { sport: 'Volleyball' }, { sport: 'Hockey' }];
-    const pick = pickSport('L', 'A', 'B', pool, h, {}).sport;
-    assert.strictEqual(pick, 'Hockey', 'should avoid each team\'s most-recent sport');
-    console.log('TEST 5 PASS — recency: picked Hockey (neither team\'s last sport)');
+    assert.strictEqual(pickSport('L', 'A', 'B', pool, h, {}).sport, 'Hockey');
+    console.log('TEST 5 PASS — recency: picked the mutually-non-recent sport');
 })();
 
-// 6: scarce-sport cap formula — only contended sports capped
+// 6: scarce-sport cap formula
 (function () {
     const fbs = { Hockey: Array(4), Baseball: Array(5), Football: Array(8), Volleyball: Array(10), Basketball: Array(15) };
     const leagues = Array.from({ length: 4 }, () => ({ sports: ['Hockey', 'Baseball', 'Football', 'Volleyball', 'Basketball'] }));
-    const cap = computeCap(fbs, leagues);
-    assert.deepStrictEqual(cap, { Hockey: 1, Baseball: 1, Football: 2, Volleyball: 2 },
-        'all contended sports capped at fields/leagues; only abundant Basketball(15) uncapped');
-    console.log('TEST 6 PASS — cap formula: ' + JSON.stringify(cap) + ' (Basketball uncapped = overflow valve)');
+    assert.deepStrictEqual(computeCap(fbs, leagues), { Hockey: 1, Baseball: 1, Football: 2, Volleyball: 2 });
+    console.log('TEST 6 PASS — cap formula (Basketball uncapped = overflow valve)');
 })();
 
-// 7: cap EFFECT — at cap, the league leaves the scarce sport for others
+// 7: cap EFFECT — at cap, leave the scarce sport
 (function () {
-    const h = { teamSports: {} }; // both teams fresh on everything
     const pool = [{ sport: 'Hockey', field: 'H2' }, { sport: 'Volleyball', field: 'V1' }];
-    const used = { Hockey: 1 };            // already used its 1 Hockey
-    const pick = pickSport('L', 'A', 'B', pool, h, used, { Hockey: 1 }).sport;
-    assert.strictEqual(pick, 'Volleyball', 'over-cap Hockey must lose to an uncapped sport');
-    console.log('TEST 7 PASS — cap effect: at Hockey cap → took Volleyball, left Hockey');
+    assert.strictEqual(pickSport('L', 'A', 'B', pool, { teamSports: {} }, { Hockey: 1 }, { Hockey: 1 }).sport, 'Volleyball');
+    console.log('TEST 7 PASS — cap effect: over-cap Hockey left for others');
 })();
 
-// 8: under cap, the scarce sport is NOT penalized (gets its fair 1)
+// 8: under cap — first scarce game allowed
 (function () {
     const h = { teamSports: { 'L|A': ['Volleyball', 'Volleyball'], 'L|B': ['Volleyball', 'Volleyball'] } };
     const pool = [{ sport: 'Hockey', field: 'H1' }, { sport: 'Volleyball', field: 'V1' }];
-    const pick = pickSport('L', 'A', 'B', pool, h, {}, { Hockey: 1 }).sport; // used Hockey = 0 < cap 1
-    assert.strictEqual(pick, 'Hockey', 'first Hockey is within cap and both teams are stale on Volleyball');
-    console.log('TEST 8 PASS — under cap: first Hockey allowed (fair share granted)');
+    assert.strictEqual(pickSport('L', 'A', 'B', pool, h, {}, { Hockey: 1 }).sport, 'Hockey');
+    console.log('TEST 8 PASS — under cap: first Hockey allowed');
 })();
 
-console.log('\nALL 8 SENIORITY + ROTATION + SCARCE-CAP TESTS PASS');
+// 9: no-3-in-a-row centered + fallback (never a bye)
+(function () {
+    const hC = { teamSports: {}, gameLog: { L: { '2026-06-23': [{ t1: 'A', t2: 'B', sport: 'Volleyball' }], '2026-06-25': [{ t1: 'A', t2: 'C', sport: 'Volleyball' }] } } };
+    assert.strictEqual(streakBlocked('L', 'A', 'Volleyball', hC, '2026-06-24'), true, 'centered V[V]V blocked');
+    assert.strictEqual(streakBlocked('L', 'A', 'Football', hC, '2026-06-24'), false, 'a different sport is fine');
+    const hF = { teamSports: {}, gameLog: { L: { '2026-06-21': [{ t1: 'A', t2: 'B', sport: 'Volleyball' }], '2026-06-23': [{ t1: 'A', t2: 'C', sport: 'Volleyball' }] } } };
+    assert.strictEqual(pickSport('L', 'A', 'B', [{ sport: 'Volleyball' }], hF, {}, null, '2026-06-24').sport, 'Volleyball', 'fallback: only field left is allowed (no bye)');
+    console.log('TEST 9 PASS — no-3 centered block + fallback (no bye)');
+})();
+
+console.log('\nALL 9 LEAGUE-ROTATION TESTS PASS');
