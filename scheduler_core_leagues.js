@@ -375,6 +375,18 @@
         return history.teamSports[key] || [];
     }
 
+    // ★ Cross-day sport freshness for ONE team: 1000 if this team has never
+    //   played the sport (across ALL prior dates — history.teamSports is a
+    //   cumulative aggregate), else a small decaying bonus. Shared by BOTH
+    //   assignment modes so sports actually rotate day to day and we don't
+    //   "keep having the same sports around and around."
+    function _sportFreshnessScore(leagueName, team, sport, history) {
+        const teamHistory = getTeamSportHistory(leagueName, team, history);
+        const sportCount = teamHistory.filter(s => s === sport).length;
+        if (sportCount === 0) return 1000;
+        return Math.max(0, 100 - sportCount * 20);
+    }
+
     function recordTeamSport(leagueName, team, sport, history) {
         const key = `${leagueName}|${team}`;
         if (!history.teamSports[key]) history.teamSports[key] = [];
@@ -707,11 +719,7 @@
         const usedSportsThisSlot = {};
 
         function getTeamSportNeed(team, sport) {
-            const teamHistory = getTeamSportHistory(leagueName, team, history);
-            const sportCount = teamHistory.filter(s => s === sport).length;
-
-            if (sportCount === 0) return 1000;
-            return Math.max(0, 100 - sportCount * 20);
+            return _sportFreshnessScore(leagueName, team, sport, history);
         }
 
         // Sort matchups so teams with less sport variety get processed first.
@@ -810,6 +818,7 @@
     function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
         const usedFields = new Set();
+        const usedSportsThisSlot = {};
 
         // Sort matchups by how many times they've played (least played first)
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
@@ -854,21 +863,29 @@
             for (const option of _pool) {
                 let score = 0;
 
-                // In matchup variety mode, sport variety is secondary
-                // Just add a small preference for sports not played as much
-                const h1 = getTeamSportHistory(leagueName, t1, history);
-                const h2 = getTeamSportHistory(leagueName, t2, history);
-                const sportCount1 = h1.filter(s => s === option.sport).length;
-                const sportCount2 = h2.filter(s => s === option.sport).length;
-                
-                // Small bonus for less-played sports (not the main factor)
-                score += Math.max(0, 50 - (sportCount1 + sportCount2) * 5);
+                // ★ Cross-day sport rotation: strongly prefer a sport neither
+                //   team has played yet (same scoring as sport-variety mode).
+                //   The MATCHUP ORDER above is still this mode's primary
+                //   guarantee — opponents rotate first; this only decides WHICH
+                //   sport each matchup gets, so sports rotate too instead of
+                //   "going around and around" on the same one.
+                score += _sportFreshnessScore(leagueName, t1, option.sport, history);
+                score += _sportFreshnessScore(leagueName, t2, option.sport, history);
+
+                // ★ Within-slot spread: don't stack the same sport across this
+                //   slot's games when other sports/fields are still available.
+                const sportUsageThisSlot = usedSportsThisSlot[option.sport] || 0;
+                if (sportUsageThisSlot === 0) {
+                    score += 500;
+                } else {
+                    score -= sportUsageThisSlot * 100;
+                }
 
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
-                // Random factor for variety
-                score += Math.random() * 20;
+                // Light tie-breaker
+                score += Math.random() * 10;
 
                 if (score > bestScore) {
                     bestScore = score;
@@ -886,6 +903,7 @@
                 });
 
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
+                usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
                 console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
@@ -1543,6 +1561,33 @@
 
                 return true;
             });
+
+            // ★ SENIORITY ORDER: process OLDER divisions' leagues FIRST so they
+            //   get first pick of fields/sports; younger divisions then "make
+            //   their way down" and take what's left. Age = the Me-page camp
+            //   structure order (window.getDivisionAgeOrder → oldest first). A
+            //   league's seniority is its OLDEST covered division. Guarded so an
+            //   unavailable age order just leaves the original (config) order.
+            try {
+                const _ageOrder = (typeof window.getDivisionAgeOrder === 'function')
+                    ? (window.getDivisionAgeOrder() || []) : [];
+                if (_ageOrder.length) {
+                    const _ageIdx = {};
+                    _ageOrder.forEach((d, i) => { if (_ageIdx[String(d)] == null) _ageIdx[String(d)] = i; });
+                    const _leagueSeniority = (l) => {
+                        let best = Infinity;
+                        (l.divisions || []).forEach(d => {
+                            const i = _ageIdx[String(d)];
+                            if (i != null && i < best) best = i;
+                        });
+                        return best;
+                    };
+                    applicableLeagues.sort((a, b) => _leagueSeniority(a) - _leagueSeniority(b));
+                    console.log(`   ★ [Seniority] league order (oldest→youngest): [${applicableLeagues.map(l => l.name).join(', ')}]`);
+                }
+            } catch (e) {
+                console.warn('[RegularLeagues] seniority sort skipped:', e && e.message);
+            }
 
             console.log(`   Applicable leagues: [${applicableLeagues.map(l => l.name).join(', ')}]`);
             if (specifiedLeagueNames.size > 0) {
