@@ -18,7 +18,7 @@
 (function () {
 'use strict';
 
-var VERSION = '3.0';
+var VERSION = '3.1';   // bumped to force a fresh print_center.js bundle (stale-cache bust) — also confirms the getSkeleton-delegate fix is loaded
 
 // =========================================================================
 // ICONS (inline SVG)
