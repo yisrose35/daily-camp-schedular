@@ -348,9 +348,25 @@
                 return;
             }
 
-            // 3. Check daily overrides (from daily_adjustments.js)
-            const dailyRules = dailyFieldAvailability?.[specialName] || [];
-            
+            // 3. Check daily overrides (Resources panel → per-date field availability).
+            //    ★ These rules are keyed by the RESOURCE the user toggled — for a special
+            //    that is its FACILITY (e.g. "Arts & Crafts Shack"), NOT the special's own
+            //    name. Most specials are self-named (location === name) so the name lookup
+            //    catches them, but specials that share one room under different names
+            //    (Arts & Crafts, Leather → "Arts & Crafts Shack") only have a rule under
+            //    the facility key — checking only `specialName` missed them, so a room the
+            //    user marked unavailable in Resources still handed out its specials. Union
+            //    the name- and facility-keyed rules so a closed/limited room blocks EVERY
+            //    special hosted there. (Mirrors the facility-keyed model the total solver
+            //    already honors via activityProperties[facility].timeRules — set from this
+            //    same dailyFieldAvailability map at optimizer startup.)
+            const _specLoc = (props && props.location) || special.location;
+            const _nameRules = dailyFieldAvailability?.[specialName] || [];
+            const _locRules = (_specLoc && String(_specLoc).toLowerCase() !== String(specialName).toLowerCase())
+                ? (dailyFieldAvailability?.[_specLoc] || [])
+                : [];
+            const dailyRules = [..._nameRules, ..._locRules];
+
            // 4. Check time rules (daily override takes precedence over global)
             // ★ Rainy day: bypass time rules if rainyDayAvailableAllDay is set
             const bypassTimeRules = isRainyMode && props.rainyDayAvailableAllDay === true;
