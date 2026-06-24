@@ -3653,17 +3653,55 @@ function runLiveStandalone() {
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
         '</div>';
 
-    // Camp name (authoritative DB name first; settings copy goes stale on rename).
-    function refreshTitle() {
+    // Camp name for the Live header. The settings copies (app1.campName /
+    // campName / camp_name in localStorage) only get refreshed on an explicit
+    // rename in the dashboard, so in a freshly-popped Live window they can hold
+    // a stale name (this is why the kiosk kept showing the old "Camp Awesome").
+    // The authoritative source is the `camps` table — fetch it directly, once,
+    // and cache the result. Until that returns we use AccessControl's DB-backed
+    // name, and only fall back to the settings copies as a last resort.
+    var _liveCampNameDB = null;   // resolved name from the camps table
+    var _liveCampNameFetching = false;
+
+    function fetchLiveCampNameFromDB() {
+        if (_liveCampNameDB !== null || _liveCampNameFetching) return;
+        if (!window.supabase) return;
+        _liveCampNameFetching = true;
         try {
-            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            var nm = '';
+            var campId = '';
             try {
-                if (window.AccessControl && typeof window.AccessControl.getCampName === 'function') {
-                    var _an = window.AccessControl.getCampName();
-                    if (_an && _an !== 'Your Camp' && _an !== 'Unknown Camp') nm = _an;
+                if (window.AccessControl && typeof window.AccessControl.getCampId === 'function') {
+                    campId = window.AccessControl.getCampId() || '';
                 }
             } catch (_) {}
+            var q = window.supabase.from('camps').select('name');
+            // camps.owner is the camp id used everywhere else in the app.
+            q = campId ? q.eq('owner', campId).maybeSingle()
+                       : q.limit(1).maybeSingle();
+            Promise.resolve(q).then(function (res) {
+                _liveCampNameFetching = false;
+                var name = res && res.data && res.data.name;
+                if (name) {
+                    _liveCampNameDB = name;
+                    try { refreshTitle(); } catch (_) {}
+                }
+            }).catch(function () { _liveCampNameFetching = false; });
+        } catch (e) { _liveCampNameFetching = false; }
+    }
+
+    function refreshTitle() {
+        try {
+            fetchLiveCampNameFromDB();
+            var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var nm = _liveCampNameDB || '';
+            if (!nm) {
+                try {
+                    if (window.AccessControl && typeof window.AccessControl.getCampName === 'function') {
+                        var _an = window.AccessControl.getCampName();
+                        if (_an && _an !== 'Your Camp' && _an !== 'Unknown Camp') nm = _an;
+                    }
+                } catch (_) {}
+            }
             nm = nm || (g.app1 ? g.app1.campName : '') || g.campName || g.camp_name || 'Camp Schedule';
             var titleEl = document.getElementById('pc3-live-title');
             if (titleEl) titleEl.textContent = nm;
