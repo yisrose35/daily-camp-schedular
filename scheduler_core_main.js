@@ -949,6 +949,85 @@
             _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
         }
 
+        // ★ FACILITY AVAILABILITY GATE for DIRECT-FILLED smart-tile activities.
+        //   The SmartTile special POOL (adapter.getAvailableSpecialsForTimeBlock)
+        //   and the field SOLVER both honor facility Available/Unavailable windows —
+        //   but routeActivity's DIRECT-FILL paths (specific specials, adapter-resolved
+        //   known specials, concrete sport/swim labels) write straight to the schedule
+        //   via fillBlock, which performs NO time-rule check. Without this gate a tile
+        //   that names a concrete special — or a special routed direct — lands in a
+        //   facility the user marked Unavailable for that window (the recurring
+        //   "Arts & Crafts at 12:20 while the Shack is closed" class of bug).
+        //   Returns false when the activity's hosting facility is CLOSED for [s,e).
+        //   Mirrors the adapter's name+facility rule union and the auto/total-solver
+        //   Available/Unavailable semantics. Fail-open: no rules / unresolved facility
+        //   => available, so it never blocks more than the user actually configured.
+        function _facilityOpenForBlock(activityLabel, startMin, endMin, division) {
+            if (!activityLabel) return true;
+            const _p2m = (v) => {
+                if (v == null || v === '') return null;
+                if (typeof v === 'number') return v;
+                const n = Utils?.parseTimeToMinutes ? Utils.parseTimeToMinutes(v) : null;
+                return (n == null || isNaN(n)) ? null : n;
+            };
+            // Resolve hosting facility (special room / field). Case-insensitive,
+            // robust to blank-location duplicate entries — same resolution the
+            // field-lock / claim-key paths use.
+            let loc = '';
+            try {
+                const resolver = window.getLocationForActivity || getLocationForActivity;
+                loc = (typeof resolver === 'function' && resolver(activityLabel)) || '';
+            } catch (_e) { loc = ''; }
+            const _lblL = String(activityLabel).toLowerCase();
+            const _locL = String(loc || '').toLowerCase();
+            const _dfa = dailyFieldAvailability || {};
+            const _dfaFor = (k) => {
+                if (!k || !_dfa) return [];
+                if (_dfa[k]) return _dfa[k];
+                const kl = String(k).toLowerCase();
+                for (const dk in _dfa) { if (String(dk).toLowerCase() === kl) return _dfa[dk] || []; }
+                return [];
+            };
+            const ap = window.activityProperties || activityProperties || {};
+            const _apRules = (k) => {
+                if (!k) return [];
+                if (ap[k] && Array.isArray(ap[k].timeRules)) return ap[k].timeRules;
+                const kl = String(k).toLowerCase();
+                for (const ak in ap) { if (String(ak).toLowerCase() === kl && Array.isArray(ap[ak].timeRules)) return ap[ak].timeRules; }
+                return [];
+            };
+            // Union name-keyed + facility-keyed rules. Prefer per-date daily overrides
+            // (Resources panel); fall back to the global facility timeRules.
+            let rules = [].concat(_dfaFor(activityLabel));
+            if (loc && _locL !== _lblL) rules = rules.concat(_dfaFor(loc));
+            if (rules.length === 0) {
+                rules = [].concat(_apRules(activityLabel));
+                if (loc && _locL !== _lblL) rules = rules.concat(_apRules(loc));
+            }
+            if (!rules || rules.length === 0) return true;
+
+            // Division scoping: a rule carrying a `divisions` list only applies to
+            // those divisions (empty/missing = applies to all).
+            const myDiv = division != null ? String(division) : null;
+            let hasAvail = false, insideAvail = false;
+            for (const r of rules) {
+                if (!r) continue;
+                const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                if (rDivs.length > 0 && myDiv && !rDivs.includes(myDiv)) continue;
+                const rs = (r.startMin != null) ? r.startMin : _p2m(r.start);
+                const re = (r.endMin != null) ? r.endMin : _p2m(r.end);
+                const isUnavail = String(r.type).toLowerCase() === 'unavailable' || r.available === false;
+                if (isUnavail) {
+                    if (rs != null && re != null && startMin < re && endMin > rs) return false;
+                } else {
+                    hasAvail = true;
+                    if (rs != null && re != null && startMin >= rs && endMin <= re) insideAvail = true;
+                }
+            }
+            if (hasAvail && !insideAvail) return false;
+            return true;
+        }
+
         // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
         //   A rotation/tile option that is NOT a configured field, special, or hosted
         //   sport is placed as its own label — exactly like Swim (the "direct fill"
@@ -1541,7 +1620,11 @@
                     // the budget system uses; falls back when at capacity.
                     const _sw = _getSharableWith(activityLabel);
                     const _swCap = (_sw && _sw.capacity) || 1;
-                    if (_canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
+                    // ★ Facility availability: never direct-fill a special into its room
+                    //   during an Unavailable window — fall through to the fallback chain.
+                    const _facOpen = _facilityOpenForBlock(activityLabel, startMin, endMin, divName);
+                    if (!_facOpen) console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" facility UNAVAILABLE @${startMin}-${endMin} → fallback`);
+                    if (_facOpen && _canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
                         _registerClaim(activityLabel, startMin, endMin, divName);
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special: ${activityLabel}`);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
@@ -1748,6 +1831,26 @@
                     });
 
               } else {
+                    // ★ Facility availability gate (parity with the special pool + the
+                    //   field solver). A concrete special OR a concrete sport/swim label
+                    //   direct-filled here writes straight to the schedule with no
+                    //   time-rule check — so without this it lands in a room/field the
+                    //   user marked Unavailable for this window. Route to the configured
+                    //   fallback (a generic Sports/General slot the solver places on an
+                    //   OPEN field) instead of filling the closed facility.
+                    const _facClosed = !_facilityOpenForBlock(activityLabel, startMin, endMin, divName);
+                    const _routeUnavailFallback = () => {
+                        const _fb2 = job.fallbackActivity || '';
+                        if (_fb2 && needsGeneration(_fb2)) {
+                            const _fbType = _fb2.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                            schedulableSlotBlocks.push({ divName, bunk, event: _fbType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        } else if (_fb2) {
+                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fb2, sport: null, _fixed: true, _activity: _fb2 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        } else {
+                            const _genType = (activityLabel.toLowerCase().includes('sport') || knownSportNames.has(activityLabel.toLowerCase().trim())) ? 'Sports Slot' : 'General Activity Slot';
+                            schedulableSlotBlocks.push({ divName, bunk, event: _genType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                        }
+                    };
                     if (knownSpecialNames.has(activityLabel.toLowerCase().trim())) {
                         const _maxCap = (() => {
                             const props = activityProperties[activityLabel] || activityProperties[Object.keys(activityProperties).find(k => k.toLowerCase() === activityLabel.toLowerCase())] || {};
@@ -1756,20 +1859,19 @@
                             if (s.type === 'custom') return parseInt(s.capacity) || 1;
                             return 999;
                         })();
-                       if (!_canClaim(activityLabel, startMin, endMin, _maxCap, divName)) {
+                       if (_facClosed || !_canClaim(activityLabel, startMin, endMin, _maxCap, divName)) {
                             const _fb2 = job.fallbackActivity || '';
-                            console.log(`[SmartTile V44.3] ${bunk} -> SPECIAL CLAIMED → fallback: ${_fb2 || 'Sports Slot'}`);
-                            if (_fb2 && needsGeneration(_fb2)) {
-                                const _fbType = _fb2.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
-                                schedulableSlotBlocks.push({ divName, bunk, event: _fbType, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
-                            } else if (_fb2) {
-                                window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fb2, sport: null, _fixed: true, _activity: _fb2 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                            } else {
-                                schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: startMin, endTime: endMin, slots, fromSmartTile: true });
-                            }
+                            console.log(`[SmartTile V44.3] ${bunk} -> ${_facClosed ? `"${activityLabel}" facility UNAVAILABLE @${startMin}-${endMin}` : 'SPECIAL CLAIMED'} → fallback: ${_fb2 || 'Sports Slot'}`);
+                            _routeUnavailFallback();
                             return;
                         }
                       _registerClaim(activityLabel, startMin, endMin, divName);
+                    } else if (_facClosed) {
+                        // Concrete sport / swim whose field is Unavailable this window —
+                        // hand to the solver as a generic slot so it resolves an OPEN field.
+                        console.log(`[SmartTile] ${bunk} -> "${activityLabel}" facility UNAVAILABLE @${startMin}-${endMin} → solver fallback (open field)`);
+                        _routeUnavailFallback();
+                        return;
                     }
                     console.log(`[SmartTile] ${bunk} -> DIRECT FILL: ${activityLabel}`);
 
