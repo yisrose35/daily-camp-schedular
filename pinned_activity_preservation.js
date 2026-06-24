@@ -265,8 +265,18 @@
 
                     capturedCount++;
 
-                    // Track field lock info
-                    const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    // Track field lock info.
+                    // ★ FACILITY RESERVATION: a pinned custom layer or pinned
+                    //   special carries its field in `_customField` /
+                    //   `_specialLocation` when `entry.field` itself is null
+                    //   (the layer-config representation). Fall back to those so
+                    //   the host facility is reserved for the pinned activity and
+                    //   can never be handed to another bunk — without this, a
+                    //   custom.pinned block with no `.field` registered NO lock.
+                    let fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    if (!fieldName || fieldName === 'Free') {
+                        fieldName = entry._customField || entry._specialLocation || fieldName;
+                    }
                     if (fieldName && fieldName !== 'Free') {
                         _pinnedFieldLocks.push({
                             field: fieldName,
