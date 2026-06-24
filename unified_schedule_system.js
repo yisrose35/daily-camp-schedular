@@ -1210,6 +1210,10 @@ function shouldHighlightBunk(bunkName) {
         if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
         if (myEntry._isDismissal || myEntry._isSnack) return [];
         if (myEntry._pinned) return [];
+        // Trips are off-site events, not a shared field — never annotate "vs Bunk X".
+        // The trip's "field" is just its name, so co-attending bunks would otherwise
+        // get treated as field-sharers and read "Trip – vs Bunk 2, Bunk 3".
+        if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return [];
         const _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
         const _myField = (typeof myEntry.field === 'string' ? myEntry.field
             : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();

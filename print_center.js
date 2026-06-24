@@ -594,6 +594,8 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
     if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
     if (myEntry._isDismissal || myEntry._isSnack) return [];
     if (myEntry._pinned) return [];
+    // Trips are off-site events, not a shared field — never annotate "vs Bunk X".
+    if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return [];
     var _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
     var _myField = (typeof myEntry.field === 'string' ? myEntry.field
         : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
