@@ -1,0 +1,57 @@
+-- ============================================================================
+-- Migration: set REPLICA IDENTITY FULL on daily_schedules
+--
+-- Why (cross-tenant realtime data-loss bug): the realtime subscription in
+--      supabase_sync.js listens to ALL postgres_changes on daily_schedules.
+--      With Postgres' DEFAULT replica identity, a DELETE event's payload.old
+--      carries ONLY the primary key (id) — no camp_id, no date_key, no
+--      scheduler_name. Consequences observed live:
+--        1. The client camp_id filter (handleRealtimeChange) can't run for
+--           DELETE → a delete in ANY OTHER CAMP is delivered to this client.
+--        2. With no date_key, the handler ASSUMED "current date", so a delete
+--           of any other date/camp was misattributed to the date the user was
+--           viewing → a false "Deletion from another scheduler" toast →
+--           "Cloud is empty — clearing all local data" wipe (integration_hooks)
+--           → the view fell back to the stale day-of-week skeleton template
+--           ("old corrupted data"). Symptom: "if I stay on a schedule too long,
+--           I'm told another user deleted and old corrupted data comes through."
+--        3. A server-side camp_id filter on the subscription was previously
+--           REMOVED precisely because, under default replica identity, it
+--           dropped every DELETE (old row had no camp_id to match) — see the
+--           comment at supabase_sync.js handleRealtimeChange.
+--
+--      REPLICA IDENTITY FULL makes Postgres emit the COMPLETE old row on
+--      UPDATE/DELETE, so realtime DELETE payloads include camp_id + date_key +
+--      scheduler_name. That lets us (a) restore the server-side
+--      camp_id=eq.<camp> filter so other camps' events never arrive, and
+--      (b) attribute deletes to the correct date instead of guessing.
+--
+-- Same technique the codebase already relies on for camp_users realtime
+-- (see access_control.js: "delivery needs REPLICA IDENTITY FULL on camp_users").
+--
+-- ⚠ ORDERING: apply this migration BEFORE/with deploying the paired
+--      supabase_sync.js change that adds `filter: camp_id=eq.<campId>` to the
+--      subscription. If the code filter ships first WITHOUT this migration,
+--      DELETE events get dropped server-side (old row has no camp_id) and
+--      legitimate deletes stop propagating. With this migration applied first,
+--      both orders are safe.
+--
+-- Cost: REPLICA IDENTITY FULL makes UPDATE/DELETE WAL records carry the full
+--      old row. daily_schedules rows are modest and write volume is low
+--      (per-camp, per-day schedule saves), so the WAL overhead is negligible.
+--
+-- Idempotent: setting REPLICA IDENTITY FULL when already FULL is a no-op.
+-- ============================================================================
+
+ALTER TABLE IF EXISTS daily_schedules REPLICA IDENTITY FULL;
+
+-- ─── Sanity check (run manually after applying) ────────────────────────────
+--   SELECT relname,
+--          CASE relreplident
+--            WHEN 'd' THEN 'default' WHEN 'n' THEN 'nothing'
+--            WHEN 'f' THEN 'full'    WHEN 'i' THEN 'index'
+--          END AS replica_identity
+--   FROM pg_class
+--   WHERE relname = 'daily_schedules';
+--
+-- Expect replica_identity = 'full'.
