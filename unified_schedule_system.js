@@ -3731,64 +3731,50 @@ divBlocks.forEach((block, blockIdx) => {
         return td;
     }
 
-    // ★ Combined-tile bunk picker. In the transposed view, when every bunk in a
-    //   division shares an identical activity at a slot, the renderer merges them
-    //   into ONE cell (rowSpan = bunks.length) drawn from bunks[0]. A direct click
-    //   could therefore only ever post-edit the first bunk — to reach any other
-    //   merged bunk the user had to dig into the scope modal's "Select specific
-    //   bunks" checkboxes. This lightweight popup lets them pick the exact bunk
-    //   straight from the combined tile, then routes into the normal edit modal
-    //   anchored on that bunk (so "Just this bunk" means the one they chose).
-    function _showMergedBunkPicker(anchorEl, bunks, divName, slotIdx, block, displayText) {
-        var existing = document.getElementById('us-merged-bunk-picker');
-        if (existing) existing.remove();
+    // ★ Combined-tile per-bunk lanes. In the transposed view, when every bunk in
+    //   a division shares an identical activity at a slot, the renderer merges
+    //   them into ONE cell (rowSpan = bunks.length) drawn from bunks[0] — so the
+    //   activity reads once, but a plain click could only ever post-edit the
+    //   first bunk. Rather than break the combined look, we keep the single tile
+    //   and overlay one transparent lane per bunk, separated by light divider
+    //   lines. Each lane is individually clickable and routes that bunk into the
+    //   normal edit modal, so the user can post-edit a specific bunk directly.
+    function _applyMergedBunkLanes(td, bunks, divName, slotIdx, block, displayText) {
+        td.style.position = 'relative';
+        td.title = 'Combined: ' + bunks.join(', ') + ' — click a bunk’s section to edit just that bunk';
 
-        var openFor = function (b) {
-            var existingEntry = (window.scheduleAssignments && window.scheduleAssignments[b]) ? window.scheduleAssignments[b][slotIdx] : null;
-            if (typeof openIntegratedEditModal === 'function') openIntegratedEditModal(b, slotIdx, existingEntry);
-            else enhancedEditCell(b, block.startMin, block.endMin, displayText);
-        };
+        var overlay = document.createElement('div');
+        overlay.className = 'us-merged-lanes';
+        // Sits on top of the (once-shown) activity content; lanes are transparent
+        // so the label still reads through, and only the light dividers + hover
+        // tint are visible.
+        overlay.style.cssText = 'position:absolute; inset:0; display:flex; flex-direction:column; z-index:2;';
 
-        var menu = document.createElement('div');
-        menu.id = 'us-merged-bunk-picker';
-        menu.style.cssText = 'position:fixed; z-index:10000; background:#fff; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 12px 32px rgba(0,0,0,0.20); padding:8px; min-width:210px; max-height:60vh; overflow-y:auto; font-size:0.85rem;';
-        menu.onclick = function (e) { e.stopPropagation(); };
+        bunks.forEach(function (b, i) {
+            var lane = document.createElement('div');
+            lane.style.cssText = 'flex:1 1 0; min-height:0; cursor:pointer; position:relative;'
+                + (i > 0 ? ' border-top:1px solid rgba(100,116,139,0.30);' : '');
+            var bunkLabel = /^\d/.test(String(b)) ? 'Bunk ' + b : String(b);
+            lane.title = bunkLabel + ' — click to edit';
 
-        var hdr = document.createElement('div');
-        hdr.textContent = 'Edit which bunk?';
-        hdr.style.cssText = 'font-weight:700; color:#111827; padding:4px 8px 8px; border-bottom:1px solid #f1f5f9; margin-bottom:6px;';
-        menu.appendChild(hdr);
+            // Faint per-bunk marker so each lane is identifiable without hover.
+            var tag = document.createElement('span');
+            tag.textContent = String(b);
+            tag.style.cssText = 'position:absolute; left:3px; top:1px; font-size:0.58rem; font-weight:700; color:#64748b; opacity:0.65; pointer-events:none; line-height:1; max-width:calc(100% - 6px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+            lane.appendChild(tag);
 
-        var mkItem = function (label, onClick) {
-            var item = document.createElement('div');
-            item.textContent = label;
-            item.style.cssText = 'padding:8px 10px; border-radius:6px; cursor:pointer; color:#1f2937; font-weight:500; white-space:nowrap;';
-            item.onmouseenter = function () { item.style.background = '#eff6ff'; };
-            item.onmouseleave = function () { item.style.background = 'transparent'; };
-            item.onclick = function (e) { e.stopPropagation(); menu.remove(); onClick(); };
-            return item;
-        };
-
-        bunks.forEach(function (b) {
-            menu.appendChild(mkItem(/^\d/.test(String(b)) ? 'Bunk ' + b : String(b), function () { openFor(b); }));
+            lane.onmouseenter = function () { lane.style.background = 'rgba(37,99,235,0.10)'; };
+            lane.onmouseleave = function () { lane.style.background = 'transparent'; };
+            lane.onclick = function (e) {
+                e.stopPropagation();
+                var existingEntry = (window.scheduleAssignments && window.scheduleAssignments[b]) ? window.scheduleAssignments[b][slotIdx] : null;
+                if (typeof openIntegratedEditModal === 'function') openIntegratedEditModal(b, slotIdx, existingEntry);
+                else enhancedEditCell(b, block.startMin, block.endMin, displayText);
+            };
+            overlay.appendChild(lane);
         });
 
-        document.body.appendChild(menu);
-
-        // Anchor to the right of the cell, flipping/clamping to stay on-screen.
-        var r = anchorEl.getBoundingClientRect();
-        var top = r.top;
-        var left = r.right + 6;
-        if (left + menu.offsetWidth > window.innerWidth - 8) left = Math.max(8, r.left - menu.offsetWidth - 6);
-        if (top + menu.offsetHeight > window.innerHeight - 8) top = Math.max(8, window.innerHeight - menu.offsetHeight - 8);
-        menu.style.top = top + 'px';
-        menu.style.left = left + 'px';
-
-        setTimeout(function () {
-            document.addEventListener('click', function dismiss(ev) {
-                if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', dismiss, true); }
-            }, true);
-        }, 0);
+        td.appendChild(overlay);
     }
 
     function renderBunkCell(block, bunk, divName, isEditable, mergedBunks) {
@@ -3941,17 +3927,10 @@ if (bypassStatus.highlight) {
 }
         
         // ★ Combined tile: this cell stands in for several bunks that share an
-        //   identical activity. Surface that so the user knows a click lets them
-        //   pick a specific bunk to post-edit (rather than silently hitting the
-        //   first one).
+        //   identical activity. We keep the merged look but divide it into light,
+        //   per-bunk lanes (applied below in the editable branch) so the user can
+        //   click a specific bunk's section to post-edit just that bunk.
         const _isMergedCell = Array.isArray(mergedBunks) && mergedBunks.length > 1;
-        if (_isMergedCell && isEditable) {
-            const _mb = document.createElement('div');
-            _mb.style.cssText = 'margin-top:4px; font-size:0.66rem; font-weight:600; color:#2563eb; opacity:0.9;';
-            _mb.textContent = '👥 ' + mergedBunks.length + ' bunks · pick to edit';
-            td.appendChild(_mb);
-            td.title = 'Combined: ' + mergedBunks.join(', ') + ' — click to edit a specific bunk';
-        }
 
         td.dataset.slot = slotIdx;
         td.dataset.slotIndex = slotIdx;
@@ -3968,14 +3947,14 @@ if (bypassStatus.highlight) {
                 else alert(`Cannot edit: ${blockedReason}`);
             };
         }
+        else if (isEditable && _isMergedCell) {
+            // Keep the combined tile, but overlay one light-divided lane per bunk
+            // so each merged bunk is directly clickable for post-edit.
+            _applyMergedBunkLanes(td, mergedBunks, divName, slotIdx, block, displayText);
+        }
         else if (isEditable) {
             td.style.cursor = 'pointer';
             td.onclick = () => {
-                // Combined tile → let the user choose which merged bunk to edit.
-                if (_isMergedCell) {
-                    _showMergedBunkPicker(td, mergedBunks, divName, slotIdx, block, displayText);
-                    return;
-                }
                 const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
                 if (typeof openIntegratedEditModal === 'function') {
                     openIntegratedEditModal(bunk, slotIdx, existingEntry);
