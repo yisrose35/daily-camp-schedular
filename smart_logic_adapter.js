@@ -290,6 +290,15 @@
         const combinedSpecials = [...allSpecials, ...propsSpecials];
         const available = [];
 
+        // ★ Per-date Resource disables (Daily Adjustments → Resources). A special whose
+        //   facility was toggled off today is added to disabledSpecials (cascade) and its
+        //   location to currentDisabledFields — neither is reflected in the global config
+        //   this reads, so without this gate the SmartTile/special distribution still
+        //   schedules it. (The total solver already excludes them via config.masterSpecials.)
+        const _resDaily = window.loadCurrentDailyData?.() || {};
+        const _disabledSpecialsSet = new Set((((_resDaily.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
+        const _disabledLocSet = new Set([...(window.currentDisabledFields || []), ...(((_resDaily.overrides || {}).disabledFields) || [])].map(n => String(n).toLowerCase().trim()));
+
         log(`\n  Checking specials for ${divisionName} at ${startMin}-${endMin}:`);
         log(`  Found ${combinedSpecials.length} total specials to check (after rainy day filter)`);
 
@@ -309,6 +318,22 @@
             if (_specialFacilityMissing(special, props)) {
                 log(`    ❌ ${specialName}: facility "${(props && props.location) || special.location}" does not exist — skipping`);
                 return;
+            }
+
+            // 0.5 Per-date Resource disable: toggling a facility off today in Resources
+            //     adds the special to disabledSpecials (cascade) and its location to
+            //     currentDisabledFields. The total solver honors this via config.masterSpecials;
+            //     this is the parity gate for the SmartTile/special-distribution pool.
+            if (_disabledSpecialsSet.has(String(specialName).toLowerCase().trim())) {
+                log(`    ❌ ${specialName}: disabled today in Resources`);
+                return;
+            }
+            {
+                const _specLoc = (props && props.location) || special.location || specialName;
+                if (_disabledLocSet.has(String(_specLoc).toLowerCase().trim())) {
+                    log(`    ❌ ${specialName}: location "${_specLoc}" disabled today in Resources`);
+                    return;
+                }
             }
 
             // 1. Check if globally enabled
