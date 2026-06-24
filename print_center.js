@@ -4165,6 +4165,7 @@ function renderLiveContent() {
     //    divisions[grade].parentDivision (falls back to the grade itself).
     var sectHtml = '';
     var sectionParents = [];
+    var sectionGrades = [];
     available.forEach(function (divName) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
@@ -4177,6 +4178,7 @@ function renderLiveContent() {
             label: realParent || divName,
             real: !!realParent
         });
+        sectionGrades.push({ divName: divName, bunks: bunks });
         sectHtml += '<div class="pc3-live-section-wrap">' + buildLiveSectionHTML(divName, bunks, nowMin) + '</div>';
     });
     if (!sectHtml) {
@@ -4204,29 +4206,69 @@ function renderLiveContent() {
     // 3. Decide how sections map to pages.
     var pages = [];
     if (_liveOneDivPerPage) {
-        // One division per page — never mix divisions on a page. All grades of a
-        // division (Juniors = grades 1-3 and their bunks) stay together, but if
-        // they don't all fit on one page the division spills onto a second (or
-        // third...) page instead of being shrunk to an unreadable size. Pages
-        // rotate division by division.
+        // One division per page — a page NEVER mixes two divisions. Within a
+        // division we paginate at the BUNK-ROW level: fill a page with as many
+        // bunks as fit, and any bunks that don't fit spill onto a fresh
+        // "(continued)" page of the same division (no shrinking to force-fit).
+        // The next division always starts on a new page.
+        var BANNER_H = 54; // reserved height for the division banner on each page
         var groups = [], byKey = {};
         wraps.forEach(function (wrap, i) {
             var meta = sectionParents[i] || { key: '#' + i, label: '', real: false };
-            if (!byKey[meta.key]) { byKey[meta.key] = { label: meta.label, real: meta.real, items: [] }; groups.push(byKey[meta.key]); }
-            byKey[meta.key].items.push({ node: wrap, h: wrap.offsetHeight + 20 });
+            if (!byKey[meta.key]) { byKey[meta.key] = { label: meta.label, real: meta.real, secs: [] }; groups.push(byKey[meta.key]); }
+            var g = sectionGrades[i] || { divName: '', bunks: [] };
+            var sec = { divName: g.divName, bunks: g.bunks.slice() };
+            // Measure per-bunk row heights (auto mode only — manual mode has bunks
+            // as columns, so it stays atomic). chromeH = the header + time-row +
+            // padding that must be repeated whenever the grade spills to a page.
+            var table = wrap.querySelector('table');
+            var tbody = table && table.tBodies && table.tBodies[0];
+            var rows = (isAutoMode() && tbody) ? Array.prototype.slice.call(tbody.rows) : null;
+            if (rows && rows.length === sec.bunks.length && rows.length > 0) {
+                var sumRows = 0;
+                sec.rowH = rows.map(function (r) { var h = r.offsetHeight; sumRows += h; return h; });
+                sec.chromeH = Math.max(0, wrap.offsetHeight - sumRows);
+                sec.atomic = false;
+            } else {
+                sec.atomic = true;
+                sec.fullH = wrap.offsetHeight;
+            }
+            byKey[meta.key].secs.push(sec);
         });
         groups.forEach(function (grp) {
-            // Bin-pack this division's grade-sections by height; each overflow
-            // starts a fresh page belonging to the same division.
-            var cur = { nodes: [], totalH: 0, parent: grp.label, realParent: grp.real, cont: false };
+            var bannerH = grp.real ? BANNER_H : 0;
+            var cur = { blocks: [], totalH: bannerH, parent: grp.label, realParent: grp.real, cont: false };
             pages.push(cur);
-            grp.items.forEach(function (it) {
-                if (cur.nodes.length > 0 && cur.totalH + it.h > availH) {
-                    cur = { nodes: [], totalH: 0, parent: grp.label, realParent: grp.real, cont: true };
-                    pages.push(cur);
+            var newPage = function () {
+                cur = { blocks: [], totalH: bannerH, parent: grp.label, realParent: grp.real, cont: true };
+                pages.push(cur);
+            };
+            grp.secs.forEach(function (sec) {
+                if (sec.atomic) {
+                    var h = sec.fullH + 20;
+                    if (cur.blocks.length > 0 && cur.totalH + h > availH) newPage();
+                    cur.blocks.push({ divName: sec.divName, bunks: sec.bunks });
+                    cur.totalH += h;
+                    return;
                 }
-                cur.nodes.push(it.node);
-                cur.totalH += it.h;
+                // Auto mode — split bunk rows across pages of this division.
+                var idx = 0, n = sec.bunks.length;
+                while (idx < n) {
+                    var firstNeed = sec.chromeH + 20 + sec.rowH[idx];
+                    if (cur.blocks.length > 0 && cur.totalH + firstNeed > availH) newPage();
+                    var budget = availH - cur.totalH - sec.chromeH - 20;
+                    var take = 0, used = 0;
+                    while (idx + take < n) {
+                        var rh = sec.rowH[idx + take];
+                        if (take > 0 && used + rh > budget) break;
+                        used += rh; take++;
+                    }
+                    if (take < 1) take = 1; // always place at least one bunk
+                    cur.blocks.push({ divName: sec.divName, bunks: sec.bunks.slice(idx, idx + take) });
+                    cur.totalH += sec.chromeH + 20 + used;
+                    idx += take;
+                    if (idx < n) newPage(); // leftover bunks get their own page
+                }
             });
         });
     } else {
@@ -4250,7 +4292,12 @@ function renderLiveContent() {
     _numLivePages = pages.length;
     if (_livePageIndex >= _numLivePages) _livePageIndex = 0;
 
-    // 4. Move section wrap nodes into absolutely-positioned, scale-to-fit page divs
+    // Per-division pages are re-rendered from a plan (bunk subsets), so drop the
+    // measurement-only section wraps before appending the real pages. Default
+    // mode reuses the wrap nodes (moved into pages below), so leave them be.
+    if (_liveOneDivPerPage) body.innerHTML = '';
+
+    // 4. Move/relabel section nodes into absolutely-positioned, scale-to-fit pages
     pages.forEach(function (page, pi) {
         var scale = page.totalH > availH ? availH / page.totalH : 1;
         scale = Math.max(0.25, Math.min(1, scale));
@@ -4274,7 +4321,17 @@ function renderLiveContent() {
             banner.textContent = page.parent + (page.cont ? ' (continued)' : '');
             inner.appendChild(banner);
         }
-        page.nodes.forEach(function (n) { inner.appendChild(n); });
+        if (page.blocks) {
+            // Per-division plan: re-render each grade (possibly a bunk subset).
+            page.blocks.forEach(function (b) {
+                var w = document.createElement('div');
+                w.className = 'pc3-live-section-wrap';
+                w.innerHTML = buildLiveSectionHTML(b.divName, b.bunks, nowMin);
+                inner.appendChild(w);
+            });
+        } else {
+            page.nodes.forEach(function (n) { inner.appendChild(n); });
+        }
         pageDiv.appendChild(inner);
         body.appendChild(pageDiv);
     });
