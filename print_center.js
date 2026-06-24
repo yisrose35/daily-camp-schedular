@@ -1478,6 +1478,7 @@ function getStyles() {
     '.pc3-live-clock{font-size:34px;font-weight:300;color:#e2e8f0;font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
     '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
+    '.pc3-live-divbanner{font-size:26px;font-weight:800;color:#fbbf24;letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid rgba(251,191,36,.35);}' +
     '.pc3-live-fit{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
     '.pc3-live-fit:hover{background:rgba(255,255,255,.2);}' +
     '.pc3-live-fit.on{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
@@ -4163,11 +4164,20 @@ function renderLiveContent() {
     }
     _liveRenderSig = sig;
 
-    // 1. Render all section wraps into body so we can measure their heights
+    // 1. Render all section wraps into body so we can measure their heights.
+    //    `sectionParents[i]` is the top-level division (Juniors/Seniors) that
+    //    grade-section i belongs to — used by "one division per page" to group
+    //    all grades of a division onto a single page. In this data model the
+    //    scheduling unit is the GRADE; its parent division lives in
+    //    divisions[grade].parentDivision (falls back to the grade itself).
     var sectHtml = '';
+    var sectionParents = [];
     available.forEach(function (divName) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
+        var parent = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) ||
+                     (divs[divName] && divs[divName].parentDivision) || divName;
+        sectionParents.push(parent);
         sectHtml += '<div class="pc3-live-section-wrap">' + buildLiveSectionHTML(divName, bunks, nowMin) + '</div>';
     });
     if (!sectHtml) {
@@ -4234,10 +4244,17 @@ function renderLiveContent() {
     // 3. Decide how sections map to pages.
     var pages = [];
     if (_liveOneDivPerPage) {
-        // One division per page — each section gets its own page (scaled to fit
-        // in step 4) and the rotation cycles through them one division at a time.
-        wraps.forEach(function (wrap) {
-            pages.push({ nodes: [wrap], totalH: wrap.offsetHeight + 20 });
+        // One division per page — group every grade-section by its parent
+        // division so all of e.g. Juniors (grades 1-3 and their bunks) lands on
+        // one page and the rotation cycles division by division. Each page is
+        // still scaled to fit in step 4, so a division with many grades/bunks
+        // shrinks rather than overflowing.
+        var byParent = {}; // parent name -> page object (preserve first-seen order)
+        wraps.forEach(function (wrap, i) {
+            var key = sectionParents[i] != null ? String(sectionParents[i]) : ('#' + i);
+            if (!byParent[key]) { byParent[key] = { nodes: [], totalH: 0, parent: key }; pages.push(byParent[key]); }
+            byParent[key].nodes.push(wrap);
+            byParent[key].totalH += wrap.offsetHeight + 20;
         });
     } else {
         // Greedy bin-pack: keep adding sections to the current page until they
@@ -4274,6 +4291,15 @@ function renderLiveContent() {
         inner.className = 'pc3-live-page-inner';
         inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
 
+        // In one-division-per-page mode, label the page with the division name
+        // when it groups more than one grade (a single-grade page already shows
+        // that grade's header, so a banner would just duplicate it).
+        if (_liveOneDivPerPage && page.parent && page.nodes.length > 1) {
+            var banner = document.createElement('div');
+            banner.className = 'pc3-live-divbanner';
+            banner.textContent = page.parent;
+            inner.appendChild(banner);
+        }
         page.nodes.forEach(function (n) { inner.appendChild(n); });
         pageDiv.appendChild(inner);
         body.appendChild(pageDiv);
