@@ -1148,7 +1148,19 @@
             console.log(`\n[SpecialtyLeagues] 🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
             if (window.GlobalFieldLocks) {
-var _specDivSlots = window.divisionTimes?.[divName] || [];
+// ★ Resolve the lock's wall-clock window from the slot indices. In AUTO mode
+//   divisionTimes[divName] is NOT a plain slot array — it's an object carrying
+//   _perBunkSlots, so the old _specDivSlots[idx] lookup returned undefined and
+//   the lock was registered with startMin/endMin = null. isFieldLockedByTime
+//   then couldn't determine the lock's time range and silently skipped it,
+//   letting regular leagues grab the specialty court at the SAME play time.
+//   Handle both shapes (manual array + auto _perBunkSlots).
+var _specDivTimes = window.divisionTimes?.[divName];
+var _specDivSlots = Array.isArray(_specDivTimes)
+    ? _specDivTimes
+    : (_specDivTimes && _specDivTimes._perBunkSlots
+        ? (_specDivTimes._perBunkSlots[Object.keys(_specDivTimes._perBunkSlots)[0]] || [])
+        : (window._perBunkSlots?.[divName]?.[Object.keys(window._perBunkSlots?.[divName] || {})[0]] || []));
 var _specLockStart = null, _specLockEnd = null;
 if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
     _specLockStart = _specDivSlots[uniqueSlots[0]].startMin;

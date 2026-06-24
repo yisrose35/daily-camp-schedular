@@ -229,7 +229,13 @@
                                 const lockDiv = lock.division || lock.allowedDivision;
                                 if (lockDiv) {
                                     const firstDiv = String(lockDiv).split(',')[0].trim();
-                                    const dts = window.divisionTimes?.[firstDiv] || [];
+                                    // ★ Auto mode: divisionTimes[div] carries _perBunkSlots, not a plain array.
+                                    const _dtC = window.divisionTimes?.[firstDiv];
+                                    const dts = Array.isArray(_dtC)
+                                        ? _dtC
+                                        : (_dtC && _dtC._perBunkSlots
+                                            ? (_dtC._perBunkSlots[Object.keys(_dtC._perBunkSlots)[0]] || [])
+                                            : (window._perBunkSlots?.[firstDiv]?.[Object.keys(window._perBunkSlots?.[firstDiv] || {})[0]] || []));
                                     const slot = dts[parseInt(slotIdx, 10)];
                                     if (slot) { lStart = slot.startMin; lEnd = slot.endMin; }
                                 }
@@ -299,7 +305,16 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
             if (lockDiv) {
                 // Handle comma-separated division strings (e.g., "Div A, Div B")
                 const firstDiv = String(lockDiv).split(',')[0].trim();
-                const divSlots = window.divisionTimes?.[firstDiv] || [];
+                // ★ In AUTO mode divisionTimes[div] is an object with _perBunkSlots,
+                //   not a plain slot array, so divSlots[slotIdx] was undefined and the
+                //   lock's time range couldn't be derived — the lock then went unseen.
+                //   Resolve against the per-bunk slot array in that case.
+                const _dt = window.divisionTimes?.[firstDiv];
+                const divSlots = Array.isArray(_dt)
+                    ? _dt
+                    : (_dt && _dt._perBunkSlots
+                        ? (_dt._perBunkSlots[Object.keys(_dt._perBunkSlots)[0]] || [])
+                        : (window._perBunkSlots?.[firstDiv]?.[Object.keys(window._perBunkSlots?.[firstDiv] || {})[0]] || []));
                 const slot = divSlots[parseInt(slotIdx, 10)];
                 if (slot) {
                     lockStartMin = slot.startMin;
