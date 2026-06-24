@@ -434,12 +434,24 @@
 </div>
 
                 <div id="schedule" class="tab-content">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                        <h3>Daily Schedule (View)</h3>
-                        <button onclick="window.validateSchedule?.()"
-                            style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;">
-                            Validate Schedule
-                        </button>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
+                        <h3 style="margin:0;">Daily Schedule (View)</h3>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button onclick="window.SnapshotUI?.saveNow()"
+                                title="Save the current schedule so you can recall it later"
+                                style="background:#2e7d32;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;cursor:pointer;">
+                                Save
+                            </button>
+                            <button onclick="window.SnapshotUI?.openModal()"
+                                title="View and restore previously saved schedules"
+                                style="background:#147D91;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;cursor:pointer;">
+                                Saved
+                            </button>
+                            <button onclick="window.validateSchedule?.()"
+                                style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;cursor:pointer;">
+                                Validate Schedule
+                            </button>
+                        </div>
                     </div>
                     <div id="scheduleTable"></div>
                 </div>
@@ -496,6 +508,7 @@
 <script src="integration_hooks.js"></script>
 
 <script src="schedule_versions_db.js"></script>
+<script src="schedule_snapshot_ui.js"></script>
 <script src="global_authority.js"></script>
 <script src="cloud_sync_helpers.js"></script>
 

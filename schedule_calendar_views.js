@@ -459,6 +459,8 @@
                         '<button class="scv-view-btn" data-view="week">Week</button>' +
                         '<button class="scv-view-btn active" data-view="day">Day</button>' +
                     '</div>' +
+                    '<button class="scv-save-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.saveNow()">Save</button>' +
+                    '<button class="scv-saved-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.openModal()">Saved</button>' +
                     '<button class="scv-validate-btn" onclick="window.validateSchedule &amp;&amp; window.validateSchedule()">Validate</button>' +
                 '</div>' +
             '</div>' +
@@ -1009,7 +1011,9 @@
 '.scv-view-btn:hover{color:var(--slate-700,#334155)}' +
 '.scv-view-btn.active{background:#fff;color:var(--slate-900,#0f172a);box-shadow:0 1px 3px rgba(0,0,0,.08)}' +
 '.scv-validate-btn{padding:6px 16px;border:none;border-radius:6px;background:#ff9800;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
-'.scv-validate-btn:hover{opacity:.85}' +
+'.scv-save-btn{padding:6px 16px;border:none;border-radius:6px;background:#2e7d32;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
+'.scv-saved-btn{padding:6px 16px;border:none;border-radius:6px;background:#147D91;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
+'.scv-validate-btn:hover,.scv-save-btn:hover,.scv-saved-btn:hover{opacity:.85}' +
 
 /* Filter */
 '.scv-filter-row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}' +
