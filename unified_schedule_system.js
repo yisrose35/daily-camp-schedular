@@ -5046,6 +5046,15 @@ if (bypassStatus.highlight) {
         const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
         result.isRainy = _isRainy;
 
+        // RotationEngine caches "activities done today" per (bunk, slotIndex).
+        // After the user edits this bunk, that cache can be stale, so the very
+        // rotation score we're about to read could carry a phantom same-day
+        // block (an activity the cache thinks is still scheduled today). Drop
+        // this bunk's cache so every candidate is scored against the live day.
+        if (window.RotationEngine?.invalidateBunkTodayCache) {
+            try { window.RotationEngine.invalidateBunkTodayCache(bunk); } catch (_e) {}
+        }
+
         // Same-day no-repeat across the full day, excluding the slot(s) being edited.
         const _editedSlots = new Set(slots);
         const _doneTodayFull = new Set();
