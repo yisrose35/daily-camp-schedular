@@ -1878,8 +1878,8 @@
             //   label as a fallback (e.g. smart-tile sport-fallback blocks).
             if (block._slotKind === undefined) {
                 var _bev = String(block.event || '').toLowerCase().trim();
-                block._slotKind = (_bev === 'sports slot' || _bev === 'sport slot') ? 'sport'
-                                : (_bev === 'special activity') ? 'special' : 'any';
+                block._slotKind = (_bev === 'sports slot' || _bev === 'sport slot' || _bev === 'sports' || _bev === 'sport') ? 'sport'
+                                : (_bev === 'special activity' || _bev === 'special' || _bev === 'specials') ? 'special' : 'any';
             }
             var _blkKind = block._slotKind;
             var domain = new Set(), bunk = block.bunk;

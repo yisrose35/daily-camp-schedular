@@ -41,8 +41,11 @@
     // the solver enforces.
     function slotKindOf(ev) {
         const s = String(ev || '').toLowerCase().trim();
-        if (s === 'sports slot' || s === 'sport slot') return 'sport';
-        if (s === 'special activity') return 'special';
+        // Also match the bare tile names ("Sports"/"Special") — split-tile halves
+        // can carry the bare word as their slot event, and defaulting to 'any' would
+        // let a Special half be back-filled with a sport. Mirrors scheduler_core_main.js.
+        if (s === 'sports slot' || s === 'sport slot' || s === 'sports' || s === 'sport') return 'sport';
+        if (s === 'special activity' || s === 'special' || s === 'specials') return 'special';
         return 'any';
     }
 

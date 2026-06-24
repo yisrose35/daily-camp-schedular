@@ -342,8 +342,14 @@
     // The solver reads _slotKind to keep the pools separate. 'any' = flexible.
     function slotKindOf(eventName) {
         const s = String(eventName || '').toLowerCase().trim();
-        if (s === 'sports slot' || s === 'sport slot') return 'sport';
-        if (s === 'special activity') return 'special';
+        // Match both the canonical slot labels ("Sports Slot" / "Special Activity")
+        // AND the bare tile names ("Sports" / "Special") the split-tile modal stores.
+        // A split tile's sub-event can arrive as the bare word — either from a
+        // string-form subEvents entry, an edit that re-parses "Swim / Special", or
+        // an older skeleton — and without these the kind defaults to 'any', which
+        // lets the solver drop a SPORT into a "Special" half (and vice-versa).
+        if (s === 'sports slot' || s === 'sport slot' || s === 'sports' || s === 'sport') return 'sport';
+        if (s === 'special activity' || s === 'special' || s === 'specials') return 'special';
         return 'any';
     }
 
@@ -3783,7 +3789,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     }
 
                     console.log(`[SPLIT] Using slot ${targetSlots[0]} for time range ${start}-${end}`);
-                    const normName = normalizeGA(actName) || actName;
+                    // Resolve the tile kind FIRST, then canonicalize the queued event
+                    // name to match. normalizeGA() would otherwise collapse "Special
+                    // Activity" → "General Activity Slot" (it contains "activity"),
+                    // erasing the special intent from the event label; pinning the
+                    // canonical label keeps the solver's _slotKind fallback and any
+                    // event-name readers in agreement with _slotKind.
+                    const splitKind = slotKindOf(actName);
+                    const normName = splitKind === 'special' ? 'Special Activity'
+                                   : splitKind === 'sport' ? 'Sports Slot'
+                                   : (normalizeGA(actName) || actName);
                     const isGen = isGeneratedType(normName);
 
                     bunks.forEach(b => {
@@ -3805,7 +3820,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 divName,
                                 bunk: b,
                                 event: normName,
-                                _slotKind: slotKindOf(actName),
+                                _slotKind: splitKind,
                                 type: 'slot',
                                 startTime: start,
                                 endTime: end,
