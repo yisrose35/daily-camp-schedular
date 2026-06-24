@@ -349,21 +349,42 @@
             }
 
             // 3. Check daily overrides (Resources panel → per-date field availability).
-            //    ★ These rules are keyed by the RESOURCE the user toggled — for a special
-            //    that is its FACILITY (e.g. "Arts & Crafts Shack"), NOT the special's own
-            //    name. Most specials are self-named (location === name) so the name lookup
-            //    catches them, but specials that share one room under different names
-            //    (Arts & Crafts, Leather → "Arts & Crafts Shack") only have a rule under
-            //    the facility key — checking only `specialName` missed them, so a room the
-            //    user marked unavailable in Resources still handed out its specials. Union
-            //    the name- and facility-keyed rules so a closed/limited room blocks EVERY
-            //    special hosted there. (Mirrors the facility-keyed model the total solver
-            //    already honors via activityProperties[facility].timeRules — set from this
-            //    same dailyFieldAvailability map at optimizer startup.)
-            const _specLoc = (props && props.location) || special.location;
-            const _nameRules = dailyFieldAvailability?.[specialName] || [];
+            //    ★ Rules are keyed by the RESOURCE the user toggled — for a special that is
+            //    its FACILITY (e.g. "Arts & Crafts Shack"), NOT the special's own name.
+            //    Self-named specials (facility === name) match by name, but specials hosted
+            //    in a shared room under a different name (Arts & Crafts / Leather → "Arts &
+            //    Crafts Shack") only have a rule under the facility key. TWO gotchas this
+            //    camp exposed: (a) every special is DUPLICATED cap/lowercase ("Arts &
+            //    Crafts" + "arts & crafts") and the duplicate's own `.location` is often
+            //    blank → can't trust `special.location` alone; resolve the facility by a
+            //    CASE-INSENSITIVE name scan over the special list, taking the first entry
+            //    that actually carries a location (same resolution getLocationForActivity /
+            //    the field-lock system use). (b) a stored location's casing may differ from
+            //    the rule key → match dailyFieldAvailability keys case-insensitively too.
+            //    Union the name- and facility-keyed rules so a closed/limited room blocks
+            //    EVERY special hosted there. (Mirrors the facility-keyed model the total
+            //    solver already honors via activityProperties[facility].timeRules.)
+            const _dfaRulesFor = (k) => {
+                if (!k || !dailyFieldAvailability) return [];
+                if (dailyFieldAvailability[k]) return dailyFieldAvailability[k];
+                const _kl = String(k).toLowerCase();
+                for (const _dk in dailyFieldAvailability) {
+                    if (String(_dk).toLowerCase() === _kl) return dailyFieldAvailability[_dk] || [];
+                }
+                return [];
+            };
+            let _specLoc = '';
+            {
+                const _nl = String(specialName).toLowerCase();
+                for (const _s of combinedSpecials) {
+                    if (_s && String(_s.name).toLowerCase() === _nl && _s.location) { _specLoc = _s.location; break; }
+                }
+                if (!_specLoc) _specLoc = (props && props.location) || special.location
+                    || (window.getLocationForActivity && window.getLocationForActivity(specialName)) || '';
+            }
+            const _nameRules = _dfaRulesFor(specialName);
             const _locRules = (_specLoc && String(_specLoc).toLowerCase() !== String(specialName).toLowerCase())
-                ? (dailyFieldAvailability?.[_specLoc] || [])
+                ? _dfaRulesFor(_specLoc)
                 : [];
             const dailyRules = [..._nameRules, ..._locRules];
 
