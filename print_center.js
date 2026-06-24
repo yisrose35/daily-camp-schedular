@@ -303,6 +303,12 @@ var _liveOneDivPerPage = (function () {
 var _liveWholeCamp = (function () {
     try { return localStorage.getItem('pc3_live_whole_camp') === '1'; } catch (e) { return false; }
 })();
+// "Shared timeline" — render one time axis down the Y-axis per division with all
+// the division's bunks as columns (grouped by grade), instead of a separate
+// per-grade grid. Much denser. Independent of the page-fit toggles above.
+var _liveSharedTimeline = (function () {
+    try { return localStorage.getItem('pc3_live_shared_timeline') === '1'; } catch (e) { return false; }
+})();
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
@@ -1477,6 +1483,9 @@ function getStyles() {
     '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
     '.pc3-live-divbanner{font-size:26px;font-weight:800;color:#fbbf24;letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid rgba(251,191,36,.35);}' +
+    '.pc3-live-unified th.pc3-uni-grade{font-size:13px;font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
+    '.pc3-live-unified th.pc3-uni-bunk{font-size:11px;font-weight:600;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
+    '.pc3-live-unified th.row-head{white-space:nowrap;font-variant-numeric:tabular-nums;}' +
     '.pc3-live-fit{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
     '.pc3-live-fit:hover{background:rgba(255,255,255,.2);}' +
     '.pc3-live-fit.on{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
@@ -3654,6 +3663,7 @@ function runLiveStandalone() {
                 '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
                 '<button class="pc3-live-fit' + (_liveOneDivPerPage ? ' on' : '') + '" id="pc3-live-perdiv-btn" title="Show one division per page, rotating through them" onclick="toggleLivePerDiv()">One division per page</button>' +
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
+                '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -4092,9 +4102,123 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     return html;
 }
 
-// Cheap fingerprint of everything the live view renders. Captures the schedule
-// data AND the time-dependent state (which activity/column is "now"/"past") so
-// the heavy DOM rebuild only fires when the picture actually changes — not on a
+// —— Build ONE shared-timeline section for a whole division ————————————————————
+// Instead of a separate grid per grade (each repeating its own time axis across
+// the top), this renders a single table with ONE time axis running DOWN the
+// Y-axis and every bunk in the division as a column (grouped by grade in the
+// header). Far denser — fits much more on a page. `grades` is an array of
+// { divName: <grade name>, bunks: [...] }.
+function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
+    var auto = isAutoMode();
+
+    // Flatten to columns (bunk + which grade it belongs to) and build each
+    // bunk's activity segments, collecting every time boundary as we go.
+    var cols = [];
+    grades.forEach(function (g) {
+        (g.bunks || []).forEach(function (b) { cols.push({ bunk: b, grade: g.divName, segs: [] }); });
+    });
+    if (!cols.length) return '';
+
+    var boundSet = {};
+    cols.forEach(function (c) {
+        var segs = [];
+        if (auto) {
+            var slots = getPerBunkSchedule(c.bunk, c.grade);
+            for (var i = 0; i < slots.length; i++) {
+                var entry = getEntry(c.bunk, i);
+                if (entry && entry.continuation && segs.length > 0) { segs[segs.length - 1].endMin = slots[i].endMin; continue; }
+                segs.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
+            }
+        } else {
+            var blocks = buildDivisionBlocks(c.grade);
+            blocks.forEach(function (bl) {
+                var si = findFirstSlotForTime(bl.startMin, c.grade);
+                var entry = si >= 0 ? getEntry(c.bunk, si) : null;
+                segs.push({ startMin: bl.startMin, endMin: bl.endMin, entry: entry, slotIdx: si, type: entry ? getEntryType(entry) : 'free', isLeague: bl.isLeague, event: bl.event });
+            });
+        }
+        c.segs = segs;
+        segs.forEach(function (s) { boundSet[s.startMin] = 1; boundSet[s.endMin] = 1; });
+    });
+
+    var bounds = Object.keys(boundSet).map(Number).sort(function (a, b) { return a - b; });
+    if (bounds.length < 2) return '';
+    var rows = [];
+    for (var bi = 0; bi < bounds.length - 1; bi++) rows.push({ startMin: bounds[bi], endMin: bounds[bi + 1] });
+
+    // Map each column to the segment covering each row (null = gap).
+    cols.forEach(function (c) {
+        c.rowSeg = rows.map(function (r) {
+            var found = null;
+            c.segs.forEach(function (s) { if (s.startMin <= r.startMin && s.endMin >= r.endMin) found = s; });
+            return found;
+        });
+    });
+
+    // Text + css class for a cell (segment may be null → gap/league).
+    function cellInfo(c, seg, r) {
+        var txt, cls;
+        if (!seg) {
+            var lg0 = pcLeagueInfoAt(c.grade, r.startMin);
+            if (lg0) { txt = lg0.label + (lg0.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + lg0.matchups.join(', ') : ''); cls = 'cell-league'; }
+            else { txt = '—'; cls = 'cell-free'; }
+        } else if (!auto && seg.isLeague) {
+            txt = seg.event || 'League Game';
+            if (!_currentTemplate.hideLeagueMatchups) { var mm = buildLeagueMatchups(seg, c.grade); if (mm.length) txt += ' | ' + mm.join(', '); }
+            cls = 'cell-league';
+        } else {
+            var isLeagueAct = !!(seg.entry && (seg.entry._h2h || seg.entry._league || seg.entry._isSpecialtyLeague || seg.entry._allMatchups));
+            var leagueInfo = (isLeagueAct || !seg.entry) ? pcLeagueInfoAt(c.grade, seg.startMin) : null;
+            if (isLeagueAct || leagueInfo) {
+                var lbl = (seg.entry && (seg.entry._gameLabel || seg.entry._leagueName)) || (leagueInfo && leagueInfo.label) || 'League Game';
+                var ms = (leagueInfo && leagueInfo.matchups) || [];
+                txt = lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + ms.join(', ') : '');
+                cls = 'cell-league';
+            } else {
+                txt = seg.entry ? formatEntry(seg.entry) : '—';
+                cls = 'cell-' + seg.type;
+            }
+        }
+        return { txt: txt, cls: cls };
+    }
+
+    var dayRange = minutesToTimeLabel(bounds[0]) + ' – ' + minutesToTimeLabel(bounds[bounds.length - 1]);
+    var html = '<div class="pc3-live-section">';
+    html += '<div class="pc3-live-divhead">' +
+        '<span class="pc3-live-divname">' + escHtml(parentLabel) + '</span>' +
+        '<span class="pc3-live-divrange">' + dayRange + '</span>' +
+    '</div>';
+    html += '<table class="pc3-live-tbl pc3-live-unified" style="table-layout:fixed;width:100%;">';
+    // Header: row 1 = grade groups, row 2 = bunk names.
+    html += '<thead><tr><th class="corner" rowspan="2">Time</th>';
+    grades.forEach(function (g) { if (g.bunks && g.bunks.length) html += '<th colspan="' + g.bunks.length + '" class="pc3-uni-grade">' + escHtml(g.divName) + '</th>'; });
+    html += '</tr><tr>';
+    cols.forEach(function (c) { html += '<th class="pc3-uni-bunk">' + escHtml(c.bunk) + '</th>'; });
+    html += '</tr></thead><tbody>';
+
+    var skip = {}; // "ci:ri" already covered by a rowspan above
+    rows.forEach(function (r, ri) {
+        var isCur = nowMin >= r.startMin && nowMin < r.endMin;
+        var isPast = nowMin >= r.endMin;
+        html += '<tr>';
+        html += '<th class="row-head' + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + minutesToTimeLabel(r.startMin) + '</th>';
+        cols.forEach(function (c, ci) {
+            if (skip[ci + ':' + ri]) return;
+            var seg = c.rowSeg[ri];
+            var span = 1;
+            if (seg) {
+                while (ri + span < rows.length && c.rowSeg[ri + span] === seg) { skip[ci + ':' + (ri + span)] = 1; span++; }
+            }
+            var info = cellInfo(c, seg, r);
+            var cls = info.cls + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '');
+            html += '<td' + (span > 1 ? ' rowspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:14px;line-height:1.25;padding:6px 5px;white-space:normal;word-break:break-word;">' + escHtml(info.txt) + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
+}
+
 // blind 30-second timer. This is what kills the periodic flash/lag on a kiosk.
 function _liveContentSignature(nowMin) {
     var divs = getDivisions();
@@ -4170,7 +4294,28 @@ function renderLiveContent() {
     //    divisions[grade].parentDivision (falls back to the grade itself).
     var sectHtml = '';
     var sectionParents = [];
-    available.forEach(function (divName) {
+    if (_liveSharedTimeline) {
+        // One shared-timeline section per DIVISION — group its grades so they
+        // share a single time axis with all their bunks as columns.
+        var stOrder = [], stByKey = {};
+        available.forEach(function (divName) {
+            var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
+            if (!bunks.length) return;
+            var rp = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) ||
+                     (divs[divName] && divs[divName].parentDivision) || null;
+            var key = rp || (' grade:' + divName);
+            if (!stByKey[key]) { stByKey[key] = { label: rp || divName, real: !!rp, grades: [] }; stOrder.push(key); }
+            stByKey[key].grades.push({ divName: divName, bunks: bunks });
+        });
+        stOrder.forEach(function (key) {
+            var grp = stByKey[key];
+            var secHtml = buildLiveUnifiedSectionHTML(grp.label, grp.grades, nowMin);
+            if (!secHtml) return;
+            sectionParents.push({ key: key, label: grp.label, real: grp.real });
+            sectHtml += '<div class="pc3-live-section-wrap">' + secHtml + '</div>';
+        });
+    }
+    if (!_liveSharedTimeline) available.forEach(function (divName) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
         var realParent = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) ||
@@ -4300,7 +4445,7 @@ function renderLiveContent() {
         // In one-division-per-page mode, label the page with the division name
         // (only for real divisions — a lone grade with no parent already shows
         // its own header).
-        if (_liveOneDivPerPage && page.realParent && page.parent) {
+        if (_liveOneDivPerPage && !_liveSharedTimeline && page.realParent && page.parent) {
             var banner = document.createElement('div');
             banner.className = 'pc3-live-divbanner';
             banner.textContent = page.parent;
@@ -4401,6 +4546,19 @@ function toggleLiveWholeCamp() {
     }
     var btn = document.getElementById('pc3-live-wholecamp-btn');
     if (btn) btn.classList.toggle('on', _liveWholeCamp);
+    _livePageIndex = 0;
+    _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
+    _liveRenderSig = '';     // force a real rebuild on the next render
+    try { renderLiveContent(); } catch (e) {}
+}
+
+// Flip "Shared timeline" on/off — one time axis per division, bunks as columns.
+// Independent of the page-fit toggles, so it just changes how sections render.
+function toggleLiveSharedTimeline() {
+    _liveSharedTimeline = !_liveSharedTimeline;
+    try { localStorage.setItem('pc3_live_shared_timeline', _liveSharedTimeline ? '1' : '0'); } catch (e) {}
+    var btn = document.getElementById('pc3-live-shared-btn');
+    if (btn) btn.classList.toggle('on', _liveSharedTimeline);
     _livePageIndex = 0;
     _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
     _liveRenderSig = '';     // force a real rebuild on the next render
@@ -6041,6 +6199,8 @@ window.livePageNav = livePageNav;
 window.toggleLivePerDiv = toggleLivePerDiv;
 // "Whole camp on one screen" toggle — exported for the popup's inline onclick.
 window.toggleLiveWholeCamp = toggleLiveWholeCamp;
+// "Shared timeline" toggle — exported for the popup's inline onclick.
+window.toggleLiveSharedTimeline = toggleLiveSharedTimeline;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');
