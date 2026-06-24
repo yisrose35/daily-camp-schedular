@@ -3639,15 +3639,32 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     
                     console.log(`[SKELETON] ✅ Filled pinned "${eventName}" for ${divName} (${bunkList.length} bunks)`);
 
-                    // ★ v17.11: Lock physical location if pinned event uses one
-                    const pinnedLocName = getLocationForPinnedEvent(item);
-                    if (pinnedLocName && typeof pinnedLocName === 'string' && window.GlobalFieldLocks) {
-                        window.GlobalFieldLocks.lockField(pinnedLocName, slots, {
-                            lockedBy: 'pinned_event_location',
-                            division: divName,
-                            activity: `${eventName} (pinned @ ${pinnedLocName})`
+                    // ★ v17.11: Lock physical location if pinned event uses one.
+                    // ★ FACILITY RESERVATION (custom.pinned override): a custom pinned
+                    //   tile can reserve SEVERAL facilities (item.reservedFields, e.g.
+                    //   "Basketball – Field 1, Field 2") plus an explicit location — but
+                    //   only the single getLocationForPinnedEvent() result used to be
+                    //   locked, so the OTHER reserved fields leaked and a league (which
+                    //   runs later, in STEP 4/5, and yields to existing locks) could
+                    //   grab them for another division. Lock EVERY field a custom pinned
+                    //   tile uses, GLOBALLY, before any league runs — so custom pinned
+                    //   always wins over regular AND specialty leagues.
+                    if (window.GlobalFieldLocks) {
+                        const _pinFields = new Set();
+                        const _addPinField = (f) => {
+                            if (f && typeof f === 'string' && f.trim() && f !== 'Free') _pinFields.add(f.trim());
+                        };
+                        _addPinField(getLocationForPinnedEvent(item));
+                        _addPinField(typeof item.location === 'string' ? item.location : null);
+                        if (Array.isArray(item.reservedFields)) item.reservedFields.forEach(_addPinField);
+                        _pinFields.forEach(_pinLoc => {
+                            window.GlobalFieldLocks.lockField(_pinLoc, slots, {
+                                lockedBy: 'pinned_event_location',
+                                division: divName,
+                                activity: `${eventName} (pinned @ ${_pinLoc})`
+                            });
+                            console.log(`[SKELETON] 🔒 Locked "${_pinLoc}" for pinned "${eventName}" in ${divName}`);
                         });
-                        console.log(`[SKELETON] 🔒 Locked "${pinnedLocName}" for pinned "${eventName}" in ${divName}`);
                     }
                 }
                 return; // Done with this item
