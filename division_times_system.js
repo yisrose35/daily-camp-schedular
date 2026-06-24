@@ -186,6 +186,40 @@
      * @param {Object} divisions - The divisions object { "Junior Boys": { bunks: [...] }, ... }
      * @returns {Object} divisionTimes - { "Junior Boys": [slots...], "Senior Boys": [slots...] }
      */
+    // Drop exact-duplicate skeleton tiles (same division + activity + start time) before
+    // building the grid. A skeleton can carry two tiles for the same period — e.g. a
+    // base-template copy plus a per-date board copy, often differing only in capitalization
+    // or a malformed time string ("6:30" vs "6:30pm"). Two tiles in one slot register as an
+    // "overlap", which flips the division onto the boundary-union path; that path then
+    // manufactures fillable slots inside genuinely-empty gaps (a phantom activity in time
+    // the user left blank). Keep the better-formed tile (valid am/pm on both ends), drop the rest.
+    function dedupeSkeletonTiles(skeleton) {
+        if (!Array.isArray(skeleton)) return skeleton;
+        const norm = x => String(x == null ? '' : x).toLowerCase().replace(/\s+/g, ' ').trim();
+        const wellFormed = b => /(am|pm)\s*$/i.test(String((b && b.startTime) || '').trim())
+                             && /(am|pm)\s*$/i.test(String((b && b.endTime) || '').trim());
+        const seen = new Map();
+        const cleaned = [];
+        const drops = [];
+        skeleton.forEach(b => {
+            if (!b || !b.division) { cleaned.push(b); return; }
+            const key = `${b.division}|${norm(b.event)}|${parseTimeToMinutes(b.startTime)}`;
+            if (!seen.has(key)) {
+                seen.set(key, cleaned.length);
+                cleaned.push(b);
+            } else {
+                const at = seen.get(key);
+                if (wellFormed(b) && !wellFormed(cleaned[at])) { drops.push(cleaned[at]); cleaned[at] = b; }
+                else drops.push(b);
+            }
+        });
+        if (drops.length) {
+            log(`  ⚠️ DEDUPE: dropped ${drops.length} duplicate tile(s): ` +
+                drops.map(b => `${b.division}:"${b.event}" ${b.startTime}-${b.endTime}`).join(', '));
+        }
+        return cleaned;
+    }
+
     function buildDivisionTimesFromSkeleton(skeleton, divisions) {
         log('Building division times from skeleton...');
         log(`  Skeleton items: ${skeleton?.length || 0}`);
@@ -195,6 +229,9 @@
             log('  ⚠️ Empty skeleton, returning empty divisionTimes');
             return {};
         }
+
+        // ★★★ DEDUPE phantom-gap trigger: remove exact-duplicate tiles up front ★★★
+        skeleton = dedupeSkeletonTiles(skeleton);
 
         const divisionTimes = {};
 
