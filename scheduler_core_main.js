@@ -888,17 +888,34 @@
             return (_specialGradePriority.score[divA] / cA) - (_specialGradePriority.score[divB] / cB);
         }
 
-      // Overlap-based claim tracker — division-aware, respects cross-division shareability
-        const _specialClaims = {}; // specialName.lower → [{startMin, endMin, divName}]
+      // Overlap-based claim tracker — keyed by the special's PHYSICAL FACILITY (its
+        // configured location) rather than its name, so two DIFFERENTLY-named specials
+        // that live in the SAME room (e.g. "Arts & Crafts" and "Leather" both hosted in
+        // "Arts & Crafts Shack") can't be scheduled there at the same time. A room runs
+        // one activity at a time; the sharability/capacity rules below apply only to
+        // multiple bunks doing the SAME activity. Self-hosted specials (location == name,
+        // or no location) fall back to the name key → identical to the old behavior.
+        const _specialClaims = {}; // facilityKey → [{startMin, endMin, divName, actLower}]
+        // Resolve a special to the key its claims are tracked under: its configured
+        // facility when present, else the special's own name.
+        function _claimKey(name) {
+            const resolver = window.getLocationForActivity || getLocationForActivity;
+            const loc = (typeof resolver === 'function') ? resolver(name) : null;
+            return String(loc || name).toLowerCase().trim();
+        }
         function _getSharableWith(name) {
             const key = Object.keys(activityProperties || {}).find(k => k.toLowerCase() === name.toLowerCase());
             return (activityProperties?.[name] || activityProperties?.[key] || {}).sharableWith || null;
         }
         function _canClaim(name, startMin, endMin, maxCap, requesterDiv) {
             const lower = name.toLowerCase();
-            const existing = _specialClaims[lower] || [];
+            const existing = _specialClaims[_claimKey(name)] || [];
             const overlapping = existing.filter(c => c.startMin < endMin && c.endMin > startMin);
             if (overlapping.length === 0) return true;
+            // ★ A facility hosts ONE activity at a time — if this room is already held by
+            //   a DIFFERENT special in an overlapping window, it can't take this one too
+            //   (regardless of either special's sharability/capacity).
+            if (overlapping.some(c => c.actLower && c.actLower !== lower)) return false;
             const sw = _getSharableWith(name);
             // Not sharable: hard cap of 1, cross-division always blocked
             if (!sw || sw.type === 'not_sharable') {
@@ -919,9 +936,9 @@
             return overlapping.length < maxCap;
         }
         function _registerClaim(name, startMin, endMin, divName) {
-            const lower = name.toLowerCase();
-            if (!_specialClaims[lower]) _specialClaims[lower] = [];
-            _specialClaims[lower].push({ startMin, endMin, divName });
+            const key = _claimKey(name);
+            if (!_specialClaims[key]) _specialClaims[key] = [];
+            _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
         }
 
         // ★ SAME-DAY SPECIAL TRACKER (per bunk, accumulates across windows in
