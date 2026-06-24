@@ -290,19 +290,13 @@ var _livePageTimer = null;
 var _livePrevPageCount = -1; // page count when the rotation timer was last (re)started
 var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
 var _LIVE_PAGE_MS = 20000; // ms between page rotations
-// "Fit to screen": squeeze every division onto ONE page instead of rotating
-// through paginated pages. Persisted so the kiosk remembers the operator's
-// choice across reloads. When the whole schedule can't shrink to fit while
-// staying legible, we fall back to the rotating-pages behaviour (see below).
-var _liveFitOneScreen = (function () {
-    try { return localStorage.getItem('pc3_live_fit_one_screen') === '1'; } catch (e) { return false; }
-})();
-// "One division per page" — each page shows exactly one division (all its
-// bunks), rotating through divisions. Mutually exclusive with fit-to-screen.
+// "One division per page" — each page shows one division (all its grades and
+// their bunks), rotating through divisions. A division that doesn't fit on one
+// page spills onto additional pages. Persisted so the kiosk remembers the
+// operator's choice across reloads.
 var _liveOneDivPerPage = (function () {
     try { return localStorage.getItem('pc3_live_one_div_per_page') === '1'; } catch (e) { return false; }
 })();
-var _LIVE_FIT_MIN_SCALE = 0.45; // readable floor — below this, fall back to paginated rotation
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
@@ -3654,7 +3648,6 @@ function runLiveStandalone() {
             '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:8px;"></div>' +
             '<div class="pc3-live-headright">' +
                 '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
-                '<button class="pc3-live-fit' + (_liveFitOneScreen ? ' on' : '') + '" id="pc3-live-fit-btn" title="Fit the entire schedule onto one screen" onclick="toggleLiveFit()">Fit to screen</button>' +
                 '<button class="pc3-live-fit' + (_liveOneDivPerPage ? ' on' : '') + '" id="pc3-live-perdiv-btn" title="Show one division per page, rotating through them" onclick="toggleLivePerDiv()">One division per page</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
@@ -4175,9 +4168,15 @@ function renderLiveContent() {
     available.forEach(function (divName) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
-        var parent = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) ||
-                     (divs[divName] && divs[divName].parentDivision) || divName;
-        sectionParents.push(parent);
+        var realParent = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) ||
+                         (divs[divName] && divs[divName].parentDivision) || null;
+        // key groups grades onto pages; real divisions share a key, while grades
+        // without a parent each get a unique key (so they stay one-per-page).
+        sectionParents.push({
+            key: realParent || (' grade:' + divName),
+            label: realParent || divName,
+            real: !!realParent
+        });
         sectHtml += '<div class="pc3-live-section-wrap">' + buildLiveSectionHTML(divName, bunks, nowMin) + '</div>';
     });
     if (!sectHtml) {
@@ -4202,59 +4201,33 @@ function renderLiveContent() {
     var availH = body.offsetHeight || (window.innerHeight - 80);
     var wraps = Array.prototype.slice.call(body.querySelectorAll('.pc3-live-section-wrap'));
 
-    // 2b. "Fit to screen" mode: try to put EVERY section on a single page and
-    //     scale the whole thing down uniformly so nothing overflows and nothing
-    //     rotates. The tables are width:100% (fixed layout) so the binding
-    //     constraint is height — scale by it. If the result would be smaller
-    //     than the readable floor, bail out and let the bin-packer paginate +
-    //     rotate instead (so text stays legible on huge schedules).
-    if (_liveFitOneScreen) {
-        var fitTotalH = 36; // .pc3-live-page-inner vertical padding (18px top + 18px bottom)
-        wraps.forEach(function (wrap) { fitTotalH += wrap.offsetHeight + 20; });
-        var fitScale = fitTotalH > availH ? availH / fitTotalH : 1;
-        fitScale = Math.min(1, fitScale);
-        if (fitScale >= _LIVE_FIT_MIN_SCALE) {
-            _numLivePages = 1;
-            _livePageIndex = 0;
-
-            var fitPage = document.createElement('div');
-            fitPage.id = 'lp-0';
-            fitPage.style.cssText = 'position:absolute;inset:0;opacity:1;pointer-events:auto;overflow:hidden;';
-
-            var fitInner = document.createElement('div');
-            fitInner.className = 'pc3-live-page-inner';
-            // Uniform shrink (no width compensation) so width fits too.
-            fitInner.style.cssText = 'transform:scale(' + fitScale.toFixed(4) + ');transform-origin:top left;width:100%;';
-
-            wraps.forEach(function (n) { fitInner.appendChild(n); });
-            fitPage.appendChild(fitInner);
-            body.appendChild(fitPage);
-
-            updateLivePageIndicator();
-            if (_numLivePages !== _livePrevPageCount) {
-                _livePrevPageCount = _numLivePages;
-                startLivePageTimer(); // stops rotation (single page)
-            }
-            body.style.visibility = '';
-            return; // single-page fit done — skip bin-packing
-        }
-        // else: would be too small to read → fall through to paginated rotation
-    }
-
     // 3. Decide how sections map to pages.
     var pages = [];
     if (_liveOneDivPerPage) {
-        // One division per page — group every grade-section by its parent
-        // division so all of e.g. Juniors (grades 1-3 and their bunks) lands on
-        // one page and the rotation cycles division by division. Each page is
-        // still scaled to fit in step 4, so a division with many grades/bunks
-        // shrinks rather than overflowing.
-        var byParent = {}; // parent name -> page object (preserve first-seen order)
+        // One division per page — never mix divisions on a page. All grades of a
+        // division (Juniors = grades 1-3 and their bunks) stay together, but if
+        // they don't all fit on one page the division spills onto a second (or
+        // third...) page instead of being shrunk to an unreadable size. Pages
+        // rotate division by division.
+        var groups = [], byKey = {};
         wraps.forEach(function (wrap, i) {
-            var key = sectionParents[i] != null ? String(sectionParents[i]) : ('#' + i);
-            if (!byParent[key]) { byParent[key] = { nodes: [], totalH: 0, parent: key }; pages.push(byParent[key]); }
-            byParent[key].nodes.push(wrap);
-            byParent[key].totalH += wrap.offsetHeight + 20;
+            var meta = sectionParents[i] || { key: '#' + i, label: '', real: false };
+            if (!byKey[meta.key]) { byKey[meta.key] = { label: meta.label, real: meta.real, items: [] }; groups.push(byKey[meta.key]); }
+            byKey[meta.key].items.push({ node: wrap, h: wrap.offsetHeight + 20 });
+        });
+        groups.forEach(function (grp) {
+            // Bin-pack this division's grade-sections by height; each overflow
+            // starts a fresh page belonging to the same division.
+            var cur = { nodes: [], totalH: 0, parent: grp.label, realParent: grp.real, cont: false };
+            pages.push(cur);
+            grp.items.forEach(function (it) {
+                if (cur.nodes.length > 0 && cur.totalH + it.h > availH) {
+                    cur = { nodes: [], totalH: 0, parent: grp.label, realParent: grp.real, cont: true };
+                    pages.push(cur);
+                }
+                cur.nodes.push(it.node);
+                cur.totalH += it.h;
+            });
         });
     } else {
         // Greedy bin-pack: keep adding sections to the current page until they
@@ -4292,12 +4265,13 @@ function renderLiveContent() {
         inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
 
         // In one-division-per-page mode, label the page with the division name
-        // when it groups more than one grade (a single-grade page already shows
-        // that grade's header, so a banner would just duplicate it).
-        if (_liveOneDivPerPage && page.parent && page.nodes.length > 1) {
+        // (only for real divisions — a lone grade with no parent already shows
+        // its own header). Spill pages of a multi-page division are marked
+        // "(continued)".
+        if (_liveOneDivPerPage && page.realParent && page.parent) {
             var banner = document.createElement('div');
             banner.className = 'pc3-live-divbanner';
-            banner.textContent = page.parent;
+            banner.textContent = page.parent + (page.cont ? ' (continued)' : '');
             inner.appendChild(banner);
         }
         page.nodes.forEach(function (n) { inner.appendChild(n); });
@@ -4360,40 +4334,12 @@ function startLivePageTimer() {
     _livePageTimer = setInterval(function () { livePageNav(1); }, _LIVE_PAGE_MS);
 }
 
-// Flip "Fit to screen" on/off from the live header button. Persists the choice,
-// resets to the first page, clears the render signature so the next tick does a
-// real rebuild, and re-renders immediately so the toggle feels instant.
-function toggleLiveFit() {
-    _liveFitOneScreen = !_liveFitOneScreen;
-    try { localStorage.setItem('pc3_live_fit_one_screen', _liveFitOneScreen ? '1' : '0'); } catch (e) {}
-    // Fit-to-screen and one-division-per-page are opposite intents — turning one
-    // on turns the other off.
-    if (_liveFitOneScreen && _liveOneDivPerPage) {
-        _liveOneDivPerPage = false;
-        try { localStorage.setItem('pc3_live_one_div_per_page', '0'); } catch (e) {}
-        var pdb = document.getElementById('pc3-live-perdiv-btn');
-        if (pdb) pdb.classList.remove('on');
-    }
-    var btn = document.getElementById('pc3-live-fit-btn');
-    if (btn) btn.classList.toggle('on', _liveFitOneScreen);
-    _livePageIndex = 0;
-    _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
-    _liveRenderSig = '';     // force a real rebuild on the next render
-    try { renderLiveContent(); } catch (e) {}
-}
-
 // Flip "One division per page" on/off. Each page then shows a single division
-// (all its bunks) and the rotation cycles division by division. Mutually
-// exclusive with fit-to-screen.
+// (all its grades and bunks, spilling onto extra pages if needed) and the
+// rotation cycles division by division.
 function toggleLivePerDiv() {
     _liveOneDivPerPage = !_liveOneDivPerPage;
     try { localStorage.setItem('pc3_live_one_div_per_page', _liveOneDivPerPage ? '1' : '0'); } catch (e) {}
-    if (_liveOneDivPerPage && _liveFitOneScreen) {
-        _liveFitOneScreen = false;
-        try { localStorage.setItem('pc3_live_fit_one_screen', '0'); } catch (e) {}
-        var fb = document.getElementById('pc3-live-fit-btn');
-        if (fb) fb.classList.remove('on');
-    }
     var btn = document.getElementById('pc3-live-perdiv-btn');
     if (btn) btn.classList.toggle('on', _liveOneDivPerPage);
     _livePageIndex = 0;
@@ -6030,10 +5976,9 @@ window._pc3RunLiveStandalone = runLiveStandalone;
 // resolves against the (popup) window's GLOBAL scope. livePageNav is defined
 // inside this file's IIFE, so without this export the arrows silently no-op.
 window.livePageNav = livePageNav;
-// "Fit to screen" toggle button uses inline onclick="toggleLiveFit()", which
-// resolves against the popup window's global scope — export it like livePageNav.
-window.toggleLiveFit = toggleLiveFit;
-// "One division per page" toggle — same inline-onclick reasoning as above.
+// "One division per page" toggle uses inline onclick="toggleLivePerDiv()",
+// which resolves against the popup window's global scope — export it like
+// livePageNav so the button isn't a silent no-op.
 window.toggleLivePerDiv = toggleLivePerDiv;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
