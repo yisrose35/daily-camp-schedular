@@ -3013,7 +3013,64 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return td;
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Scroll preservation across re-render.
+    // The schedule re-renders on a burst of cloud-hydration events (registry
+    // reload + app1 refresh + sync's updateTable, all firing off the throttled
+    // `campistry-cloud-hydrated` event). Each render wipes the table via
+    // innerHTML='' (below): the document height collapses, the browser clamps
+    // window scrollY down to the new max, and the synchronous rebuild restores
+    // the height but NOT the scroll position — so the page "jumps back to the
+    // top" every few seconds while the user is scrolled down. Capture the
+    // scroll position before the wipe and restore it after the rebuild, on
+    // every return path.
+    // ─────────────────────────────────────────────────────────────────────
+    function _usCaptureScroll(el) {
+        return {
+            wx: window.scrollX || window.pageXOffset || 0,
+            wy: window.scrollY || window.pageYOffset || 0,
+            el: el || null,
+            ex: el ? el.scrollLeft : 0,
+            ey: el ? el.scrollTop : 0
+        };
+    }
+    function _usRestoreScroll(s) {
+        if (!s) return;
+        // Defeat html{scroll-behavior:smooth} so the correction is instant, not
+        // an animated scroll the user would see.
+        var de = document.documentElement;
+        var prevBehavior = de.style.scrollBehavior;
+        de.style.scrollBehavior = 'auto';
+        try {
+            var curY = window.scrollY || window.pageYOffset || 0;
+            var curX = window.scrollX || window.pageXOffset || 0;
+            // Only correct a position the render actually disturbed — never
+            // fight a genuine scroll that happened during the render.
+            if (Math.abs(curY - s.wy) > 1 || Math.abs(curX - s.wx) > 1) {
+                window.scrollTo(s.wx, s.wy);
+            }
+            if (s.el && (s.el.scrollTop !== s.ey || s.el.scrollLeft !== s.ex)) {
+                s.el.scrollTop = s.ey;
+                s.el.scrollLeft = s.ex;
+            }
+        } catch (_e) { /* non-fatal */ }
+        de.style.scrollBehavior = prevBehavior;
+    }
+
+    // Thin scroll-preserving wrapper around the real renderer. renderStaggeredView
+    // and updateTable both funnel through here, so this one wrapper covers every
+    // render path (manual flat table AND the auto-grid delegation below).
     function renderTransposedView(container) {
+        var _el = container || document.getElementById('scheduleTable');
+        var _savedScroll = _usCaptureScroll(_el);
+        try {
+            return _renderTransposedViewImpl(container);
+        } finally {
+            _usRestoreScroll(_savedScroll);
+        }
+    }
+
+    function _renderTransposedViewImpl(container) {
         _usTransposed = true; // time runs left→right here → travel sits left/right
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
 
