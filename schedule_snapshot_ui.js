@@ -70,49 +70,66 @@
                 if (!window.confirm(`A saved schedule named “${name}” already exists. Overwrite it?`)) return;
             }
         } catch (_e) { /* listing is best-effort; proceed to save */ }
-        setSaveState('saving');
+        const progress = showSaveProgress();          // centered "Saving…" popup
         try {
             const res = await vm().saveVersion(name, { silent: true });
             if (res?.success) {
-                setSaveState('saved');                       // button flips to "Saved!"
-                toast(`Saved as “${name}”. Recall it anytime from the Saved button.`, 'success');
+                progress.done(`Saved as “${name}”`);    // popup flips to "Saved!" then auto-closes
                 if (document.getElementById('snapshotModalOverlay')) renderTable();
-                setTimeout(() => setSaveState('idle'), 2000); // revert button label after a beat
             } else {
-                setSaveState('idle');
+                progress.close();
                 toast('Could not save: ' + (res?.error || 'unknown error'), 'error');
             }
         } catch (e) {
-            setSaveState('idle');
+            progress.close();
             toast('Could not save: ' + e.message, 'error');
         }
     }
 
-    // Find the live Save button(s) — the calendar-views toolbar (.scv-save-btn)
-    // and the static fallback (#snapshotSaveBtn) — and the list button(s).
+    // Find the live Save / list button(s) across both toolbars (for restore busy state).
     function saveBtns() { return Array.from(document.querySelectorAll('.scv-save-btn, #snapshotSaveBtn')); }
     function listBtns() { return Array.from(document.querySelectorAll('.scv-saved-btn, #snapshotListBtn')); }
 
-    // Drive the Save button through saving -> saved -> idle so it's obvious
-    // something happened (the old code only toggled ids that didn't exist).
-    function setSaveState(state) {
-        saveBtns().forEach(b => {
-            if (b.dataset.idleLabel == null) b.dataset.idleLabel = b.textContent;
-            if (state === 'saving') {
-                b.disabled = true; b.style.opacity = '0.75'; b.style.cursor = 'wait';
-                b.textContent = 'Saving…';
-            } else if (state === 'saved') {
-                b.disabled = true; b.style.opacity = '1'; b.style.cursor = 'default';
-                b.textContent = 'Saved!';
-            } else {
-                b.disabled = false; b.style.opacity = '1'; b.style.cursor = 'pointer';
-                b.textContent = b.dataset.idleLabel;
-            }
-        });
-        listBtns().forEach(b => {
-            const busy = state === 'saving';
-            b.disabled = busy; b.style.opacity = busy ? '0.75' : '1';
-        });
+    // -------------------------------------------------------------
+    // Centered "Saving… / Saved!" popup (replaces the old button label swap,
+    // which could get stuck if the toolbar rebuilt mid-save).
+    // -------------------------------------------------------------
+    function ensureProgressStyles() {
+        if (document.getElementById('snapshotProgressStyles')) return;
+        const s = document.createElement('style');
+        s.id = 'snapshotProgressStyles';
+        s.textContent = '@keyframes snapSpin{to{transform:rotate(360deg)}}';
+        document.head.appendChild(s);
+    }
+
+    function showSaveProgress() {
+        ensureProgressStyles();
+        const old = document.getElementById('snapshotSaveProgress');
+        if (old) old.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'snapshotSaveProgress';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100001;display:flex;align-items:center;justify-content:center;';
+        const card = document.createElement('div');
+        card.style.cssText = 'background:#fff;border-radius:12px;padding:28px 40px;min-width:230px;box-shadow:0 12px 40px rgba(0,0,0,.25);display:flex;flex-direction:column;align-items:center;gap:16px;';
+        card.innerHTML =
+            '<div id="snapProgIcon" style="width:44px;height:44px;border:4px solid #e5e7eb;border-top-color:#147D91;border-radius:50%;animation:snapSpin .8s linear infinite;box-sizing:border-box;"></div>' +
+            '<div id="snapProgText" style="font-size:16px;font-weight:600;color:#334155;text-align:center;">Saving…</div>';
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        return {
+            done(message) {
+                const icon = card.querySelector('#snapProgIcon');
+                const text = card.querySelector('#snapProgText');
+                // CSS-drawn green check (no emoji)
+                icon.style.cssText = 'width:44px;height:44px;border-radius:50%;background:#2e7d32;display:flex;align-items:center;justify-content:center;box-sizing:border-box;';
+                icon.innerHTML = '<div style="width:12px;height:22px;border:solid #fff;border-width:0 4px 4px 0;transform:rotate(45deg);margin-top:-4px;"></div>';
+                text.textContent = message || 'Saved!';
+                text.style.color = '#2e7d32';
+                setTimeout(() => overlay.remove(), 1400);
+            },
+            close() { overlay.remove(); }
+        };
     }
 
     function setButtonsBusy(busy) {
