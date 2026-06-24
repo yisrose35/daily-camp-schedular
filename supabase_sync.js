@@ -800,7 +800,15 @@
                     {
                         event: '*',
                         schema: 'public',
-                        table: 'daily_schedules'
+                        table: 'daily_schedules',
+                        // ★★★ CROSS-TENANT FIX: scope realtime to THIS camp so a
+                        // delete/edit in any other camp never reaches this client
+                        // (was unfiltered → other camps' DELETEs were misattributed
+                        // to the viewed date and wiped it). Requires REPLICA IDENTITY
+                        // FULL on daily_schedules (migration 014) so DELETE payloads
+                        // carry camp_id to match against — otherwise this filter would
+                        // drop every DELETE. Apply migration 014 before/with this code.
+                        filter: `camp_id=eq.${campId}`
                     },
                     handleRealtimeChange
                 )
@@ -909,9 +917,10 @@
         const record = payload.new || payload.old || {};
         const eventType = payload.eventType;
 
-        // Client-side camp_id filter (server-side filter removed because
-        // DELETE events with default REPLICA IDENTITY lack camp_id in
-        // payload.old, causing them to be silently dropped).
+        // Client-side camp_id backstop (defense-in-depth). The subscription now
+        // ALSO filters camp_id server-side (see subscribe()), and REPLICA IDENTITY
+        // FULL (migration 014) makes camp_id present on DELETE payloads too — so
+        // an other-camp event should never even reach here.
         if (record.camp_id && myCampId && record.camp_id !== myCampId) {
             return;
         }
@@ -925,13 +934,16 @@
             return;
         }
 
-        // For DELETE events, payload.old may only have the primary key (id)
-        // if REPLICA IDENTITY is default. Treat unknown-date deletes as
-        // potentially affecting the current date.
+        // With REPLICA IDENTITY FULL (migration 014), DELETE payloads carry the
+        // full old row, so date_key is present. If it is somehow missing, do NOT
+        // guess "current date" — that misattribution let an unrelated delete (other
+        // camp / other date) wipe the viewed schedule. An unattributable delete is
+        // ignored (safe: stale data persists) rather than acted on (unsafe: real
+        // data wiped).
         var recordDateKey = record.date_key;
         if (eventType === 'DELETE' && !recordDateKey) {
-            log('DELETE with unknown date_key — treating as current date');
-            recordDateKey = _currentDateKey;
+            log('DELETE with unknown date_key (REPLICA IDENTITY not FULL?) — ignoring, cannot safely attribute');
+            return;
         }
 
         if (recordDateKey !== _currentDateKey) {
