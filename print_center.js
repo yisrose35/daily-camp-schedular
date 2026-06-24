@@ -309,6 +309,15 @@ var _liveWholeCamp = (function () {
 var _liveSharedTimeline = (function () {
     try { return localStorage.getItem('pc3_live_shared_timeline') === '1'; } catch (e) { return false; }
 })();
+// "Custom pages" — the operator assigns each bunk to a specific page number, so
+// pages contain exactly the bunks they choose (overrides auto-pagination).
+var _liveCustomPages = (function () {
+    try { return localStorage.getItem('pc3_live_custom_pages') === '1'; } catch (e) { return false; }
+})();
+var _liveCustomPageMap = (function () {
+    try { return JSON.parse(localStorage.getItem('pc3_live_custom_page_map') || '{}') || {}; } catch (e) { return {}; }
+})();
+function _cpBunkKey(divName, bunk) { return divName + ' ' + bunk; }
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
@@ -1486,6 +1495,20 @@ function getStyles() {
     '.pc3-live-unified th.pc3-uni-grade{font-size:13px;font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
     '.pc3-live-unified th.pc3-uni-bunk{font-size:11px;font-weight:600;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
     '.pc3-live-unified th.row-head{white-space:nowrap;font-variant-numeric:tabular-nums;}' +
+    '#pc3-cp-modal{position:fixed;inset:0;background:rgba(2,6,16,.72);z-index:100000;display:flex;align-items:center;justify-content:center;}' +
+    '#pc3-cp-modal .pc3-cp-panel{background:#0b1326;border:1px solid #1e293b;border-radius:14px;width:min(560px,92vw);max-height:86vh;display:flex;flex-direction:column;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.5);}' +
+    '#pc3-cp-modal .pc3-cp-title{font-size:20px;font-weight:800;padding:18px 22px 4px;}' +
+    '#pc3-cp-modal .pc3-cp-sub{font-size:13px;color:#94a3b8;padding:0 22px 12px;}' +
+    '#pc3-cp-modal .pc3-cp-list{overflow:auto;padding:0 22px;flex:1;}' +
+    '#pc3-cp-modal .pc3-cp-grade{font-size:13px;font-weight:800;color:#fcd34d;margin:14px 0 6px;letter-spacing:.3px;}' +
+    '#pc3-cp-modal .pc3-cp-row{display:flex;align-items:center;gap:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);}' +
+    '#pc3-cp-modal .pc3-cp-bunk{flex:1;font-size:14px;}' +
+    '#pc3-cp-modal .pc3-cp-input{width:90px;background:#0e1830;border:1px solid #334155;border-radius:7px;color:#fff;padding:6px 8px;font-size:14px;text-align:center;}' +
+    '#pc3-cp-modal .pc3-cp-empty{padding:24px 22px;color:#94a3b8;}' +
+    '#pc3-cp-modal .pc3-cp-foot{display:flex;align-items:center;gap:10px;padding:14px 22px;border-top:1px solid #1e293b;}' +
+    '#pc3-cp-modal .pc3-cp-btn{padding:9px 18px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:14px;font-weight:600;cursor:pointer;}' +
+    '#pc3-cp-modal .pc3-cp-btn:hover{background:rgba(255,255,255,.2);}' +
+    '#pc3-cp-modal .pc3-cp-apply{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
     '.pc3-live-fit{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
     '.pc3-live-fit:hover{background:rgba(255,255,255,.2);}' +
     '.pc3-live-fit.on{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
@@ -3664,6 +3687,7 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveOneDivPerPage ? ' on' : '') + '" id="pc3-live-perdiv-btn" title="Show one division per page, rotating through them" onclick="toggleLivePerDiv()">One division per page</button>' +
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
+                '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -4196,27 +4220,74 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
     cols.forEach(function (c) { html += '<th class="pc3-uni-bunk">' + escHtml(c.bunk) + '</th>'; });
     html += '</tr></thead><tbody>';
 
-    var skip = {}; // "ci:ri" already covered by a rowspan above
+    // Build a descriptor for every cell, then merge identical adjacent tiles
+    // into rectangles (same activity across bunks AND across time → one cell).
+    // Highlight (current/past) is derived from the tile's own time span so a
+    // merged tile lights up correctly regardless of which row "now" lands on.
+    var nR = rows.length, nC = cols.length;
+    var grid = [];
+    for (var gr = 0; gr < nR; gr++) {
+        grid[gr] = [];
+        for (var gc = 0; gc < nC; gc++) {
+            var gseg = cols[gc].rowSeg[gr];
+            var ginfo = cellInfo(cols[gc], gseg, rows[gr]);
+            var gs = gseg ? gseg.startMin : rows[gr].startMin;
+            var ge = gseg ? gseg.endMin : rows[gr].endMin;
+            grid[gr][gc] = { text: ginfo.txt, cls: ginfo.cls, s: gs, e: ge, key: ginfo.txt + '|' + ginfo.cls + '|' + gs + '|' + ge };
+        }
+    }
+    var done = {};
+    var kk = function (a, b) { return a + ':' + b; };
     rows.forEach(function (r, ri) {
-        var isCur = nowMin >= r.startMin && nowMin < r.endMin;
-        var isPast = nowMin >= r.endMin;
+        var rowCur = nowMin >= r.startMin && nowMin < r.endMin;
+        var rowPast = nowMin >= r.endMin;
         html += '<tr>';
-        html += '<th class="row-head' + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + minutesToTimeLabel(r.startMin) + '</th>';
-        cols.forEach(function (c, ci) {
-            if (skip[ci + ':' + ri]) return;
-            var seg = c.rowSeg[ri];
-            var span = 1;
-            if (seg) {
-                while (ri + span < rows.length && c.rowSeg[ri + span] === seg) { skip[ci + ':' + (ri + span)] = 1; span++; }
+        html += '<th class="row-head' + (rowCur ? ' cell-current' : '') + (rowPast ? ' cell-past' : '') + '">' + minutesToTimeLabel(r.startMin) + '</th>';
+        for (var ci = 0; ci < nC; ci++) {
+            if (done[kk(ri, ci)]) continue;
+            var cell = grid[ri][ci];
+            // Extend right across bunks with the same tile.
+            var colspan = 1;
+            while (ci + colspan < nC && !done[kk(ri, ci + colspan)] && grid[ri][ci + colspan].key === cell.key) colspan++;
+            // Extend down across time while the whole column-range still matches.
+            var rowspan = 1;
+            extend: while (ri + rowspan < nR) {
+                for (var cc = ci; cc < ci + colspan; cc++) {
+                    if (done[kk(ri + rowspan, cc)] || grid[ri + rowspan][cc].key !== cell.key) break extend;
+                }
+                rowspan++;
             }
-            var info = cellInfo(c, seg, r);
-            var cls = info.cls + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '');
-            html += '<td' + (span > 1 ? ' rowspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:14px;line-height:1.25;padding:6px 5px;white-space:normal;word-break:break-word;">' + escHtml(info.txt) + '</td>';
-        });
+            for (var rr = ri; rr < ri + rowspan; rr++) for (var c2 = ci; c2 < ci + colspan; c2++) done[kk(rr, c2)] = 1;
+            var isCur = nowMin >= cell.s && nowMin < cell.e;
+            var isPast = nowMin >= cell.e;
+            var cls = cell.cls + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '');
+            html += '<td' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
+                ' class="' + cls + '" style="text-align:center;font-size:14px;line-height:1.25;padding:6px 5px;white-space:normal;word-break:break-word;">' + escHtml(cell.text) + '</td>';
+        }
         html += '</tr>';
     });
     html += '</tbody></table></div>';
     return html;
+}
+
+// Build section HTML for a set of {divName(grade), bunks} groups, honoring the
+// shared-timeline toggle (one unified table per division vs one grid per grade).
+// Returns an array of HTML strings (one per rendered section).
+function buildSectionHtmlsForGroups(groups, nowMin) {
+    var out = [];
+    if (_liveSharedTimeline) {
+        var order = [], byk = {};
+        groups.forEach(function (g) {
+            var rp = (typeof window.getParentDivision === 'function' && window.getParentDivision(g.divName)) || null;
+            var key = rp || (' grade:' + g.divName);
+            if (!byk[key]) { byk[key] = { label: rp || g.divName, grades: [] }; order.push(key); }
+            byk[key].grades.push(g);
+        });
+        order.forEach(function (key) { out.push(buildLiveUnifiedSectionHTML(byk[key].label, byk[key].grades, nowMin)); });
+    } else {
+        groups.forEach(function (g) { out.push(buildLiveSectionHTML(g.divName, g.bunks, nowMin)); });
+    }
+    return out;
 }
 
 // blind 30-second timer. This is what kills the periodic flash/lag on a kiosk.
@@ -4294,7 +4365,50 @@ function renderLiveContent() {
     //    divisions[grade].parentDivision (falls back to the grade itself).
     var sectHtml = '';
     var sectionParents = [];
-    if (_liveSharedTimeline) {
+    var sectionPage = [];   // custom-pages: which user page each section belongs to
+    var customActive = _liveCustomPages && _liveCustomPageMap && Object.keys(_liveCustomPageMap).length > 0;
+    if (customActive) {
+        // Build pages straight from the operator's bunk→page assignment. Bunks
+        // with no assignment fall into a trailing page so none are lost.
+        var pageOrder = [], seenP = {}, hasUnassigned = false;
+        available.forEach(function (divName) {
+            var allB = (divs[divName] && divs[divName].bunks) ? divs[divName].bunks : [];
+            allB.forEach(function (b) {
+                var pg = _liveCustomPageMap[_cpBunkKey(divName, b)];
+                if (pg == null || pg === '') { hasUnassigned = true; return; }
+                pg = String(pg);
+                if (!seenP[pg]) { seenP[pg] = 1; pageOrder.push(pg); }
+            });
+        });
+        pageOrder.sort(function (a, b) { return (parseFloat(a) || 0) - (parseFloat(b) || 0); });
+        var pageDefs = pageOrder.map(function (pg) {
+            var groups = [];
+            available.forEach(function (divName) {
+                var allB = (divs[divName] && divs[divName].bunks) ? divs[divName].bunks : [];
+                var sel = allB.filter(function (b) { return String(_liveCustomPageMap[_cpBunkKey(divName, b)]) === pg; });
+                if (sel.length) groups.push({ divName: divName, bunks: sel });
+            });
+            return groups;
+        });
+        if (hasUnassigned) {
+            var ug = [];
+            available.forEach(function (divName) {
+                var allB = (divs[divName] && divs[divName].bunks) ? divs[divName].bunks : [];
+                var sel = allB.filter(function (b) { var pg = _liveCustomPageMap[_cpBunkKey(divName, b)]; return pg == null || pg === ''; });
+                if (sel.length) ug.push({ divName: divName, bunks: sel });
+            });
+            if (ug.length) pageDefs.push(ug);
+        }
+        pageDefs.forEach(function (groups, pIdx) {
+            buildSectionHtmlsForGroups(groups, nowMin).forEach(function (h) {
+                if (!h) return;
+                sectionParents.push({ key: 'cp' + pIdx, label: '', real: false });
+                sectionPage.push(pIdx);
+                sectHtml += '<div class="pc3-live-section-wrap">' + h + '</div>';
+            });
+        });
+    }
+    if (!customActive && _liveSharedTimeline) {
         // One shared-timeline section per DIVISION — group its grades so they
         // share a single time axis with all their bunks as columns.
         var stOrder = [], stByKey = {};
@@ -4315,7 +4429,7 @@ function renderLiveContent() {
             sectHtml += '<div class="pc3-live-section-wrap">' + secHtml + '</div>';
         });
     }
-    if (!_liveSharedTimeline) available.forEach(function (divName) {
+    if (!customActive && !_liveSharedTimeline) available.forEach(function (divName) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
         var realParent = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) ||
@@ -4355,7 +4469,7 @@ function renderLiveContent() {
     //     non-rotating page and shrink it uniformly until it fits — no matter
     //     how small. Unlike the old "fit to screen", there is no readability
     //     floor and no fallback to rotation: the whole camp is always visible.
-    if (_liveWholeCamp) {
+    if (_liveWholeCamp && !customActive) {
         var wcTotalH = 36; // .pc3-live-page-inner vertical padding (18 top + 18 bottom)
         wraps.forEach(function (wrap) { wcTotalH += wrap.offsetHeight + 20; });
         var wcScale = wcTotalH > availH ? availH / wcTotalH : 1;
@@ -4388,7 +4502,17 @@ function renderLiveContent() {
 
     // 3. Decide how sections map to pages.
     var pages = [];
-    if (_liveOneDivPerPage) {
+    if (customActive) {
+        // Custom pages — one page per user-assigned page number (sectionPage).
+        var byPg = {};
+        wraps.forEach(function (wrap, i) {
+            var p = sectionPage[i];
+            if (p == null) p = 0;
+            if (!byPg[p]) { byPg[p] = { nodes: [], totalH: 0 }; pages.push(byPg[p]); }
+            byPg[p].nodes.push(wrap);
+            byPg[p].totalH += wrap.offsetHeight + 20;
+        });
+    } else if (_liveOneDivPerPage) {
         // One division per page — a page NEVER mixes two divisions. ALL of a
         // division's grades and bunks go on its single page, which is then
         // shrunk (in step 4) as far as needed to fit, no matter how small — no
@@ -4430,7 +4554,7 @@ function renderLiveContent() {
         // One-division-per-page shrinks as far as needed (no readability floor)
         // so an entire division always fits on its single page. Default mode
         // keeps a 0.25 floor and paginates instead.
-        scale = _liveOneDivPerPage ? Math.min(1, scale) : Math.max(0.25, Math.min(1, scale));
+        scale = (_liveOneDivPerPage || customActive) ? Math.min(1, scale) : Math.max(0.25, Math.min(1, scale));
         if (!(scale > 0)) scale = 1;
 
         var pageDiv = document.createElement('div');
@@ -4563,6 +4687,86 @@ function toggleLiveSharedTimeline() {
     _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
     _liveRenderSig = '';     // force a real rebuild on the next render
     try { renderLiveContent(); } catch (e) {}
+}
+
+// Open the "Bunks per page" config — a modal where the operator types a page
+// number next to each bunk. Bunks sharing a number share a page; blanks fall to
+// a trailing page. Applying turns on custom-pages mode.
+function openLiveBunkPageConfig() {
+    var existing = document.getElementById('pc3-cp-modal');
+    if (existing) existing.remove();
+
+    var divs = getDivisions();
+    var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
+    if (typeof window.filterDivisionsByDate === 'function') available = window.filterDivisionsByDate(available);
+
+    var rowsHtml = '';
+    var idx = 0;
+    available.forEach(function (divName) {
+        var bunks = (divs[divName] && divs[divName].bunks) ? divs[divName].bunks : [];
+        if (!bunks.length) return;
+        var parent = (typeof window.getParentDivision === 'function' && window.getParentDivision(divName)) || null;
+        var head = parent ? (escHtml(parent) + ' › ' + escHtml(divName)) : escHtml(divName);
+        rowsHtml += '<div class="pc3-cp-grade">' + head + '</div>';
+        bunks.forEach(function (b) {
+            var key = _cpBunkKey(divName, b);
+            var val = _liveCustomPageMap[key];
+            rowsHtml += '<label class="pc3-cp-row">' +
+                '<span class="pc3-cp-bunk">' + escHtml(b) + '</span>' +
+                '<input type="number" min="1" step="1" class="pc3-cp-input" data-div="' + escHtml(divName) + '" data-bunk="' + escHtml(b) + '" value="' + (val != null && val !== '' ? escHtml(String(val)) : '') + '" placeholder="page #">' +
+                '</label>';
+            idx++;
+        });
+    });
+    if (!idx) rowsHtml = '<div class="pc3-cp-empty">No bunks to configure for this day.</div>';
+
+    var overlay = document.createElement('div');
+    overlay.id = 'pc3-cp-modal';
+    overlay.innerHTML =
+        '<div class="pc3-cp-panel">' +
+            '<div class="pc3-cp-title">Bunks per page</div>' +
+            '<div class="pc3-cp-sub">Type a page number for each bunk. Bunks with the same number share a page; blanks go on a final page.</div>' +
+            '<div class="pc3-cp-list">' + rowsHtml + '</div>' +
+            '<div class="pc3-cp-foot">' +
+                '<button class="pc3-cp-btn pc3-cp-off">Turn off</button>' +
+                '<span style="flex:1;"></span>' +
+                '<button class="pc3-cp-btn pc3-cp-cancel">Cancel</button>' +
+                '<button class="pc3-cp-btn pc3-cp-apply">Apply</button>' +
+            '</div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+
+    var close = function () { overlay.remove(); };
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    overlay.querySelector('.pc3-cp-cancel').addEventListener('click', close);
+    overlay.querySelector('.pc3-cp-off').addEventListener('click', function () {
+        _liveCustomPages = false;
+        try { localStorage.setItem('pc3_live_custom_pages', '0'); } catch (e) {}
+        var b = document.getElementById('pc3-live-custompages-btn');
+        if (b) b.classList.remove('on');
+        close();
+        _livePageIndex = 0; _livePrevPageCount = -1; _liveRenderSig = '';
+        try { renderLiveContent(); } catch (e) {}
+    });
+    overlay.querySelector('.pc3-cp-apply').addEventListener('click', function () {
+        var map = {};
+        overlay.querySelectorAll('.pc3-cp-input').forEach(function (inp) {
+            var v = (inp.value || '').trim();
+            if (v === '') return;
+            map[_cpBunkKey(inp.getAttribute('data-div'), inp.getAttribute('data-bunk'))] = v;
+        });
+        _liveCustomPageMap = map;
+        _liveCustomPages = true;
+        try {
+            localStorage.setItem('pc3_live_custom_page_map', JSON.stringify(map));
+            localStorage.setItem('pc3_live_custom_pages', '1');
+        } catch (e) {}
+        var b = document.getElementById('pc3-live-custompages-btn');
+        if (b) b.classList.add('on');
+        close();
+        _livePageIndex = 0; _livePrevPageCount = -1; _liveRenderSig = '';
+        try { renderLiveContent(); } catch (e) {}
+    });
 }
 
 
@@ -6201,6 +6405,8 @@ window.toggleLivePerDiv = toggleLivePerDiv;
 window.toggleLiveWholeCamp = toggleLiveWholeCamp;
 // "Shared timeline" toggle — exported for the popup's inline onclick.
 window.toggleLiveSharedTimeline = toggleLiveSharedTimeline;
+// "Bunks per page" config — exported for the popup's inline onclick.
+window.openLiveBunkPageConfig = openLiveBunkPageConfig;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');
