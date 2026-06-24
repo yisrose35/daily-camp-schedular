@@ -631,6 +631,43 @@
         return true;
     };
 
+    // =========================================================================
+    // ★★★ SPECIALTY-LEAGUE FIELD RESERVATION ★★★
+    // Fields saved on an enabled specialty league are DEDICATED courts: a
+    // specialty league can only play on its configured fields (no flexible
+    // fallback), so they must never be handed to a regular activity (rotation,
+    // sports, electives, smart tiles) or a regular league — even on the
+    // periods/days the specialty league has no game, where the runtime lock
+    // doesn't reach. The specialty engine sources fields straight from its own
+    // league.fields config and never routes through these gates, so reserving
+    // here doesn't starve specialty's own placement.
+    //
+    // Cache keyed by object reference: loadGlobalSettings() returns the stable
+    // _localCache, so the set is built once per generation and only rebuilt when
+    // the config object is replaced (a re-save). Cheap enough for the hot loop.
+    // =========================================================================
+    let _specReservedCache = { settingsRef: null, disabledRef: null, set: new Set() };
+    Utils.isFieldReservedForSpecialty = function (fieldName) {
+        if (!fieldName) return false;
+        const settings = (typeof window.loadGlobalSettings === 'function')
+            ? (window.loadGlobalSettings() || {})
+            : (window.globalSettings || {});
+        const sl = settings.specialtyLeagues || {};
+        const disabled = window.disabledSpecialtyLeagues || [];
+        if (_specReservedCache.settingsRef !== sl || _specReservedCache.disabledRef !== disabled) {
+            const set = new Set();
+            try {
+                Object.values(sl).forEach(l => {
+                    if (!l || !l.enabled) return;
+                    if (disabled.includes(l.name)) return;
+                    (l.fields || []).forEach(f => { if (f) set.add(String(f).trim().toLowerCase()); });
+                });
+            } catch (e) { /* fail open — reserve nothing rather than block everything */ }
+            _specReservedCache = { settingsRef: sl, disabledRef: disabled, set };
+        }
+        return _specReservedCache.set.has(String(fieldName).trim().toLowerCase());
+    };
+
     /**
      * =========================================================================
      * MAIN FIT CHECK - DIVISION-AWARE LOCK CHECKING FOR ELECTIVES
@@ -661,6 +698,12 @@
         const disabledFields = window.currentDisabledFields || [];
         if (disabledFields.includes(fieldName)) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - field is DISABLED (rainy day or manual override)`);
+            return false;
+        }
+
+        // ★★★ SPECIALTY-LEAGUE RESERVED FIELD — off-limits to regular activities ★★★
+        if (Utils.isFieldReservedForSpecialty(fieldName)) {
+            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - reserved for a specialty league`);
             return false;
         }
 
@@ -1191,6 +1234,11 @@
             return -999999; // Completely unavailable
         }
 
+        // ★★★ Reserved for a specialty league — never give it to a regular activity ★★★
+        if (Utils.isFieldReservedForSpecialty(fieldName)) {
+            return -999999; // Completely unavailable
+        }
+
         // First check if field is locked (with division context)
         const slots = Utils.findSlotsForRange(block.startTime, block.endTime);
         const divisionContext = block.divName || block.division;
@@ -1289,6 +1337,11 @@
             // ★★★ CHECK DISABLED FIELDS FIRST ★★★
             const disabledFields = window.currentDisabledFields || [];
             if (disabledFields.includes(resourceName)) {
+                return false;
+            }
+
+            // ★★★ Reserved for a specialty league — off-limits to regular activities ★★★
+            if (Utils.isFieldReservedForSpecialty(resourceName)) {
                 return false;
             }
 
@@ -1963,7 +2016,10 @@
         // Check disabled fields (rainy day etc.)
         const disabledFields = window.currentDisabledFields || [];
         if (disabledFields.includes(fieldName)) return false;
-        
+
+        // Reserved for a specialty league — off-limits to regular activities
+        if (Utils.isFieldReservedForSpecialty(fieldName)) return false;
+
         // Check global locks
         if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots)) {
             return false;

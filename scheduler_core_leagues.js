@@ -625,7 +625,12 @@
             // ★★★ SKIP COURTS RESERVED FOR SPECIALTY LEAGUES ★★★
             // A field dedicated to an enabled specialty league is never available to
             // a regular league — specialty leagues get first claim on their saved courts.
-            if (_reservedSpecialtyFields.has(String(field.name).trim().toLowerCase())) {
+            // Prefer the shared Utils helper (single source of truth); fall back to the
+            // locally-computed set if Utils hasn't loaded yet.
+            const _isReserved = window.SchedulerCoreUtils?.isFieldReservedForSpecialty
+                ? window.SchedulerCoreUtils.isFieldReservedForSpecialty(field.name)
+                : _reservedSpecialtyFields.has(String(field.name).trim().toLowerCase());
+            if (_isReserved) {
                 console.log(`[RegularLeagues] ⚠️ Field "${field.name}" reserved for a specialty league — skipping for regular leagues`);
                 continue;
             }
