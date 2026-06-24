@@ -5046,6 +5046,23 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.8: Field Quality Groups re-optimization (manual / Smart Tile)
+        // The auto builder pulls grouped-field placements to the best-ranked field
+        // for the most senior grade via its own final post-pass; the manual builder
+        // (and its Smart Tile auto-fill) never did, so manual output ignored field
+        // quality. Run the SHARED FieldQualityReopt pass over the assembled
+        // schedule now — after every fill/refill/demote sweep above has settled the
+        // fields, and before STEP 8 saves. No-op when no field groups are configured.
+        // =========================================================================
+        try {
+            if (window.FieldQualityReopt && typeof window.FieldQualityReopt.run === 'function') {
+                window.FieldQualityReopt.run({ log: function (m) { console.log('[STEP 7.8]' + m); } });
+            }
+        } catch (_e78) {
+            console.warn('[STEP 7.8] field-quality re-opt failed:', _e78);
+        }
+
+        // =========================================================================
         // STEP 8: Update History
         // =========================================================================
 
