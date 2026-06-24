@@ -1013,7 +1013,7 @@
 '.scv-validate-btn{padding:6px 16px;border:none;border-radius:6px;background:#ff9800;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
 '.scv-save-btn{padding:6px 16px;border:none;border-radius:6px;background:#2e7d32;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
 '.scv-saved-btn{padding:6px 16px;border:none;border-radius:6px;background:#147D91;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
-'.scv-validate-btn:hover{opacity:.85}' +
+'.scv-validate-btn:hover,.scv-save-btn:hover,.scv-saved-btn:hover{opacity:.85}' +
 
 /* Filter */
 '.scv-filter-row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}' +
