@@ -73,6 +73,83 @@
             return hh * 60 + mm;
         },
 
+        // Shared skeleton tile sanitizer — the SAME rules run as a pre-guard (tile
+        // editors, on save) and a post-guard (generator, on entry), so corrupt tiles
+        // can't enter storage and can't reach the solver if one ever slips through:
+        //   • normalize bare times ("6:30" -> "6:30pm"; bare hours 1-6 -> PM, the camp
+        //     afternoon heuristic) so no ambiguous time ever reaches the parsers;
+        //   • DROP tiles whose times are unparseable or end <= start (e.g. a typo'd
+        //     "5:10pm-4:50pm" that can't render but still gets scheduled);
+        //   • DROP exact-duplicate tiles (same division + activity + start), keeping
+        //     the better-formed one.
+        // Already-am/pm times are left byte-identical. Returns
+        // { tiles, dropped:[{division,event,startTime,endTime,reason}], normalized }.
+        // Pure and defensive — never throws on bad input.
+        sanitizeSkeletonTiles: function (skeleton) {
+            if (!Array.isArray(skeleton)) return { tiles: skeleton, dropped: [], normalized: 0 };
+            var toMin = function (t) {
+                if (t == null) return null;
+                if (typeof t === 'number') return t;
+                var s = String(t).trim().toLowerCase(), mer = null;
+                if (s.slice(-2) === 'am' || s.slice(-2) === 'pm') { mer = s.slice(-2); s = s.slice(0, -2).trim(); }
+                var m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
+                if (!m) return null;
+                var hh = parseInt(m[1], 10), mm = parseInt(m[2], 10);
+                if (isNaN(hh) || isNaN(mm) || hh > 23 || mm < 0 || mm > 59) return null;
+                if (mer) { if (hh === 12) hh = (mer === 'am') ? 0 : 12; else if (mer === 'pm' && hh < 12) hh += 12; }
+                else if (hh >= 1 && hh <= 6) hh += 12;
+                return hh * 60 + mm;
+            };
+            var fmt = function (mins) {
+                var h = Math.floor(mins / 60), m = mins % 60, ap = h >= 12 ? 'pm' : 'am', h12 = (h % 12) || 12;
+                return h12 + ':' + (m < 10 ? '0' + m : '' + m) + ap;
+            };
+            var hasMer = function (t) { return /(am|pm)\s*$/i.test(String(t == null ? '' : t).trim()); };
+            var norm = function (x) { return String(x == null ? '' : x).toLowerCase().replace(/\s+/g, ' ').trim(); };
+            var seen = {}, tiles = [], dropped = [], normalized = 0;
+            for (var i = 0; i < skeleton.length; i++) {
+                var b = skeleton[i];
+                if (!b) continue;
+                var sM = toMin(b.startTime), eM = toMin(b.endTime);
+                if (sM == null || eM == null || eM <= sM) {
+                    dropped.push({ division: b.division, event: b.event, startTime: b.startTime, endTime: b.endTime, reason: (sM == null || eM == null) ? 'unparseable time' : 'end <= start' });
+                    continue;
+                }
+                var wasWell = hasMer(b.startTime) && hasMer(b.endTime);
+                var nb = b;
+                if (!hasMer(b.startTime) || !hasMer(b.endTime)) {
+                    nb = {};
+                    for (var k in b) { if (Object.prototype.hasOwnProperty.call(b, k)) nb[k] = b[k]; }
+                    if (!hasMer(b.startTime)) nb.startTime = fmt(sM);
+                    if (!hasMer(b.endTime)) nb.endTime = fmt(eM);
+                    normalized++;
+                }
+                if (!b.division) { tiles.push(nb); continue; }
+                var key = b.division + '|' + norm(b.event) + '|' + sM;
+                if (!Object.prototype.hasOwnProperty.call(seen, key)) {
+                    seen[key] = { pos: tiles.length, well: wasWell };
+                    tiles.push(nb);
+                } else {
+                    var prev = seen[key];
+                    if (wasWell && !prev.well) {
+                        var old = tiles[prev.pos];
+                        dropped.push({ division: old.division, event: old.event, startTime: old.startTime, endTime: old.endTime, reason: 'duplicate' });
+                        tiles[prev.pos] = nb;
+                        prev.well = true;
+                    } else {
+                        dropped.push({ division: b.division, event: b.event, startTime: b.startTime, endTime: b.endTime, reason: 'duplicate' });
+                    }
+                }
+            }
+            if (dropped.length || normalized) {
+                try {
+                    console.warn('[Sanitize] ' + dropped.length + ' tile(s) dropped, ' + normalized + ' time(s) normalized'
+                        + (dropped.length ? ' | ' + dropped.map(function (d) { return (d.division || '?') + ':"' + (d.event || '') + '" ' + d.startTime + '-' + d.endTime + ' (' + d.reason + ')'; }).join('; ') : ''));
+                } catch (_) {}
+            }
+            return { tiles: tiles, dropped: dropped, normalized: normalized };
+        },
+
         // Minutes -> "H:MM AM/PM" label (e.g. 540 -> "9:00 AM"). null/undefined/
         // NaN -> ''. Prefers the solver canonical when present so there is ONE
         // runtime implementation; the inline fallback is identical for valid input

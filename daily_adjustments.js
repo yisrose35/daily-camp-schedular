@@ -4564,6 +4564,20 @@ function saveDailySkeleton() {
     return;
   }
   
+  // ★ Pre-guard: clean the skeleton before it is persisted — drop malformed /
+  //   duplicate tiles and normalize bare times so corrupt data never reaches
+  //   storage or the generator. In place so the module closure + window global
+  //   both observe the cleaned array. Non-fatal: a failure leaves data untouched.
+  try {
+    if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles && Array.isArray(dailyOverrideSkeleton)) {
+      const _san = window.CampUtils.sanitizeSkeletonTiles(dailyOverrideSkeleton);
+      if (_san && Array.isArray(_san.tiles) && (_san.dropped.length || _san.normalized)) {
+        dailyOverrideSkeleton.length = 0;
+        Array.prototype.push.apply(dailyOverrideSkeleton, _san.tiles);
+      }
+    }
+  } catch (e) { console.error('[DailyAdj] skeleton sanitize on save failed (non-fatal):', e); }
+
   const dateKey = window.currentScheduleDate;
   const _skelTs = new Date().toISOString();   // ★ #10 (manual twin): newest-wins recency stamp (local + cloud)
   console.log(`[DailyAdj] saveDailySkeleton called with ${dailyOverrideSkeleton.length} events for ${dateKey}`);

@@ -637,7 +637,15 @@
                     //   the flag was dropped here, so a custom-named pinned period not in the
                     //   sweep's skip-list was treated as a cap-1 room and demoted to Free for
                     //   all-but-one bunk — breaking the full-division cell merge.
-                    _pinned: pick._pinned || false
+                    _pinned: pick._pinned || false,
+                    // ★ Field-less direct-fill label (e.g. a rotation tile's Swim / Pickleball
+                    //   option with NO configured field): `field` here is only a display label,
+                    //   not a bookable room. The STEP 7.55 room-capacity sweep skips entries
+                    //   carrying this flag so N bunks on the SAME label aren't treated as N
+                    //   occupants of one phantom cap-1 room (which demoted all-but-one → Free →
+                    //   STEP 7.6 refilled them with GENERIC SPORTS — the "it's giving out sports"
+                    //   bug). Default false → zero change for every real field / special placement.
+                    _noRoomCap: pick._noRoomCap || false
                 };
                 // ★ Away (off-campus) tile (e.g. an away league game): stamp travel
                 //   to/from on the lead slot so grids + print render the 🚶 Travel
@@ -939,6 +947,35 @@
             const key = _claimKey(name);
             if (!_specialClaims[key]) _specialClaims[key] = [];
             _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
+        }
+
+        // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
+        //   A rotation/tile option that is NOT a configured field, special, or hosted
+        //   sport is placed as its own label — exactly like Swim (the "direct fill"
+        //   branch): the cell just reads "Pickleball", no solver and no real field
+        //   needed. Most such labels are unlimited (Swim — everyone can go), but some
+        //   have a real-world cap the camp hasn't modeled as a field (e.g. only 2
+        //   pickleball nets). Hardcode those caps here and enforce them CAMP-WIDE per
+        //   overlapping window via this tracker, so the 3rd bunk falls through to its
+        //   next rotation option (like a scarce special does) instead of over-filling.
+        //   Name match is loose so spelling variants ("Pickleball"/"Pickelball") resolve.
+        const _directFillClaims = {}; // labelKey → [{startMin, endMin}]
+        function _directFillCap(label) {
+            const n = String(label || '').toLowerCase().replace(/[^a-z]/g, '');
+            if (n.includes('pickle') || n.includes('pickel')) return 2; // pickleball: 2 bunks at a time
+            return Infinity; // Swim and other field-less labels are uncapped
+        }
+        function _canClaimDirectFill(label, startMin, endMin) {
+            const cap = _directFillCap(label);
+            if (cap === Infinity) return true;
+            const key = String(label || '').toLowerCase().trim();
+            const overlapping = (_directFillClaims[key] || []).filter(c => c.startMin < endMin && c.endMin > startMin);
+            return overlapping.length < cap;
+        }
+        function _registerDirectFillClaim(label, startMin, endMin) {
+            if (_directFillCap(label) === Infinity) return;
+            const key = String(label || '').toLowerCase().trim();
+            (_directFillClaims[key] = _directFillClaims[key] || []).push({ startMin, endMin });
         }
 
         // ★ SAME-DAY SPECIAL TRACKER (per bunk, accumulates across windows in
@@ -1374,6 +1411,9 @@
                                     window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                     _placed = true; break;
                                 }
+                                // Diagnostic: why the "Special" rotation step couldn't place (so a
+                                // fall-through to Pickleball/Swim is explained, not silent).
+                                if (!_placed) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" unplaceable @${_rStart}-${_rEnd} (${_avail.length} candidate(s): ${_avail.map(s => s.name).join(', ') || 'none available'} — all at capacity or already used today) → next option`);
                             } else {
                                 const _gT = optNorm.includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                                 console.log(`[SmartTile] ${bunk} -> ROTATION ${_gT}`);
@@ -1397,10 +1437,23 @@
                             schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                             _placed = true;
                         } else {
-                            // Direct-fill label (Swim etc.) — always placeable
-                            console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
-                            window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                            _placed = true;
+                            // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
+                            //   — no solver, no real field needed (the cell just reads the label,
+                            //   even when nothing hosts it). _noRoomCap marks it field-less so the
+                            //   STEP 7.55 room-capacity sweep leaves it alone (otherwise N bunks on
+                            //   one label collapse onto a phantom cap-1 room → demoted → refilled
+                            //   with generic sports). A few labels carry a hardcoded real-world cap
+                            //   (e.g. 2 pickleball nets, _directFillCap): when that window is full,
+                            //   leave _placed false so the bunk falls through to its NEXT rotation
+                            //   option (Swim) — exactly like a scarce special does.
+                            if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
+                                _registerDirectFillClaim(opt, _rStart, _rEnd);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
+                            } else {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION "${opt}" at capacity (${_directFillCap(opt)}/window) → next option`);
+                            }
                         }
                     }
                     if (_placed && _usedOpts && _placedOpt) _usedOpts.add(_placedOpt);
@@ -3337,6 +3390,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   removed (e.g. user merged Swim + Elective into a hybrid, or moved the swim).
         //   A _swimChange tile is orphan if no swim/swim_elective in the same division
         //   touches it (pre = ends at swim's start, post = starts at swim's end).
+        // ★ Post-guard: final safety net. Even if a malformed/duplicate tile slips past
+        //   the editors' save-time guards (or arrives from an older cloud record), drop
+        //   it here so generation always works on a clean skeleton — same shared rules.
+        try {
+            if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles) {
+                const _gsan = window.CampUtils.sanitizeSkeletonTiles(manualSkeleton);
+                if (_gsan && Array.isArray(_gsan.tiles)) manualSkeleton = _gsan.tiles;
+            }
+        } catch (e) { console.error('[Optimizer] skeleton sanitize failed (non-fatal):', e); }
+
         const _origLen = manualSkeleton.length;
         manualSkeleton = manualSkeleton.filter(item => {
             if (!item || !item._swimChange) return true;

@@ -150,6 +150,17 @@ const SNAP_MINS = 5;
 
 // --- Persistence ---
 function saveDraftToLocalStorage() {
+  // ★ Pre-guard: drop malformed/duplicate tiles + normalize bare times before the
+  //   draft is persisted, so corrupt tiles never enter the saved base skeleton.
+  try {
+    if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles && Array.isArray(dailySkeleton)) {
+      const _san = window.CampUtils.sanitizeSkeletonTiles(dailySkeleton);
+      if (_san && Array.isArray(_san.tiles) && (_san.dropped.length || _san.normalized)) {
+        dailySkeleton.length = 0;
+        Array.prototype.push.apply(dailySkeleton, _san.tiles);
+      }
+    }
+  } catch (e) { console.error('[MSB] skeleton sanitize on save failed (non-fatal):', e); }
   try {
     if (dailySkeleton && dailySkeleton.length > 0) {
       localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
