@@ -4601,6 +4601,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     // collapsing a whole division's trip. Skip trip entries —
                     // matching auto_validator.buildFieldUsageIndex (FN-59).
                     if (e._isTrip || (e.type || '').toLowerCase() === 'trip') return;
+                    // ★ Field-less direct-fill label (Swim / Pickleball rotation option with no
+                    //   configured field). Same shape of problem as a Trip above: its `field` is a
+                    //   display label, not a bookable room, so N bunks on the SAME label are NOT N
+                    //   occupants of one cap-1 room. fillBlock stamps _noRoomCap on these; skip them
+                    //   here so they aren't demoted → Free → refilled with generic sports. Their own
+                    //   real-world cap (e.g. 2 pickleball nets) is enforced at placement time by the
+                    //   smart-tile direct-fill claim tracker, not by this room sweep.
+                    if (e._noRoomCap) return;
                     var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
                     // NOTE: do NOT skip rooms missing from _rcfg. auto_validator defaults any
                     // field it can't resolve to {not_sharable, cap 1} and flags it — most often
