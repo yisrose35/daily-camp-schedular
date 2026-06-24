@@ -250,6 +250,27 @@
             }
         }
 
+        // ★ CROSS-GRADE SAFETY NET: slot indices are per-division — slot N is a
+        //   different clock time in each grade's grid — so the index scan above is
+        //   blind to a lock placed on ANOTHER grade's grid. The most important case
+        //   is a grade-level ELECTIVE: it reserves its facility for its OWN grade
+        //   only and must be off-limits to EVERY other grade/division at that
+        //   wall-clock time. When we know the asking division, re-check by the actual
+        //   time window so an elective (or any time-locked field) on a different grid
+        //   still blocks this caller. Allowed-division (own-grade) locks are skipped
+        //   inside isFieldLockedByTime, so a grade is never blocked from its own
+        //   elective. No-ops when the division or its slot times can't be resolved.
+        if (divisionContext && typeof this.isFieldLockedByTime === 'function'
+            && window.divisionTimes && window.divisionTimes[divisionContext]) {
+            const _dts = window.divisionTimes[divisionContext];
+            const _qs = _dts[slots[0]] && _dts[slots[0]].startMin;
+            const _qe = _dts[slots[slots.length - 1]] && _dts[slots[slots.length - 1]].endMin;
+            if (_qs != null && _qe != null) {
+                const _byTime = this.isFieldLockedByTime(fieldName, _qs, _qe, divisionContext);
+                if (_byTime) return _byTime;
+            }
+        }
+
         return null;
     };
 
