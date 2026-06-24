@@ -290,6 +290,14 @@ var _livePageTimer = null;
 var _livePrevPageCount = -1; // page count when the rotation timer was last (re)started
 var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
 var _LIVE_PAGE_MS = 20000; // ms between page rotations
+// "Fit to screen": squeeze every division onto ONE page instead of rotating
+// through paginated pages. Persisted so the kiosk remembers the operator's
+// choice across reloads. When the whole schedule can't shrink to fit while
+// staying legible, we fall back to the rotating-pages behaviour (see below).
+var _liveFitOneScreen = (function () {
+    try { return localStorage.getItem('pc3_live_fit_one_screen') === '1'; } catch (e) { return false; }
+})();
+var _LIVE_FIT_MIN_SCALE = 0.45; // readable floor — below this, fall back to paginated rotation
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
@@ -1463,6 +1471,9 @@ function getStyles() {
     '.pc3-live-clock{font-size:34px;font-weight:300;color:#e2e8f0;font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
     '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
+    '.pc3-live-fit{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
+    '.pc3-live-fit:hover{background:rgba(255,255,255,.2);}' +
+    '.pc3-live-fit.on{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
     '.pc3-live-loading{color:#94a3b8;padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
     '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
     '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
@@ -3635,6 +3646,7 @@ function runLiveStandalone() {
             '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:8px;"></div>' +
             '<div class="pc3-live-headright">' +
                 '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
+                '<button class="pc3-live-fit' + (_liveFitOneScreen ? ' on' : '') + '" id="pc3-live-fit-btn" title="Fit the entire schedule onto one screen" onclick="toggleLiveFit()">Fit to screen</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -4011,6 +4023,45 @@ function renderLiveContent() {
     var availH = body.offsetHeight || (window.innerHeight - 80);
     var wraps = Array.prototype.slice.call(body.querySelectorAll('.pc3-live-section-wrap'));
 
+    // 2b. "Fit to screen" mode: try to put EVERY section on a single page and
+    //     scale the whole thing down uniformly so nothing overflows and nothing
+    //     rotates. The tables are width:100% (fixed layout) so the binding
+    //     constraint is height — scale by it. If the result would be smaller
+    //     than the readable floor, bail out and let the bin-packer paginate +
+    //     rotate instead (so text stays legible on huge schedules).
+    if (_liveFitOneScreen) {
+        var fitTotalH = 36; // .pc3-live-page-inner vertical padding (18px top + 18px bottom)
+        wraps.forEach(function (wrap) { fitTotalH += wrap.offsetHeight + 20; });
+        var fitScale = fitTotalH > availH ? availH / fitTotalH : 1;
+        fitScale = Math.min(1, fitScale);
+        if (fitScale >= _LIVE_FIT_MIN_SCALE) {
+            _numLivePages = 1;
+            _livePageIndex = 0;
+
+            var fitPage = document.createElement('div');
+            fitPage.id = 'lp-0';
+            fitPage.style.cssText = 'position:absolute;inset:0;opacity:1;pointer-events:auto;overflow:hidden;';
+
+            var fitInner = document.createElement('div');
+            fitInner.className = 'pc3-live-page-inner';
+            // Uniform shrink (no width compensation) so width fits too.
+            fitInner.style.cssText = 'transform:scale(' + fitScale.toFixed(4) + ');transform-origin:top left;width:100%;';
+
+            wraps.forEach(function (n) { fitInner.appendChild(n); });
+            fitPage.appendChild(fitInner);
+            body.appendChild(fitPage);
+
+            updateLivePageIndicator();
+            if (_numLivePages !== _livePrevPageCount) {
+                _livePrevPageCount = _numLivePages;
+                startLivePageTimer(); // stops rotation (single page)
+            }
+            body.style.visibility = '';
+            return; // single-page fit done — skip bin-packing
+        }
+        // else: would be too small to read → fall through to paginated rotation
+    }
+
     // 3. Greedy bin-pack: keep adding sections to the current page until they
     //    would overflow, then start a new page. A single oversized section gets
     //    its own page and is scaled down to fit.
@@ -4103,6 +4154,20 @@ function startLivePageTimer() {
     _livePageTimer = null;
     if (_numLivePages < 2) return;
     _livePageTimer = setInterval(function () { livePageNav(1); }, _LIVE_PAGE_MS);
+}
+
+// Flip "Fit to screen" on/off from the live header button. Persists the choice,
+// resets to the first page, clears the render signature so the next tick does a
+// real rebuild, and re-renders immediately so the toggle feels instant.
+function toggleLiveFit() {
+    _liveFitOneScreen = !_liveFitOneScreen;
+    try { localStorage.setItem('pc3_live_fit_one_screen', _liveFitOneScreen ? '1' : '0'); } catch (e) {}
+    var btn = document.getElementById('pc3-live-fit-btn');
+    if (btn) btn.classList.toggle('on', _liveFitOneScreen);
+    _livePageIndex = 0;
+    _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
+    _liveRenderSig = '';     // force a real rebuild on the next render
+    try { renderLiveContent(); } catch (e) {}
 }
 
 
@@ -5733,6 +5798,9 @@ window._pc3RunLiveStandalone = runLiveStandalone;
 // resolves against the (popup) window's GLOBAL scope. livePageNav is defined
 // inside this file's IIFE, so without this export the arrows silently no-op.
 window.livePageNav = livePageNav;
+// "Fit to screen" toggle button uses inline onclick="toggleLiveFit()", which
+// resolves against the popup window's global scope — export it like livePageNav.
+window.toggleLiveFit = toggleLiveFit;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');
