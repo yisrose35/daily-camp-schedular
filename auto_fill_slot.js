@@ -261,10 +261,28 @@
         //   skips sports. 'any' (or unset) keeps both, the pre-existing behavior.
         const _kind = slotKind || 'any';
 
+        // ★ Today's Resource disables (Daily Adjustments → Resources). The main solver
+        //   already excludes these via canBlockFit / the domain build, but this fill path
+        //   (the STEP 7.5 silent free-slot fallback AND the manual ⚡ Auto Fill button)
+        //   iterates the RAW field/special config, so without these gates it re-fills the
+        //   very fields/sports/specials the user shut off for today. Read both the gen-time
+        //   global (currentDisabledFields, set during generation) and the date-fresh daily
+        //   data (for the post-gen manual button). currentDisabledFields also contains
+        //   special-activity LOCATIONS — disabling a facility adds its name there.
+        const _curDaily = window.loadCurrentDailyData?.() || {};
+        const _disabledLc = new Set([
+            ...(window.currentDisabledFields || []),
+            ...(((_curDaily.overrides || {}).disabledFields) || [])
+        ].map(n => String(n).toLowerCase().trim()));
+        const _disabledSportsByField = _curDaily.dailyDisabledSportsByField || {};
+        const _disabledSpecialsLc = new Set((((_curDaily.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
+
         // Sports / field activities (skipped entirely for a Special-only slot)
         if (_kind !== 'special') (gs.app1?.fields || []).forEach(f => {
             if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
             if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
+            // ★ Field disabled today in Resources
+            if (_disabledLc.has(String(f.name).toLowerCase().trim())) return;
             // ★ Grade restriction — skip if this field excludes our division
             if (isDivisionRestricted(f, divName)) return;
             // ★ Time rules — skip if [slotStart, slotEnd] is unavailable
@@ -273,7 +291,10 @@
             if (isFieldGloballyLocked(f.name, slotStart, slotEnd, divName)) return;
             // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
+            // ★ Specific sports disabled on THIS field today (dailyDisabledSportsByField)
+            const _blockedOnField = _disabledSportsByField[f.name] || null;
             (f.activities || []).forEach(actName => {
+                if (_blockedOnField && _blockedOnField.indexOf(actName) !== -1) return;
                 candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, maxUsagePeriod: f.maxUsagePeriod || 'half', exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
             });
         });
@@ -295,9 +316,13 @@
             (gs.app1?.specialActivities || []).forEach(s => {
                 if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
                 if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
+                // ★ Special disabled today (e.g. its facility was toggled off → cascade)
+                if (_disabledSpecialsLc.has(String(s.name).toLowerCase().trim())) return;
                 // ★ Grade restriction
                 if (isDivisionRestricted(s, divName)) return;
                 const loc = s.location || null;
+                // ★ Special's location/facility disabled today in Resources
+                if (loc && _disabledLc.has(String(loc).toLowerCase().trim())) return;
                 // ★ Facility-existence gate
                 if (_validLocs && loc && String(loc).trim() && !_validLocs.has(String(loc).trim().toLowerCase())) return;
                 if (loc) {

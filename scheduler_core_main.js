@@ -4699,7 +4699,21 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const _skip76 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
             const _specialRooms76 = {};
             ((_gs76.app1 && _gs76.app1.specialActivities) || []).forEach(s => { if (s && s.location) _specialRooms76[String(s.location).toLowerCase().trim()] = 1; });
+            // ★ Today's Resource disables (Daily Adjustments → Resources). This leftover-
+            //   Free-slot backfill targets EMPTY fields — and a field disabled for today is
+            //   empty precisely BECAUSE the solver avoided it, so without these gates the
+            //   backfill re-fills the very fields/sports/specials the user shut off.
+            //   currentDisabledFields includes special-activity LOCATIONS too (disabling a
+            //   facility adds its name). Union with the date-fresh daily overrides for safety.
+            const _curDaily76 = window.loadCurrentDailyData?.() || {};
+            const _disabledLc76 = new Set([
+                ...(window.currentDisabledFields || []),
+                ...(((_curDaily76.overrides || {}).disabledFields) || [])
+            ].map(n => String(n).toLowerCase().trim()));
+            const _disSportsByField76 = _curDaily76.dailyDisabledSportsByField || {};
+            const _disabledSpecialsLc76 = new Set((((_curDaily76.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
             const _sportFields76 = _fields76.filter(f => f && f.name && f.available !== false
+                && !_disabledLc76.has(String(f.name).toLowerCase().trim())
                 && !_specialRooms76[String(f.name).toLowerCase().trim()]
                 && Array.isArray(f.activities) && f.activities.length
                 && !(f.timeRules && f.timeRules.enabled));
@@ -4770,7 +4784,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
                         if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
                         let act = null;
-                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()]) { act = c; break; } }
+                        const _blockedOnField76 = _disSportsByField76[f.name] || null;
+                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1)) { act = c; break; } }
                         if (!act) continue;
                         _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                         (_occ76[fl] = _occ76[fl] || []).push({ s: t.s, e: t.e });
@@ -4825,7 +4840,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 (_sa76[b] || []).forEach((e, idx) => {
                     if (!e || e.continuation) return;
                     const fl = String(e.field || '').toLowerCase().trim();
-                    if (!fl || _skip76[fl] || e.field === 'Free') return;
+                    if (!fl || _skip76[fl] || _disabledLc76.has(fl) || e.field === 'Free') return;
                     const act = e._activity || e.sport; if (!act || String(act).toLowerCase() === 'free') return;
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     (_occL65[fl] = _occL65[fl] || []).push({ bunk: String(b), grade: g, act: act, s: t.s, e: t.e, field: e.field });
@@ -4892,6 +4907,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const ordered = pool.filter(an => !done[an]); // fresh only — never a same-day repeat
                     for (const an of ordered) {
                         const sp = _specByName65[an]; if (!sp) continue;
+                        // ★ special disabled today (facility-off cascade) or its location disabled
+                        if (_disabledSpecialsLc76.has(String(an).toLowerCase().trim()) || _disabledLc76.has(String(sp.loc).toLowerCase().trim())) continue;
                         const cfg = _loc65[sp.loc] || { type: 'same_division', cap: 2 };
                         const occ = _occAt65(sp.loc, t.s, t.e, String(b));
                         if (cfg.type === 'not_sharable' ? occ.length > 0 : occ.length >= cfg.cap) continue; // full
