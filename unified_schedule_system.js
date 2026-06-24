@@ -7485,6 +7485,36 @@ if (softBlocks.length > 0) {
                 alert(`Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
                 return { success: true, count: versions.length, bunks: bunksTouched.size };
             } catch (err) { alert('Error: ' + err.message); return { success: false }; }
+        },
+        // Restore a specific saved version by its id (used by the Saved Schedules table UI).
+        // Unlike loadVersion(), this takes no user prompt and (by default) snapshots the
+        // current live schedule first, so an accidental restore is itself recoverable.
+        async restoreVersionById(versionId, { snapshotFirst = true } = {}) {
+            const dateKey = getDateKey();
+            if (!dateKey || !window.ScheduleVersionsDB) { return { success: false, error: 'Version database not available.' }; }
+            try {
+                const row = await window.ScheduleVersionsDB.getVersion(versionId);
+                if (!row) return { success: false, error: 'Saved schedule not found.' };
+                // Safety net: capture the current live state before overwriting it.
+                if (snapshotFirst && Object.keys(window.scheduleAssignments || {}).length > 0) {
+                    const stamp = new Date().toLocaleString();
+                    try { await this.saveVersion(`Auto-backup before restore (${stamp})`, { silent: true }); } catch (_e) {}
+                }
+                let data = row.schedule_data;
+                if (typeof data === 'string') { try { data = JSON.parse(data); } catch (_e) {} }
+                window.scheduleAssignments = data.scheduleAssignments || data;
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with loaded version (cross-date guard)
+                if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
+                    window.scheduleSegments = data.scheduleSegments;
+                } else {
+                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+                }
+                if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
+                if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
+                saveSchedule();
+                updateTable();
+                return { success: true, name: row.name };
+            } catch (err) { return { success: false, error: err.message }; }
         }
     };
 
