@@ -3468,6 +3468,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const sMin = Utils.parseTimeToMinutes(item.startTime);
             const eMin = Utils.parseTimeToMinutes(item.endTime);
 
+            // ★ Skip malformed tiles whose end is at/before their start (e.g. a typo'd
+            //   "5:10pm-4:50pm"). The slot-grid builder already drops these
+            //   (division_times_system.js), but the pinned-fill path below reads the raw
+            //   skeleton — without this guard a backwards-time tile still gets pinned onto
+            //   every bunk (e.g. phantom "Signup leagues" on a division that never set it).
+            if (sMin != null && eMin != null && eMin <= sMin) {
+                console.warn(`[SKELETON] ⚠️ Skipping malformed tile "${item.event || item.type}" for ${divName}: ${item.startTime}–${item.endTime} (end ≤ start)`);
+                return;
+            }
+
             // ★★★ v17.5 FIX: Process PINNED events FIRST (before overlap check) ★★★
             // ★ Hybrid swim_elective is treated like a pinned fill (every bunk gets
             //   the same "Swim + Elective" entry so per-bunk views show the option).
