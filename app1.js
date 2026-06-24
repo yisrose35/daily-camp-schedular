@@ -150,13 +150,32 @@
                 : all;
         };
 
-        // Parent-division order: by the numeric value of each division's first
-        // grade (matches the Me / Flow Divisions view); 999 + alpha as fallback.
+        // Parent-division order.
+        // ★ FN-53: PREFER the user's explicit Me-page ordering
+        //   (app1.manualColumnOrder — the drag/move order on the structure list,
+        //   stored as an ARRAY so it IS order-stable in JSONB, unlike campStructure
+        //   key order). This is the order the user actually SEES, and it's the order
+        //   the "Grade age order" toggle (divisionAgeDirection) is defined against —
+        //   so seniority for Field Quality Groups must derive from it. Without this,
+        //   parents fell back to the numeric first-grade heuristic below, which
+        //   (a) ignores any manual reorder (e.g. oldest dragged to the top) and
+        //   (b) collapses to ALPHABETICAL for named grades (Soloists/Trios/Majors)
+        //   with no numeric basis. Either case made the youngest grades read as the
+        //   most senior under the oldToYoung toggle → they grabbed the best fields.
+        //   Numeric/alpha heuristic kept as the fallback for parents the user never
+        //   positioned (and when no manual order exists at all).
         var firstGradeNum = function (divName) {
             var m = String(gradesInOrder(divName)[0] || '').match(/(\d+)/);
             return m ? parseInt(m[1], 10) : 999;
         };
+        var manualOrd = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : [];
+        var manualPos = {};
+        manualOrd.forEach(function (k, i) { manualPos[k] = i; });
         var parents = Object.keys(cs).slice().sort(function (a, b) {
+            var ma = manualPos[a], mb = manualPos[b];
+            if (ma != null && mb != null && ma !== mb) return ma - mb;
+            if (ma != null && mb == null) return -1;   // user-positioned parents lead
+            if (ma == null && mb != null) return 1;
             var na = firstGradeNum(a), nb = firstGradeNum(b);
             if (na !== nb) return na - nb;
             return a.localeCompare(b);
