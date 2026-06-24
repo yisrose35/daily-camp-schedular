@@ -594,10 +594,41 @@
         if (_poolStartMin == null && timeKey != null) _poolStartMin = Number(timeKey) || undefined;
         if (_poolEndMin == null && blockEndMin != null) _poolEndMin = Number(blockEndMin) || undefined;
 
+        // ★★★ SPECIALTY-LEAGUE FIELD RESERVATION ★★★
+        // Fields saved on an enabled specialty league are DEDICATED to that league —
+        // a specialty league can ONLY play on its configured courts (it has no
+        // flexible fallback), whereas regular leagues can use any court of the sport.
+        // So those courts must never be handed to a regular league, or the specialty
+        // league is starved ("NO COURTS AVAILABLE"). Specialty leagues run first and
+        // lock their courts at play time, but that runtime lock doesn't cover the
+        // courts on periods/days the specialty league isn't playing — this config-level
+        // reservation keeps them off-limits to regular leagues regardless.
+        const _reservedSpecialtyFields = (() => {
+            const set = new Set();
+            try {
+                const _sl = (window.loadGlobalSettings?.() || {}).specialtyLeagues || {};
+                const _disabled = window.disabledSpecialtyLeagues || context.disabledSpecialtyLeagues || [];
+                Object.values(_sl).forEach(l => {
+                    if (!l || !l.enabled) return;
+                    if (_disabled.includes(l.name)) return;
+                    (l.fields || []).forEach(f => { if (f) set.add(String(f).trim().toLowerCase()); });
+                });
+            } catch (e) { /* fail open — reserve nothing rather than starve regular leagues */ }
+            return set;
+        })();
+
         for (const field of allFields) {
             if (!field || !field.name) continue;
             if (field.available === false) continue;
             if (disabledFields && disabledFields.includes(field.name)) continue;
+
+            // ★★★ SKIP COURTS RESERVED FOR SPECIALTY LEAGUES ★★★
+            // A field dedicated to an enabled specialty league is never available to
+            // a regular league — specialty leagues get first claim on their saved courts.
+            if (_reservedSpecialtyFields.has(String(field.name).trim().toLowerCase())) {
+                console.log(`[RegularLeagues] ⚠️ Field "${field.name}" reserved for a specialty league — skipping for regular leagues`);
+                continue;
+            }
 
            // ★★★ CHECK GLOBAL LOCKS FIRST (TIME-BASED to avoid cross-division false positives) ★★★
             if (window.GlobalFieldLocks && slots && slots.length > 0) {
