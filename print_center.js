@@ -297,6 +297,12 @@ var _LIVE_PAGE_MS = 20000; // ms between page rotations
 var _liveOneDivPerPage = (function () {
     try { return localStorage.getItem('pc3_live_one_div_per_page') === '1'; } catch (e) { return false; }
 })();
+// "Whole camp on one screen" — shrink EVERY division onto a single, non-rotating
+// page no matter how small it gets (no readability floor, no fallback). Mutually
+// exclusive with one-division-per-page.
+var _liveWholeCamp = (function () {
+    try { return localStorage.getItem('pc3_live_whole_camp') === '1'; } catch (e) { return false; }
+})();
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
@@ -3649,6 +3655,7 @@ function runLiveStandalone() {
             '<div class="pc3-live-headright">' +
                 '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
                 '<button class="pc3-live-fit' + (_liveOneDivPerPage ? ' on' : '') + '" id="pc3-live-perdiv-btn" title="Show one division per page, rotating through them" onclick="toggleLivePerDiv()">One division per page</button>' +
+                '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -4203,6 +4210,41 @@ function renderLiveContent() {
     var availH = body.offsetHeight || (window.innerHeight - 80);
     var wraps = Array.prototype.slice.call(body.querySelectorAll('.pc3-live-section-wrap'));
 
+    // 2b. "Whole camp on one screen": put EVERY division on a single,
+    //     non-rotating page and shrink it uniformly until it fits — no matter
+    //     how small. Unlike the old "fit to screen", there is no readability
+    //     floor and no fallback to rotation: the whole camp is always visible.
+    if (_liveWholeCamp) {
+        var wcTotalH = 36; // .pc3-live-page-inner vertical padding (18 top + 18 bottom)
+        wraps.forEach(function (wrap) { wcTotalH += wrap.offsetHeight + 20; });
+        var wcScale = wcTotalH > availH ? availH / wcTotalH : 1;
+        wcScale = Math.min(1, wcScale); // only ever shrink, never enlarge
+
+        _numLivePages = 1;
+        _livePageIndex = 0;
+
+        var wcPage = document.createElement('div');
+        wcPage.id = 'lp-0';
+        wcPage.style.cssText = 'position:absolute;inset:0;opacity:1;pointer-events:auto;overflow:hidden;';
+
+        var wcInner = document.createElement('div');
+        wcInner.className = 'pc3-live-page-inner';
+        // Uniform shrink, origin top-center so the shrunken camp stays centered.
+        wcInner.style.cssText = 'transform:scale(' + wcScale.toFixed(4) + ');transform-origin:top center;width:100%;';
+
+        wraps.forEach(function (n) { wcInner.appendChild(n); });
+        wcPage.appendChild(wcInner);
+        body.appendChild(wcPage);
+
+        updateLivePageIndicator();
+        if (_numLivePages !== _livePrevPageCount) {
+            _livePrevPageCount = _numLivePages;
+            startLivePageTimer(); // single page → stops rotation
+        }
+        body.style.visibility = '';
+        return; // whole-camp fit done — skip pagination
+    }
+
     // 3. Decide how sections map to pages.
     var pages = [];
     if (_liveOneDivPerPage) {
@@ -4397,8 +4439,35 @@ function startLivePageTimer() {
 function toggleLivePerDiv() {
     _liveOneDivPerPage = !_liveOneDivPerPage;
     try { localStorage.setItem('pc3_live_one_div_per_page', _liveOneDivPerPage ? '1' : '0'); } catch (e) {}
+    // Per-division and whole-camp are opposite layouts — turning one on turns
+    // the other off.
+    if (_liveOneDivPerPage && _liveWholeCamp) {
+        _liveWholeCamp = false;
+        try { localStorage.setItem('pc3_live_whole_camp', '0'); } catch (e) {}
+        var wcb = document.getElementById('pc3-live-wholecamp-btn');
+        if (wcb) wcb.classList.remove('on');
+    }
     var btn = document.getElementById('pc3-live-perdiv-btn');
     if (btn) btn.classList.toggle('on', _liveOneDivPerPage);
+    _livePageIndex = 0;
+    _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
+    _liveRenderSig = '';     // force a real rebuild on the next render
+    try { renderLiveContent(); } catch (e) {}
+}
+
+// Flip "Whole camp on one screen" on/off — shrink the entire camp onto a single
+// non-rotating page. Mutually exclusive with one-division-per-page.
+function toggleLiveWholeCamp() {
+    _liveWholeCamp = !_liveWholeCamp;
+    try { localStorage.setItem('pc3_live_whole_camp', _liveWholeCamp ? '1' : '0'); } catch (e) {}
+    if (_liveWholeCamp && _liveOneDivPerPage) {
+        _liveOneDivPerPage = false;
+        try { localStorage.setItem('pc3_live_one_div_per_page', '0'); } catch (e) {}
+        var pdb = document.getElementById('pc3-live-perdiv-btn');
+        if (pdb) pdb.classList.remove('on');
+    }
+    var btn = document.getElementById('pc3-live-wholecamp-btn');
+    if (btn) btn.classList.toggle('on', _liveWholeCamp);
     _livePageIndex = 0;
     _livePrevPageCount = -1; // force the rotation timer to be re-evaluated for the new layout
     _liveRenderSig = '';     // force a real rebuild on the next render
@@ -6037,6 +6106,8 @@ window.livePageNav = livePageNav;
 // which resolves against the popup window's global scope — export it like
 // livePageNav so the button isn't a silent no-op.
 window.toggleLivePerDiv = toggleLivePerDiv;
+// "Whole camp on one screen" toggle — exported for the popup's inline onclick.
+window.toggleLiveWholeCamp = toggleLiveWholeCamp;
 window._pc3SaveTemplate = function () {
     if (!canEditTemplates()) return;
     var nm = prompt('Template name:', 'My Template');
