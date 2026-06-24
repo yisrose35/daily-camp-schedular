@@ -459,8 +459,8 @@
                         '<button class="scv-view-btn" data-view="week">Week</button>' +
                         '<button class="scv-view-btn active" data-view="day">Day</button>' +
                     '</div>' +
-                    '<button class="scv-save-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.saveNow()">💾 Save</button>' +
-                    '<button class="scv-saved-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.openModal()">🗂 Saved</button>' +
+                    '<button class="scv-save-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.saveNow()">Save</button>' +
+                    '<button class="scv-saved-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.openModal()">Saved</button>' +
                     '<button class="scv-validate-btn" onclick="window.validateSchedule &amp;&amp; window.validateSchedule()">Validate</button>' +
                 '</div>' +
             '</div>' +

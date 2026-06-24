@@ -70,31 +70,56 @@
                 if (!window.confirm(`A saved schedule named “${name}” already exists. Overwrite it?`)) return;
             }
         } catch (_e) { /* listing is best-effort; proceed to save */ }
-        const btnSet = setButtonsBusy(true);
+        setSaveState('saving');
         try {
             const res = await vm().saveVersion(name, { silent: true });
             if (res?.success) {
-                toast('Schedule saved. You can recall it anytime.', 'success');
-                // If the table modal is open, refresh it.
+                setSaveState('saved');                       // button flips to "Saved!"
+                toast(`Saved as “${name}”. Recall it anytime from the Saved button.`, 'success');
                 if (document.getElementById('snapshotModalOverlay')) renderTable();
+                setTimeout(() => setSaveState('idle'), 2000); // revert button label after a beat
             } else {
+                setSaveState('idle');
                 toast('Could not save: ' + (res?.error || 'unknown error'), 'error');
             }
         } catch (e) {
+            setSaveState('idle');
             toast('Could not save: ' + e.message, 'error');
-        } finally {
-            btnSet();
         }
     }
 
-    function setButtonsBusy(busy) {
-        const ids = ['snapshotSaveBtn', 'snapshotListBtn'];
-        const prev = {};
-        ids.forEach(id => {
-            const b = document.getElementById(id);
-            if (b) { prev[id] = b.disabled; b.disabled = busy; b.style.opacity = busy ? '0.6' : '1'; }
+    // Find the live Save button(s) — the calendar-views toolbar (.scv-save-btn)
+    // and the static fallback (#snapshotSaveBtn) — and the list button(s).
+    function saveBtns() { return Array.from(document.querySelectorAll('.scv-save-btn, #snapshotSaveBtn')); }
+    function listBtns() { return Array.from(document.querySelectorAll('.scv-saved-btn, #snapshotListBtn')); }
+
+    // Drive the Save button through saving -> saved -> idle so it's obvious
+    // something happened (the old code only toggled ids that didn't exist).
+    function setSaveState(state) {
+        saveBtns().forEach(b => {
+            if (b.dataset.idleLabel == null) b.dataset.idleLabel = b.textContent;
+            if (state === 'saving') {
+                b.disabled = true; b.style.opacity = '0.75'; b.style.cursor = 'wait';
+                b.textContent = 'Saving…';
+            } else if (state === 'saved') {
+                b.disabled = true; b.style.opacity = '1'; b.style.cursor = 'default';
+                b.textContent = 'Saved!';
+            } else {
+                b.disabled = false; b.style.opacity = '1'; b.style.cursor = 'pointer';
+                b.textContent = b.dataset.idleLabel;
+            }
         });
-        return () => ids.forEach(id => { const b = document.getElementById(id); if (b) { b.disabled = !!prev[id]; b.style.opacity = '1'; } });
+        listBtns().forEach(b => {
+            const busy = state === 'saving';
+            b.disabled = busy; b.style.opacity = busy ? '0.75' : '1';
+        });
+    }
+
+    function setButtonsBusy(busy) {
+        const all = [...saveBtns(), ...listBtns()];
+        const prev = all.map(b => b.disabled);
+        all.forEach(b => { b.disabled = busy; b.style.opacity = busy ? '0.6' : '1'; });
+        return () => all.forEach((b, i) => { b.disabled = prev[i]; b.style.opacity = '1'; });
     }
 
     // -------------------------------------------------------------
