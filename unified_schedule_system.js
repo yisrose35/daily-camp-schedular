@@ -5010,6 +5010,165 @@ if (bypassStatus.highlight) {
         });
     }
 
+    // ───────────────────────────────────────────────────────────────────────
+    // Auto Change picker (post-edit). Module-level so the live "Auto Change"
+    // button AND window.diagnoseAutoChange() run the EXACT same gate chain —
+    // the diagnostic can never drift from what the button actually does.
+    //
+    // Honors every gate the auto-scheduler enforces, reusing the engine's own
+    // functions instead of re-implementing the rules:
+    //   • calculateRotationPenalty → RotationEngine.calculateRotationScore
+    //     (Infinity = hard-blocked): availableDays weekday gate, frequencyDays
+    //     cooldown, maxUsage (+per-grade), exactFrequency, multiPart,
+    //     rotationCohort, available=false, recency, same-day-before. Ranks too.
+    //   • findFieldsForActivity: capacity & time conflict, access restrictions,
+    //     league locks, field-combo exclusivity.
+    //   • full-day same-day no-repeat; rainy-day gating; bunk/grade access.
+    //
+    // Returns the best {activity, field, penalty} (or null). With opts.verbose,
+    // returns { bunk, divName, slots, startMin, endMin, isRainy, pick, ranked,
+    // candidates } where candidates[] carries each activity's gate verdict.
+    function computeAutoChangeCandidate(bunk, startMin, endMin, opts) {
+        opts = opts || {};
+        const report = [];
+        const divName = getDivisionForBunk(bunk);
+        const hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
+        const result = { bunk, divName, slots, startMin, endMin, isRainy: false, pick: null, ranked: [], candidates: report };
+        if (!slots || slots.length === 0) {
+            result.error = 'no slots resolved for this time range';
+            return opts.verbose ? result : null;
+        }
+
+        const _settings = window.loadGlobalSettings?.() || {};
+        const _app1 = _settings.app1 || {};
+        const _props = getActivityProperties();
+        const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+        result.isRainy = _isRainy;
+
+        // Same-day no-repeat across the full day, excluding the slot(s) being edited.
+        const _editedSlots = new Set(slots);
+        const _doneTodayFull = new Set();
+        (window.scheduleAssignments?.[bunk] || []).forEach((entry, i) => {
+            if (!entry || _editedSlots.has(i) || entry.continuation || entry._isTransition) return;
+            const a = (entry._activity || '').toLowerCase().trim();
+            if (a && a !== 'free') _doneTodayFull.add(a);
+        });
+
+        // Rainy-day gate — mirrors findAlternativeForBunk (lines ~5610/5634).
+        function _rainyBlocks(name) {
+            const p = _props[name] || _props[name.toLowerCase()] || {};
+            const sp = window.getSpecialActivityByName?.(name)
+                || (_app1.specialActivities || []).find(s => s.name === name) || {};
+            const rainyOnly = p.rainyDayOnly === true || p.rainyDayExclusive === true
+                || sp.rainyDayOnly === true || sp.rainyDayExclusive === true;
+            if (!_isRainy && rainyOnly) return true;
+            if (_isRainy) {
+                const notRainyOk = p.rainyDayAvailable === false || p.availableOnRainyDay === false || p.isIndoor === false
+                    || sp.rainyDayAvailable === false || sp.availableOnRainyDay === false || sp.isIndoor === false;
+                if (notRainyOk) return true;
+            }
+            return false;
+        }
+
+        // Bunk + grade access gate — mirrors findAlternativeForBunk._isBunkBlockedByAccess.
+        function _accessBlocks(name) {
+            let p = _props[name] || _props[name.toLowerCase()] || {};
+            if (!p.accessRestrictions?.enabled) {
+                const sd = window.getSpecialActivityByName?.(name)
+                    || (_app1.specialActivities || []).find(s => s.name === name);
+                if (sd?.accessRestrictions?.enabled) p = sd; else return false;
+            }
+            const allowed = p.accessRestrictions.divisions || {};
+            if (!(divName in allowed)) return true;
+            const bl = allowed[divName];
+            if (Array.isArray(bl) && bl.length > 0) {
+                const bStr = String(bunk), bNum = parseInt(bunk);
+                if (!bl.some(b => String(b) === bStr || parseInt(b) === bNum)) return true;
+            }
+            return false;
+        }
+
+        const allActivities = [...new Set(getAllLocations().flatMap(l => l.activities || []))].sort();
+        const _seen = new Set();
+        const _cands = [];
+        for (const actName of allActivities) {
+            const al = actName.toLowerCase().trim();
+            if (_seen.has(al)) continue;
+            _seen.add(al);
+            if (!al || al === 'free') continue;
+            if (_doneTodayFull.has(al)) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'already done today' }); continue; }
+            if (_rainyBlocks(actName)) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'rainy-day gate' }); continue; }
+            if (_accessBlocks(actName)) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'access restricted (grade/bunk)' }); continue; }
+            const penalty = calculateRotationPenalty(bunk, actName, slots);
+            if (penalty === Infinity) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'rotation hard-gate (cooldown/availableDays/maxUsage/exactFreq/multiPart/cohort)' }); continue; }
+            const { open, none } = findFieldsForActivity(actName, slots, divName, bunk, startMin, endMin);
+            if (none || open.length === 0) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'no open field (capacity/access/league/combo)', penalty }); continue; }
+            const bestField = open.find(f => !f.shared) || open[0];
+            _cands.push({ activity: actName, field: bestField.name, penalty, shared: !!bestField.shared });
+            if (opts.verbose) report.push({ activity: actName, ok: true, reason: bestField.shared ? 'available (shared field)' : 'available', penalty, field: bestField.name });
+        }
+        _cands.sort((a, b) => a.penalty - b.penalty);   // lower rotation score = better
+        result.pick = _cands[0] || null;
+        result.ranked = _cands;
+        return opts.verbose ? result : (_cands[0] || null);
+    }
+
+    // Console diagnostic: verify Auto Change against your live config without
+    // opening the modal. Make a config change → reload → run this → read the
+    // per-activity verdict table.
+    //
+    //   diagnoseAutoChange("נ")               → list that bunk's day (slot times)
+    //   diagnoseAutoChange("נ", 600, 645)      → run gates for 10:00–10:45
+    //   diagnoseAutoChange("נ", "10:00am", "10:45am")  → times as strings
+    window.diagnoseAutoChange = function(bunk, start, end) {
+        if (bunk == null) {
+            console.log('%cdiagnoseAutoChange', 'font-weight:bold', '\n  diagnoseAutoChange("BUNK")                 → list the bunk\'s slots (with times)\n  diagnoseAutoChange("BUNK", 600, 645)        → run gates for that time window\n  diagnoseAutoChange("BUNK", "10:00am", "10:45am")');
+            return;
+        }
+        bunk = String(bunk);
+        const _toMin = (v) => {
+            if (v == null) return null;
+            if (typeof v === 'number') return v;
+            const p = window.SchedulerCoreUtils?.parseTimeToMinutes?.(String(v));
+            return (p == null ? null : p);
+        };
+        const _lbl = (m) => (window.SchedulerCoreUtils?.minutesToTimeLabel?.(m)
+            ?? (m == null ? '?' : `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`));
+
+        // No time window → dump the bunk's day so the user can pick a slot.
+        if (start == null) {
+            const divName = getDivisionForBunk(bunk);
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const times = perBunk || window.divisionTimes?.[divName] || [];
+            const sched = window.scheduleAssignments?.[bunk] || [];
+            const rows = [];
+            for (let i = 0; i < times.length; i++) {
+                const t = times[i] || {};
+                const e = sched[i];
+                if (e && e.continuation) continue;
+                rows.push({ slot: i, time: `${_lbl(t.startMin)}–${_lbl(t.endMin)}`, startMin: t.startMin, endMin: t.endMin, current: e?._activity || (e ? '(empty)' : '—') });
+            }
+            console.log(`%cAuto Change — ${bunk} (${divName}) day. Call diagnoseAutoChange("${bunk}", startMin, endMin) for any row.`, 'font-weight:bold;color:#2563eb');
+            console.table(rows);
+            return rows;
+        }
+
+        const r = computeAutoChangeCandidate(bunk, _toMin(start), _toMin(end), { verbose: true });
+        console.log(`%cAuto Change diagnostic — ${r.bunk} (${r.divName})  ${_lbl(r.startMin)}–${_lbl(r.endMin)}  slots=[${r.slots.join(',')}]  rainy=${r.isRainy}`,
+            'font-weight:bold;color:#2563eb');
+        if (r.error) { console.warn('  ⚠️ ' + r.error); return r; }
+        console.table(r.candidates);
+        if (r.pick) {
+            const fieldTxt = (r.pick.field && r.pick.field !== r.pick.activity) ? ` @ ${r.pick.field}` : '';
+            console.log(`%c  ✅ PICK: ${r.pick.activity}${fieldTxt}  (rotation score ${r.pick.penalty}${r.pick.shared ? ', shared field' : ''})`,
+                'font-weight:bold;color:#16a34a');
+        } else {
+            console.log('%c  ⛔ PICK: none — every activity is gated out (see reasons above).', 'font-weight:bold;color:#dc2626');
+        }
+        return r;
+    };
+
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
         const modal = createModal();
         const locations = getAllLocations();
@@ -5032,94 +5191,8 @@ if (bypassStatus.highlight) {
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
 
-        // ── Auto Change: pick the best activity for this slot, honoring EVERY
-        //    gate the auto-scheduler enforces. This is a mini single-bunk
-        //    generation. It reuses the real engine functions rather than
-        //    re-implementing the rules, so it can never drift from the solver:
-        //
-        //    • calculateRotationPenalty → RotationEngine.calculateRotationScore
-        //      (Infinity = hard-blocked): availableDays weekday gate,
-        //      frequencyDays cooldown, maxUsage (+per-grade), exactFrequency,
-        //      multiPart daysBetween/totalParts, rotationCohort, available=false,
-        //      recency, and same-day-before. Also ranks (lower = better).
-        //    • findFieldsForActivity: field/location gates — capacity & time
-        //      conflict (checkFieldAvailableByTime + checkLocationConflict),
-        //      access restrictions, league locks, field-combo exclusivity.
-        //    • _doneTodayFull: same-day no-repeat across the WHOLE day (the
-        //      rotation engine only looks at slots BEFORE this one).
-        //    • _rainyBlocks / _accessBlocks: rainy-day gating and bunk-level
-        //      access, mirroring findAlternativeForBunk's own guards.
-        function _pickAutoCandidate() {
-            const _settings = window.loadGlobalSettings?.() || {};
-            const _app1 = _settings.app1 || {};
-            const _props = getActivityProperties();
-            const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
-
-            // Same-day no-repeat across the full day, excluding the slot(s) being edited.
-            const _editedSlots = new Set(slots);
-            const _doneTodayFull = new Set();
-            (window.scheduleAssignments?.[bunk] || []).forEach((entry, i) => {
-                if (!entry || _editedSlots.has(i) || entry.continuation || entry._isTransition) return;
-                const a = (entry._activity || '').toLowerCase().trim();
-                if (a && a !== 'free') _doneTodayFull.add(a);
-            });
-
-            // Rainy-day gate — mirrors findAlternativeForBunk (lines ~5610/5634).
-            function _rainyBlocks(name) {
-                const p = _props[name] || _props[name.toLowerCase()] || {};
-                const sp = window.getSpecialActivityByName?.(name)
-                    || (_app1.specialActivities || []).find(s => s.name === name) || {};
-                const rainyOnly = p.rainyDayOnly === true || p.rainyDayExclusive === true
-                    || sp.rainyDayOnly === true || sp.rainyDayExclusive === true;
-                if (!_isRainy && rainyOnly) return true;
-                if (_isRainy) {
-                    const notRainyOk = p.rainyDayAvailable === false || p.availableOnRainyDay === false || p.isIndoor === false
-                        || sp.rainyDayAvailable === false || sp.availableOnRainyDay === false || sp.isIndoor === false;
-                    if (notRainyOk) return true;
-                }
-                return false;
-            }
-
-            // Bunk + grade access gate — mirrors findAlternativeForBunk._isBunkBlockedByAccess.
-            function _accessBlocks(name) {
-                let p = _props[name] || _props[name.toLowerCase()] || {};
-                if (!p.accessRestrictions?.enabled) {
-                    const sd = window.getSpecialActivityByName?.(name)
-                        || (_app1.specialActivities || []).find(s => s.name === name);
-                    if (sd?.accessRestrictions?.enabled) p = sd; else return false;
-                }
-                const allowed = p.accessRestrictions.divisions || {};
-                if (!(divName in allowed)) return true;
-                const bl = allowed[divName];
-                if (Array.isArray(bl) && bl.length > 0) {
-                    const bStr = String(bunk), bNum = parseInt(bunk);
-                    if (!bl.some(b => String(b) === bStr || parseInt(b) === bNum)) return true;
-                }
-                return false;
-            }
-
-            const _seen = new Set();
-            const _cands = [];
-            for (const actName of allActivities) {
-                const al = actName.toLowerCase().trim();
-                if (_seen.has(al)) continue;
-                _seen.add(al);
-                if (!al || al === 'free') continue;
-                if (_doneTodayFull.has(al)) continue;            // same-day no-repeat (full day)
-                if (_rainyBlocks(actName)) continue;             // rainy-day gating
-                if (_accessBlocks(actName)) continue;            // bunk/grade access
-                // Rotation hard-gates (freq cooldown, availableDays, maxUsage, exactFreq, multiPart, cohort, …)
-                const penalty = calculateRotationPenalty(bunk, actName, slots);
-                if (penalty === Infinity) continue;
-                // Field/location gates: capacity, time conflict, access, league locks, combos
-                const { open, none } = findFieldsForActivity(actName, slots, divName, bunk, startMin, endMin);
-                if (none || open.length === 0) continue;
-                const bestField = open.find(f => !f.shared) || open[0];
-                _cands.push({ activity: actName, field: bestField.name, penalty });
-            }
-            _cands.sort((a, b) => a.penalty - b.penalty);   // lower rotation score = better
-            return _cands[0] || null;
-        }
+        // Auto Change runs the module-level computeAutoChangeCandidate (shared
+        // with window.diagnoseAutoChange so the diagnostic never drifts).
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
@@ -5164,7 +5237,7 @@ if (bypassStatus.highlight) {
         document.getElementById('post-edit-cancel').onclick = closeModal;
 
         document.getElementById('post-edit-autochange').onclick = () => {
-            const pick = _pickAutoCandidate();
+            const pick = computeAutoChangeCandidate(bunk, startMin, endMin);
             if (!pick) {
                 showIntegratedToast('No suitable activity found — all options are unavailable or already done today.', 'warning', 3500);
                 return;
