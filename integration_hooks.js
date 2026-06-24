@@ -805,6 +805,7 @@
             // client gets the response, causing the echo-suppression check
             // to miss and triggering a redundant re-hydrate.
             _lastSelfWriteAt = Date.now();
+            _recordSelfWriteStamp(nowIso); // ★ deterministic self-echo guard (see _selfWrittenStamps)
 
             // Cache the access token while we have a fresh async context.
             // The beforeunload handler (which runs synchronously) needs a
@@ -2007,6 +2008,44 @@
 
     let _campStateChannel = null;
     let _lastSelfWriteAt = 0;
+    // ── Deterministic self-echo guard ───────────────────────────────────────
+    // We stamp our own camp_state_kv upserts with `updated_at: nowIso`
+    // (executeBatchSync) and there is NO updated_at trigger on the table
+    // (migration 001 = column DEFAULT only), so Supabase realtime echoes that
+    // EXACT stamp back to us. Recording the stamps we wrote lets the realtime
+    // handler recognize and drop our own echoes with certainty — unlike the 3s
+    // window below, this can't be defeated by replication delay, and unlike a
+    // content hash it doesn't care whether the written value changed. This is
+    // what stops the hydrate→save→echo→hydrate re-render loop at its source.
+    let _selfWrittenStamps = [];
+    function _normStampMs(s) {
+        if (s == null) return NaN;
+        var str = String(s).trim().replace(' ', 'T');
+        // Realtime serializes timestamptz in UTC; if it arrives WITHOUT a
+        // timezone designator, Date.parse would read it as local time — append
+        // 'Z' so our nowIso and the echoed value normalize to the same instant.
+        if (!/(?:[zZ]|[+\-]\d\d:?\d\d)$/.test(str)) str += 'Z';
+        return Date.parse(str);
+    }
+    function _recordSelfWriteStamp(iso) {
+        _selfWrittenStamps.push({ iso: String(iso), ms: _normStampMs(iso), at: Date.now() });
+        // An echo always lands within seconds; cap the list and drop >60s-old.
+        if (_selfWrittenStamps.length > 64) {
+            var cutoff = Date.now() - 60000;
+            _selfWrittenStamps = _selfWrittenStamps.filter(function (e) { return e.at >= cutoff; });
+        }
+    }
+    function _isSelfWriteEcho(updatedAt) {
+        if (updatedAt == null) return false;
+        var raw = String(updatedAt);
+        var ms = _normStampMs(updatedAt);
+        for (var i = 0; i < _selfWrittenStamps.length; i++) {
+            var e = _selfWrittenStamps[i];
+            if (e.iso === raw) return true;                              // exact string match
+            if (!isNaN(ms) && !isNaN(e.ms) && e.ms === ms) return true;  // same instant, any format
+        }
+        return false;
+    }
     let _lastHydrationDispatchAt = 0;       // throttle: min interval between dispatches
     let _lastHydrationHash = null;          // content hash: skip if cloud unchanged
     const HYDRATION_THROTTLE_MS = 10000;    // 10s — cloud doesn't change faster than this in practice
@@ -2042,6 +2081,16 @@
                     table: 'camp_state_kv',
                     filter: `camp_id=eq.${campId}`
                 }, function (payload) {
+                    // ★ Deterministic self-echo guard (PRIMARY): if this change
+                    //   carries an updated_at stamp we just wrote, it's our own
+                    //   echo — drop it. Replication delay can't defeat this the
+                    //   way it defeats the 3s window below, so THIS is what stops
+                    //   the self-echo re-hydrate loop. The time window stays as a
+                    //   fallback for any write path that didn't record a stamp.
+                    if (payload && payload.new && _isSelfWriteEcho(payload.new.updated_at)) {
+                        log('camp_state change ignored (self echo — stamp match)');
+                        return;
+                    }
                     // Self-echo guard: our own UPSERT just fired this event.
                     if (Date.now() - _lastSelfWriteAt < 3000) {
                         log('camp_state change ignored (self echo)');
