@@ -3842,7 +3842,93 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
         });
         html += '</tr></thead><tbody>';
 
-        bunks.forEach(function (bunk) {
+        // —— Whole-division merge ————————————————————————————————————————
+        // When EVERY bunk is doing the exact same thing for the same span
+        // (all at Swim, all in one league game, etc.) collapse the repeated
+        // per-bunk cells into a single cell that spans all bunk rows, so the
+        // activity is shown once instead of N identical times.
+        function lActIsLeague(a) {
+            return !!(a && a.entry && (a.entry._h2h || a.entry._league || a.entry._isSpecialtyLeague || a.entry._allMatchups));
+        }
+        function lActText(a) {
+            if (!a) return '—';
+            var isLg = lActIsLeague(a);
+            var lInfo = (isLg || !a.entry) ? pcLeagueInfoAt(divName, a.startMin) : null;
+            if (isLg || lInfo) {
+                var lbl = (a.entry && (a.entry._gameLabel || a.entry._leagueName)) ||
+                          (lInfo && lInfo.label) || 'League Game';
+                var ms = (lInfo && lInfo.matchups) || [];
+                return lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + ms.join(', ') : '');
+            }
+            return a.entry ? formatEntry(a.entry) : '—';
+        }
+        // colSpan of an activity (number of grid columns it covers).
+        function lColSpanAt(startColIdx, endMin) {
+            var span = 1, n = startColIdx + 1;
+            while (n < lTimeCols.length && lTimeCols[n].startMin < endMin) { span++; n++; }
+            return span;
+        }
+        // segByStartCol[colIdx] = {colSpan,text,isLeague,type,startMin,endMin} for
+        // a column that BEGINS a fully-shared block; mergedCols marks every column
+        // covered by such a block so non-first rows can skip it.
+        var segByStartCol = {}, mergedCols = {};
+        if (bunks.length > 1) {
+            var firstBunkActs = lBunkActs[bunks[0]] || [];
+            firstBunkActs.forEach(function (a0) {
+                var txt0 = lActText(a0);
+                if (!txt0 || txt0 === '—') return;
+                var allShare = bunks.every(function (bk) {
+                    var acts = lBunkActs[bk] || [];
+                    return acts.some(function (a) {
+                        return a.startMin === a0.startMin && a.endMin === a0.endMin && lActText(a) === txt0;
+                    });
+                });
+                if (!allShare) return;
+                // locate the starting column for this block
+                var sc = -1;
+                for (var c = 0; c < lTimeCols.length; c++) {
+                    if (a0.startMin < lTimeCols[c].endMin && a0.endMin > lTimeCols[c].startMin) { sc = c; break; }
+                }
+                if (sc < 0) return;
+                var span = lColSpanAt(sc, a0.endMin);
+                segByStartCol[sc] = {
+                    colSpan: span, text: txt0, isLeague: lActIsLeague(a0),
+                    type: a0.type, startMin: a0.startMin, endMin: a0.endMin
+                };
+                for (var k = 0; k < span; k++) mergedCols[sc + k] = true;
+            });
+        }
+        // Division-wide league periods carried as empty-league columns (no
+        // per-bunk entry) are identical for every bunk too — collapse them.
+        if (bunks.length > 1) {
+            var hasActAt = function (colIdx) {
+                return bunks.some(function (bk) {
+                    var acts = lBunkActs[bk] || [];
+                    return acts.some(function (a) { return a.startMin < lTimeCols[colIdx].endMin && a.endMin > lTimeCols[colIdx].startMin; });
+                });
+            };
+            var lc = 0;
+            while (lc < lTimeCols.length) {
+                if (mergedCols[lc] || hasActAt(lc)) { lc++; continue; }
+                var lg = pcLeagueInfoAt(divName, lTimeCols[lc].startMin);
+                if (!lg) { lc++; continue; }
+                var lspan = 1, ln = lc + 1;
+                while (ln < lTimeCols.length && !mergedCols[ln] && !hasActAt(ln)) {
+                    var lg2 = pcLeagueInfoAt(divName, lTimeCols[ln].startMin);
+                    if (!lg2 || lg2.label !== lg.label) break;
+                    lspan++; ln++;
+                }
+                var lText = lg.label + (lg.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + lg.matchups.join(', ') : '');
+                segByStartCol[lc] = {
+                    colSpan: lspan, text: lText, isLeague: true, type: 'league',
+                    startMin: lTimeCols[lc].startMin, endMin: lTimeCols[lc + lspan - 1].endMin
+                };
+                for (var lk = 0; lk < lspan; lk++) mergedCols[lc + lk] = true;
+                lc = ln;
+            }
+        }
+
+        bunks.forEach(function (bunk, bunkIdx) {
             html += '<tr>';
             html += '<th class="row-head">' + escHtml(bunk) + '</th>';
             var acts = lBunkActs[bunk] || [];
@@ -3850,6 +3936,26 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
             while (ci < lTimeCols.length) {
                 var cStart = lTimeCols[ci].startMin;
                 var cEnd = lTimeCols[ci].endMin;
+
+                // Shared block: render once (first row, spanning all rows) then skip.
+                if (mergedCols[ci]) {
+                    var seg = segByStartCol[ci];
+                    if (seg) {
+                        if (bunkIdx === 0) {
+                            var sCur = nowMin >= seg.startMin && nowMin < seg.endMin;
+                            var sPast = nowMin >= seg.endMin;
+                            var sCls = (seg.isLeague ? 'cell-league' : 'cell-' + seg.type) + ' cell-merged';
+                            if (sCur) sCls += ' cell-current';
+                            if (sPast) sCls += ' cell-past';
+                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(seg.text) + '</td>';
+                        }
+                        ci += seg.colSpan;
+                    } else {
+                        ci++; // covered by a rowspan from row 0 — emit nothing
+                    }
+                    continue;
+                }
+
                 var mAct = null;
                 acts.forEach(function (a) { if (a.startMin < cEnd && a.endMin > cStart) mAct = a; });
 
@@ -3936,23 +4042,40 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                 return;
             }
 
-            bunks.forEach(function (bunk) {
-                var slotIdx = findFirstSlotForTime(ts.startMin, divName);
-                var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
-                var type = getEntryType(entry);
-                var text = entry ? formatEntry(entry) : '—';
-                if (entry && text !== '—' && slotIdx >= 0) {
-                    var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
-                    if (_sh.length) {
-                        var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                        text += ' – vs ' + _names.join(', ');
-                    }
-                }
-                var cls = 'cell-' + type;
-                if (isCurrent) cls += ' cell-current';
-                if (isPast) cls += ' cell-past';
-                html += '<td class="' + cls + '">' + escHtml(text) + '</td>';
+            var mSlotIdx = findFirstSlotForTime(ts.startMin, divName);
+            var perBunk = bunks.map(function (bunk) {
+                var entry = mSlotIdx >= 0 ? getEntry(bunk, mSlotIdx) : null;
+                return { entry: entry, type: getEntryType(entry), text: entry ? formatEntry(entry) : '—' };
             });
+
+            // When every bunk is doing the exact same thing this period, show it
+            // once across the whole row instead of repeating it per bunk.
+            var allSame = bunks.length > 1 && perBunk.every(function (p) {
+                return p.text !== '—' && p.text === perBunk[0].text && p.type === perBunk[0].type;
+            });
+
+            if (allSame) {
+                var mCls = 'cell-' + perBunk[0].type + ' cell-merged';
+                if (isCurrent) mCls += ' cell-current';
+                if (isPast) mCls += ' cell-past';
+                html += '<td colspan="' + bunks.length + '" class="' + mCls + '" style="text-align:center;white-space:normal;word-break:break-word;">' + escHtml(perBunk[0].text) + '</td>';
+            } else {
+                perBunk.forEach(function (p, bi) {
+                    var bunk = bunks[bi];
+                    var text = p.text;
+                    if (p.entry && text !== '—' && mSlotIdx >= 0) {
+                        var _sh = pcFindFieldSharers(bunk, mSlotIdx, divName);
+                        if (_sh.length) {
+                            var _names = _sh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                            text += ' – vs ' + _names.join(', ');
+                        }
+                    }
+                    var cls = 'cell-' + p.type;
+                    if (isCurrent) cls += ' cell-current';
+                    if (isPast) cls += ' cell-past';
+                    html += '<td class="' + cls + '">' + escHtml(text) + '</td>';
+                });
+            }
             html += '</tr>';
         });
         html += '</tbody></table>';
