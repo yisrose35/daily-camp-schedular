@@ -5367,8 +5367,12 @@ function buildPrintHTML(sel) {
         });
     }
 
+    // One division per page: in shared-timeline division view, always break
+    // between divisions (don't depend on the "Page breaks" checkbox, which
+    // readDesignValues can flip off) — that's the whole point of the layout.
+    var forceDivBreak = (_activeView === 'division' && t.sharedTimeline);
     units.forEach(function (u, idx) {
-        var pageBreak = (t.showPageBreaks && idx > 0) ? 'page-break-before:always;' : '';
+        var pageBreak = ((t.showPageBreaks || forceDivBreak) && idx > 0) ? 'page-break-before:always;' : '';
         html += '<div style="' + pageBreak + 'margin-bottom:16px;position:relative;">';
 
         // Watermark
