@@ -4717,7 +4717,7 @@ function pcLiveFitFont(nodes) {
         var minW = Infinity;
         ths.forEach(function (th) { if (!th.classList.contains('row-head')) minW = Math.min(minW, th.offsetWidth); });
         if (!isFinite(minW) || minW <= 0) return;
-        var fs = Math.max(15, Math.min(36, Math.round(minW * 0.225)));
+        var fs = Math.max(14, Math.min(28, Math.round(minW * 0.155)));
         tbl.style.fontSize = fs + 'px';
     });
 }
