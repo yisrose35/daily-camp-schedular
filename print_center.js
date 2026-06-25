@@ -1102,7 +1102,7 @@ function pcLeagueInfoAt(divName, startMin) {
 }
 
 // Returns matchup lines for a manual league block, formatted as
-// "Football - Football Field 1 - Bunk 1 vs 2". When `bunk` is given and the
+// "Football - Football Field 1 - Team 1 vs Team 2". When `bunk` is given and the
 // teams are bunk-like, returns only that bunk's game; otherwise all games.
 function buildLeagueMatchups(eventBlock, divName, bunk) {
     var raw = [];
@@ -1188,12 +1188,15 @@ function pcParseMatchup(m) {
     return { a: a, b: b, sport: sport, field: field };
 }
 
-// Format one parsed matchup as "Bunk 1 vs 2 - Football - Football Field 1"
+// Format one parsed matchup as "Team 1 vs Team 2 - Football - Football Field 1"
 // (teams first, then sport, then field — easiest to scan on the live screen).
+// League teams are separate entities from bunks, so numeric labels get a
+// "Team " prefix (NOT "Bunk ").
 function pcFormatMatchupLine(p) {
     var sport = p.sport ? (p.sport.charAt(0).toUpperCase() + p.sport.slice(1)) : '';
-    var a = /^\d+$/.test(String(p.a).trim()) ? 'Bunk ' + p.a : p.a;
-    return [a + ' vs ' + p.b, sport, p.field].filter(Boolean).join(' - ');
+    var a = /^\d+$/.test(String(p.a).trim()) ? 'Team ' + p.a : p.a;
+    var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
+    return [a + ' vs ' + b, sport, p.field].filter(Boolean).join(' - ');
 }
 
 // Build a league/specialty-league cell for the live view: the game/league label
@@ -1219,7 +1222,7 @@ function pcLeagueSlotRecord(divName, startMin) {
     return null;
 }
 
-// Build a rich league label for a bunk's game: "Football - Football Field 1 - Bunk 1 vs 2".
+// Build a rich league label for a bunk's game: "Football - Football Field 1 - Team 1 vs Team 2".
 // Returns { sport, field, matchup, full }. Picks the matchup involving `bunk` when the
 // teams are bunk-like; otherwise lists all matchups for the game.
 function pcLeagueLabel(entry, bunk, divName, startMin) {
@@ -1247,8 +1250,10 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
     var chosen = (mine && mine.length) ? mine : parsed;
 
     var fmtPair = function (p) {
-        var a = /^\d+$/.test(String(p.a).trim()) ? 'Bunk ' + p.a : p.a;
-        return a + ' vs ' + p.b;
+        // League teams are separate entities from bunks → "Team " prefix.
+        var a = /^\d+$/.test(String(p.a).trim()) ? 'Team ' + p.a : p.a;
+        var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
+        return a + ' vs ' + b;
     };
     var matchStrs = chosen.map(fmtPair);
 
