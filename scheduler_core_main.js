@@ -1441,8 +1441,19 @@
                                     _placed = true; break;
                                 }
                                 // Diagnostic: why the "Special" rotation step couldn't place (so a
-                                // fall-through to Pickleball/Swim is explained, not silent).
-                                if (!_placed) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" unplaceable @${_rStart}-${_rEnd} (${_avail.length} candidate(s): ${_avail.map(s => s.name).join(', ') || 'none available'} — all at capacity or already used today) → next option`);
+                                // fall-through to Pickleball/Swim is explained, not silent). Per
+                                // candidate, show WHO holds it (which special/division/time window) —
+                                // this reveals when a budget-mode division in an overlapping window
+                                // claimed the facility away from this rotation tile.
+                                if (!_placed) {
+                                    const _diag = _avail.map(s => {
+                                        if (_had && _had.has(s.name.toLowerCase())) return `${s.name}=had-today`;
+                                        const _ov = (_specialClaims[_claimKey(s.name)] || []).filter(c => c.startMin < _rEnd && c.endMin > _rStart);
+                                        if (_ov.length) return `${s.name}⟵[${_ov.map(c => `${c.actLower}@${c.startMin}-${c.endMin}·${c.divName}`).join('|')}]`;
+                                        return `${s.name}=blocked(other)`;
+                                    }).join(', ');
+                                    console.log(`[SmartTile] ${bunk} -> ROTATION "Special" unplaceable @${_rStart}-${_rEnd} (${_avail.length} cand): ${_diag || 'none available'} → next option`);
+                                }
                             } else {
                                 const _gT = optNorm.includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                                 console.log(`[SmartTile] ${bunk} -> ROTATION ${_gT}`);
@@ -1479,17 +1490,22 @@
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                                 _placed = true;
-                            } else if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
+                            } else if (_o === 0 && _canClaimDirectFill(opt, _rStart, _rEnd)) {
                                 // No open field → place the named sport as its OWN field-less label,
-                                // but honor its hardcoded real-world cap (e.g. Pickleball = 2 nets,
-                                // _directFillCap): once the window is full the next bunk falls
-                                // through to its NEXT rotation option instead of over-piling on it.
+                                // but ONLY for the bunk whose PRIMARY rotation slot this is (_o===0),
+                                // and honor its hardcoded real-world cap (e.g. Pickleball = 2 nets,
+                                // _directFillCap). A bunk that merely FELL THROUGH here (its real pick
+                                // was unplaceable, _o>0) skips to its NEXT option instead — otherwise
+                                // the same low-index bunks grab the field-less label every day (their
+                                // turn or not), starving rotation. So the scarce label goes to the
+                                // bunks whose turn it actually is, and rotates as the daily offset moves.
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                 _placed = true;
                             } else {
-                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" at cap (${_directFillCap(opt)}/window, no open field) → next option`);
+                                const _why = (_o !== 0) ? 'fell through here (not its turn)' : `at cap (${_directFillCap(opt)}/window)`;
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" ${_why}, no open field → next option`);
                             }
                         } else {
                             // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
