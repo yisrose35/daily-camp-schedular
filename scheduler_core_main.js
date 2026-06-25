@@ -1363,6 +1363,14 @@
         //   still respects room availability, so an unused quota never wastes a room.
         const _rotSpecialQuota = {};   // `${div}|${start}|${end}` -> max specials claimable
         const _rotSpecialClaimed = {}; // same key -> running count
+        // ★ Per-division special PRIORITY weight: a division listed here gets that many
+        //   times its normal demand in the fair-share split, so it claims a BIGGER slice of
+        //   the contended special rooms (and the others reserve more for it). Used to make a
+        //   flexible division (e.g. 9th grade, whose specials can be slotted earlier) more
+        //   aggressive. Tunable at runtime via window.__smartTileSpecialWeight; default boosts
+        //   div "9". Weight 1 (the default for everyone else) = no change.
+        const _specialWeightMap = window.__smartTileSpecialWeight || { '9': 8 };
+        const _specialWeight = (d) => _specialWeightMap[d] || 1;
         (function _buildRotationSpecialQuotas() {
             const rj = [];
             filteredJobs.forEach(job => {
@@ -1381,7 +1389,7 @@
                     facs.set(k, Math.max(facs.get(k) || 0, c));
                 });
                 if (!facs.size) return;
-                rj.push({ div: job.division, s: b.startMin, e: b.endMin, demand: bunks / Math.max(1, opts.length), facs, key: `${job.division}|${b.startMin}|${b.endMin}` });
+                rj.push({ div: job.division, s: b.startMin, e: b.endMin, demand: (bunks / Math.max(1, opts.length)) * _specialWeight(job.division), facs, key: `${job.division}|${b.startMin}|${b.endMin}` });
             });
             rj.forEach(j => {
                 let q = 0, contended = false;
