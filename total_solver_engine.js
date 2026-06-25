@@ -1717,9 +1717,19 @@
                 pick.field = 'Free';
                 pick.sport = null;
                 pick._activity = 'Free';
-            
+
         }
     }
+        // ★ Same-activity-when-sharing gate (last line of defense, mirrors the
+        //   cross-division guard above). A shared field/room hosts ONE activity at a
+        //   time: two DIFFERENT activities overlapping on the same physical field — two
+        //   different specials sharing a room (e.g. Running Bases + Off The Wall on
+        //   "Football Turf"), or a sport + special on one turf — is a double-book even
+        //   when capacity is not exceeded. The scorer rejects it, but batch/sequential
+        //   commits can race it through, so enforce it at the commit gate too.
+        if (fName && fName !== 'Free' && checkSameFieldActivityMismatch(fName, block.startTime, block.endTime, (pick._activity || pick.activityName || pick.sport || fName), bunk)) {
+            fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free';
+        }
     }    var _actName = pick._activity || pick.activityName || pick.sport || fName;
     // ★ Day-19 special features (durations[] best-fit / multiPart part labels /
     //   prep lead-in) for the manual solver's MAIN write path. This is where
