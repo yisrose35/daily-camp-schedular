@@ -4715,22 +4715,21 @@ function pcLiveStretchTables(nodes, availH, gap) {
     var avail = availH - padV - gap * (nodes.length - 1);
     var totalNat = 0;
     nodes.forEach(function (n) { totalNat += n.offsetHeight || 1; });
-    if (totalNat <= 0 || avail <= totalNat + 8) return; // no real spare room
+    var extra = avail - totalNat; // spare vertical space to distribute
+    if (totalNat <= 0 || extra <= 8) return; // nothing meaningful to fill
     nodes.forEach(function (n) {
         var nat = n.offsetHeight || 1;
-        var share = Math.floor(avail * nat / totalNat);
-        var head = n.querySelector('.pc3-live-divhead');
+        // This section's share of the spare space, split across its body rows.
+        var sectionExtra = extra * (nat / totalNat);
         var tbl = n.querySelector('.pc3-live-tbl');
         if (!tbl) return;
         var bodyRows = Array.prototype.slice.call(tbl.querySelectorAll('tbody tr'));
         if (!bodyRows.length) return;
-        var thead = tbl.querySelector('thead');
-        var headH = (head ? head.offsetHeight + 10 : 0) + (thead ? thead.offsetHeight : 0);
-        var perRow = Math.floor((share - headH) / bodyRows.length);
-        var natRow = Math.floor((tbl.offsetHeight - (thead ? thead.offsetHeight : 0)) / bodyRows.length);
-        if (perRow <= natRow) return; // already at/above target — don't shrink
-        tbl.style.height = (share - (head ? head.offsetHeight + 10 : 0)) + 'px';
-        bodyRows.forEach(function (tr) { tr.style.height = perRow + 'px'; });
+        var addPerRow = Math.floor(sectionExtra / bodyRows.length) - 1; // -1 px safety
+        if (addPerRow < 1) return;
+        // ADD to each row's natural height (never below content) so tall wrapped
+        // rows keep their size and the total never overflows the screen.
+        bodyRows.forEach(function (tr) { tr.style.height = (tr.offsetHeight + addPerRow) + 'px'; });
     });
 }
 
