@@ -70,9 +70,13 @@ var DEFAULT_TEMPLATE = {
     timeColBgColor: '#F8FAFC', timeColTextColor: '#475569',
     timeColFont: '', timeColFontSize: 11, timeColBold: true, timeColWidth: 90,
     cellPadding: 6,
-    tableOrientation: 'bunks-top', layoutMode: 'all-bunks',
+    tableOrientation: 'bunks-top', layoutMode: 'per-division',
     orientation: 'landscape', paperSize: 'letter',
     showPageBreaks: true,
+    // Default print layout = the "Shared Timeline" look: one vertical time
+    // axis per division with bunks as columns, each division page-broken onto
+    // its own page. Other packs (e.g. Full Master) flip these off.
+    sharedTimeline: true,
     hideLeagueMatchups: false,
     watermarkEnabled: false, watermarkText: 'DRAFT', watermarkColor: '#CBD5E1', watermarkOpacity: 0.08,
     footerEnabled: false, footerText: ''
@@ -6584,6 +6588,8 @@ window._pc3ApplyPreset = function (presetId) {
         footerText: _currentTemplate.footerText,
         tableOrientation: _currentTemplate.tableOrientation,
         layoutMode: _currentTemplate.layoutMode,
+        sharedTimeline: _currentTemplate.sharedTimeline,
+        showPageBreaks: _currentTemplate.showPageBreaks,
         hideLeagueMatchups: _currentTemplate.hideLeagueMatchups,
         orientation: _currentTemplate.orientation,
         paperSize: _currentTemplate.paperSize
