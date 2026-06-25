@@ -4703,6 +4703,37 @@ function _liveContentSignature(nowMin) {
 }
 
 // —— Paginated live view renderer ————————————————————————————————————————————
+// Stretch live tables to fill leftover vertical space. When the page content
+// is shorter than the screen, grow each section's BODY ROWS (the reliable way
+// — setting height on a <table> alone doesn't stretch rows in all browsers)
+// so the schedule uses the full height instead of clustering at the top. Each
+// section gets a share proportional to its natural height. Must be called while
+// the section nodes are laid out (offsetHeight readable).
+function pcLiveStretchTables(nodes, availH, gap) {
+    if (!nodes || !nodes.length) return;
+    var padV = 36; // .pc3-live-page-inner top+bottom padding
+    var avail = availH - padV - gap * (nodes.length - 1);
+    var totalNat = 0;
+    nodes.forEach(function (n) { totalNat += n.offsetHeight || 1; });
+    if (totalNat <= 0 || avail <= totalNat + 8) return; // no real spare room
+    nodes.forEach(function (n) {
+        var nat = n.offsetHeight || 1;
+        var share = Math.floor(avail * nat / totalNat);
+        var head = n.querySelector('.pc3-live-divhead');
+        var tbl = n.querySelector('.pc3-live-tbl');
+        if (!tbl) return;
+        var bodyRows = Array.prototype.slice.call(tbl.querySelectorAll('tbody tr'));
+        if (!bodyRows.length) return;
+        var thead = tbl.querySelector('thead');
+        var headH = (head ? head.offsetHeight + 10 : 0) + (thead ? thead.offsetHeight : 0);
+        var perRow = Math.floor((share - headH) / bodyRows.length);
+        var natRow = Math.floor((tbl.offsetHeight - (thead ? thead.offsetHeight : 0)) / bodyRows.length);
+        if (perRow <= natRow) return; // already at/above target — don't shrink
+        tbl.style.height = (share - (head ? head.offsetHeight + 10 : 0)) + 'px';
+        bodyRows.forEach(function (tr) { tr.style.height = perRow + 'px'; });
+    });
+}
+
 function renderLiveContent() {
     var body = el('pc3-live-body');
     if (!body) return;
@@ -4841,23 +4872,9 @@ function renderLiveContent() {
         var wcScale = wcTotalH > availH ? availH / wcTotalH : 1;
         wcScale = Math.min(1, wcScale); // only ever shrink, never enlarge
 
-        // Fits with room to spare → grow each table to fill the empty vertical
-        // space (proportional to natural height) so the whole camp uses the
-        // full screen instead of clustering at the top.
-        if (wcScale >= 1 && wraps.length) {
-            var wcAvailFill = availH - 36 - 20 * wraps.length;
-            var wcTotalNat = 0;
-            wraps.forEach(function (n) { wcTotalNat += n.offsetHeight || 1; });
-            if (wcTotalNat > 0 && wcAvailFill > wcTotalNat) {
-                wraps.forEach(function (n) {
-                    var nat = n.offsetHeight || 1;
-                    var share = Math.floor(wcAvailFill * nat / wcTotalNat);
-                    var head = n.querySelector('.pc3-live-divhead');
-                    var tbl = n.querySelector('.pc3-live-tbl');
-                    if (tbl) tbl.style.height = Math.max(tbl.offsetHeight, share - (head ? head.offsetHeight + 10 : 0)) + 'px';
-                });
-            }
-        }
+        // Fits with room to spare → grow rows to fill the empty vertical space
+        // so the whole camp uses the full screen instead of clustering at top.
+        if (wcScale >= 1) pcLiveStretchTables(wraps, availH, 20);
 
         _numLivePages = 1;
         _livePageIndex = 0;
@@ -4949,28 +4966,7 @@ function renderLiveContent() {
         var inner = document.createElement('div');
         inner.className = 'pc3-live-page-inner';
         inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
-        if (scale >= 1 && page.nodes.length) {
-            // Page fits with room to spare → grow each section's table to fill the
-            // empty vertical space, proportional to its natural height. Setting an
-            // explicit pixel height on a <table> makes the browser stretch its rows
-            // (flex/height:100% on a table does not reliably do this).
-            var padV = 36, gapV = 22; // page-inner padding + .pc3-live-section margin
-            var availFill = availH - padV - gapV * (page.nodes.length - 1);
-            var totalNat = 0;
-            page.nodes.forEach(function (n) { totalNat += n.offsetHeight || 1; });
-            if (totalNat > 0 && availFill > totalNat) {
-                page.nodes.forEach(function (n) {
-                    var nat = n.offsetHeight || 1;
-                    var share = Math.floor(availFill * nat / totalNat);
-                    var head = n.querySelector('.pc3-live-divhead');
-                    var tbl = n.querySelector('.pc3-live-tbl');
-                    if (tbl) {
-                        var headH = head ? head.offsetHeight + 10 : 0;
-                        tbl.style.height = Math.max(tbl.offsetHeight, share - headH) + 'px';
-                    }
-                });
-            }
-        }
+        if (scale >= 1) pcLiveStretchTables(page.nodes, availH, 22);
 
         // In one-division-per-page mode, label the page with the division name
         // (only for real divisions — a lone grade with no parent already shows
