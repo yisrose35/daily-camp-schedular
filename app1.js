@@ -241,8 +241,33 @@
         var keys = Array.isArray(names) && names.length ? names.slice() : Object.keys(window.divisions || {});
         var ordered = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(keys) : keys;
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        // ★ Seniority must follow the user's EXPLICIT column order (app1.manualColumnOrder),
+        //   which is stored at the grade-COLUMN level — the SAME key space as `keys`
+        //   (e.g. '1', 'Day Camp > 4', 'לב', 'מתמדים'). getUserDivisionOrder *tries* to
+        //   honor manualColumnOrder, but it looks it up by PARENT name (its sort keys are
+        //   campStructure parents like 'Bunk לב' / 'Masmidim'), so the lookup never hits
+        //   and named divisions with no number in the grade silently fall back to the
+        //   numeric firstGradeNum=999 heuristic — landing at the numeric extreme and, under
+        //   the youngToOld flip, reading as the MOST senior (they grabbed the rank-1 fields
+        //   ahead of older numbered grades). Re-rank here at the real grade-column level so
+        //   Field Quality seniority matches the order the user actually arranged. Scoped to
+        //   this seniority helper on purpose: display ordering still goes through
+        //   getUserDivisionOrder untouched (FN-50: a stale manualColumnOrder must never
+        //   override the live structure for column DISPLAY).
+        var mco = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : [];
+        if (mco.length) {
+            var mp = {}; mco.forEach(function (k, i) { mp[k] = i; });
+            var base = {}; ordered.forEach(function (k, i) { base[k] = i; });   // stable fallback
+            ordered = ordered.slice().sort(function (a, b) {
+                var ma = mp[a], mb = mp[b];
+                if (ma != null && mb != null && ma !== mb) return ma - mb;      // both positioned → by column order
+                if (ma != null && mb == null) return -1;                        // positioned columns lead
+                if (ma == null && mb != null) return 1;
+                return base[a] - base[b];                                       // else keep getUserDivisionOrder order
+            });
+        }
         var dir = (gs.app1 && gs.app1.divisionAgeDirection) || 'youngToOld';
-        // youngToOld = the Me list runs top(young) → bottom(old), so oldest-first = reversed
+        // youngToOld = the column list runs top(young) → bottom(old), so oldest-first = reversed
         return dir === 'oldToYoung' ? ordered.slice() : ordered.slice().reverse();
     };
 
