@@ -214,6 +214,101 @@ var PRINT_PACKS = [
     }
 ];
 
+// ─────────────────────────────────────────────────────────────────────────
+// USER PACKS — print a pack tailored to a specific person/role.
+// Unlike PRINT_PACKS (which always include the whole camp), a user pack can be
+// SCOPED so each recipient gets only their slice of the schedule:
+//   • scope 'all'              → every division / every bunk (the master copy)
+//   • scope 'division'         → one chosen division (division view)
+//   • scope 'division-bunks'   → bunks of one chosen division, or all bunks
+// Pick a pack (and a division where relevant), it configures the print center,
+// then hit Print.
+// ─────────────────────────────────────────────────────────────────────────
+var USER_PACKS = [
+    {
+        id: 'full-master',
+        name: 'Full Master',
+        tagline: 'Every division and bunk — the complete schedule.',
+        icon: 'grid',
+        scope: 'all',
+        preset: 'classic',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+    },
+    {
+        id: 'division-head',
+        name: 'Division Head',
+        tagline: 'One division — all its bunks on a clean stack.',
+        icon: 'user',
+        scope: 'division',
+        preset: 'classic',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+    },
+    {
+        id: 'head-counselor',
+        name: 'Head Counselor',
+        tagline: 'Per-bunk sheets, big type — one slip per bunk.',
+        icon: 'user',
+        scope: 'division-bunks',
+        preset: 'bold',
+        view: 'bunk',
+        layout: { tableOrientation: 'time-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'portrait', pageBreakPerBunk: true }
+    },
+    {
+        id: 'specialist',
+        name: 'Specialist / Facility',
+        tagline: "Who's on each field, court, and room all day.",
+        icon: 'mapPin',
+        scope: 'all',
+        preset: 'classic',
+        view: 'location',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+    }
+];
+
+// Divisions in the user-facing order, filtered to those present on the date —
+// mirrors how populateSidebar orders the sidebar so the pack dropdown matches.
+function getOrderedPackDivisions() {
+    var avail = getAvailableDivisions();
+    avail = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(avail)
+        : avail.slice().sort(naturalSort);
+    if (typeof window.filterDivisionsByDate === 'function') avail = window.filterDivisionsByDate(avail);
+    return avail;
+}
+
+// Build the "Packs" popover content from USER_PACKS. Division-scoped packs get
+// a division dropdown (Head Counselor also offers "All divisions").
+function buildUserPacksMenu() {
+    var divOpts = getOrderedPackDivisions().map(function (d) {
+        return '<option value="' + escHtml(d) + '">' + escHtml(d) + '</option>';
+    }).join('');
+    var html = '<div class="pcx-menu-label">Print a pack for…</div>';
+    USER_PACKS.forEach(function (p) {
+        var icon = ICO[p.icon] || ICO.user;
+        var control;
+        if (p.scope === 'division') {
+            control = '<select class="pcx-up-sel" data-userpack="' + p.id + '">' +
+                '<option value="">Choose…</option>' + divOpts + '</select>';
+        } else if (p.scope === 'division-bunks') {
+            control = '<select class="pcx-up-sel" data-userpack="' + p.id + '">' +
+                '<option value="">All divisions</option>' + divOpts + '</select>';
+        } else {
+            control = '<button class="pcx-up-go" data-userpack="' + p.id + '">Apply</button>';
+        }
+        html += '<div class="pcx-up-row">' +
+            '<span class="pcx-up-icon">' + icon + '</span>' +
+            '<div class="pcx-up-text">' +
+                '<div class="pcx-up-name">' + escHtml(p.name) + '</div>' +
+                '<div class="pcx-up-tag">' + escHtml(p.tagline) + '</div>' +
+            '</div>' +
+            control +
+        '</div>';
+    });
+    return html;
+}
+
 // Style presets — Classic (default), Bold, Minimal, Dark.
 // Each preset is a partial overlay applied on top of DEFAULT_TEMPLATE.
 var STYLE_PRESETS = [
@@ -1633,6 +1728,18 @@ function buildMainUI() {
         '.pcx-menu button:hover{background:#f4f1ea;}' +
         '.pcx-menu button svg{width:17px;height:17px;color:#0F5F6E;}' +
         '.pcx-menu .pcx-menu-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#b3ab9c;padding:7px 11px 3px;}' +
+        /* User Packs popover — a tailored pack per role/recipient */
+        '#pc3-userpacks-menu{min-width:300px;}' +
+        '.pcx-up-row{display:flex;align-items:center;gap:11px;width:100%;padding:9px 11px;border-radius:10px;}' +
+        '.pcx-up-row:hover{background:#f4f1ea;}' +
+        '.pcx-up-icon{width:30px;height:30px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;background:#e3f3f6;color:#0F5F6E;border-radius:8px;}' +
+        '.pcx-up-text{flex:1;min-width:0;}' +
+        '.pcx-up-name{font-size:13.5px;font-weight:700;color:#23252a;line-height:1.2;}' +
+        '.pcx-up-tag{font-size:11px;color:#8a8170;line-height:1.35;margin-top:1px;}' +
+        '.pcx-up-go{flex-shrink:0;width:auto;padding:7px 13px;border:1px solid #0F5F6E;background:#0F5F6E;color:#fff;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;}' +
+        '.pcx-up-go:hover{background:#0c4e5a;}' +
+        '.pcx-up-sel{flex-shrink:0;max-width:140px;padding:7px 8px;border:1px solid #d9d3c7;border-radius:8px;font-family:inherit;font-size:12px;font-weight:600;color:#23252a;background:#fff;cursor:pointer;}' +
+        '.pcx-up-sel:focus{outline:none;border-color:#0F5F6E;box-shadow:0 0 0 3px rgba(20,125,145,.12);}' +
         '.pcx-body{flex:1;display:flex;min-height:0;overflow:hidden;}' +
         /* RAIL — warm cream */
         '.pcx-rail{width:290px;flex-shrink:0;background:#faf8f3;border-right:1px solid #e7e2d6;display:flex;flex-direction:column;overflow-y:auto;}' +
@@ -1690,6 +1797,10 @@ function buildMainUI() {
             '<button class="pcx-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="Open Live View on a screen">' +
                 (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
             '</button>' +
+            '<div class="pcx-menuwrap">' +
+                '<button class="pcx-btn" id="pc3-userpacks-btn">' + ICO.user + ' Packs <span style="opacity:.6;font-size:9px;">▼</span></button>' +
+                '<div class="pcx-menu" id="pc3-userpacks-menu">' + buildUserPacksMenu() + '</div>' +
+            '</div>' +
             '<div class="pcx-menuwrap">' +
                 '<button class="pcx-btn" id="pc3-output-btn">' + ICO.download + ' Download <span style="opacity:.6;font-size:9px;">▼</span></button>' +
                 '<div class="pcx-menu" id="pc3-output-menu">' +
@@ -5456,6 +5567,7 @@ function bindAll() {
     // Popovers — Packs / Output / Style / Layout
     var popoverPairs = [
         ['pc3-packs-btn', 'pc3-packs-menu'],
+        ['pc3-userpacks-btn', 'pc3-userpacks-menu'],
         ['pc3-output-btn', 'pc3-output-menu'],
         ['pc3-style-btn', 'pc3-style-menu'],
         ['pc3-layout-btn', 'pc3-layout-menu']
@@ -5529,6 +5641,22 @@ function bindAll() {
         btn.addEventListener('click', function () {
             var packId = this.getAttribute('data-pack');
             window._pc3ApplyPack && window._pc3ApplyPack(packId);
+        });
+    });
+
+    // User pack apply — "Apply" buttons (whole-camp packs) and division
+    // dropdowns (division-scoped packs). Either configures the print center and
+    // closes the Packs popover so the operator can hit Print.
+    document.querySelectorAll('.pcx-up-go').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            window._pc3ApplyUserPack && window._pc3ApplyUserPack(this.getAttribute('data-userpack'), null);
+            setTimeout(closeAllPopovers, 0);
+        });
+    });
+    document.querySelectorAll('.pcx-up-sel').forEach(function (sel) {
+        sel.addEventListener('change', function () {
+            window._pc3ApplyUserPack && window._pc3ApplyUserPack(this.getAttribute('data-userpack'), this.value || null);
+            setTimeout(closeAllPopovers, 0);
         });
     });
 
@@ -6040,6 +6168,62 @@ window._pc3ApplyPack = function (packId) {
     // 7. Optional after-apply (e.g. open Live View for Office TV pack)
     if (typeof pack.afterApply === 'function') {
         try { pack.afterApply(); } catch (e) { console.warn('[PrintCenter] pack.afterApply failed', e); }
+    }
+};
+
+// Apply a role/recipient pack, optionally scoped to a single division.
+// divisionName: a division to scope to, or null for the pack's default
+// ('all' packs ignore it; division packs fall back to all when null).
+window._pc3ApplyUserPack = function (packId, divisionName) {
+    var pack = USER_PACKS.filter(function (p) { return p.id === packId; })[0];
+    if (!pack) return;
+    // 1. Preset (color scheme)
+    if (pack.preset) window._pc3ApplyPreset(pack.preset);
+    // 2. Layout flags
+    if (pack.layout) {
+        Object.keys(pack.layout).forEach(function (k) { _currentTemplate[k] = pack.layout[k]; });
+        if (Object.prototype.hasOwnProperty.call(pack.layout, 'pageBreakPerBunk')) {
+            _pageBreakPerBunk = !!pack.layout.pageBreakPerBunk;
+            try { localStorage.setItem('campistry_pc3_pageBreakPerBunk', _pageBreakPerBunk ? '1' : '0'); } catch (e) {}
+            var rootPB = document.getElementById('pc3-root');
+            if (rootPB) rootPB.classList.toggle('pc3-pb-per-bunk', _pageBreakPerBunk);
+            var pbCb = el('pc3-page-break-bunk'); if (pbCb) pbCb.checked = _pageBreakPerBunk;
+        }
+    }
+    // 3. Switch view (rebuilds the sidebar items for that view)
+    if (pack.view && pack.view !== _activeView) {
+        _activeView = pack.view;
+        document.querySelectorAll('[data-view]').forEach(function (b) {
+            b.classList.toggle('active', b.getAttribute('data-view') === pack.view);
+        });
+        if (_activeView === 'week') ensureWeekDataLoaded(false);
+    }
+    // Always repopulate so the checkbox set matches the (possibly unchanged) view.
+    populateSidebar();
+    // 4. Scoped selection
+    var allCbs = document.querySelectorAll('.pc3-item-cb');
+    if (pack.scope === 'division' && divisionName) {
+        // Division view: check only the chosen division's item.
+        allCbs.forEach(function (cb) { cb.checked = (cb.getAttribute('data-item') === divisionName); });
+    } else if (pack.scope === 'division-bunks' && divisionName) {
+        // Bunk view: check only the bunks grouped under the chosen division.
+        var esc = (window.CSS && CSS.escape) ? CSS.escape(divisionName) : divisionName;
+        var grp = document.querySelector('.pc3-sidebar-group[data-group="' + esc + '"]');
+        allCbs.forEach(function (cb) { cb.checked = false; });
+        if (grp) grp.querySelectorAll('.pc3-item-cb').forEach(function (cb) { cb.checked = true; });
+    } else {
+        // 'all', or a division pack with no division chosen → everything.
+        allCbs.forEach(function (cb) { cb.checked = true; });
+    }
+    updateSidebarSelectionUI && updateSidebarSelectionUI();
+    // 5. Sync the Options checkboxes so the UI reflects the pack
+    var cbCombined = el('pc3-combined'); if (cbCombined) cbCombined.checked = (_currentTemplate.layoutMode === 'all-bunks');
+    var hm = el('pc3-hide-matchups'); if (hm) hm.checked = !!_currentTemplate.hideLeagueMatchups;
+    var orient = el('pc3-orientation'); if (orient) orient.value = _currentTemplate.orientation || 'landscape';
+    liveRefresh();
+    if (window.showToast) {
+        var label = pack.name + (divisionName ? ' · ' + divisionName : '');
+        window.showToast(label + ' pack ready — hit Print', 'info');
     }
 };
 
