@@ -5198,20 +5198,22 @@ window._pc3LiveDownloadJpeg = function () {
     _pc3CaptureLivePages(function (canvases) {
         if (!canvases) return;
         var dateStr = String(window.currentScheduleDate || 'schedule').replace(/[^0-9A-Za-z\-]/g, '');
-        // Save EVERY page. Browsers throttle rapid back-to-back downloads to just
-        // the first, so trigger them one at a time with a small gap.
-        function saveOne(idx) {
-            if (idx >= canvases.length) {
-                if (window.showToast) window.showToast('Saved ' + canvases.length + ' image' + (canvases.length > 1 ? 's' : ''), 'success');
-                return;
-            }
-            var a = document.createElement('a');
-            a.href = canvases[idx].toDataURL('image/jpeg', 0.95);
-            a.download = 'schedule-' + dateStr + (canvases.length > 1 ? '-' + (idx + 1) : '') + '.jpg';
-            document.body.appendChild(a); a.click(); a.remove();
-            setTimeout(function () { saveOne(idx + 1); }, 600);
-        }
-        saveOne(0);
+        // Stack EVERY page into one tall image so it's a single download (browsers
+        // throttle multiple back-to-back downloads to just the first).
+        var gap = canvases.length > 1 ? 16 : 0;
+        var W = 0, H = 0;
+        canvases.forEach(function (c, idx) { W = Math.max(W, c.width); H += c.height + (idx ? gap : 0); });
+        var big = document.createElement('canvas');
+        big.width = W; big.height = H;
+        var ctx = big.getContext('2d');
+        ctx.fillStyle = '#0b1220'; ctx.fillRect(0, 0, W, H); // colored-schedule background
+        var y = 0;
+        canvases.forEach(function (c, idx) { if (idx) y += gap; ctx.drawImage(c, 0, y); y += c.height; });
+        var a = document.createElement('a');
+        a.href = big.toDataURL('image/jpeg', 0.95);
+        a.download = 'schedule-' + dateStr + '.jpg';
+        document.body.appendChild(a); a.click(); a.remove();
+        if (window.showToast) window.showToast('Saved schedule (' + canvases.length + ' page' + (canvases.length > 1 ? 's' : '') + ')', 'success');
     }, false); // JPEG = actual colored schedule
 };
 window._pc3LivePrint = function () {
