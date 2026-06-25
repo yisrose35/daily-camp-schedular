@@ -776,10 +776,27 @@
         //   and have it SOLVER-placed on a real hosting field instead of
         //   literal-filled with the sport name as its own location.
         const knownSportNames = new Set();
+        // lowercase sport name → array of field names that host it (for the rotation's
+        // specific-sport feasibility gate: a sport with NO open hosting field at a window
+        // must fall through to the next option rather than become a generic Sport).
+        const _sportFieldMap = {};
+        const _addSportField = (sport, field) => {
+            const k = String(sport || '').toLowerCase().trim();
+            if (!k || !field) return;
+            (_sportFieldMap[k] = _sportFieldMap[k] || []);
+            if (!_sportFieldMap[k].includes(field)) _sportFieldMap[k].push(field);
+        };
         try {
             const _lfd = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
-            Object.keys(_lfd.fieldsBySport || {}).forEach(sp => knownSportNames.add(String(sp).toLowerCase().trim()));
-            (_lfd.masterFields || []).forEach(f => ((f && f.activities) || []).forEach(a => a && knownSportNames.add(String(a).toLowerCase().trim())));
+            Object.keys(_lfd.fieldsBySport || {}).forEach(sp => {
+                knownSportNames.add(String(sp).toLowerCase().trim());
+                (_lfd.fieldsBySport[sp] || []).forEach(f => _addSportField(sp, (f && f.name) || f));
+            });
+            (_lfd.masterFields || []).forEach(f => ((f && f.activities) || []).forEach(a => {
+                if (!a) return;
+                knownSportNames.add(String(a).toLowerCase().trim());
+                _addSportField(a, f.name);
+            }));
         } catch (_) {}
 
         const smartJobs = window.SmartLogicAdapter?.preprocessSmartTiles?.(
@@ -836,17 +853,18 @@
         //   claims don't consume capacity the rotation never uses.
         const _rotationOptions = (job) => {
             if (!job || job.blockB || job.multiGuarantee) return null;
-            // ★ Rotation options = the two "mains" (Main 1 / Main 2). Main 1's Fallback
-            //   is normally just Main 1's in-slot backup, NOT its own rotation slot — it
-            //   surfaces only when neither main can be placed (the exhausted→fallback path
-            //   below). So a SINGLE tile picks one of [Main 1, Main 2] (preferring those
-            //   over the Fallback), and a 2-tile group hands each bunk BOTH mains. Only a
-            //   3rd connected tile PROMOTES the Fallback to a first-class option →
-            //   [Main 1, Fallback, Main 2], so every bunk walks all three across the group.
+            // ★ Rotation options by connected-tile count:
+            //   • 1 tile (or standalone) → all three [Main 1, Main 2, Fallback]: each bunk
+            //     picks ONE, with Main 1/Main 2 preferred (tried first) and the Fallback
+            //     reachable when neither main can be placed.
+            //   • 2 tiles → [Main 1, Main 2]: each bunk gets BOTH mains (e.g. Special+Swim).
+            //   • 3+ tiles → [Main 1, Fallback, Main 2]: the Fallback is promoted so every
+            //     bunk walks all three across the group.
             const _gs = job.groupSize;
-            const ordered = (_gs >= 3)
-                ? [job.main1, job.fallbackActivity, job.main2]
-                : [job.main1, job.main2];
+            let ordered;
+            if (_gs === 2) ordered = [job.main1, job.main2];
+            else if (_gs >= 3) ordered = [job.main1, job.fallbackActivity, job.main2];
+            else ordered = [job.main1, job.main2, job.fallbackActivity];
             const seen = new Set(); const opts = [];
             ordered.forEach(v => {
                 const t = String(v || '').trim(); const k = t.toLowerCase();
@@ -1444,9 +1462,26 @@
                                 }
                             }
                         } else if (knownSportNames.has(optNorm) && !optNorm.includes('swim')) {
-                            console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
-                            schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
-                            _placed = true;
+                            // ★ FEASIBILITY GATE: a specific sport (e.g. Pickleball) may have NO
+                            //   open hosting field at this window (court locked / time-ruled /
+                            //   disabled — e.g. "Pickleball court" blocked 970-1020). Handing the
+                            //   solver an unplaceable restricted block makes it silently DROP the
+                            //   restriction → a GENERIC sport (the "they got sports" bug). So if
+                            //   NONE of the sport's hosting fields can fit here, leave _placed
+                            //   false and fall through to the bunk's NEXT rotation option (e.g.
+                            //   Swim) — exactly like a scarce special. Gate only when we KNOW the
+                            //   sport's fields and can check them; otherwise keep the original
+                            //   solver-restricted path (no regression for un-mapped sports).
+                            const _spFields = _sportFieldMap[optNorm];
+                            const _spFits = !(_spFields && _spFields.length) || typeof Utils.canBlockFit !== 'function'
+                                || _spFields.some(_ff => Utils.canBlockFit({ divName, division: divName, bunk, startTime: _rStart, endTime: _rEnd, startMin: _rStart, endMin: _rEnd, slots: _rotSlots }, _ff, activityProperties, fieldUsageBySlot, opt));
+                            if (_spFits) {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
+                                schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
+                                _placed = true;
+                            } else {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" infeasible @${_rStart}-${_rEnd} (no open field among: ${(_spFields || []).join(', ') || 'none'}) → next option`);
+                            }
                         } else {
                             // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
                             //   — no solver, no real field needed (the cell just reads the label,
@@ -1469,17 +1504,8 @@
                     }
                     if (_placed && _usedOpts && _placedOpt) _usedOpts.add(_placedOpt);
                     if (!_placed) {
-                        // ★ Neither main could be placed → fall back to the tile's CONFIGURED
-                        //   Fallback (Main 1's backup), honoring "preferably Main 1/Main 2 but
-                        //   it can also choose the Fallback". Map the fallback category to its
-                        //   slot kind: a general/"Activity" fallback → General Activity Slot;
-                        //   anything else (a Sport category, a specific name, or unset) keeps
-                        //   the Sports Slot default.
-                        const _fb = String(job.fallbackActivity || '').trim();
-                        const _fbEvent = (_fb && !_fb.toLowerCase().includes('sport') && needsGeneration(_fb))
-                            ? 'General Activity Slot' : 'Sports Slot';
-                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → ${_fbEvent} (fallback: ${_fb || 'Sport'})`);
-                        schedulableSlotBlocks.push({ divName, bunk, event: _fbEvent, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
+                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → Sports Slot`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
                     }
                 });
                 return; // rotation handled this job — skip the A/B split machinery

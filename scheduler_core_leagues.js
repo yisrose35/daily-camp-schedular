@@ -587,6 +587,25 @@
 
         const allFields = fields || [];
 
+        // ★ A field that is a SPECIAL activity's physical room (e.g. court "Jump Shot"
+        //   is the "Basketball Clinic" room) must NOT be handed to a league game.
+        //   Leagues run BEFORE Smart Tiles, so without this a league grabs the court
+        //   and Smart Tiles then drop the clinic onto it — a physical double-book the
+        //   name-vs-field tracking never sees. League analog of STEP 7.6's _specialRooms76
+        //   (sport fill) and STEP 6.95's lock (solver): special rooms are special-only
+        //   across every engine. Self-named specials (location == own name) aren't sport
+        //   fields, so excluding them is a harmless no-op.
+        const _leagueSpecialRooms = (function () {
+            const s = new Set();
+            try {
+                const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : (window.globalSettings || {});
+                ((gs.app1 && gs.app1.specialActivities) || gs.specialActivities || []).forEach(sp => {
+                    if (sp && sp.location) s.add(String(sp.location).toLowerCase().trim());
+                });
+            } catch (_e) {}
+            return s;
+        })();
+
         const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
         let _poolStartMin = (slots && slots.length > 0) ? _poolDivSlots[slots[0]]?.startMin : undefined;
         let _poolEndMin = (slots && slots.length > 0) ? _poolDivSlots[slots[slots.length - 1]]?.endMin : undefined;
@@ -598,6 +617,10 @@
             if (!field || !field.name) continue;
             if (field.available === false) continue;
             if (disabledFields && disabledFields.includes(field.name)) continue;
+            if (_leagueSpecialRooms.has(String(field.name).toLowerCase().trim())) {
+                console.log(`[RegularLeagues] ⚠️ Field "${field.name}" is a special-activity room — reserved for specials, not available to leagues`);
+                continue;
+            }
 
            // ★★★ CHECK GLOBAL LOCKS FIRST (TIME-BASED to avoid cross-division false positives) ★★★
             if (window.GlobalFieldLocks && slots && slots.length > 0) {
