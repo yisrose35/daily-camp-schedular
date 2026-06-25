@@ -836,18 +836,17 @@
         //   claims don't consume capacity the rotation never uses.
         const _rotationOptions = (job) => {
             if (!job || job.blockB || job.multiGuarantee) return null;
-            // ★ Rotation options = number of connected tiles. A smart tile has two
-            //   "mains" (Main 1 / Main 2); Main 1's Fallback is normally just Main 1's
-            //   in-slot backup (surfaced when no special is placeable — see the
-            //   exhausted→fallback path below), NOT its own rotation slot. So a 2-tile
-            //   group rotates [Main 1, Main 2]; connecting a 3rd tile PROMOTES the
-            //   Fallback to its own option → [Main 1, Fallback, Main 2]. Ungrouped /
-            //   standalone tiles (no groupSize) keep the legacy [Main1, Main2, Fallback].
+            // ★ Rotation options = the two "mains" (Main 1 / Main 2). Main 1's Fallback
+            //   is normally just Main 1's in-slot backup, NOT its own rotation slot — it
+            //   surfaces only when neither main can be placed (the exhausted→fallback path
+            //   below). So a SINGLE tile picks one of [Main 1, Main 2] (preferring those
+            //   over the Fallback), and a 2-tile group hands each bunk BOTH mains. Only a
+            //   3rd connected tile PROMOTES the Fallback to a first-class option →
+            //   [Main 1, Fallback, Main 2], so every bunk walks all three across the group.
             const _gs = job.groupSize;
-            let ordered;
-            if (_gs === 2) ordered = [job.main1, job.main2];
-            else if (_gs >= 3) ordered = [job.main1, job.fallbackActivity, job.main2];
-            else ordered = [job.main1, job.main2, job.fallbackActivity];
+            const ordered = (_gs >= 3)
+                ? [job.main1, job.fallbackActivity, job.main2]
+                : [job.main1, job.main2];
             const seen = new Set(); const opts = [];
             ordered.forEach(v => {
                 const t = String(v || '').trim(); const k = t.toLowerCase();
@@ -1470,8 +1469,17 @@
                     }
                     if (_placed && _usedOpts && _placedOpt) _usedOpts.add(_placedOpt);
                     if (!_placed) {
-                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → Sports Slot`);
-                        schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
+                        // ★ Neither main could be placed → fall back to the tile's CONFIGURED
+                        //   Fallback (Main 1's backup), honoring "preferably Main 1/Main 2 but
+                        //   it can also choose the Fallback". Map the fallback category to its
+                        //   slot kind: a general/"Activity" fallback → General Activity Slot;
+                        //   anything else (a Sport category, a specific name, or unset) keeps
+                        //   the Sports Slot default.
+                        const _fb = String(job.fallbackActivity || '').trim();
+                        const _fbEvent = (_fb && !_fb.toLowerCase().includes('sport') && needsGeneration(_fb))
+                            ? 'General Activity Slot' : 'Sports Slot';
+                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → ${_fbEvent} (fallback: ${_fb || 'Sport'})`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbEvent, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
                     }
                 });
                 return; // rotation handled this job — skip the A/B split machinery
@@ -4377,6 +4385,61 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         console.log(`[SmartTile] Added ${smartTileBlocks.length} blocks to scheduler`);
 
         // =========================================================================
+        // STEP 6.95: LOCK EACH PLACED SPECIAL'S PHYSICAL FACILITY
+        // =========================================================================
+        // Smart Tiles place specials by NAME (field = "Basketball Clinic"), but a
+        // special's physical room can ALSO be a sport field (e.g. "Basketball Clinic"
+        // → court "Jump Shot", which is in the Basketball field pool). The total solver
+        // tracks sports by field name and specials by name, so without this it can drop
+        // a Basketball game onto the very court a clinic is using — a physical double-
+        // book neither engine sees. Some smart-tile paths already lock the facility;
+        // this pass does it UNIFORMLY for every placed special, so the solver
+        // (isFieldLocked / isFieldLockedByTime) and the lock-aware fill passes skip that
+        // court for sports. Runs AFTER all special placement → never blocks same-special
+        // capacity sharing (specials are already seated; the lock only gates downstream
+        // SPORT placement). Time-based so it holds across divisions' differing grids.
+        try {
+            if (window.GlobalFieldLocks && window.GlobalFieldLocks.lockField) {
+                const _slGS = window.loadGlobalSettings ? window.loadGlobalSettings() : (window.globalSettings || {});
+                const _slSpecLoc = {}; // special name (lc) → physical location (orig case); first-with-location wins (cap/lowercase dup quirk)
+                ((_slGS.app1 && _slGS.app1.specialActivities) || _slGS.specialActivities || []).forEach(s => {
+                    if (!s || !s.name) return;
+                    const _snm = String(s.name).toLowerCase().trim();
+                    if (s.location && !_slSpecLoc[_snm]) _slSpecLoc[_snm] = s.location;
+                });
+                const _slDivs = window.divisions || {};
+                const _slB2D = {}; Object.keys(_slDivs).forEach(d => ((_slDivs[d] && _slDivs[d].bunks) || []).forEach(b => { _slB2D[String(b)] = d; }));
+                const _slDT = window.divisionTimes || {};
+                const _slSA = window.scheduleAssignments || {};
+                const _slDone = {};
+                let _slLocked = 0;
+                Object.keys(_slSA).forEach(bunk => {
+                    const arr = _slSA[bunk]; if (!Array.isArray(arr)) return;
+                    const div = _slB2D[String(bunk)]; if (!div) return;
+                    arr.forEach((e, idx) => {
+                        if (!e || e.continuation || e._noRoomCap) return;
+                        const act = e._activity || e.field;
+                        const locName = _slSpecLoc[String(act || '').toLowerCase().trim()]; // null unless a real special
+                        if (!locName) return;
+                        const sM = e._startMin, eM = e._endMin; if (sM == null || eM == null) return;
+                        const key = String(locName).toLowerCase().trim() + '|' + sM + '-' + eM;
+                        if (_slDone[key]) return; _slDone[key] = 1;
+                        // Slots in this bunk's division grid that overlap the special's time
+                        // (for the slot-based isFieldLocked check); startMin/endMin drive the
+                        // cross-division isFieldLockedByTime check regardless.
+                        const grid = _slDT[div] || [];
+                        const occ = [];
+                        for (let i = 0; i < grid.length; i++) { const s = grid[i]; if (s && s.startMin != null && s.startMin < eM && s.endMin > sM) occ.push(i); }
+                        if (!occ.length) occ.push(idx);
+                        window.GlobalFieldLocks.lockField(locName, occ, { lockedBy: 'placed_special_facility', division: div, activity: 'Special: ' + act, startMin: sM, endMin: eM });
+                        _slLocked++;
+                    });
+                });
+                console.log('[STEP 6.95] 🔒 Locked ' + _slLocked + ' physical facilit(ies) for placed specials (blocks sports on a special\'s court)');
+            }
+        } catch (_e695) { console.warn('[STEP 6.95] special-facility lock pass failed:', _e695); }
+
+        // =========================================================================
         // STEP 6.5: REMOVE SOLVER BLOCKS FOR SLOTS ALREADY FILLED BY SMART TILES
         // =========================================================================
         // Smart tile direct fills (e.g. Swim) write to scheduleAssignments via fillBlock,
@@ -5105,6 +5168,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (_disabledSpecialsLc76.has(String(an).toLowerCase().trim()) || _disabledLc76.has(String(sp.loc).toLowerCase().trim())) continue;
                         const cfg = _loc65[sp.loc] || { type: 'same_division', cap: 2 };
                         const occ = _occAt65(sp.loc, t.s, t.e, String(b));
+                        if (occ.some(o => String(o.act || '').toLowerCase().trim() !== String(an).toLowerCase().trim())) continue; // never open a special on a court already running a DIFFERENT activity (sport or other special)
                         if (cfg.type === 'not_sharable' ? occ.length > 0 : occ.length >= cfg.cap) continue; // full
                         if (occ.some(o => o.grade !== g)) continue;             // same-grade only
                         if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-start
