@@ -2097,14 +2097,16 @@
      */
     Utils.formatEntry = function(entry) {
         if (!entry) return '';
-        
-        const activity = entry._displayName || entry._activity || entry.sport || '';
+        // Display-name ALIAS = exact cell text; show it verbatim, no location appended.
+        if (entry._displayName) return entry._displayName;
+
+        const activity = entry._activity || entry.sport || '';
         const field = Utils.fieldLabel(entry.field) || '';
 
         if (activity && field && activity !== field) {
             return `${field} – ${activity}`;
         }
-        
+
         return activity || field || '';
     };
 

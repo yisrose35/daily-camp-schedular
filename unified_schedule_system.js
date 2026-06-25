@@ -1303,11 +1303,15 @@ function shouldHighlightBunk(bunkName) {
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
         if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+        // Display-name ALIAS = the EXACT, complete cell text the user typed. Show it
+        // verbatim with no location appended (e.g. "Lake", never "Lake – VR"); if a
+        // room is wanted, the user includes it in the display name itself.
+        if (entry._displayName) return entry._displayName;
         // ★ Every cell shows "Activity – Location" (activity name FIRST), for sports
         //   AND specials. Manual specials store field = the activity name, so the real
         //   room is resolved via resolveEntryLocation (special location / configured
         //   room). Location is dropped only when it's empty or identical to the name.
-        const name = entry._displayName || entry._partLabel || entry._activity || sport || field || '';
+        const name = entry._partLabel || entry._activity || sport || field || '';
         const loc = resolveEntryLocation(entry);
         if (name && loc && loc.toLowerCase() !== name.toLowerCase()) return `${name} – ${loc}`;
         return name || loc || '';

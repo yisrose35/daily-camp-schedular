@@ -869,11 +869,12 @@ function formatEntry(entry) {
         var seFiltered = seActs.filter(function (a) { return (a || '').toLowerCase().trim() !== sePoolLc; });
         return ['Swim'].concat(seFiltered).join(', ');
     }
+    // Display-name ALIAS = the EXACT cell text the user typed; show it verbatim with
+    // no location appended (e.g. "Lake", never "Lake \u2013 VR").
+    if (entry._displayName) return entry._displayName;
     var parts = [];
-    // _displayName = per-cell display alias (post-edit rename); show it instead of
-    // the real activity. pcResolveLocation still reads the real _activity for the room.
-    var act = entry._displayName || entry._activity || entry.sport || '';
-    var label = entry._displayName || entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
+    var act = entry._activity || entry.sport || '';
+    var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
     // Always show "Activity \u2013 Location" (activity name first), for sports AND
     // specials. Location is dropped only when it's empty or identical to the name
@@ -2562,6 +2563,8 @@ function renderAutoDivisionTable(divName, bunks) {
             var locText = pcResolveLocation(a.entry);
             if (actText && locText && actText.toLowerCase() === locText.toLowerCase()) locText = '';
             if (!actText && locText) { actText = locText; locText = ''; }
+            // Display-name alias = exact label: drop the location sub-line.
+            if (a.entry._displayName) locText = '';
             var nameTxt = actText || '—';
 
             var sharers = '';
@@ -3096,9 +3099,11 @@ function renderBunkSheet(bunk) {
         var type = getEntryType(entry);
         var act = '', loc = '';
         if (entry && !entry.continuation) {
-            act = entry._displayName || entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label + post-edit display alias
+            act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
             loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
             if (!act && loc) { act = loc; loc = ''; }
+            // Display-name alias = exact label: show it verbatim, no location column.
+            if (entry._displayName) { act = entry._displayName; loc = ''; }
         }
         var actDisplay = act || '\u2014';
         var locDisplay = loc;
@@ -3701,8 +3706,9 @@ function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
     var slot = _slots81[slotIdx];
     if (!entry) return '';
     var act = entry._displayName || entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label + post-edit display alias
-    var field = (typeof entry.field === 'string') ? entry.field
-        : (entry.field && entry.field.name ? entry.field.name : '');
+    // Display-name alias = exact label: don't reveal the underlying room in the tip.
+    var field = entry._displayName ? '' : ((typeof entry.field === 'string') ? entry.field
+        : (entry.field && entry.field.name ? entry.field.name : ''));
     var title = act || field || 'Free';
     if (act && field && act !== field) title = act;
 
@@ -5892,10 +5898,10 @@ function getExportActivityLocation(bunk, slotIdx) {
         if (entry.continuation) return { activity: '', location: '' };
     }
 
-    // _displayName = per-cell display alias (post-edit rename); export it instead
-    // of the real activity. pcResolveLocation still reads the real _activity.
-    var act = entry._displayName || entry._activity || entry.sport || '';
-    var label = entry._displayName || entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
+    // Display-name alias = exact label: export it verbatim, no location column.
+    if (entry._displayName) return { activity: entry._displayName, location: '' };
+    var act = entry._activity || entry.sport || '';
+    var label = entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
 
     // If act and field are identical, don't duplicate. Otherwise always keep both

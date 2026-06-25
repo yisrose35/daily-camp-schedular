@@ -52,6 +52,19 @@ function formatEntryName(entry) {
     return entry._displayName || entry._partLabel || entry._activity || sport || field || '';
 }
 
+// ─── VERBATIM: formatEntry's full "Activity – Location" path (unified) ────────
+// A normal entry shows "Activity – Room"; an aliased entry must short-circuit to
+// the EXACT display name with NO " – Room" suffix.
+function formatEntryWithLocation(entry, resolveLoc) {
+    const field = entry.field || '';
+    const sport = entry.sport || '';
+    if (entry._displayName) return entry._displayName;          // exact, no location
+    const name = entry._partLabel || entry._activity || sport || field || '';
+    const loc = resolveLoc ? resolveLoc(entry) : '';
+    if (name && loc && loc.toLowerCase() !== name.toLowerCase()) return `${name} – ${loc}`;
+    return name || loc || '';
+}
+
 describe('post-edit display-name alias', () => {
     it('stores the alias when it differs from the activity', () => {
         const e = buildEntry('Caps Making', 'Art Room', false, { displayName: 'Shirt Making' });
@@ -64,6 +77,23 @@ describe('post-edit display-name alias', () => {
         const e = buildEntry('Caps Making', 'Art Room', false, { displayName: 'Shirt Making' });
         assert.equal(getActivityDisplayName(e), 'Shirt Making');
         assert.equal(formatEntryName(e), 'Shirt Making');
+    });
+
+    it('shows the EXACT display name with no location appended (Lake, not "Lake – VR")', () => {
+        // VR activity whose room resolves to "VR", renamed to "Lake".
+        const e = buildEntry('VR', null, false, { displayName: 'Lake' });
+        e.field = 'VR';
+        const resolveLoc = () => 'VR';                  // the real room
+        // Without an alias a normal VR entry would read "VR" (name === loc → no suffix);
+        // with an alias it must be exactly the typed text, never "Lake – VR".
+        assert.equal(formatEntryWithLocation(e, resolveLoc), 'Lake');
+        assert.equal(getActivityDisplayName(e), 'Lake');
+    });
+
+    it('a non-aliased entry still shows "Activity – Room"', () => {
+        const e = buildEntry('Caps Making', 'Art Room', false, {});
+        const resolveLoc = () => 'Art Room';
+        assert.equal(formatEntryWithLocation(e, resolveLoc), 'Caps Making – Art Room');
     });
 
     it('does not store an alias when blank, whitespace, or equal to the activity', () => {
