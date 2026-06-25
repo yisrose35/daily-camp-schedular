@@ -2870,7 +2870,88 @@
             S._todayCache.clear();
         } catch (eC) { console.warn('[v15.5 C] overlap swap error:', eC && eC.message); }
 
-        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s), ' + overlapSwaps + ' staggered-overlap swap(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
+        // ★ PHASE D — whole-field group swap (parity with field_quality_reopt.js).
+        //   Phases A-C move/swap atomic blocks keyed by a single window, so they
+        //   cannot fix the common cross-division case where a senior block (one
+        //   long period, e.g. 740-815) spans a boundary at which a better-ranked
+        //   field hands off between two SEQUENTIAL junior occupants (740-805 then
+        //   805-870): every candidate move collides with the second occupant, so
+        //   nothing moves. Exchange the ENTIRE block set of two same-group fields
+        //   at once when the WORSE-ranked field holds a more-senior division than
+        //   the better-ranked one. Wholesale movement preserves each field's
+        //   internal time structure + same-grade shares; _fqValidSwap re-checks
+        //   host/access/locks/cross-div, and (as blocks are tentatively re-indexed
+        //   during validation) capacity for every moved block.
+        var fieldSwaps = 0;
+        try {
+            var senOfD = function (divName) { var s = seniorityMap && seniorityMap[divName]; return (s === undefined) ? Infinity : s; };
+            var rebuildBBF = function () {
+                var m = {};
+                for (var bi4 = 0; bi4 < activityBlocks.length; bi4++) {
+                    if (!S._assignedBlocks.has(bi4)) continue;
+                    var a4 = S._assignments.get(bi4);
+                    if (!a4 || !a4.pick || !a4.pick.field || a4.pick.field === 'Free') continue;
+                    if (!fgMap[a4.pick.field]) continue;
+                    var b4 = activityBlocks[bi4];
+                    if (b4.startTime === undefined || b4.endTime === undefined) continue;
+                    (m[a4.pick.field] = m[a4.pick.field] || []).push({ bi: bi4, blk: b4, asgn: a4 });
+                }
+                return m;
+            };
+            var mostSeniorD = function (bbf, field) {
+                var arr = bbf[field] || [], best = Infinity;
+                for (var mi = 0; mi < arr.length; mi++) { var s = senOfD(arr[mi].blk.divName); if (s < best) best = s; }
+                return best;
+            };
+            var groupNamesD = Object.keys(fgGroups);
+            var passD = 0, improvedD = true, bbfD = rebuildBBF();
+            while (improvedD && passD++ < 8) {
+                improvedD = false;
+                for (var gd = 0; gd < groupNamesD.length; gd++) {
+                    var membersD = fgGroups[groupNamesD[gd]].slice().sort(function (a, b) { return a.qualityRank - b.qualityRank; });
+                    for (var id = 0; id < membersD.length; id++) {
+                        for (var jd = id + 1; jd < membersD.length; jd++) {
+                            var fiD = membersD[id].name, fjD = membersD[jd].name; // fiD better-ranked
+                            var aB = bbfD[fiD] || [], bB = bbfD[fjD] || [];
+                            if (!aB.length || !bB.length) continue;
+                            if (!(mostSeniorD(bbfD, fjD) < mostSeniorD(bbfD, fiD))) continue; // worse field must hold a MORE senior div
+                            // detach both sets from schedule + index
+                            aB.forEach(function (x) { S.undoPickFromSchedule(x.blk, x.asgn.pick); S.removeFromFieldTimeIndex(normName(fiD), x.blk.startTime, x.blk.endTime, x.blk.bunk); });
+                            bB.forEach(function (x) { S.undoPickFromSchedule(x.blk, x.asgn.pick); S.removeFromFieldTimeIndex(normName(fjD), x.blk.startTime, x.blk.endTime, x.blk.bunk); });
+                            // validate with accumulation: add each tentatively so a same-field
+                            // share's 2nd block sees the 1st (correct capacity counting).
+                            var trialD = [], okD = true;
+                            var tryPlaceD = function (blocks, target) {
+                                for (var k = 0; k < blocks.length; k++) {
+                                    var x = blocks[k];
+                                    var act = x.asgn.pick._activity || x.asgn.pick.field;
+                                    if (_fqValidSwap(x.blk, target, act, x.blk.bunk)) {
+                                        S.addToFieldTimeIndex(normName(target), x.blk.startTime, x.blk.endTime, x.blk.bunk, x.blk.divName, normName(act));
+                                        trialD.push({ f: normName(target), blk: x.blk });
+                                    } else { okD = false; return; }
+                                }
+                            };
+                            tryPlaceD(aB, fjD);
+                            if (okD) tryPlaceD(bB, fiD);
+                            // drop tentative index entries; _fqApplySwap re-adds cleanly
+                            trialD.forEach(function (t) { S.removeFromFieldTimeIndex(t.f, t.blk.startTime, t.blk.endTime, t.blk.bunk); });
+                            if (okD) {
+                                aB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fjD); });
+                                bB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fiD); });
+                                fieldSwaps++; improvedD = true;
+                            } else {
+                                aB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fiD); });
+                                bB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fjD); });
+                            }
+                            bbfD = rebuildBBF(); // refs are stale after _fqApplySwap → refresh
+                        }
+                    }
+                }
+            }
+            S._todayCache.clear();
+        } catch (eD) { console.warn('[v15.5 D] whole-field swap error:', eD && eD.message); }
+
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s), ' + overlapSwaps + ' staggered-overlap swap(s), ' + fieldSwaps + ' whole-field swap(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
         if (blocksWithBetterCandidate > improved) {
             console.log('[v15.5]    ' + (blocksWithBetterCandidate - improved) + ' block(s) had a higher-ranked candidate but the swap was rejected. Set window.DEBUG_FQ_REOPT = true and regenerate to see why.');
         }
