@@ -398,6 +398,7 @@ var _numLivePages = 1;
 var _livePageTimer = null;
 var _livePrevPageCount = -1; // page count when the rotation timer was last (re)started
 var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
+var _liveRenderToken = 0; // bumped each render; a deferred (rAF) pass aborts if a newer render superseded it
 var _LIVE_PAGE_MS = 20000; // ms between page rotations
 // "One division per page" — each page shows one division (all its grades and
 // their bunks), rotating through divisions. A division that doesn't fit on one
@@ -4919,11 +4920,20 @@ function renderLiveContent() {
     body.style.visibility = 'hidden';
     body.innerHTML = sectHtml;
 
+    // Guard against overlapping renders (rapid hydration/refresh events fire
+    // renderLiveContent several times in a row). Each render replaces the DOM
+    // and defers its measure/fit to a rAF; without this token a STALE rAF would
+    // run on the NEWER DOM — re-measuring already-fitted nodes and shrinking the
+    // text, and rebuilding pages out from under the nav arrows. Only the latest
+    // render's deferred pass is allowed to proceed.
+    var myToken = ++_liveRenderToken;
+
     // Defer measure + paginate until after the browser has computed layout.
     // A double rAF guarantees the new DOM nodes have been laid out so
     // offsetHeight values are real (not 0) when we bin-pack into pages.
     requestAnimationFrame(function () {
         requestAnimationFrame(function () {
+        if (myToken !== _liveRenderToken) return; // superseded by a newer render
         try {
 
     // 2. Measure available height and each section rendered height
