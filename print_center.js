@@ -498,6 +498,24 @@ var LIVE_THEMES = [
     }
 ];
 var _LIVE_THEME_KEY = 'pc3LiveTheme';
+var _LIVE_CUSTOM_KEY = 'pc3LiveThemeCustom';
+
+// Custom color controls — a curated subset of the --lv-* vars exposed as color
+// pickers so a camp can fine-tune a preset. Each control drives one or more vars
+// (grouped so related surfaces stay consistent — e.g. both cell shades together).
+// Overrides are layered ON TOP of the chosen preset and stored as {key:'#hex'};
+// picking a preset clears them (preset = a known-good starting point).
+var LIVE_CUSTOM_FIELDS = [
+    { key: 'bg',       label: 'Screen background', vars: ['--lv-bg'] },
+    { key: 'header',   label: 'Header bar',        vars: ['--lv-header-bg'] },
+    { key: 'headtext', label: 'Header text',       vars: ['--lv-title', '--lv-clock'] },
+    { key: 'accent',   label: 'Accent (titles, date, dots)', vars: ['--lv-accent', '--lv-date', '--lv-banner-border'] },
+    { key: 'gradehdr', label: 'Column headers',    vars: ['--lv-th-bg', '--lv-uni-grade-bg', '--lv-uni-bunk-bg'] },
+    { key: 'gradetxt', label: 'Header label text', vars: ['--lv-th-text', '--lv-rowhead-text', '--lv-uni-grade-text', '--lv-uni-bunk-text'] },
+    { key: 'cellbg',   label: 'Activity cells',    vars: ['--lv-cell-bg', '--lv-cell-bg-alt'] },
+    { key: 'celltext', label: 'Activity text',     vars: ['--lv-cell-text'] },
+    { key: 'now',      label: 'Happening-now',     vars: ['--lv-current-bg', '--lv-curcol-bg'] }
+];
 
 // Resolve the camp's chosen live theme (defaults to Midnight = original look).
 function _pcGetLiveThemeId() {
@@ -512,20 +530,41 @@ function _pcGetLiveTheme(id) {
     for (var i = 0; i < LIVE_THEMES.length; i++) { if (LIVE_THEMES[i].id === id) return LIVE_THEMES[i]; }
     return LIVE_THEMES[0];
 }
-// Apply a theme's CSS variables to the live overlay root + page background.
-// Safe to call in either window; no-op if the overlay isn't present.
+// Per-camp custom color overrides ({fieldKey:'#hex'}), layered over the preset.
+function _pcGetLiveCustom() {
+    try { return JSON.parse(localStorage.getItem(_LIVE_CUSTOM_KEY) || '{}') || {}; }
+    catch (e) { return {}; }
+}
+function _pcSetLiveCustom(obj) {
+    try {
+        if (obj && Object.keys(obj).length) localStorage.setItem(_LIVE_CUSTOM_KEY, JSON.stringify(obj));
+        else localStorage.removeItem(_LIVE_CUSTOM_KEY);
+    } catch (e) {}
+}
+// The effective var map = preset vars with any custom overrides applied.
+function _pcEffectiveLiveVars(id) {
+    var vars = Object.assign({}, _pcGetLiveTheme(id).vars);
+    var custom = _pcGetLiveCustom();
+    LIVE_CUSTOM_FIELDS.forEach(function (f) {
+        var v = custom[f.key];
+        if (v) f.vars.forEach(function (k) { vars[k] = v; });
+    });
+    return vars;
+}
+// Apply the effective palette (preset + custom) to the live overlay root +
+// page background. Safe to call in either window; no-op if the overlay is absent.
 function _pcApplyLiveTheme(id) {
-    var theme = _pcGetLiveTheme(id);
+    var vars = _pcEffectiveLiveVars(id);
     var overlay = document.getElementById('pc3-live-overlay');
     if (overlay) {
-        Object.keys(theme.vars).forEach(function (k) { overlay.style.setProperty(k, theme.vars[k]); });
+        Object.keys(vars).forEach(function (k) { overlay.style.setProperty(k, vars[k]); });
     }
     // The standalone kiosk paints #print as the backdrop behind the overlay.
     var printTab = document.getElementById('print');
     if (printTab && document.documentElement.classList.contains('pc3-live-standalone')) {
-        printTab.style.background = theme.vars['--lv-bg'];
+        printTab.style.background = vars['--lv-bg'];
     }
-    return theme;
+    return vars;
 }
 
 var _previewHtml = '';
@@ -2090,6 +2129,18 @@ function buildMainUI() {
         '.pcx-live-sw{display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid #e7e5e4;}' +
         '.pcx-live-sw span{flex:1;height:100%;}' +
         '.pcx-live-theme-nm{font-size:12px;font-weight:600;color:#3a382f;}' +
+        /* Live custom color pickers */
+        '.pcx-live-custom{margin-top:10px;border-top:1px solid #efe9dd;padding-top:8px;}' +
+        '.pcx-live-custom summary{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#a79f8e;cursor:pointer;list-style:none;user-select:none;padding:2px 0;}' +
+        '.pcx-live-custom summary::-webkit-details-marker{display:none;}' +
+        '.pcx-live-custom summary::before{content:"\\25B8  ";color:#bcb3a2;}' +
+        '.pcx-live-custom[open] summary::before{content:"\\25BE  ";color:#147D91;}' +
+        '.pcx-live-cc-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;margin:10px 0 4px;}' +
+        '.pcx-live-cc{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:#5b5446;font-weight:500;}' +
+        '.pcx-live-cc span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+        '.pcx-live-cc input[type="color"]{width:30px;height:24px;flex-shrink:0;padding:1px;border:1px solid #e2dccf;border-radius:5px;background:#fff;cursor:pointer;}' +
+        '.pcx-live-reset{width:100%;margin-top:8px;height:32px;border:1px solid #e2dccf;border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:600;color:#5b5446;cursor:pointer;}' +
+        '.pcx-live-reset:hover{border-color:#147D91;color:#0F5F6E;}' +
     '</style>';
 
     return getStyles() + chrome +
@@ -2175,6 +2226,21 @@ function buildMainUI() {
                         '</button>';
                     }).join('') +
                 '</div>' +
+                /* Per-color fine-tuning, layered on the chosen preset */
+                '<details class="pcx-live-custom"' + (Object.keys(_pcGetLiveCustom()).length ? ' open' : '') + '>' +
+                    '<summary>Customize colors</summary>' +
+                    '<div class="pcx-live-cc-grid" id="pc3-live-custom-grid">' +
+                        (function () {
+                            var eff = _pcEffectiveLiveVars();
+                            return LIVE_CUSTOM_FIELDS.map(function (f) {
+                                var val = eff[f.vars[0]] || '#000000';
+                                return '<label class="pcx-live-cc"><span>' + escHtml(f.label) + '</span>' +
+                                    '<input type="color" data-live-custom="' + f.key + '" value="' + val + '"></label>';
+                            }).join('');
+                        })() +
+                    '</div>' +
+                    '<button type="button" class="pcx-live-reset" id="pc3-live-reset-colors">Reset to preset</button>' +
+                '</details>' +
             '</div>' +
         '</aside>' +
 
@@ -4342,7 +4408,7 @@ function runLiveStandalone() {
         printTab.style.display = 'block';
         printTab.style.position = 'fixed';
         printTab.style.inset = '0';
-        printTab.style.background = _pcGetLiveTheme().vars['--lv-bg'];
+        printTab.style.background = _pcEffectiveLiveVars()['--lv-bg'];
         printTab.style.zIndex = '9999';
     }
 
@@ -5450,7 +5516,7 @@ function _pc3CaptureLivePages(cb, bw) {
         // html2canvas clones only the page subtree, so a class on an ancestor is
         // lost there and the dark cell rules win.
         if (bw) { body.classList.add('pc3-live-bw'); pages.forEach(function (p) { p.classList.add('pc3-live-bw'); }); }
-        var bg = bw ? '#ffffff' : _pcGetLiveTheme().vars['--lv-bg'];
+        var bg = bw ? '#ffffff' : _pcEffectiveLiveVars()['--lv-bg'];
         var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
         var canvases = [], i = 0;
         function finish() {
@@ -6648,18 +6714,52 @@ function bindAll() {
 
     // Live screen theme chips — persist the choice and, if a kiosk window is
     // already open, re-skin it instantly (localStorage is shared, so a fresh
-    // Live View picks it up on boot regardless).
+    // Live View picks it up on boot regardless). Picking a preset clears any
+    // custom color overrides so it acts as a clean starting point.
+    function _pcPushLiveTheme(id) {
+        try {
+            if (_liveWindow && !_liveWindow.closed && _liveWindow._pcApplyLiveTheme) _liveWindow._pcApplyLiveTheme(id);
+        } catch (e) {}
+    }
+    // Re-sync the custom color inputs to the current effective palette (after a
+    // preset switch or reset, the swatches must reflect the new base values).
+    function _pcSyncLiveCustomInputs() {
+        var eff = _pcEffectiveLiveVars();
+        document.querySelectorAll('[data-live-custom]').forEach(function (inp) {
+            var f = null;
+            for (var i = 0; i < LIVE_CUSTOM_FIELDS.length; i++) {
+                if (LIVE_CUSTOM_FIELDS[i].key === inp.getAttribute('data-live-custom')) { f = LIVE_CUSTOM_FIELDS[i]; break; }
+            }
+            if (f && eff[f.vars[0]]) inp.value = eff[f.vars[0]];
+        });
+    }
     document.querySelectorAll('[data-live-theme]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             var id = this.getAttribute('data-live-theme');
             try { localStorage.setItem(_LIVE_THEME_KEY, id); } catch (e) {}
+            _pcSetLiveCustom({}); // preset = fresh start, drop overrides
             document.querySelectorAll('[data-live-theme]').forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-live-theme') === id);
             });
-            try {
-                if (_liveWindow && !_liveWindow.closed && _liveWindow._pcApplyLiveTheme) _liveWindow._pcApplyLiveTheme(id);
-            } catch (e) {}
+            _pcSyncLiveCustomInputs();
+            _pcPushLiveTheme(id);
         });
+    });
+
+    // Live custom color pickers — layer per-color overrides on the preset.
+    document.querySelectorAll('[data-live-custom]').forEach(function (inp) {
+        inp.addEventListener('input', function () {
+            var custom = _pcGetLiveCustom();
+            custom[this.getAttribute('data-live-custom')] = this.value;
+            _pcSetLiveCustom(custom);
+            _pcPushLiveTheme();
+        });
+    });
+    var _lvReset = el('pc3-live-reset-colors');
+    if (_lvReset) _lvReset.addEventListener('click', function () {
+        _pcSetLiveCustom({});
+        _pcSyncLiveCustomInputs();
+        _pcPushLiveTheme();
     });
 
     // Popovers — Packs / Output / Style / Layout
