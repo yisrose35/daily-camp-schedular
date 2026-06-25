@@ -1307,7 +1307,7 @@ function shouldHighlightBunk(bunkName) {
         //   AND specials. Manual specials store field = the activity name, so the real
         //   room is resolved via resolveEntryLocation (special location / configured
         //   room). Location is dropped only when it's empty or identical to the name.
-        const name = entry._partLabel || entry._activity || sport || field || '';
+        const name = entry._displayName || entry._partLabel || entry._activity || sport || field || '';
         const loc = resolveEntryLocation(entry);
         if (name && loc && loc.toLowerCase() !== name.toLowerCase()) return `${name} – ${loc}`;
         return name || loc || '';
@@ -1900,7 +1900,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
     
     // Apply the primary edit first
-    applyDirectEdit(bunk, slots, activity, location, false, true);
+    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName });
     
     // Lock the field
     if (window.GlobalFieldLocks) {
@@ -4100,17 +4100,25 @@ if (bypassStatus.highlight) {
         }
         
         const fieldValue = location ? `${location} – ${activity}` : activity;
+        // Per-cell display-name ALIAS: an optional label shown on the schedule
+        // instead of the real activity (e.g. "Shirt Making" for a Caps Making slot).
+        // _activity stays the real activity so rotation/counting are unaffected.
+        // Kept only when it's a non-empty value that actually differs from the activity.
+        const _dn = (!isClear && opts.displayName && String(opts.displayName).trim()
+            && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+            ? String(opts.displayName).trim() : null;
         slots.forEach((idx, i) => {
-            window.scheduleAssignments[bunk][idx] = { 
-                field: isClear ? 'Free' : fieldValue, 
-                sport: isClear ? null : activity, 
+            window.scheduleAssignments[bunk][idx] = {
+                field: isClear ? 'Free' : fieldValue,
+                sport: isClear ? null : activity,
                 continuation: i > 0,
-                _fixed: !isClear, 
-                _activity: isClear ? 'Free' : activity, 
-                _location: location, 
-                _postEdit: true, 
-                _pinned: shouldPin && !isClear, 
-                _editedAt: Date.now() 
+                _fixed: !isClear,
+                _activity: isClear ? 'Free' : activity,
+                _displayName: _dn,
+                _location: location,
+                _postEdit: true,
+                _pinned: shouldPin && !isClear,
+                _editedAt: Date.now()
             };
         });
         
@@ -4591,7 +4599,7 @@ if (bypassStatus.highlight) {
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName } = editData;
         const divName = getDivisionForBunk(bunk);
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -4637,12 +4645,12 @@ if (bypassStatus.highlight) {
             if (hasPerBunk && !isClear && startMin != null && endMin != null) {
                 const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
                 if (reshaped.length > 0) {
-                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true);
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName });
                 } else {
-                    applyDirectEdit(bunk, slots, activity, location, isClear, true);
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
                 }
             } else {
-                applyDirectEdit(bunk, slots, activity, location, isClear, true);
+                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
             }
         }
 
@@ -5183,7 +5191,7 @@ if (bypassStatus.highlight) {
         const locations = getAllLocations();
         const divName = getDivisionForBunk(bunk);
         const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
-        let currentActivity = currentValue || '', currentField = '', resolutionChoice = 'notify';
+        let currentActivity = currentValue || '', currentField = '', currentDisplayName = '', resolutionChoice = 'notify';
         // ★ Pass the bunk in auto mode. Without it findSlotsForRange falls through
         //   to DIVISION-level slots and returns an index that points at the WRONG
         //   per-bunk entry — pre-filling the activity box with a stale/foreign
@@ -5196,6 +5204,7 @@ if (bypassStatus.highlight) {
             if (entry) {
                 currentField = fieldLabel(entry.field);
                 currentActivity = entry._activity || currentField || currentValue;
+                currentDisplayName = entry._displayName || '';
             }
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
@@ -5224,6 +5233,13 @@ if (bypassStatus.highlight) {
                         <option value="Free">— Leave empty (Free) —</option>
                     </select>
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court.</div>
+                </div>
+                <div>
+                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">Display name <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <input id="post-edit-display-name" type="text" value="${escapeHtml(currentDisplayName)}"
+                        placeholder="e.g. Shirt Making"
+                        style="width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;" />
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shown on the schedule instead of the activity name. Still counts as the chosen activity. Leave blank to use the real name.</div>
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -5387,17 +5403,18 @@ if (bypassStatus.highlight) {
         document.getElementById('post-edit-save').onclick = () => {
             const activity = actInput.value.trim();
             const location = locationSelect.value;
+            const displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
             if (!activity) { alert('Please enter an activity name.'); return; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, startMin, endMin, hasConflict: true,
+                onSave({ activity, location, displayName, startMin, endMin, hasConflict: true,
                     conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, startMin, endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName, startMin, endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };

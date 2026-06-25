@@ -38,6 +38,10 @@
     // schedule grid, print center, calendar, daily adjustments, etc.
     Utils.getActivityDisplayName = function (slot) {
         if (!slot) return '';
+        // Per-cell display-name ALIAS (post-edit "rename for display only"):
+        // show this instead of the real activity. _activity is left untouched so
+        // rotation/counting still credit the underlying activity.
+        if (slot._displayName) return slot._displayName;
         if (slot._partLabel) return slot._partLabel;
         if (slot._partNumber && slot._totalParts && slot._activity) {
             return slot._activity + ' ' + slot._partNumber + '/' + slot._totalParts;
@@ -2094,9 +2098,9 @@
     Utils.formatEntry = function(entry) {
         if (!entry) return '';
         
-        const activity = entry._activity || entry.sport || '';
+        const activity = entry._displayName || entry._activity || entry.sport || '';
         const field = Utils.fieldLabel(entry.field) || '';
-        
+
         if (activity && field && activity !== field) {
             return `${field} – ${activity}`;
         }

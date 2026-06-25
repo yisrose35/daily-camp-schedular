@@ -785,8 +785,9 @@
                     }
                 }
             } else {
-                // Standard Activity
-                const activityName = assignment.sport || assignment._activity || "Activity";
+                // Standard Activity (_displayName = post-edit display alias, shown
+                // instead of the real activity; falls back to the real name).
+                const activityName = assignment._displayName || assignment.sport || assignment._activity || "Activity";
                 const fieldName = (typeof assignment.field === 'object') ? assignment.field.name : assignment.field;
 
                 locationHtml = `<span style="color:#0284c7; font-weight:bold; font-size:1.4rem;">${escapeHtml(fieldName)}</span>`;
