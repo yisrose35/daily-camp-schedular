@@ -5249,6 +5249,36 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 (_occL65[fl] = _occL65[fl] || []).push({ bunk: String(b), grade: _b2g76[String(b)] || '?', act: act, s: s, e: e, field: locName });
                 (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
             };
+            // ★ Combined-player cap for SPORT shares (mirror of total_solver_engine
+            //   checkSharedPlayerMaxConflict). The cfg.cap test below caps how many BUNKS
+            //   share a field; it does NOT cap the combined CAMPERS. Without this, two
+            //   same-grade bunks (e.g. 13 + 15) get seated on one court whose sport maxes
+            //   at 22 → 28 players, blowing past the rule. Grace is absolute (max+2: max =
+            //   target, +1 small grace, +2 ceiling, +3 blocked). Inert unless bunk sizes
+            //   AND a sport max are configured. Round 0 only ever ADDS a 2nd bunk to an
+            //   already-occupied field (occ.length >= 1), so a lone over-size bunk is never
+            //   reached here — matching the solver gate's "only fires on a genuine share".
+            const _bunkMeta65 = window.getBunkMetaData?.() || window.bunkMetaData || {};
+            const _bunkSize65 = (bn) => (_bunkMeta65[bn]?.size || _bunkMeta65[String(bn)]?.size || 0);
+            const _sportMax65 = (sp) => {
+                const r = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(sp);
+                if (r && r.maxPlayers) return r.maxPlayers;
+                const sm = window.getSportMetaData?.() || window.sportMetaData || {};
+                if (sm[sp] && sm[sp].maxPlayers) return sm[sp].maxPlayers;
+                const key = Object.keys(sm).find(k => k.toLowerCase() === String(sp || '').toLowerCase().trim());
+                return (key && sm[key].maxPlayers) || 0;
+            };
+            // true if seating a bunk of `mySize` alongside the bunks in `occ` (all playing
+            // the SAME sport `act`) keeps combined campers within maxPlayers + 2. Specials
+            // have no player max → always fits.
+            const _sportShareFits65 = (act, occ, mySize) => {
+                if (_isSpecial65(act)) return true;
+                const maxP = _sportMax65(act);
+                if (!maxP || !(mySize > 0)) return true;
+                let combined = mySize;
+                for (const o of occ) combined += (_bunkSize65(o.bunk) || 0);
+                return combined <= maxP + 2;
+            };
             let _shared65 = 0, _backfilled65 = 0;
             // Round 0 — share into an under-capacity same-grade location (kind-matched),
             // fresh only. Among the legal shares, prefer the room whose occupant is the
@@ -5275,6 +5305,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (kind === 'special' && !actSp) continue;            // special slot → join a special only
                         if (kind === 'sport' && actSp) continue;               // sport slot → join a sport only
                         if (_done76[String(b)] && _done76[String(b)][String(act).toLowerCase()]) continue; // never a repeat
+                        // ★ combined sport maxPlayers cap (max+2 grace) — skip a court that
+                        //   this bunk would push past the sport's limit; bunk stays Free
+                        //   rather than overfill, exactly as the solver declines the share.
+                        if (!_sportShareFits65(act, occ, _bunkSize65(b))) continue;
                         let _dist65 = Infinity;
                         occ.forEach(o => { const dd = Math.abs(_bunkNum65(o.bunk) - _myNum65); if (dd < _dist65) _dist65 = dd; });
                         if (!_best65 || _dist65 < _best65.dist) _best65 = { field: occ[0].field, act: act, dist: _dist65 };
