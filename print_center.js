@@ -1603,8 +1603,8 @@ function getStyles() {
     '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
     '.pc3-live-divbanner{font-size:26px;font-weight:800;color:#fbbf24;letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid rgba(251,191,36,.35);}' +
-    '.pc3-live-unified th.pc3-uni-grade{font-size:clamp(15px,1.3vw,24px);font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
-    '.pc3-live-unified th.pc3-uni-bunk{font-size:clamp(14px,1.1vw,20px);font-weight:700;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
+    '.pc3-live-unified th.pc3-uni-grade{font-size:.85em;font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
+    '.pc3-live-unified th.pc3-uni-bunk{font-size:.72em;font-weight:700;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
     '.pc3-live-unified th.row-head{white-space:nowrap;font-variant-numeric:tabular-nums;}' +
     '#pc3-cp-modal{position:fixed;inset:0;background:rgba(2,6,16,.72);z-index:100000;display:flex;align-items:center;justify-content:center;}' +
     '#pc3-cp-modal .pc3-cp-panel{background:#0b1326;border:1px solid #1e293b;border-radius:14px;width:min(560px,92vw);max-height:86vh;display:flex;flex-direction:column;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.5);}' +
@@ -1633,8 +1633,8 @@ function getStyles() {
     '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
     '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;font-size:clamp(16px,1.5vw,28px);}' +
+    '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;font-size:20px;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;font-size:1em;}' +
     '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
     '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
@@ -4354,7 +4354,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                             var sCls = (seg.isLeague ? 'cell-league' : 'cell-' + seg.type) + ' cell-merged';
                             if (sCur) sCls += ' cell-current';
                             if (sPast) sCls += ' cell-past';
-                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(seg.text) + '</td>';
+                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:1em;line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(seg.text) + '</td>';
                         }
                         ci += seg.colSpan;
                     } else {
@@ -4393,7 +4393,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
                     if (isCur) cls += ' cell-current';
                     if (isPast) cls += ' cell-past';
-                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
+                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
                     ci = nextCi;
                 } else {
                     var emptyLeague = pcLeagueInfoAt(divName, cStart);
@@ -4411,7 +4411,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                         }
                         var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
                         var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
-                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
                         ci = lnext;
                     } else {
                         html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">—</td>';
@@ -4628,7 +4628,7 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
             var isPast = nowMin >= cell.e;
             var cls = cell.cls + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '');
             html += '<td' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
-                ' class="' + cls + '" style="text-align:center;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(cell.text) + '</td>';
+                ' class="' + cls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(cell.text) + '</td>';
         }
         html += '</tr>';
     });
@@ -4703,6 +4703,25 @@ function _liveContentSignature(nowMin) {
 }
 
 // —— Paginated live view renderer ————————————————————————————————————————————
+// Size each table's font to its column width: a few-bunk table (wide columns)
+// gets big text; a many-bunk table (narrow columns) stays small enough that
+// common words don't break. Cells are em-based, so setting the table font-size
+// scales every cell + the bunk/grade/time headers proportionally. Run BEFORE
+// pcLiveFillTables (font changes row heights; the fill then tops off the page).
+function pcLiveFitFont(nodes) {
+    if (!nodes || !nodes.length) return;
+    nodes.forEach(function (n) {
+        var tbl = n.querySelector('.pc3-live-tbl');
+        if (!tbl) return;
+        var ths = Array.prototype.slice.call(tbl.querySelectorAll('thead tr:last-child th:not(.corner)'));
+        var minW = Infinity;
+        ths.forEach(function (th) { if (!th.classList.contains('row-head')) minW = Math.min(minW, th.offsetWidth); });
+        if (!isFinite(minW) || minW <= 0) return;
+        var fs = Math.max(15, Math.min(36, Math.round(minW * 0.225)));
+        tbl.style.fontSize = fs + 'px';
+    });
+}
+
 // Fill leftover vertical space: when the page content is shorter than the
 // screen, set each table's HEIGHT to its proportional share of the available
 // space. The browser distributes that height across the table's rows (the
@@ -4879,8 +4898,9 @@ function renderLiveContent() {
         wraps.forEach(function (n) { wcInner.appendChild(n); });
         wcPage.appendChild(wcInner);
         body.appendChild(wcPage);
-        // Fits with room to spare → grow the tables to fill the empty vertical
-        // space so the whole camp uses the full screen (done after placement).
+        // Size fonts to columns, then fill any leftover vertical space so the
+        // whole camp uses the full screen (done after placement).
+        pcLiveFitFont(wraps);
         if (wcScale >= 1) pcLiveFillTables(wraps, availH);
 
         updateLivePageIndicator();
@@ -4968,10 +4988,11 @@ function renderLiveContent() {
         pageDiv.appendChild(inner);
         body.appendChild(pageDiv);
         // Now the content is placed (and reflowed at the possibly-widened width
-        // from the scale trick). Grow the rows to fill the unscaled target so
-        // that after the transform scales it, it fills the screen exactly — both
-        // when the page fits (scale 1) and when it was shrunk (scale < 1, where
-        // the width expansion otherwise leaves a gap at the bottom).
+        // from the scale trick). First size each table's font to its columns
+        // (big text where bunks are few), then grow the rows to fill the unscaled
+        // target so that after the transform scales it, it fills the screen
+        // exactly — both when the page fits (scale 1) and when it was shrunk.
+        pcLiveFitFont(page.nodes);
         pcLiveFillTables(page.nodes, Math.round(availH / scale));
     });
 
