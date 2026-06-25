@@ -5198,13 +5198,20 @@ window._pc3LiveDownloadJpeg = function () {
     _pc3CaptureLivePages(function (canvases) {
         if (!canvases) return;
         var dateStr = String(window.currentScheduleDate || 'schedule').replace(/[^0-9A-Za-z\-]/g, '');
-        canvases.forEach(function (canvas, idx) {
+        // Save EVERY page. Browsers throttle rapid back-to-back downloads to just
+        // the first, so trigger them one at a time with a small gap.
+        function saveOne(idx) {
+            if (idx >= canvases.length) {
+                if (window.showToast) window.showToast('Saved ' + canvases.length + ' image' + (canvases.length > 1 ? 's' : ''), 'success');
+                return;
+            }
             var a = document.createElement('a');
-            a.href = canvas.toDataURL('image/jpeg', 0.95);
+            a.href = canvases[idx].toDataURL('image/jpeg', 0.95);
             a.download = 'schedule-' + dateStr + (canvases.length > 1 ? '-' + (idx + 1) : '') + '.jpg';
             document.body.appendChild(a); a.click(); a.remove();
-        });
-        if (window.showToast) window.showToast('Saved ' + canvases.length + ' image' + (canvases.length > 1 ? 's' : ''), 'success');
+            setTimeout(function () { saveOne(idx + 1); }, 600);
+        }
+        saveOne(0);
     }, false); // JPEG = actual colored schedule
 };
 window._pc3LivePrint = function () {
