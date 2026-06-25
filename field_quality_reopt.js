@@ -305,6 +305,12 @@
                 Object.keys(byTgt).forEach(function (tf) {
                     var grp = byTgt[tf];
                     if (grp.length < 2) return;
+                    // ★ A field hosts ONE grade at a time (same_division sharing). The
+                    //   bijection above can split a same-grade share and land two
+                    //   DIFFERENT grades on one field — a cross-division conflict the
+                    //   validator later has to repair by dropping a placement. Reject
+                    //   any re-pair that would co-locate different grades.
+                    for (var gck = 1; gck < grp.length; gck++) { if (grp[gck].grade !== grp[0].grade) { ok = false; return; } }
                     var sm = (window.sportMetaData || {})[grp[0].s._activity];
                     if (!(sm && sm.maxPlayers)) return;
                     var tot = 0;

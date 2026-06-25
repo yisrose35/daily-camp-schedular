@@ -2801,6 +2801,18 @@
                 }
             }
 
+            // ★ A field hosts ONE division at a time (same_division sharing). The
+            //   bijection above can split a same-grade share and assign two DIFFERENT
+            //   divisions to one field — a cross-division conflict the validator later
+            //   has to repair by dropping a placement. Reject any re-pair that would
+            //   co-locate different divisions on the same target field.
+            var divByFieldB = {};
+            for (var cgi = 0; cgi < swaps.length; cgi++) {
+                var nfB = swaps[cgi].newField, dvB = swaps[cgi].p.blk.divName;
+                if (divByFieldB[nfB] === undefined) divByFieldB[nfB] = dvB;
+                else if (divByFieldB[nfB] !== dvB) return;
+            }
+
             // Apply atomically: undo all olds first, then apply all news.
             swaps.forEach(function(sp) {
                 if (sp.p.currentField === sp.newField) return;
