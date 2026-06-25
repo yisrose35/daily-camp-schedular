@@ -70,12 +70,12 @@ var DEFAULT_TEMPLATE = {
     timeColBgColor: '#F8FAFC', timeColTextColor: '#475569',
     timeColFont: '', timeColFontSize: 11, timeColBold: true, timeColWidth: 90,
     cellPadding: 6,
-    tableOrientation: 'bunks-top', layoutMode: 'per-division',
+    tableOrientation: 'time-top', layoutMode: 'per-division',
     orientation: 'landscape', paperSize: 'letter',
     showPageBreaks: true,
-    // Default print layout = the "Shared Timeline" look: one vertical time
-    // axis per division with bunks as columns, each division page-broken onto
-    // its own page. Other packs (e.g. Full Master) flip these off.
+    // Default print layout = the "Shared Timeline" look: one shared time axis
+    // per division, time across the top and bunks down the side, each division
+    // page-broken onto its own page. Other packs (e.g. Full Master) flip off.
     sharedTimeline: true,
     hideLeagueMatchups: false,
     watermarkEnabled: false, watermarkText: 'DRAFT', watermarkColor: '#CBD5E1', watermarkOpacity: 0.08,
@@ -252,12 +252,12 @@ var USER_PACKS = [
     {
         id: 'shared-timeline',
         name: 'Shared Timeline',
-        tagline: 'One time axis, bunks across the top — each division on its own page.',
+        tagline: 'One shared time axis on top, bunks down the side — each division on its own page.',
         icon: 'grid',
         scope: 'all',
         preset: 'classic',
         view: 'division',
-        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false, showPageBreaks: true, sharedTimeline: true }
+        layout: { tableOrientation: 'time-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false, showPageBreaks: true, sharedTimeline: true }
     },
     {
         id: 'head-counselor',
@@ -2651,23 +2651,11 @@ function renderSharedTimelineTable(grades) {
     var sheetId = pcNextSheetId();
     var gradeCols = grades.filter(function (g) { return g.bunks && g.bunks.length; });
     var multiGrade = gradeCols.length > 1;
-    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
-    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="shared-timeline" data-day-start="' + bounds[0] + '" data-day-end="' + bounds[bounds.length - 1] + '">';
-    html += '<thead>';
-    if (multiGrade) {
-        html += '<tr><th class="corner" rowspan="2" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
-        gradeCols.forEach(function (g) { html += '<th colspan="' + g.bunks.length + '">' + escHtml(g.divName) + '</th>'; });
-        html += '</tr><tr>';
-        cols.forEach(function (c) { html += '<th>' + escHtml(c.bunk) + '</th>'; });
-        html += '</tr>';
-    } else {
-        html += '<tr><th class="corner" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
-        cols.forEach(function (c) { html += '<th>' + escHtml(c.bunk) + '</th>'; });
-        html += '</tr>';
-    }
-    html += '</thead><tbody>';
+    // Orientation: 'time-top' → time across the top (columns), bunks down the
+    // side (rows). 'bunks-top' → bunks across the top, time down the side.
+    var timeTop = (t.tableOrientation === 'time-top');
 
-    // Build a descriptor grid, then merge identical neighbors into rectangles.
+    // Build a descriptor grid [timeRow][bunkCol], then merge identical neighbors.
     var nR = rows.length, nC = cols.length;
     var grid = [];
     for (var gr = 0; gr < nR; gr++) {
@@ -2682,28 +2670,84 @@ function renderSharedTimelineTable(grades) {
     }
     var done = {};
     var kk = function (a, b) { return a + ':' + b; };
-    rows.forEach(function (r, ri) {
-        html += '<tr data-block-start="' + r.startMin + '" data-block-end="' + r.endMin + '">';
-        html += '<th class="row-head">' + escHtml(minutesToTimeLabel(r.startMin)) + '</th>';
-        for (var ci = 0; ci < nC; ci++) {
-            if (done[kk(ri, ci)]) continue;
-            var cell = grid[ri][ci];
-            var colspan = 1;
-            while (ci + colspan < nC && !done[kk(ri, ci + colspan)] && grid[ri][ci + colspan].key === cell.key) colspan++;
-            var rowspan = 1;
-            extend: while (ri + rowspan < nR) {
-                for (var cc = ci; cc < ci + colspan; cc++) {
-                    if (done[kk(ri + rowspan, cc)] || grid[ri + rowspan][cc].key !== cell.key) break extend;
-                }
-                rowspan++;
-            }
-            for (var rr = ri; rr < ri + rowspan; rr++) for (var c2 = ci; c2 < ci + colspan; c2++) done[kk(rr, c2)] = 1;
-            html += '<td class="' + cell.cls + '"' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
-                ' data-cell-text="' + escHtml(cell.text) + '" style="text-align:center;">' + escHtml(cell.text) + '</td>';
+
+    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="shared-timeline" data-orient="' + (timeTop ? 'time-top' : 'bunks-top') + '" data-day-start="' + bounds[0] + '" data-day-end="' + bounds[bounds.length - 1] + '">';
+
+    if (!timeTop) {
+        // ── Bunks across the top, time down the side ──
+        html += '<thead>';
+        if (multiGrade) {
+            html += '<tr><th class="corner" rowspan="2" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+            gradeCols.forEach(function (g) { html += '<th colspan="' + g.bunks.length + '">' + escHtml(g.divName) + '</th>'; });
+            html += '</tr><tr>';
+            cols.forEach(function (c) { html += '<th>' + escHtml(c.bunk) + '</th>'; });
+            html += '</tr>';
+        } else {
+            html += '<tr><th class="corner" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+            cols.forEach(function (c) { html += '<th>' + escHtml(c.bunk) + '</th>'; });
+            html += '</tr>';
         }
-        html += '</tr>';
-    });
-    html += '</tbody></table></div>';
+        html += '</thead><tbody>';
+        rows.forEach(function (r, ri) {
+            html += '<tr data-block-start="' + r.startMin + '" data-block-end="' + r.endMin + '">';
+            html += '<th class="row-head">' + escHtml(minutesToTimeLabel(r.startMin)) + '</th>';
+            for (var ci = 0; ci < nC; ci++) {
+                if (done[kk(ri, ci)]) continue;
+                var cell = grid[ri][ci];
+                var colspan = 1;
+                while (ci + colspan < nC && !done[kk(ri, ci + colspan)] && grid[ri][ci + colspan].key === cell.key) colspan++;
+                var rowspan = 1;
+                extend: while (ri + rowspan < nR) {
+                    for (var cc = ci; cc < ci + colspan; cc++) {
+                        if (done[kk(ri + rowspan, cc)] || grid[ri + rowspan][cc].key !== cell.key) break extend;
+                    }
+                    rowspan++;
+                }
+                for (var rr = ri; rr < ri + rowspan; rr++) for (var c2 = ci; c2 < ci + colspan; c2++) done[kk(rr, c2)] = 1;
+                html += '<td class="' + cell.cls + '"' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
+                    ' data-cell-text="' + escHtml(cell.text) + '" style="text-align:center;">' + escHtml(cell.text) + '</td>';
+            }
+            html += '</tr>';
+        });
+        html += '</tbody>';
+    } else {
+        // ── Time across the top, bunks down the side (transposed) ──
+        // Merge across time = colspan; merge across bunks = rowspan.
+        html += '<thead><tr>';
+        html += '<th class="corner"' + (multiGrade ? ' colspan="2"' : '') + ' style="min-width:' + t.timeColWidth + 'px;">Bunk</th>';
+        rows.forEach(function (r) { html += '<th class="row-head">' + escHtml(minutesToTimeLabel(r.startMin)) + '</th>'; });
+        html += '</tr></thead><tbody>';
+        cols.forEach(function (c, bi) {
+            html += '<tr>';
+            // Grade label column (once per grade, spanning its bunks).
+            if (multiGrade && (bi === 0 || cols[bi - 1].grade !== c.grade)) {
+                var gspan = 0;
+                for (var gi = bi; gi < nC && cols[gi].grade === c.grade; gi++) gspan++;
+                html += '<th class="pc3-uni-grade"' + (gspan > 1 ? ' rowspan="' + gspan + '"' : '') + '>' + escHtml(c.grade) + '</th>';
+            }
+            html += '<th>' + escHtml(c.bunk) + '</th>';
+            for (var ti = 0; ti < nR; ti++) {
+                if (done[kk(bi, ti)]) continue;
+                var cellT = grid[ti][bi];
+                var colspanT = 1;
+                while (ti + colspanT < nR && !done[kk(bi, ti + colspanT)] && grid[ti + colspanT][bi].key === cellT.key) colspanT++;
+                var rowspanT = 1;
+                extendT: while (bi + rowspanT < nC) {
+                    for (var tt = ti; tt < ti + colspanT; tt++) {
+                        if (done[kk(bi + rowspanT, tt)] || grid[tt][bi + rowspanT].key !== cellT.key) break extendT;
+                    }
+                    rowspanT++;
+                }
+                for (var rr2 = bi; rr2 < bi + rowspanT; rr2++) for (var c3 = ti; c3 < ti + colspanT; c3++) done[kk(rr2, c3)] = 1;
+                html += '<td class="' + cellT.cls + '"' + (colspanT > 1 ? ' colspan="' + colspanT + '"' : '') + (rowspanT > 1 ? ' rowspan="' + rowspanT + '"' : '') +
+                    ' data-cell-text="' + escHtml(cellT.text) + '" style="text-align:center;">' + escHtml(cellT.text) + '</td>';
+            }
+            html += '</tr>';
+        });
+        html += '</tbody>';
+    }
+    html += '</table></div>';
     return html;
 }
 
