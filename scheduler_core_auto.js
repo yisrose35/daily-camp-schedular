@@ -594,6 +594,10 @@
     // listed bunks are allowed. Duplicate-safe (see _specialConfigMatches).
     function isSpecialAvailableForBunk(specialName, divName, bunkName, gs) {
         if (!isSpecialAvailableForDivision(specialName, divName, gs)) return false;
+        // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
+        //   Blocks specials reserved for other bunk(s) at every auto special pool-filter
+        //   call site that consults this function (plus manual eligibility).
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, specialName, null, divName)) return false;
         const matches = _specialConfigMatches(specialName, gs);
         if (!matches.length) return true;
         for (const cfg of matches) {
@@ -2845,6 +2849,11 @@
 
             // Rainy: no outdoor fields
             if (isRainy && !ledger.isIndoor) return false;
+
+            // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
+            //   Auto field gate: covers facility targets (fieldName) and sport targets
+            //   (activity) at per-bunk granularity. Allowed bunks pass; others blocked.
+            if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, activity, fieldName, grade)) return false;
 
             // Unavailable rules check — if any unavailable rule overlaps, block it
             if (ledger.unavailableRules && ledger.unavailableRules.length > 0) {
