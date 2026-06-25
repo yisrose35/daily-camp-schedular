@@ -4087,7 +4087,7 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
                 '<button class="pc3-live-close" id="pc3-live-print-btn" title="Print the live view — one division per page" onclick="window._pc3LivePrint&&window._pc3LivePrint()">Print</button>' +
-                '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the live view as JPEG image(s)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download JPEG</button>' +
+                '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the schedule in color — one division per page (PDF)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -5194,27 +5194,54 @@ function _pc3CaptureLivePages(cb, bw) {
         next();
     });
 }
+// Load jsPDF on demand (CDN, same source as html2canvas).
+function _pc3LoadJsPDF() {
+    return new Promise(function (resolve) {
+        var get = function () { return (window.jspdf && window.jspdf.jsPDF) || window.jsPDF || null; };
+        if (get()) return resolve(get());
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
+        s.onload = function () { resolve(get()); };
+        s.onerror = function () { resolve(null); };
+        document.head.appendChild(s);
+    });
+}
+// Download — one division per page. Forces "one division per page" layout,
+// captures each page in color, and builds a single multi-page PDF (a single
+// JPEG can't hold multiple pages; a PDF gives one division per page in one file).
 window._pc3LiveDownloadJpeg = function () {
-    _pc3CaptureLivePages(function (canvases) {
-        if (!canvases) return;
-        var dateStr = String(window.currentScheduleDate || 'schedule').replace(/[^0-9A-Za-z\-]/g, '');
-        // Stack EVERY page into one tall image so it's a single download (browsers
-        // throttle multiple back-to-back downloads to just the first).
-        var gap = canvases.length > 1 ? 16 : 0;
-        var W = 0, H = 0;
-        canvases.forEach(function (c, idx) { W = Math.max(W, c.width); H += c.height + (idx ? gap : 0); });
-        var big = document.createElement('canvas');
-        big.width = W; big.height = H;
-        var ctx = big.getContext('2d');
-        ctx.fillStyle = '#0b1220'; ctx.fillRect(0, 0, W, H); // colored-schedule background
-        var y = 0;
-        canvases.forEach(function (c, idx) { if (idx) y += gap; ctx.drawImage(c, 0, y); y += c.height; });
-        var a = document.createElement('a');
-        a.href = big.toDataURL('image/jpeg', 0.95);
-        a.download = 'schedule-' + dateStr + '.jpg';
-        document.body.appendChild(a); a.click(); a.remove();
-        if (window.showToast) window.showToast('Saved schedule (' + canvases.length + ' page' + (canvases.length > 1 ? 's' : '') + ')', 'success');
-    }, false); // JPEG = actual colored schedule
+    var prevPerDiv = _liveOneDivPerPage;
+    var perdivBtn = document.getElementById('pc3-live-perdiv-btn');
+    if (!prevPerDiv) {
+        _liveOneDivPerPage = true; _liveWholeCamp = false;
+        if (perdivBtn) perdivBtn.classList.add('on');
+        _liveRenderSig = '';
+        try { renderLiveContent(); } catch (e) {}
+    }
+    setTimeout(function () {
+        _pc3CaptureLivePages(function (canvases) {
+            if (!prevPerDiv) { // restore the prior layout
+                _liveOneDivPerPage = false;
+                if (perdivBtn) perdivBtn.classList.remove('on');
+                _liveRenderSig = '';
+                try { renderLiveContent(); } catch (e) {}
+            }
+            if (!canvases) return;
+            _pc3LoadJsPDF().then(function (jsPDF) {
+                var dateStr = String(window.currentScheduleDate || 'schedule').replace(/[^0-9A-Za-z\-]/g, '');
+                if (!jsPDF) { if (window.showToast) window.showToast('Could not load the PDF library (offline?)', 'error'); return; }
+                var pdf = null;
+                canvases.forEach(function (c, idx) {
+                    var w = c.width, h = c.height, orient = w >= h ? 'l' : 'p';
+                    if (idx === 0) pdf = new jsPDF({ orientation: orient, unit: 'px', format: [w, h] });
+                    else pdf.addPage([w, h], orient);
+                    pdf.addImage(c.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, w, h);
+                });
+                pdf.save('schedule-' + dateStr + '.pdf');
+                if (window.showToast) window.showToast('Saved schedule — ' + canvases.length + ' division' + (canvases.length > 1 ? 's, one per page' : ''), 'success');
+            });
+        }, false); // color
+    }, prevPerDiv ? 60 : 560); // wait for the re-render when we had to switch modes
 };
 window._pc3LivePrint = function () {
     _pc3CaptureLivePages(function (canvases) {
