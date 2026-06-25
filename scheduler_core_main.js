@@ -1462,26 +1462,27 @@
                                 }
                             }
                         } else if (knownSportNames.has(optNorm) && !optNorm.includes('swim')) {
-                            // ★ FEASIBILITY GATE: a specific sport (e.g. Pickleball) may have NO
-                            //   open hosting field at this window (court locked / time-ruled /
-                            //   disabled — e.g. "Pickleball court" blocked 970-1020). Handing the
-                            //   solver an unplaceable restricted block makes it silently DROP the
-                            //   restriction → a GENERIC sport (the "they got sports" bug). So if
-                            //   NONE of the sport's hosting fields can fit here, leave _placed
-                            //   false and fall through to the bunk's NEXT rotation option (e.g.
-                            //   Swim) — exactly like a scarce special. Gate only when we KNOW the
-                            //   sport's fields and can check them; otherwise keep the original
-                            //   solver-restricted path (no regression for un-mapped sports).
+                            // ★ A user who NAMES a specific sport in a smart tile wants that sport
+                            //   placed — even when no field is open for it. So: if one of the
+                            //   sport's hosting fields can fit here, hand it to the solver to book
+                            //   a REAL field (allowedActivities). If NONE can fit (court locked /
+                            //   time-ruled / disabled — e.g. "Pickleball court" blocked 970-1020),
+                            //   place the sport as its OWN field-less LABEL (_noRoomCap, like Swim)
+                            //   instead of handing the solver an unplaceable block that it would
+                            //   silently DROP to a GENERIC sport (the "they got sports" bug). Either
+                            //   way the cell reads the named sport — never a random Sport, never a
+                            //   fall-through. Un-mapped sports keep the solver-restricted path.
                             const _spFields = _sportFieldMap[optNorm];
                             const _spFits = !(_spFields && _spFields.length) || typeof Utils.canBlockFit !== 'function'
                                 || _spFields.some(_ff => Utils.canBlockFit({ divName, division: divName, bunk, startTime: _rStart, endTime: _rEnd, startMin: _rStart, endMin: _rEnd, slots: _rotSlots }, _ff, activityProperties, fieldUsageBySlot, opt));
                             if (_spFits) {
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
-                                _placed = true;
                             } else {
-                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" infeasible @${_rStart}-${_rEnd} (no open field among: ${(_spFields || []).join(', ') || 'none'}) → next option`);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                             }
+                            _placed = true;
                         } else {
                             // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
                             //   — no solver, no real field needed (the cell just reads the label,
