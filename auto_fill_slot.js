@@ -173,7 +173,7 @@
         return out;
     }
 
-    function isFieldAvailable(fieldName, myBunk, myDiv, slotStart, slotEnd, actProps) {
+    function isFieldAvailable(fieldName, myBunk, myDiv, slotStart, slotEnd, actProps, wantActivity) {
         const ap = actProps[fieldName] || {};
         const sharing = ap.sharableWith || ap.sharing || {};
         const sharingType = sharing.type || 'not_sharable';
@@ -216,6 +216,16 @@
                     continue;
                 }
 
+                // ★ Same-activity-when-sharing: a shared field/room hosts ONE activity
+                //   at a time. A co-occupant doing a DIFFERENT activity means this fill
+                //   can't share it — two different specials on one room (e.g. Running
+                //   Bases + Off The Wall on "Football Turf"), or two different sports on
+                //   one field, is a double-book even within capacity. Only enforced when
+                //   the caller names the activity it intends to place.
+                if (wantActivity) {
+                    const _oAct = oe._activity || oe.sport || oe.activity || '';
+                    if (_oAct && String(_oAct).toLowerCase().trim() !== String(wantActivity).toLowerCase().trim()) return false;
+                }
                 // Apply sharing rules
                 if (sharingType === 'not_sharable') return false;
                 if (sharingType === 'same_division' && otherDiv !== myDiv) return false;
@@ -308,6 +318,9 @@
             const _blockedOnField = _disabledSportsByField[f.name] || null;
             (f.activities || []).forEach(actName => {
                 if (_blockedOnField && _blockedOnField.indexOf(actName) !== -1) return;
+                // ★ Same-activity-when-sharing: skip a sport whose field is already held
+                //   by a DIFFERENT activity at this time (mismatch double-book).
+                if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps, actName)) return;
                 candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, maxUsagePeriod: f.maxUsagePeriod || 'half', exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
             });
         });
@@ -349,7 +362,10 @@
                 if (loc) {
                     if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
                     if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
-                    if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
+                    // ★ wantActivity = s.name: reject this special if its room is already
+                    //   held by a DIFFERENT activity (a different special, or a sport that
+                    //   shares the room) — a shared room hosts one activity at a time.
+                    if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps, s.name)) return;
                 }
                 candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, maxUsagePeriod: s.maxUsagePeriod || 'half', exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
             });
