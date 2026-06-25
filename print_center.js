@@ -388,6 +388,146 @@ var STYLE_PRESETS = [
         }
     }
 ];
+// ── Live View screen themes ──────────────────────────────────────────────
+// The fullscreen kiosk (Live View) has its OWN palette, independent of the
+// print-sheet template above — a TV/projector in a bright dining hall needs
+// different colors than a printed handout. Each theme is just a map of CSS
+// custom properties applied to the live overlay root (see _pcApplyLiveTheme).
+// "midnight" reproduces the original hardcoded dark look exactly, so existing
+// screens are unchanged until a camp picks something else.
+var LIVE_THEMES = [
+    {
+        id: 'midnight', name: 'Midnight',
+        description: 'Bright text on near-black — best for TVs in dim rooms (the classic look).',
+        swatch: ['#0b1220', '#fbbf24', '#0e7490'],
+        vars: {
+            '--lv-bg': '#0b1220', '--lv-header-bg': '#060a16', '--lv-header-border': '#1e293b',
+            '--lv-title': '#ffffff', '--lv-date': '#fcd34d', '--lv-clock': '#e2e8f0',
+            '--lv-close-border': 'rgba(255,255,255,.22)', '--lv-close-bg': 'rgba(255,255,255,.10)',
+            '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.2)',
+            '--lv-loading': '#94a3b8', '--lv-nav': 'rgba(255,255,255,.6)', '--lv-nav-hover': '#fbbf24',
+            '--lv-accent': '#fbbf24', '--lv-divrange': '#8aa0bd', '--lv-cell-border': '#2b3a55',
+            '--lv-th-bg': '#16233e', '--lv-th-text': '#f8fafc', '--lv-rowhead-text': '#aab8cc',
+            '--lv-cell-bg': '#1c2a46', '--lv-cell-bg-alt': '#16223a', '--lv-cell-text': '#f1f5f9',
+            '--lv-free-bg': '#131f33', '--lv-free-text': '#42536c',
+            '--lv-current-bg': '#0e7490', '--lv-current-ring': '#22d3ee',
+            '--lv-current-glow': 'rgba(34,211,238,.35)', '--lv-current-text': '#ffffff',
+            '--lv-pinned-bg': '#3a2206', '--lv-pinned-text': '#fcd34d',
+            '--lv-league-bg': '#262150', '--lv-league-text': '#c4b5fd',
+            '--lv-curcol-bg': '#0e7490', '--lv-curcol-text': '#a5f3fc', '--lv-curcol-underline': '#fbbf24',
+            '--lv-banner-border': 'rgba(251,191,36,.35)',
+            '--lv-uni-grade-bg': '#0e1830', '--lv-uni-grade-text': '#fcd34d',
+            '--lv-uni-bunk-bg': '#0b1326', '--lv-uni-bunk-text': '#cbd5e1', '--lv-fit-on-text': '#1f2937',
+            '--lv-dot-idle': 'rgba(255,255,255,.3)'
+        }
+    },
+    {
+        id: 'daylight', name: 'Daylight',
+        description: 'Dark text on white — best for bright rooms, windows, and projectors.',
+        swatch: ['#ffffff', '#0e7490', '#f1f5f9'],
+        vars: {
+            '--lv-bg': '#f1f5f9', '--lv-header-bg': '#ffffff', '--lv-header-border': '#e2e8f0',
+            '--lv-title': '#0f172a', '--lv-date': '#b45309', '--lv-clock': '#334155',
+            '--lv-close-border': 'rgba(15,23,42,.18)', '--lv-close-bg': 'rgba(15,23,42,.05)',
+            '--lv-close-text': '#0f172a', '--lv-close-bg-hover': 'rgba(15,23,42,.12)',
+            '--lv-loading': '#64748b', '--lv-nav': 'rgba(15,23,42,.45)', '--lv-nav-hover': '#0e7490',
+            '--lv-accent': '#0f6e80', '--lv-divrange': '#64748b', '--lv-cell-border': '#cbd5e1',
+            '--lv-th-bg': '#e2e8f0', '--lv-th-text': '#0f172a', '--lv-rowhead-text': '#475569',
+            '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f8fafc', '--lv-cell-text': '#1e293b',
+            '--lv-free-bg': '#f1f5f9', '--lv-free-text': '#94a3b8',
+            '--lv-current-bg': '#cffafe', '--lv-current-ring': '#0e7490',
+            '--lv-current-glow': 'rgba(14,116,144,.25)', '--lv-current-text': '#0c4a6e',
+            '--lv-pinned-bg': '#fef3c7', '--lv-pinned-text': '#92400e',
+            '--lv-league-bg': '#ede9fe', '--lv-league-text': '#5b21b6',
+            '--lv-curcol-bg': '#cffafe', '--lv-curcol-text': '#0c4a6e', '--lv-curcol-underline': '#0e7490',
+            '--lv-banner-border': 'rgba(14,116,144,.3)',
+            '--lv-uni-grade-bg': '#e2e8f0', '--lv-uni-grade-text': '#0f172a',
+            '--lv-uni-bunk-bg': '#f1f5f9', '--lv-uni-bunk-text': '#475569', '--lv-fit-on-text': '#ffffff',
+            '--lv-dot-idle': 'rgba(15,23,42,.2)'
+        }
+    },
+    {
+        id: 'teal', name: 'Camp Teal',
+        description: 'On-brand teal header over a soft cyan board — friendly and easy on the eyes.',
+        swatch: ['#147D91', '#ecfeff', '#fbbf24'],
+        vars: {
+            '--lv-bg': '#ecfeff', '--lv-header-bg': '#147D91', '--lv-header-border': '#0F5F6E',
+            '--lv-title': '#ffffff', '--lv-date': '#fde68a', '--lv-clock': '#ecfeff',
+            '--lv-close-border': 'rgba(255,255,255,.3)', '--lv-close-bg': 'rgba(255,255,255,.14)',
+            '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.26)',
+            '--lv-loading': '#0f6e80', '--lv-nav': 'rgba(15,95,110,.5)', '--lv-nav-hover': '#0F5F6E',
+            '--lv-accent': '#0F5F6E', '--lv-divrange': '#5b8a93', '--lv-cell-border': '#b6e3ea',
+            '--lv-th-bg': '#cdeef3', '--lv-th-text': '#0F5F6E', '--lv-rowhead-text': '#0f6e80',
+            '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f3fcfd', '--lv-cell-text': '#134e57',
+            '--lv-free-bg': '#ecfeff', '--lv-free-text': '#93b8bf',
+            '--lv-current-bg': '#147D91', '--lv-current-ring': '#fbbf24',
+            '--lv-current-glow': 'rgba(20,125,145,.3)', '--lv-current-text': '#ffffff',
+            '--lv-pinned-bg': '#fff4d6', '--lv-pinned-text': '#92560e',
+            '--lv-league-bg': '#e9e5ff', '--lv-league-text': '#5b21b6',
+            '--lv-curcol-bg': '#147D91', '--lv-curcol-text': '#ecfeff', '--lv-curcol-underline': '#fbbf24',
+            '--lv-banner-border': 'rgba(15,95,110,.3)',
+            '--lv-uni-grade-bg': '#cdeef3', '--lv-uni-grade-text': '#0F5F6E',
+            '--lv-uni-bunk-bg': '#e3f6f9', '--lv-uni-bunk-text': '#0f6e80', '--lv-fit-on-text': '#ffffff',
+            '--lv-dot-idle': 'rgba(15,95,110,.25)'
+        }
+    },
+    {
+        id: 'contrast', name: 'High Contrast',
+        description: 'Pure black on white with bold weights — maximum legibility from across a field.',
+        swatch: ['#000000', '#ffffff', '#ffeb00'],
+        vars: {
+            '--lv-bg': '#ffffff', '--lv-header-bg': '#000000', '--lv-header-border': '#000000',
+            '--lv-title': '#ffffff', '--lv-date': '#ffd400', '--lv-clock': '#ffffff',
+            '--lv-close-border': 'rgba(255,255,255,.5)', '--lv-close-bg': 'rgba(255,255,255,.15)',
+            '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.3)',
+            '--lv-loading': '#000000', '--lv-nav': '#000000', '--lv-nav-hover': '#0e7490',
+            '--lv-accent': '#000000', '--lv-divrange': '#333333', '--lv-cell-border': '#000000',
+            '--lv-th-bg': '#000000', '--lv-th-text': '#ffffff', '--lv-rowhead-text': '#ffffff',
+            '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f2f2f2', '--lv-cell-text': '#000000',
+            '--lv-free-bg': '#ffffff', '--lv-free-text': '#999999',
+            '--lv-current-bg': '#ffeb00', '--lv-current-ring': '#000000',
+            '--lv-current-glow': 'rgba(0,0,0,.3)', '--lv-current-text': '#000000',
+            '--lv-pinned-bg': '#ffe08a', '--lv-pinned-text': '#000000',
+            '--lv-league-bg': '#d9d2ff', '--lv-league-text': '#000000',
+            '--lv-curcol-bg': '#000000', '--lv-curcol-text': '#ffeb00', '--lv-curcol-underline': '#ffeb00',
+            '--lv-banner-border': '#000000',
+            '--lv-uni-grade-bg': '#000000', '--lv-uni-grade-text': '#ffffff',
+            '--lv-uni-bunk-bg': '#222222', '--lv-uni-bunk-text': '#ffffff', '--lv-fit-on-text': '#ffffff',
+            '--lv-dot-idle': 'rgba(0,0,0,.25)'
+        }
+    }
+];
+var _LIVE_THEME_KEY = 'pc3LiveTheme';
+
+// Resolve the camp's chosen live theme (defaults to Midnight = original look).
+function _pcGetLiveThemeId() {
+    try {
+        var id = localStorage.getItem(_LIVE_THEME_KEY);
+        if (id && LIVE_THEMES.some(function (t) { return t.id === id; })) return id;
+    } catch (e) {}
+    return 'midnight';
+}
+function _pcGetLiveTheme(id) {
+    id = id || _pcGetLiveThemeId();
+    for (var i = 0; i < LIVE_THEMES.length; i++) { if (LIVE_THEMES[i].id === id) return LIVE_THEMES[i]; }
+    return LIVE_THEMES[0];
+}
+// Apply a theme's CSS variables to the live overlay root + page background.
+// Safe to call in either window; no-op if the overlay isn't present.
+function _pcApplyLiveTheme(id) {
+    var theme = _pcGetLiveTheme(id);
+    var overlay = document.getElementById('pc3-live-overlay');
+    if (overlay) {
+        Object.keys(theme.vars).forEach(function (k) { overlay.style.setProperty(k, theme.vars[k]); });
+    }
+    // The standalone kiosk paints #print as the backdrop behind the overlay.
+    var printTab = document.getElementById('print');
+    if (printTab && document.documentElement.classList.contains('pc3-live-standalone')) {
+        printTab.style.background = theme.vars['--lv-bg'];
+    }
+    return theme;
+}
+
 var _previewHtml = '';
 var _cloudSyncTimeout = null;
 var _liveInterval = null;
@@ -1683,19 +1823,35 @@ function getStyles() {
     /* ── League Matchups ── */
     '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 7px;background:#ddebf7;border:1px solid #9bc2e6;border-radius:2px;font-size:10px;white-space:nowrap;color:#1f3864;}' +
 
-    /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
-    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
-    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:#060a16;border-bottom:1px solid #1e293b;flex-shrink:0;}' +
+    /* ── Live Mode ── kiosk theme (TV / big-screen friendly). Colors are driven
+       by --lv-* custom properties so a camp can re-skin the screen via the Live
+       theme picker; the defaults below are the original "Midnight" palette, so
+       an un-themed overlay looks identical to before. See LIVE_THEMES. */
+    '.pc3-live-overlay{' +
+        '--lv-bg:#0b1220;--lv-header-bg:#060a16;--lv-header-border:#1e293b;' +
+        '--lv-title:#ffffff;--lv-date:#fcd34d;--lv-clock:#e2e8f0;' +
+        '--lv-close-border:rgba(255,255,255,.22);--lv-close-bg:rgba(255,255,255,.10);--lv-close-text:#ffffff;--lv-close-bg-hover:rgba(255,255,255,.2);' +
+        '--lv-loading:#94a3b8;--lv-nav:rgba(255,255,255,.6);--lv-nav-hover:#fbbf24;' +
+        '--lv-accent:#fbbf24;--lv-divrange:#8aa0bd;--lv-cell-border:#2b3a55;' +
+        '--lv-th-bg:#16233e;--lv-th-text:#f8fafc;--lv-rowhead-text:#aab8cc;' +
+        '--lv-cell-bg:#1c2a46;--lv-cell-bg-alt:#16223a;--lv-cell-text:#f1f5f9;' +
+        '--lv-free-bg:#131f33;--lv-free-text:#42536c;' +
+        '--lv-current-bg:#0e7490;--lv-current-ring:#22d3ee;--lv-current-glow:rgba(34,211,238,.35);--lv-current-text:#ffffff;' +
+        '--lv-pinned-bg:#3a2206;--lv-pinned-text:#fcd34d;--lv-league-bg:#262150;--lv-league-text:#c4b5fd;' +
+        '--lv-curcol-bg:#0e7490;--lv-curcol-text:#a5f3fc;--lv-curcol-underline:#fbbf24;--lv-dot-idle:rgba(255,255,255,.3);' +
+        '--lv-banner-border:rgba(251,191,36,.35);--lv-uni-grade-bg:#0e1830;--lv-uni-grade-text:#fcd34d;--lv-uni-bunk-bg:#0b1326;--lv-uni-bunk-text:#cbd5e1;--lv-fit-on-text:#1f2937;' +
+        'position:absolute;inset:0;z-index:100;background:var(--lv-bg);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:var(--lv-header-bg);border-bottom:1px solid var(--lv-header-border);flex-shrink:0;}' +
     '.pc3-live-headleft{display:flex;align-items:baseline;gap:14px;min-width:0;}' +
-    '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:#ffffff;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-    '.pc3-live-date{font-size:16px;font-weight:600;color:#fcd34d;white-space:nowrap;}' +
+    '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:var(--lv-title);letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.pc3-live-date{font-size:16px;font-weight:600;color:var(--lv-date);white-space:nowrap;}' +
     '.pc3-live-headright{display:flex;align-items:center;gap:18px;flex-shrink:0;}' +
-    '.pc3-live-clock{font-size:34px;font-weight:300;color:#e2e8f0;font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
-    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
-    '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
-    '.pc3-live-divbanner{font-size:26px;font-weight:800;color:#fbbf24;letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid rgba(251,191,36,.35);}' +
-    '.pc3-live-unified th.pc3-uni-grade{font-size:.85em;font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
-    '.pc3-live-unified th.pc3-uni-bunk{font-size:.72em;font-weight:700;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
+    '.pc3-live-clock{font-size:34px;font-weight:300;color:var(--lv-clock);font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
+    '.pc3-live-close{padding:8px 16px;border:1px solid var(--lv-close-border);border-radius:9px;background:var(--lv-close-bg);color:var(--lv-close-text);font-size:13px;font-weight:600;cursor:pointer;}' +
+    '.pc3-live-close:hover{background:var(--lv-close-bg-hover);}' +
+    '.pc3-live-divbanner{font-size:26px;font-weight:800;color:var(--lv-accent);letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid var(--lv-banner-border);}' +
+    '.pc3-live-unified th.pc3-uni-grade{font-size:.85em;font-weight:800;text-align:center;background:var(--lv-uni-grade-bg);color:var(--lv-uni-grade-text);border-bottom:1px solid var(--lv-header-border);white-space:nowrap;padding:5px 4px;}' +
+    '.pc3-live-unified th.pc3-uni-bunk{font-size:.72em;font-weight:700;text-align:center;background:var(--lv-uni-bunk-bg);color:var(--lv-uni-bunk-text);white-space:nowrap;padding:4px 3px;}' +
     '.pc3-live-unified th.row-head{white-space:nowrap;font-variant-numeric:tabular-nums;}' +
     '#pc3-cp-modal{position:fixed;inset:0;background:rgba(2,6,16,.72);z-index:100000;display:flex;align-items:center;justify-content:center;}' +
     '#pc3-cp-modal .pc3-cp-panel{background:#0b1326;border:1px solid #1e293b;border-radius:14px;width:min(560px,92vw);max-height:86vh;display:flex;flex-direction:column;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.5);}' +
@@ -1711,31 +1867,32 @@ function getStyles() {
     '#pc3-cp-modal .pc3-cp-btn{padding:9px 18px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:14px;font-weight:600;cursor:pointer;}' +
     '#pc3-cp-modal .pc3-cp-btn:hover{background:rgba(255,255,255,.2);}' +
     '#pc3-cp-modal .pc3-cp-apply{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
-    '.pc3-live-fit{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
-    '.pc3-live-fit:hover{background:rgba(255,255,255,.2);}' +
-    '.pc3-live-fit.on{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
-    '.pc3-live-loading{color:#94a3b8;padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
+    '.pc3-live-fit{padding:8px 16px;border:1px solid var(--lv-close-border);border-radius:9px;background:var(--lv-close-bg);color:var(--lv-close-text);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
+    '.pc3-live-fit:hover{background:var(--lv-close-bg-hover);}' +
+    '.pc3-live-fit.on{background:var(--lv-accent);border-color:var(--lv-accent);color:var(--lv-fit-on-text);}' +
+    '.pc3-live-loading{color:var(--lv-loading);padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
     '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
     '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
     '.pc3-live-page-inner{padding:18px 28px;}' +
-    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
-    '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
+    '.pc3-live-nav-btn{background:none;border:none;color:var(--lv-nav);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
+    '.pc3-live-nav-btn:hover{color:var(--lv-nav-hover);}' +
     '.pc3-live-section{margin-bottom:22px;}' +
     '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
-    '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
-    '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:var(--lv-accent);letter-spacing:.2px;}' +
+    '.pc3-live-divrange{font-size:14px;font-weight:600;color:var(--lv-divrange);font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;font-size:20px;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
-    '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid var(--lv-cell-border);padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
+    '.pc3-live-tbl th{background:var(--lv-th-bg);color:var(--lv-th-text);font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
-    '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:pre-line;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:700;}' +
-    '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
-    '.pc3-live-tbl .cell-free{color:#42536c !important;font-style:normal;background:#131f33 !important;font-weight:400;}' +
-    '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee,0 0 18px rgba(34,211,238,.35);color:#ffffff !important;font-weight:800 !important;}' +
+    '.pc3-live-tbl th.row-head{color:var(--lv-rowhead-text);font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:pre-line;word-break:break-word;overflow:hidden;background:var(--lv-th-bg);font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-tbl th.lv-curcol{background:var(--lv-curcol-bg);color:var(--lv-curcol-text);box-shadow:inset 0 -3px 0 var(--lv-curcol-underline);}' +
+    '.pc3-live-tbl td{color:var(--lv-cell-text);background:var(--lv-cell-bg);font-weight:700;}' +
+    '.pc3-live-tbl tr:nth-child(even) td{background:var(--lv-cell-bg-alt);}' +
+    '.pc3-live-tbl .cell-free{color:var(--lv-free-text) !important;font-style:normal;background:var(--lv-free-bg) !important;font-weight:400;}' +
+    '.pc3-live-tbl .cell-current{background:var(--lv-current-bg) !important;box-shadow:inset 0 0 0 3px var(--lv-current-ring),0 0 18px var(--lv-current-glow);color:var(--lv-current-text) !important;font-weight:800 !important;}' +
     '.pc3-live-tbl .cell-past{opacity:.42;}' +
-    '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
-    '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
+    '.pc3-live-tbl .cell-pinned{background:var(--lv-pinned-bg) !important;color:var(--lv-pinned-text) !important;font-weight:700;}' +
+    '.pc3-live-tbl .cell-league{background:var(--lv-league-bg) !important;color:var(--lv-league-text) !important;font-weight:700;}' +
     /* Black-and-white override — applied only while capturing the live view for
        Print / Download so the output looks like an Excel printout (white cells,
        black borders, black text). The on-screen kiosk stays dark. */
@@ -1922,6 +2079,14 @@ function buildMainUI() {
         '.pc3.pc3-focus .pcx-bar,.pc3.pc3-focus .pcx-rail,.pc3.pc3-focus .pc3-zoom-dock,.pc3.pc3-focus .pc3-sidebar-toggle{display:none!important;}' +
         '.pc3.pc3-focus .pcx-canvas{padding:0;background:#fff;}' +
         '.pc3.pc3-focus .pc3-focus-exit{display:inline-flex;}' +
+        /* Live screen theme chips */
+        '.pcx-live-theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
+        '.pcx-live-theme-btn{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #e2dccf;border-radius:11px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:all .14s;}' +
+        '.pcx-live-theme-btn:hover{border-color:#147D91;}' +
+        '.pcx-live-theme-btn.active{border-color:#147D91;background:#dff1f4;box-shadow:0 0 0 1px #147D91;}' +
+        '.pcx-live-sw{display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid #e7e5e4;}' +
+        '.pcx-live-sw span{flex:1;height:100%;}' +
+        '.pcx-live-theme-nm{font-size:12px;font-weight:600;color:#3a382f;}' +
     '</style>';
 
     return getStyles() + chrome +
@@ -1992,6 +2157,20 @@ function buildMainUI() {
                 '<div class="pcx-paper">' +
                     '<select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select>' +
                     '<select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select>' +
+                '</div>' +
+            '</div>' +
+            /* Live screen theme — the kiosk/TV display palette */
+            '<div class="pcx-section">' +
+                '<div class="pcx-label">Live screen theme</div>' +
+                '<div style="font-size:11px;color:#9a917f;margin:-6px 0 10px;line-height:1.4;">Colors for the fullscreen Live View on a TV or projector.</div>' +
+                '<div class="pcx-live-theme-grid" id="pc3-live-theme-grid">' +
+                    LIVE_THEMES.map(function (th) {
+                        var active = _pcGetLiveThemeId() === th.id;
+                        return '<button type="button" class="pcx-live-theme-btn' + (active ? ' active' : '') + '" data-live-theme="' + th.id + '" title="' + escHtml(th.description) + '">' +
+                            '<span class="pcx-live-sw">' + th.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
+                            '<span class="pcx-live-theme-nm">' + escHtml(th.name) + '</span>' +
+                        '</button>';
+                    }).join('') +
                 '</div>' +
             '</div>' +
         '</aside>' +
@@ -4155,7 +4334,7 @@ function runLiveStandalone() {
         printTab.style.display = 'block';
         printTab.style.position = 'fixed';
         printTab.style.inset = '0';
-        printTab.style.background = '#0b1220';
+        printTab.style.background = _pcGetLiveTheme().vars['--lv-bg'];
         printTab.style.zIndex = '9999';
     }
 
@@ -4185,6 +4364,9 @@ function runLiveStandalone() {
         '</div>' +
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
         '</div>';
+
+    // Paint the camp's chosen kiosk palette onto the freshly-built overlay.
+    try { _pcApplyLiveTheme(); } catch (e) {}
 
     // Camp name for the Live header. The settings copies (app1.campName /
     // campName / camp_name in localStorage) only get refreshed on an explicit
@@ -4371,7 +4553,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
         html += '<thead><tr><th class="corner">Bunk</th>';
         lTimeCols.forEach(function (tc) {
             var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="font-size:12px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#0e7490;color:#a5f3fc;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+            html += '<th' + (isCurCol ? ' class="lv-curcol"' : '') + ' data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="font-size:12px;text-align:center;white-space:nowrap;">' + tc.label + '</th>';
         });
         html += '</tr></thead><tbody>';
 
@@ -5221,7 +5403,7 @@ function updateLivePageIndicator() {
         ind.style.display = 'flex';
         var dots = '';
         for (var i = 0; i < _numLivePages; i++) {
-            dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? '#fbbf24' : 'rgba(255,255,255,.3)') + ';transition:background .3s;"></span>';
+            dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? 'var(--lv-accent,#fbbf24)' : 'var(--lv-dot-idle,rgba(255,255,255,.3))') + ';transition:background .3s;"></span>';
         }
         ind.innerHTML =
             '<button class="pc3-live-nav-btn" onclick="livePageNav(-1)">&#8249;</button>' +
@@ -5260,7 +5442,7 @@ function _pc3CaptureLivePages(cb, bw) {
         // html2canvas clones only the page subtree, so a class on an ancestor is
         // lost there and the dark cell rules win.
         if (bw) { body.classList.add('pc3-live-bw'); pages.forEach(function (p) { p.classList.add('pc3-live-bw'); }); }
-        var bg = bw ? '#ffffff' : '#0b1220';
+        var bg = bw ? '#ffffff' : _pcGetLiveTheme().vars['--lv-bg'];
         var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
         var canvases = [], i = 0;
         function finish() {
@@ -6454,6 +6636,22 @@ function bindAll() {
         });
     });
 
+    // Live screen theme chips — persist the choice and, if a kiosk window is
+    // already open, re-skin it instantly (localStorage is shared, so a fresh
+    // Live View picks it up on boot regardless).
+    document.querySelectorAll('[data-live-theme]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var id = this.getAttribute('data-live-theme');
+            try { localStorage.setItem(_LIVE_THEME_KEY, id); } catch (e) {}
+            document.querySelectorAll('[data-live-theme]').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-live-theme') === id);
+            });
+            try {
+                if (_liveWindow && !_liveWindow.closed && _liveWindow._pcApplyLiveTheme) _liveWindow._pcApplyLiveTheme(id);
+            } catch (e) {}
+        });
+    });
+
     // Popovers — Packs / Output / Style / Layout
     var popoverPairs = [
         ['pc3-packs-btn', 'pc3-packs-menu'],
@@ -7273,6 +7471,9 @@ window._pc3RunLiveStandalone = runLiveStandalone;
 // resolves against the (popup) window's GLOBAL scope. livePageNav is defined
 // inside this file's IIFE, so without this export the arrows silently no-op.
 window.livePageNav = livePageNav;
+// Exposed so the (popup) Live View can be re-skinned from its own boot AND so
+// the opener can push a theme change into an already-open kiosk window.
+window._pcApplyLiveTheme = _pcApplyLiveTheme;
 // "One division per page" toggle uses inline onclick="toggleLivePerDiv()",
 // which resolves against the popup window's global scope — export it like
 // livePageNav so the button isn't a silent no-op.
