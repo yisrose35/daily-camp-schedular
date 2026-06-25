@@ -633,6 +633,57 @@
 
     /**
      * =========================================================================
+     * PER-DATE BUNK-ONLY ACTIVITY RESTRICTION (Daily Adjustments → Resources)
+     * =========================================================================
+     * "This activity/sport/facility is only available for these bunk(s) today."
+     * Restriction-only (allow-list): if a matching restriction exists and this
+     * bunk is NOT in its allow-list, the bunk is BLOCKED from that target.
+     * Targets:
+     *   - targetType 'special'/'sport' → matches the activity NAME (actName)
+     *   - targetType 'facility'        → matches the FIELD/facility name
+     * Data lives in the per-date Resources overrides
+     * (dailyActivityBunkRestrictions), mirrored to the campResourceOverrides_<date>
+     * localStorage blob — read with the same fallback as the sport-disable /
+     * dailyFieldAvailability paths so it works post-gen and on fresh devices.
+     * Fail-open: any read error or empty list → not restricted.
+     * Shared by BOTH engines (manual/total via canBlockFit, auto via
+     * calculateLimitScore / isSpecialAvailableForBunk / isFieldAvailable, and the
+     * fill pass via auto_fill_slot.buildCandidates).
+     */
+    Utils.isBunkRestrictedFromTarget = function (bunkName, activityName, fieldName, divName) {
+        if (!bunkName) return false;
+        let list = (window.loadCurrentDailyData?.() || {}).dailyActivityBunkRestrictions;
+        if (!Array.isArray(list) || list.length === 0) {
+            // localStorage fallback (mirror of isFieldAvailable @ scheduler_core_auto.js:2818)
+            try {
+                const dk = window.currentScheduleDate || '';
+                if (dk) {
+                    const stored = localStorage.getItem('campResourceOverrides_' + dk);
+                    if (stored) {
+                        const p = JSON.parse(stored);
+                        if (Array.isArray(p?.dailyActivityBunkRestrictions)) list = p.dailyActivityBunkRestrictions;
+                    }
+                }
+            } catch (_e) { /* ignore */ }
+        }
+        if (!Array.isArray(list) || list.length === 0) return false;
+        const actLc = activityName ? String(activityName).toLowerCase().trim() : null;
+        const fldLc = fieldName ? String(fieldName).toLowerCase().trim() : null;
+        const bunkStr = String(bunkName);
+        for (const r of list) {
+            if (!r || !r.target || !Array.isArray(r.bunks)) continue;
+            const tLc = String(r.target).toLowerCase().trim();
+            const isActTarget = (r.targetType === 'special' || r.targetType === 'sport') && actLc && tLc === actLc;
+            const isFacTarget = (r.targetType === 'facility') && fldLc && tLc === fldLc;
+            if (!isActTarget && !isFacTarget) continue;
+            const allowed = r.bunks.some(b => String(b) === bunkStr);
+            if (!allowed) return true; // matched a restriction, bunk not allowed → blocked
+        }
+        return false;
+    };
+
+    /**
+     * =========================================================================
      * MAIN FIT CHECK - DIVISION-AWARE LOCK CHECKING FOR ELECTIVES
      * =========================================================================
      * This is the CRITICAL function that determines if a bunk can use a field.
@@ -672,6 +723,14 @@
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport "${actName}" is disabled on this field today`);
                 return false;
             }
+        }
+
+        // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
+        //   Covers special/sport (actName) and facility (fieldName) targets for the
+        //   manual + total-solver path. Allowed bunks pass; everyone else is blocked.
+        if (Utils.isBunkRestrictedFromTarget(block.bunk, actName, fieldName, block.divName || block.division)) {
+            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - target reserved for other bunk(s) today (bunk-only restriction)`);
+            return false;
         }
 
         // Get slots for this block

@@ -36,7 +36,8 @@ let currentOverrides = {
   dailyDisabledSportsByField: {},
   disabledFields: [],
   disabledSpecials: [],
-  bunkActivityOverrides: []
+  bunkActivityOverrides: [],
+  dailyActivityBunkRestrictions: []
 };
 let displacedTiles = [];
 let smartTileHistory = null;
@@ -5478,7 +5479,8 @@ async function runOptimizer() {
     },
     dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
     dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || [],
+    dailyActivityBunkRestrictions: currentOverrides.dailyActivityBunkRestrictions || []
   };
 
   if (isPartialWipe) {
@@ -5600,6 +5602,7 @@ async function runOptimizer() {
   window.saveCurrentDailyData("dailyDisabledSportsByField", savedResourceOverrides.dailyDisabledSportsByField);
   window.saveCurrentDailyData("dailyFieldAvailability", savedResourceOverrides.dailyFieldAvailability);
   window.saveCurrentDailyData("disabledSpecialtyLeagues", savedResourceOverrides.disabledSpecialtyLeagues);
+  window.saveCurrentDailyData("dailyActivityBunkRestrictions", savedResourceOverrides.dailyActivityBunkRestrictions);
   console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
 
   window.invalidateSmartLogicSpecialsCache?.();
@@ -7588,12 +7591,14 @@ function saveOverridesUnified() {
   window.saveCurrentDailyData?.("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
   window.saveCurrentDailyData?.("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
   window.saveCurrentDailyData?.("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+  window.saveCurrentDailyData?.("dailyActivityBunkRestrictions", currentOverrides.dailyActivityBunkRestrictions);
   try {
     localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
       overrides: fullOverrides,
       dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
       dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-      disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+      disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || [],
+      dailyActivityBunkRestrictions: currentOverrides.dailyActivityBunkRestrictions || []
     }));
     // Iron-gate time-rules key (read by _ironGateTimeRulesV1 in
     // scheduler_core_auto.js as PRIMARY for time-rule clearing).
@@ -7640,6 +7645,7 @@ function renderResourceOverridesUI() {
         </div>
       </div>
     </div>
+    <div id="da-bunk-restrictions-panel" style="margin-top:20px;"></div>
   `;
   
   // Local alias delegates to the module-scope unified saver so toggling
@@ -7722,6 +7728,196 @@ function renderResourceOverridesUI() {
   });
   
   renderOverrideDetailPane();
+  renderBunkRestrictionsPanel();
+}
+
+// =================================================================
+// BUNK-ONLY ACTIVITY RESTRICTIONS (Resources panel)
+// "This activity/sport/facility is only available for these bunk(s) today."
+// Restriction-only: listed bunks may receive it; all others are blocked.
+// Persists via the same dailyActivityBunkRestrictions resource-override key
+// (saveOverridesUnified → cloud + campResourceOverrides_<date>).
+// =================================================================
+
+// Draft state for the add/edit form (module scope so re-renders don't lose it).
+let _brDraftType = 'special';
+let _brEditId = null;
+
+function _brGenId() {
+  return 'r_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+// Targets for the currently-selected type, reusing the bulk-override enumerator.
+function _brTargetsForType(type) {
+  let groups = {};
+  try { groups = _boGetActivityGroups() || {}; } catch (_e) { groups = {}; }
+  if (type === 'special') return (groups.specials || []).map(o => o.name);
+  if (type === 'sport') return (groups.sports || []).map(o => o.name);
+  // facility: fields + named facilities (dedup by name)
+  const names = []
+    .concat((groups.fields || []).map(o => o.name))
+    .concat((groups.facilities || []).map(o => o.name));
+  return [...new Set(names.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function renderBunkRestrictionsPanel() {
+  const panel = document.getElementById('da-bunk-restrictions-panel');
+  if (!panel) return;
+
+  const list = currentOverrides.dailyActivityBunkRestrictions || [];
+  const targets = _brTargetsForType(_brDraftType);
+  const typeOpt = (v, label) => `<option value="${v}" ${_brDraftType === v ? 'selected' : ''}>${label}</option>`;
+
+  // Existing restriction entry being edited (to prefill chips/target)
+  const editing = _brEditId ? list.find(r => r.id === _brEditId) : null;
+  const editTarget = editing ? editing.target : '';
+
+  let html = `
+    <div class="da-section">
+      <h3 class="da-section-title">Bunk-Only Restrictions (today)</h3>
+      <p class="da-section-desc">Reserve an activity, sport, or facility so that <strong>only the selected bunk(s)</strong> may be scheduled for it today. Every other bunk is blocked from it. (It does not force the chosen bunk to get it.)</p>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
+        <select id="br-type" class="da-select da-select-sm">
+          ${typeOpt('special', 'Special')}${typeOpt('sport', 'Sport')}${typeOpt('facility', 'Facility/Field')}
+        </select>
+        <select id="br-target" class="da-select da-select-sm" style="min-width:180px;">
+          <option value="">— choose —</option>
+          ${targets.map(t => `<option value="${_escHtml(t)}" ${t === editTarget ? 'selected' : ''}>${_escHtml(t)}</option>`).join('')}
+        </select>
+      </div>
+
+      <div style="margin-top:10px;">
+        <div style="font-size:12px;color:#64748b;margin-bottom:6px;">Allowed bunk(s):</div>
+        <div id="br-bunk-chips"></div>
+      </div>
+
+      <div style="margin-top:10px;display:flex;gap:8px;">
+        <button id="br-add-btn" class="da-btn da-btn-primary da-btn-sm">${editing ? 'Save Restriction' : 'Add Restriction'}</button>
+        ${editing ? '<button id="br-cancel-btn" class="da-btn da-btn-sm">Cancel</button>' : ''}
+      </div>
+  `;
+
+  if (list.length > 0) {
+    html += `<div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;">
+      <span style="font-size:13px;color:#374151;"><strong>${list.length}</strong> restriction(s) today</span>
+      <button id="br-clear-all" class="da-btn da-btn-danger da-btn-sm">Clear All</button>
+    </div>`;
+    html += '<div id="br-list" style="margin-top:8px;"></div>';
+  }
+  html += '</div>';
+  panel.innerHTML = html;
+
+  // ── Bunk chip picker (division-ordered, reusing renderBunkOverridesUI's model) ──
+  const chipsEl = document.getElementById('br-bunk-chips');
+  const divisions = masterSettings.app1?.divisions || {};
+  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_rawAvail.slice())
+    : _rawAvail.slice();
+  const preselect = new Set(editing ? (editing.bunks || []).map(String) : []);
+  if (chipsEl) {
+    if (availableDivisions.length === 0) {
+      chipsEl.innerHTML = '<span style="color:#94a3b8;font-size:12px;">No divisions found.</span>';
+    } else {
+      availableDivisions.forEach(divName => {
+        const color = divisions[divName]?.color || '#64748b';
+        const bunks = divisions[divName]?.bunks || [];
+        if (!bunks.length) return;
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-bottom:8px;';
+        wrap.innerHTML = `<div style="font-size:11px;font-weight:600;color:${color};margin-bottom:4px;">${_escHtml(divName)}</div>`;
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+        bunks.forEach(b => {
+          const chip = createChip(b, color);
+          if (preselect.has(String(b))) {
+            chip.classList.add('selected');
+            chip.style.backgroundColor = color;
+            chip.style.color = 'white';
+          }
+          row.appendChild(chip);
+        });
+        wrap.appendChild(row);
+        chipsEl.appendChild(wrap);
+      });
+    }
+  }
+
+  // ── Handlers ──
+  const typeSel = document.getElementById('br-type');
+  if (typeSel) typeSel.onchange = () => { _brDraftType = typeSel.value; renderBunkRestrictionsPanel(); };
+
+  const addBtn = document.getElementById('br-add-btn');
+  if (addBtn) addBtn.onclick = () => {
+    const target = (document.getElementById('br-target')?.value || '').trim();
+    if (!target) { daShowAlert('Please choose an activity, sport, or facility.'); return; }
+    const selectedBunks = Array.from(panel.querySelectorAll('#br-bunk-chips .da-chip.selected')).map(c => c.dataset.value);
+    if (selectedBunks.length === 0) { daShowAlert('Please select at least one bunk that is allowed.'); return; }
+    let arr = currentOverrides.dailyActivityBunkRestrictions || [];
+    if (_brEditId) {
+      arr = arr.map(r => r.id === _brEditId ? { ...r, targetType: _brDraftType, target, bunks: selectedBunks } : r);
+      _brEditId = null;
+    } else {
+      arr = arr.concat([{ id: _brGenId(), targetType: _brDraftType, target, bunks: selectedBunks }]);
+    }
+    currentOverrides.dailyActivityBunkRestrictions = arr;
+    saveOverridesUnified();
+    renderBunkRestrictionsPanel();
+  };
+
+  const cancelBtn = document.getElementById('br-cancel-btn');
+  if (cancelBtn) cancelBtn.onclick = () => { _brEditId = null; renderBunkRestrictionsPanel(); };
+
+  const clearBtn = document.getElementById('br-clear-all');
+  if (clearBtn) clearBtn.onclick = () => {
+    daShowConfirm('Clear ALL bunk-only restrictions for today?', { danger: true, confirmText: 'Clear All' }).then(ok => {
+      if (!ok) return;
+      currentOverrides.dailyActivityBunkRestrictions = [];
+      _brEditId = null;
+      saveOverridesUnified();
+      renderBunkRestrictionsPanel();
+    });
+  };
+
+  // ── Existing restriction rows ──
+  const listEl = document.getElementById('br-list');
+  if (listEl) {
+    const typeLabel = { special: 'Special', sport: 'Sport', facility: 'Facility' };
+    listEl.innerHTML = '';
+    list.forEach(r => {
+      const row = document.createElement('div');
+      row.className = 'da-resource-item';
+      row.innerHTML = `
+        <span class="da-resource-name">
+          <span class="da-badge" style="background:#eef2ff;color:#3730a3;">${typeLabel[r.targetType] || r.targetType}</span>
+          <strong>${_escHtml(r.target)}</strong>
+          <span style="color:#64748b;">→ ${_escHtml((r.bunks || []).join(', '))}</span>
+        </span>
+        <span style="display:flex;gap:6px;">
+          <button class="da-btn da-btn-sm br-edit" data-id="${r.id}">Edit</button>
+          <button class="da-btn da-btn-danger da-btn-sm br-remove" data-id="${r.id}">✕</button>
+        </span>`;
+      listEl.appendChild(row);
+    });
+    listEl.querySelectorAll('.br-remove').forEach(btn => {
+      btn.onclick = () => {
+        currentOverrides.dailyActivityBunkRestrictions = (currentOverrides.dailyActivityBunkRestrictions || []).filter(r => r.id !== btn.dataset.id);
+        if (_brEditId === btn.dataset.id) _brEditId = null;
+        saveOverridesUnified();
+        renderBunkRestrictionsPanel();
+      };
+    });
+    listEl.querySelectorAll('.br-edit').forEach(btn => {
+      btn.onclick = () => {
+        const entry = (currentOverrides.dailyActivityBunkRestrictions || []).find(r => r.id === btn.dataset.id);
+        if (!entry) return;
+        _brEditId = entry.id;
+        _brDraftType = entry.targetType;
+        renderBunkRestrictionsPanel();
+      };
+    });
+  }
 }
 
 function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false, hasTimeRules = false) {
@@ -8503,6 +8699,7 @@ function loadCurrentOverrides() {
         if (parsed.dailyDisabledSportsByField !== undefined) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
         if (parsed.dailyFieldAvailability !== undefined) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
         if (parsed.disabledSpecialtyLeagues !== undefined) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+        if (parsed.dailyActivityBunkRestrictions !== undefined) dailyData.dailyActivityBunkRestrictions = parsed.dailyActivityBunkRestrictions;
         // Sync to dailyData (cloud) so other consumers also see the right state.
         try { window.saveCurrentDailyData?.("overrides", dailyOverrides); } catch (_e) {}
       }
@@ -8514,7 +8711,8 @@ function loadCurrentOverrides() {
           overrides: dailyOverrides,
           dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
           dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
-          disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
+          disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || [],
+          dailyActivityBunkRestrictions: dailyData.dailyActivityBunkRestrictions || []
         }));
       } catch (_e2) {}
     }
@@ -8533,6 +8731,7 @@ function loadCurrentOverrides() {
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
+  currentOverrides.dailyActivityBunkRestrictions = dailyData.dailyActivityBunkRestrictions || [];
   // Load bunk overrides from multiple sources (same pattern as trips)
   let bunkOv = dailyData.bunkActivityOverrides || [];
   if (bunkOv.length === 0) {

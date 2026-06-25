@@ -246,6 +246,7 @@
         'dailyDisabledSportsByField',
         'dailyFieldAvailability',
         'disabledSpecialtyLeagues',
+        'dailyActivityBunkRestrictions',
         'leagueRoundState',
         'leagueDayCounters',
     ];

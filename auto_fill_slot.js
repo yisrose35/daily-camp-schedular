@@ -318,6 +318,8 @@
             const _blockedOnField = _disabledSportsByField[f.name] || null;
             (f.activities || []).forEach(actName => {
                 if (_blockedOnField && _blockedOnField.indexOf(actName) !== -1) return;
+                // ★ Per-date bunk-only restriction (sport actName / facility f.name)
+                if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, actName, f.name, divName)) return;
                 // ★ Same-activity-when-sharing: skip a sport whose field is already held
                 //   by a DIFFERENT activity at this time (mismatch double-book).
                 if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps, actName)) return;
@@ -347,6 +349,13 @@
                 // ★ Grade restriction
                 if (isDivisionRestricted(s, divName)) return;
                 const loc = s.location || null;
+                // ★ Per-date bunk-only restriction (special s.name / facility host).
+                //   Resolve host like the shut-off gate below so facility targets match
+                //   even when a duplicated special's own .location is blank.
+                {
+                    const _rHost = loc || (window.getLocationForActivity && window.getLocationForActivity(s.name)) || null;
+                    if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, s.name, _rHost, divName)) return;
+                }
                 // ★ Special's host facility shut off in Facilities config. Resolve the host
                 //   robustly: this camp duplicates specials cap/lowercase and the dup's own
                 //   .location is often blank, so fall back to getLocationForActivity (the same

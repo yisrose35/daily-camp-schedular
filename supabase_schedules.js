@@ -210,6 +210,7 @@
         'dailyDisabledSportsByField',  // per-day field sport restrictions
         'dailyFieldAvailability',      // per-day field availability
         'disabledSpecialtyLeagues',    // disabled specialty leagues for day
+        'dailyActivityBunkRestrictions', // per-day "only available for these bunk(s)" restrictions
         'leagueRoundState',            // league round state
         'leagueDayCounters',           // league day counters
     ];
