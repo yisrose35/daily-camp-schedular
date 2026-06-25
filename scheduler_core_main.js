@@ -836,8 +836,20 @@
         //   claims don't consume capacity the rotation never uses.
         const _rotationOptions = (job) => {
             if (!job || job.blockB || job.multiGuarantee) return null;
+            // ★ Rotation options = number of connected tiles. A smart tile has two
+            //   "mains" (Main 1 / Main 2); Main 1's Fallback is normally just Main 1's
+            //   in-slot backup (surfaced when no special is placeable — see the
+            //   exhausted→fallback path below), NOT its own rotation slot. So a 2-tile
+            //   group rotates [Main 1, Main 2]; connecting a 3rd tile PROMOTES the
+            //   Fallback to its own option → [Main 1, Fallback, Main 2]. Ungrouped /
+            //   standalone tiles (no groupSize) keep the legacy [Main1, Main2, Fallback].
+            const _gs = job.groupSize;
+            let ordered;
+            if (_gs === 2) ordered = [job.main1, job.main2];
+            else if (_gs >= 3) ordered = [job.main1, job.fallbackActivity, job.main2];
+            else ordered = [job.main1, job.main2, job.fallbackActivity];
             const seen = new Set(); const opts = [];
-            [job.main1, job.main2, job.fallbackActivity].forEach(v => {
+            ordered.forEach(v => {
                 const t = String(v || '').trim(); const k = t.toLowerCase();
                 if (!t || seen.has(k)) return; seen.add(k); opts.push(t);
             });
