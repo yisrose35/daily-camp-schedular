@@ -4703,23 +4703,54 @@ function _liveContentSignature(nowMin) {
 }
 
 // —— Paginated live view renderer ————————————————————————————————————————————
-// Size each table's font to its column width: a few-bunk table (wide columns)
-// gets big text; a many-bunk table (narrow columns) stays small enough that
-// common words don't break. Cells are em-based, so setting the table font-size
-// scales every cell + the bunk/grade/time headers proportionally. Run BEFORE
-// pcLiveFillTables (font changes row heights; the fill then tops off the page).
+// Size each table's font to its ACTUAL content (fully dynamic — no magic
+// per-column factor). For every body cell we measure its real rendered width
+// (which already accounts for colspan) and the pixel width of its widest single
+// word; the table font is the largest size at which no word overflows its own
+// cell. So a few-bunk table (wide columns) gets big text and a many-bunk table
+// (narrow columns) gets just enough to keep words whole — adapting to whatever
+// the schedule actually contains and to the screen size. Cells are em-based, so
+// one table font-size scales every cell + the bunk/grade/time headers. Run
+// BEFORE pcLiveFillTables (font changes row heights; the fill then tops off).
 function pcLiveFitFont(nodes) {
     if (!nodes || !nodes.length) return;
-    nodes.forEach(function (n) {
-        var tbl = n.querySelector('.pc3-live-tbl');
-        if (!tbl) return;
-        var ths = Array.prototype.slice.call(tbl.querySelectorAll('thead tr:last-child th:not(.corner)'));
-        var minW = Infinity;
-        ths.forEach(function (th) { if (!th.classList.contains('row-head')) minW = Math.min(minW, th.offsetWidth); });
-        if (!isFinite(minW) || minW <= 0) return;
-        var fs = Math.max(14, Math.min(28, Math.round(minW * 0.155)));
-        tbl.style.fontSize = fs + 'px';
-    });
+    var meas = document.createElement('span');
+    meas.style.cssText = 'position:absolute;left:-9999px;top:-9999px;white-space:nowrap;font-weight:700;visibility:hidden;';
+    document.body.appendChild(meas);
+    var cache = {};
+    function wordPerPx(word, family) {
+        var k = family + '|' + word;
+        if (cache[k] != null) return cache[k];
+        meas.style.fontFamily = family; meas.style.fontSize = '100px'; meas.textContent = word;
+        var v = meas.offsetWidth / 100; // width per 1px of font size
+        cache[k] = v; return v;
+    }
+    try {
+        nodes.forEach(function (n) {
+            var tbl = n.querySelector('.pc3-live-tbl');
+            if (!tbl) return;
+            var fam = getComputedStyle(tbl).fontFamily;
+            var cells = tbl.querySelectorAll('tbody td');
+            var cap = 44; // px — the largest font that keeps every word in its cell
+            for (var i = 0; i < cells.length; i++) {
+                var cell = cells[i];
+                var usable = cell.clientWidth - 18; // minus cell padding + slack
+                if (usable < 8) continue;
+                var words = (cell.textContent || '').trim().split(/\s+/);
+                var widest = 0;
+                for (var w = 0; w < words.length; w++) {
+                    if (!words[w] || words[w] === '—') continue; // skip the "—" free marker
+                    var pp = wordPerPx(words[w], fam);
+                    if (pp > widest) widest = pp;
+                }
+                if (widest > 0) { var maxFs = usable / widest; if (maxFs < cap) cap = maxFs; }
+            }
+            var fs = Math.max(13, Math.min(40, Math.floor(cap)));
+            tbl.style.fontSize = fs + 'px';
+        });
+    } finally {
+        document.body.removeChild(meas);
+    }
 }
 
 // Fill leftover vertical space: when the page content is shorter than the
