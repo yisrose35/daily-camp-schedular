@@ -5979,6 +5979,15 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
    function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
         closeIntegratedEditModal();
 
+        // ★ League / specialty-league game → field-change modal (the normal
+        //   activity-edit flow can't reach the field: it lives inside the matchup
+        //   strings, not entry.field). Route to PostEditFieldChange instead.
+        const _leagueEntry = existingEntry || (window.scheduleAssignments?.[bunk]?.[slotIdx]);
+        if (window.PostEditFieldChange?.isLeagueEntry?.(_leagueEntry)) {
+            window.PostEditFieldChange.openFromEntry(bunk, slotIdx, _leagueEntry);
+            return;
+        }
+
         const divName = getDivisionForBunk(bunk);
         const bunksInDivision = getBunksForDivision(divName);
         // *** AUTO MODE: Per-bunk slots have bunk-specific time indices ***
