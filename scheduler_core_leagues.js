@@ -603,7 +603,7 @@
             if (window.GlobalFieldLocks && slots && slots.length > 0) {
                 const lockInfo = (_poolStartMin != null && _poolEndMin != null)
                     ? window.GlobalFieldLocks.isFieldLockedByTime(field.name, _poolStartMin, _poolEndMin, divisionNames[0])
-                    : window.GlobalFieldLocks.isFieldLocked(field.name, slots);
+                    : window.GlobalFieldLocks.isFieldLocked(field.name, slots, divisionNames[0]);
                 if (lockInfo) {
                     console.log(`[RegularLeagues] ⚠️ Field "${field.name}" time-locked by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
                     continue;

@@ -117,9 +117,15 @@
      * @param {string} allowedDivision - The division that CAN still use this field
      * @param {string} reason - Description (e.g., "Elective (2nd Grade)")
      */
-    GlobalFieldLocks.lockFieldForDivision = function(fieldName, slots, allowedDivision, reason) {
+    GlobalFieldLocks.lockFieldForDivision = function(fieldName, slots, allowedDivision, reason, timeRange) {
         if (!this._initialized) this.reset();
         if (!fieldName || !slots || slots.length === 0 || !allowedDivision) return false;
+        // ★ Optional explicit {startMin, endMin}: lets cross-grade time checks
+        //   (isFieldLockedByTime) match this lock WITHOUT deriving the window from
+        //   the allowed division's slot grid — so an elective is reliably off-limits
+        //   to other grades even when their grids don't line up by slot index.
+        const _trStart = timeRange && timeRange.startMin;
+        const _trEnd = timeRange && timeRange.endMin;
         
         const normalizedField = fieldName.toLowerCase().trim();
         
@@ -146,6 +152,8 @@
                 allowedDivision: allowedDivision,
                 reason: reason || `Elective for ${allowedDivision}`,
                 fieldName: fieldName,
+                startMin: (_trStart != null ? _trStart : undefined),
+                endMin: (_trEnd != null ? _trEnd : undefined),
                 timestamp: Date.now()
             };
             

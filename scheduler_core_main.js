@@ -3473,7 +3473,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         resolvedName,
                         slots,
                         electiveDivision,
-                        `Elective (${electiveDivision})`
+                        `Elective (${electiveDivision})`,
+                        { startMin, endMin }
                     );
                     console.log(`   → Locked "${resolvedName}" for ${electiveDivision} only`);
 
@@ -3484,7 +3485,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                     alias,
                                     slots,
                                     electiveDivision,
-                                    `Elective (${electiveDivision}) - Pool Alias`
+                                    `Elective (${electiveDivision}) - Pool Alias`,
+                                    { startMin, endMin }
                                 );
                             }
                         });
@@ -3661,6 +3663,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             window.GlobalFieldLocks.lockField(_pinLoc, slots, {
                                 lockedBy: 'pinned_event_location',
                                 division: divName,
+                                // ★ Stamp EXPLICIT times so cross-grade time checks
+                                //   (isFieldLockedByTime) never have to derive the window
+                                //   from this division's slot grid. Without explicit times,
+                                //   a league on ANOTHER grade's grid that can't resolve the
+                                //   pinned division's slot index silently skips the lock
+                                //   (global_field_locks ~L312) and poaches the facility.
+                                startMin: sMin, endMin: eMin,
                                 activity: `${eventName} (pinned @ ${_pinLoc})`
                             });
                             console.log(`[SKELETON] 🔒 Locked "${_pinLoc}" for pinned "${eventName}" in ${divName}`);
