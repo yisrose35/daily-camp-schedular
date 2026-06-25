@@ -1630,6 +1630,13 @@ function getStyles() {
     '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
     '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
     '.pc3-live-section{margin-bottom:22px;}' +
+    /* Vertical-fill: when a page is shorter than the screen, stretch its
+       sections (and their tables) to use all the height instead of leaving
+       the bottom empty. JS adds .pc3-live-fill + per-section flex-grow. */
+    '.pc3-live-fill{display:flex;flex-direction:column;height:100%;box-sizing:border-box;gap:18px;}' +
+    '.pc3-live-fill .pc3-live-section-wrap{display:flex;flex-direction:column;min-height:0;}' +
+    '.pc3-live-fill .pc3-live-section{flex:1;display:flex;flex-direction:column;min-height:0;margin-bottom:0;}' +
+    '.pc3-live-fill .pc3-live-tbl{flex:1 1 auto;height:100%;}' +
     '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
     '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
@@ -4930,7 +4937,16 @@ function renderLiveContent() {
 
         var inner = document.createElement('div');
         inner.className = 'pc3-live-page-inner';
-        inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
+        if (scale >= 1) {
+            // Page fits with room to spare → stretch sections vertically to fill
+            // the screen (proportional to their natural height) rather than
+            // leaving the bottom empty. Tables grow via the .pc3-live-fill CSS.
+            inner.classList.add('pc3-live-fill');
+            inner.style.cssText = 'width:100%;';
+            page.nodes.forEach(function (n) { n.style.flex = (n.offsetHeight || 1) + ' 1 0'; });
+        } else {
+            inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
+        }
 
         // In one-division-per-page mode, label the page with the division name
         // (only for real divisions — a lone grade with no parent already shows
