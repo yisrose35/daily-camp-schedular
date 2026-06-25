@@ -312,6 +312,10 @@ if (hasBunkSpecificBlocks) {
 
     const sortedPoints = [...timePoints].sort((a, b) => a - b);
     const divWideBlocks = withExpandedSplits.filter(b => !b._bunk);
+    // Per-bunk (auto) blocks legitimately overlap each other and drive _perBunkSlots
+    // below; a manual skeleton has NO _bunk tiles, so its overlaps are between real
+    // div-wide tiles (e.g. two overlapping pinned events).
+    const hasPerBunkBlocks = withExpandedSplits.some(b => b._bunk);
 
     slotsForDiv = [];
     for (let i = 0; i < sortedPoints.length - 1; i++) {
@@ -319,6 +323,13 @@ if (hasBunkSpecificBlocks) {
         const e = sortedPoints[i + 1];
         if (e - s < 5) continue;
         const meta = divWideBlocks.find(b => b.startMin <= s && b.endMin >= e);
+        // ★ PHANTOM-GAP GUARD: in a pure-manual skeleton, a gap with NO covering tile
+        // is time the user deliberately left blank. The non-overlap path (consolidateBlocks)
+        // never makes a slot for such gaps; only this boundary-union path did, stamping it
+        // event:'Activity' → STEP 3.5 then filled it with a phantom sport. Honor the manual
+        // principle (tile → fill, no tile → nothing): skip uncovered gaps here. Auto per-bunk
+        // mode (_perBunkSlots is authoritative) is unaffected.
+        if (!meta && !hasPerBunkBlocks) continue;
         slotsForDiv.push({
             slotIndex: slotsForDiv.length,
             startMin: s,
