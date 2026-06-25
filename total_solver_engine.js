@@ -744,7 +744,25 @@
         config.masterSpecials?.forEach(function(s) {
             if (!s.name || disabledSet.has(s.name)) return;
             var key = s.name + '|special';
-            if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: s.name, sport: null, activityName: s.name, type: 'special', _fieldNorm: normName(s.name), _actNorm: normName(s.name), _fullGrade: s.fullGrade === true }); }
+            if (seenKeys.has(key)) return;
+            seenKeys.add(key);
+            // ★ Register the special under its PHYSICAL host facility, not its own
+            //   name. When a special's location is a shared field (e.g. "Dodgeball"
+            //   on "Baseball Turf", which also hosts the sport "Baseball"), filing the
+            //   candidate's `field` as the special name left the field-time occupancy
+            //   index blind to the overlap — so a sport double-booked the very turf the
+            //   special was on. Using the real location makes the capacity / cross-
+            //   division gate (applyPickToSchedule) and the occupancy index see the
+            //   special and any sport on that field as sharing the SAME facility.
+            //   `activityName`/`_actNorm` stay the special's name (rotation, same-day-
+            //   repeat, tile-kind are all unchanged). Self-hosted specials whose
+            //   location == name (e.g. Gaga, Playground) resolve to the same value, so
+            //   their behaviour is identical to before.
+            var _loc = (s.location && String(s.location).trim())
+                ? String(s.location).trim()
+                : (window.getLocationForActivity ? (window.getLocationForActivity(s.name) || s.name) : s.name);
+            if (disabledSet.has(_loc)) return;
+            options.push({ field: _loc, sport: null, activityName: s.name, type: 'special', _fieldNorm: normName(_loc), _actNorm: normName(s.name), _fullGrade: s.fullGrade === true });
         });
         var loadedData = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
         var fieldsBySport = loadedData.fieldsBySport || {};
