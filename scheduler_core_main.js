@@ -1097,12 +1097,13 @@
             const bunkList = (divisions[divName] && divisions[divName].bunks) || [];
             const N = bunkList.length;
             if (N === 0) return;
-            // Rank bunks by fairness (least special usage first; non-priority after).
+            // Rank bunks by fairness (least special usage first); the configured
+            // per-division priority only BREAKS TIES, not overrides fairness.
             const divPriority = _globalPriority[divName] || [];
             const ordered = [...bunkList].map(b => {
                 const h = historicalCounts[b] || {};
-                return { b, score: (divPriority.includes(b) ? 0 : 100) + _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0) };
-            }).sort((x, y) => (x.score - y.score) || (Math.random() - 0.5)).map(r => r.b);
+                return { b, usage: _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0), prioRank: divPriority.includes(b) ? 0 : 1 };
+            }).sort((x, y) => (x.usage - y.usage) || (x.prioRank - y.prioRank) || (Math.random() - 0.5)).map(r => r.b);
 
             if (unit.kind === 'pair') {
                 const job = unit.job;
@@ -1186,8 +1187,10 @@
                 bunkList.forEach(bunk => {
                     const bunkHist = historicalCounts[bunk] || {};
                     const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
-                    const priorityBonus = divPriority.includes(bunk) ? 0 : 100;
-                    _bunkRankings.push({ bunk, divName, score: priorityBonus + totalUsage });
+                    // ★ Priority is a TIEBREAKER only — keep fairness (usage) pure and
+                    //   rank the configured per-division priority list separately below.
+                    const prioRank = divPriority.includes(bunk) ? 0 : 1;
+                    _bunkRankings.push({ bunk, divName, usage: totalUsage, prioRank });
                 });
             });
 
@@ -1205,12 +1208,16 @@
             _uniqueSpecials.forEach((cap, name) => _specialPool.set(name, cap));
 
             // Sort most deserving first, assign specific specials top-down.
-            // ★ Higher-priority grades first (no-op unless a special uses priority),
-            //   then fairness, then random jitter.
+            // ★ Fairness FIRST (fewest specials today, then fewest cumulatively);
+            //   the configured priority list + per-division priority only BREAK TIES,
+            //   so two equally-deserving bunks send the special to the higher-priority
+            //   one without starving lower-priority grades over the week.
             _bunkRankings.sort((a, b) =>
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
+                (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
-                (a.score - b.score) || (Math.random() - 0.5));
+                (a.prioRank - b.prioRank) ||
+                (Math.random() - 0.5));
             _bunkRankings.forEach(entry => {
                 const bk = `${entry.divName}|${entry.bunk}|${startMin}|${endMin}`;
                 const hist = historicalCounts[entry.bunk] || {};
@@ -1316,17 +1323,23 @@
                bunkList.forEach(bunk => {
                     const bunkHist = historicalCounts[bunk] || {};
                     const totalUsage = _allSpecialNames.reduce((s, n) => s + (bunkHist[n] || 0), 0);
-                    const priorityBonus = divPriority.includes(bunk) ? 0 : 100;
-                    allBunkEntries.push({ bunk, divName, score: priorityBonus + totalUsage });
+                    // ★ Priority is a TIEBREAKER only — fairness (usage) stays pure;
+                    //   the configured priority list + per-division priority break ties below.
+                    const prioRank = divPriority.includes(bunk) ? 0 : 1;
+                    allBunkEntries.push({ bunk, divName, usage: totalUsage, prioRank });
                 });
             });
 
             // B3: Sort most deserving first
-            // ★ Higher-priority grades first (no-op unless a special uses priority),
-            //   then fairness, then random jitter.
+            // ★ Fairness FIRST (fewest specials cumulatively); the configured priority
+            //   list + per-division priority only BREAK TIES — the special goes to the
+            //   higher-priority bunk when two are equally deserving, without starving
+            //   lower-priority grades over the week.
             allBunkEntries.sort((a, b) =>
+                (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
-                (a.score - b.score) || (Math.random() - 0.5));
+                (a.prioRank - b.prioRank) ||
+                (Math.random() - 0.5));
 
             console.log(`[PreAlloc]   Bunks: ${allBunkEntries.length}, Total slots: ${totalSpecialSlots}`);
 
