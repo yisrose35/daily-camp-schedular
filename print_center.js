@@ -1603,8 +1603,8 @@ function getStyles() {
     '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
     '.pc3-live-divbanner{font-size:26px;font-weight:800;color:#fbbf24;letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid rgba(251,191,36,.35);}' +
-    '.pc3-live-unified th.pc3-uni-grade{font-size:13px;font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
-    '.pc3-live-unified th.pc3-uni-bunk{font-size:11px;font-weight:600;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
+    '.pc3-live-unified th.pc3-uni-grade{font-size:clamp(15px,1.3vw,24px);font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
+    '.pc3-live-unified th.pc3-uni-bunk{font-size:clamp(14px,1.1vw,20px);font-weight:700;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
     '.pc3-live-unified th.row-head{white-space:nowrap;font-variant-numeric:tabular-nums;}' +
     '#pc3-cp-modal{position:fixed;inset:0;background:rgba(2,6,16,.72);z-index:100000;display:flex;align-items:center;justify-content:center;}' +
     '#pc3-cp-modal .pc3-cp-panel{background:#0b1326;border:1px solid #1e293b;border-radius:14px;width:min(560px,92vw);max-height:86vh;display:flex;flex-direction:column;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.5);}' +
@@ -1634,11 +1634,11 @@ function getStyles() {
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
     '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:10px 12px;text-align:center;white-space:normal;word-break:break-word;font-size:16px;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;white-space:normal;word-break:break-word;font-size:clamp(16px,1.5vw,28px);}' +
     '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
     '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:600;}' +
+    '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:700;}' +
     '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
     '.pc3-live-tbl .cell-free{color:#42536c !important;font-style:normal;background:#131f33 !important;font-weight:400;}' +
     '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee,0 0 18px rgba(34,211,238,.35);color:#ffffff !important;font-weight:800 !important;}' +
@@ -2018,7 +2018,11 @@ function readDesignValues() {
     for (var eid2 in intMap) { var e2 = el(eid2); if (e2) t[intMap[eid2]] = parseInt(e2.value) || t[intMap[eid2]]; }
     var chkMap = { 'pc3-time-bold': 'timeColBold', 'pc3-page-breaks': 'showPageBreaks', 'pc3-watermark-enabled': 'watermarkEnabled', 'pc3-footer-enabled': 'footerEnabled', 'pc3-show-header': 'showHeader', 'pc3-show-date': 'showDate', 'pc3-show-div-name': 'showDivisionName' };
     for (var eid3 in chkMap) { var e3 = el(eid3); if (e3) t[chkMap[eid3]] = !!e3.checked; }
-    t.tableOrientation = (el('pc3-transpose') && el('pc3-transpose').checked) ? 'time-top' : 'bunks-top';
+    // Only let the transpose control drive orientation when it actually exists
+    // in the DOM — otherwise keep the template/default (it would otherwise force
+    // 'bunks-top' every refresh and override the time-top default).
+    var _transposeEl = el('pc3-transpose');
+    if (_transposeEl) t.tableOrientation = _transposeEl.checked ? 'time-top' : 'bunks-top';
     t.layoutMode = (el('pc3-combined') && el('pc3-combined').checked) ? 'all-bunks' : 'per-division';
     t.hideLeagueMatchups = !!(el('pc3-hide-matchups') && el('pc3-hide-matchups').checked);
     if (el('pc3-watermark-opacity')) t.watermarkOpacity = parseFloat(el('pc3-watermark-opacity').value) || 0.08;
@@ -4350,7 +4354,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                             var sCls = (seg.isLeague ? 'cell-league' : 'cell-' + seg.type) + ' cell-merged';
                             if (sCur) sCls += ' cell-current';
                             if (sPast) sCls += ' cell-past';
-                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(seg.text) + '</td>';
+                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(seg.text) + '</td>';
                         }
                         ci += seg.colSpan;
                     } else {
@@ -4389,7 +4393,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
                     if (isCur) cls += ' cell-current';
                     if (isPast) cls += ' cell-past';
-                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
+                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
                     ci = nextCi;
                 } else {
                     var emptyLeague = pcLeagueInfoAt(divName, cStart);
@@ -4407,7 +4411,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                         }
                         var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
                         var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
-                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
                         ci = lnext;
                     } else {
                         html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">—</td>';
@@ -4624,7 +4628,7 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
             var isPast = nowMin >= cell.e;
             var cls = cell.cls + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '');
             html += '<td' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
-                ' class="' + cls + '" style="text-align:center;font-size:14px;line-height:1.25;padding:6px 5px;white-space:normal;word-break:break-word;">' + escHtml(cell.text) + '</td>';
+                ' class="' + cls + '" style="text-align:center;font-size:clamp(17px,1.7vw,34px);line-height:1.15;padding:6px 6px;white-space:normal;word-break:break-word;">' + escHtml(cell.text) + '</td>';
         }
         html += '</tr>';
     });
