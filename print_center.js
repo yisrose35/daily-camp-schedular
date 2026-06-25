@@ -808,16 +808,65 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
 var _pcSpecialLocCache = {};
 function pcConfiguredSpecialLocation(act) {
     if (!act) return '';
-    if (Object.prototype.hasOwnProperty.call(_pcSpecialLocCache, act)) return _pcSpecialLocCache[act];
+    var key = String(act).toLowerCase().trim();
+    if (Object.prototype.hasOwnProperty.call(_pcSpecialLocCache, key)) return _pcSpecialLocCache[key];
     var loc = '';
     try {
-        if (typeof window.getLocationForActivity === 'function') {
+        // ★ This camp duplicates specials cap + lowercase, and the lowercase dup
+        //   often has a BLANK location. getLocationForActivity is first-match-wins,
+        //   so it can return '' for the dup even though a sibling entry carries the
+        //   room. Scan all specials case-insensitively for the FIRST one that
+        //   actually has a location before falling back.
+        var specials = (typeof window.getGlobalSpecialActivities === 'function' && window.getGlobalSpecialActivities())
+            || (window.loadGlobalSettings && window.loadGlobalSettings().app1 && window.loadGlobalSettings().app1.specialActivities)
+            || [];
+        for (var i = 0; i < specials.length; i++) {
+            var s = specials[i];
+            if (s && s.name && String(s.name).toLowerCase().trim() === key && s.location) { loc = s.location; break; }
+        }
+        if (!loc && typeof window.getLocationForActivity === 'function') {
             var l = window.getLocationForActivity(act);
             if (l && typeof l === 'string') loc = l;
         }
     } catch (e) { /* ignore */ }
-    _pcSpecialLocCache[act] = loc;
+    _pcSpecialLocCache[key] = loc;
     return loc;
+}
+
+// ★ Canonical display name. The schedule can store a non-canonical variant of an
+//   activity/facility name — most commonly the all-lowercase duplicate this camp
+//   keeps alongside the proper-cased special (e.g. "arts & crafts" vs the
+//   configured "Arts & Crafts"). Map a stored name back to the configured casing
+//   by a case-insensitive lookup across specials, facilities and fields,
+//   preferring a variant that carries capitals over an all-lowercase duplicate.
+//   Returns the name unchanged when there is no config match (sports, custom
+//   tiles, etc.) — a complete no-op for correctly-cased entries.
+var _pcCanonNameMap = null;
+function pcCanonicalActivityName(name) {
+    if (!name) return name;
+    if (!_pcCanonNameMap) {
+        _pcCanonNameMap = {};
+        try {
+            var g = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+            var names = [];
+            var specials = (typeof window.getGlobalSpecialActivities === 'function' && window.getGlobalSpecialActivities())
+                || (g.app1 && g.app1.specialActivities) || [];
+            specials.forEach(function (s) { if (s && s.name) names.push(s.name); });
+            var facs = (typeof window.getFacilities === 'function' && window.getFacilities()) || [];
+            facs.forEach(function (f) { var nm = (typeof f === 'string') ? f : (f && f.name); if (nm) names.push(nm); });
+            var fields = (g.app1 && g.app1.fields) || [];
+            fields.forEach(function (f) { var nm = (typeof f === 'string') ? f : (f && f.name); if (nm) names.push(nm); });
+            names.forEach(function (nm) {
+                var k = String(nm).toLowerCase().trim();
+                if (!k) return;
+                var cur = _pcCanonNameMap[k];
+                // First writer wins, but a capitalized variant always beats an
+                // all-lowercase duplicate of the same name.
+                if (!cur || (cur === cur.toLowerCase() && nm !== nm.toLowerCase())) _pcCanonNameMap[k] = nm;
+            });
+        } catch (e) { /* ignore */ }
+    }
+    return _pcCanonNameMap[String(name).toLowerCase().trim()] || name;
 }
 
 function pcResolveLocation(entry) {
@@ -870,7 +919,7 @@ function formatEntry(entry) {
         return ['Swim'].concat(seFiltered).join(', ');
     }
     var parts = [];
-    var act = entry._activity || entry.sport || '';
+    var act = pcCanonicalActivityName(entry._activity || entry.sport || '');
     var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
     // Always show "Activity \u2013 Location" (activity name first), for sports AND
@@ -2556,7 +2605,7 @@ function renderAutoDivisionTable(divName, bunks) {
             var dur = a.endMin - a.startMin;
             if (dur < 1) return;
 
-            var actText = a.entry._activity || a.entry.sport || '';
+            var actText = pcCanonicalActivityName(a.entry._activity || a.entry.sport || '');
             var locText = pcResolveLocation(a.entry);
             if (actText && locText && actText.toLowerCase() === locText.toLowerCase()) locText = '';
             if (!actText && locText) { actText = locText; locText = ''; }
@@ -3094,7 +3143,7 @@ function renderBunkSheet(bunk) {
         var type = getEntryType(entry);
         var act = '', loc = '';
         if (entry && !entry.continuation) {
-            act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
+            act = entry._partLabel || pcCanonicalActivityName(entry._activity || entry.sport || ''); // ★ Day 19 multiPart label
             loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
             if (!act && loc) { act = loc; loc = ''; }
         }
@@ -3299,12 +3348,22 @@ function scanLocationAcrossBunks(loc) {
  * Handles string fields, object fields, compound "Activity – Location" fields, and _activity.
  */
 function matchesLocation(entry, loc) {
-    if (!entry) return false;
+    if (!entry || !loc) return false;
+    var lc = String(loc).toLowerCase().trim();
     var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
-    if (fn === loc) return true;
-    if (entry._activity && entry._activity === loc) return true;
+    var fnLc = String(fn).toLowerCase().trim();
+    if (fnLc && fnLc === lc) return true;
+    var actLc = String(entry._activity || '').toLowerCase().trim();
+    if (actLc && actLc === lc) return true;
+    // ★ Name-only specials store field = the special's NAME, not its room. Resolve
+    //   the configured room so the special shows up under its facility (e.g. a
+    //   lowercase-dup "arts & crafts" → "Arts & Crafts Shack"). Also makes the
+    //   whole match case-insensitive, so a facility/activity stored in a different
+    //   casing than the selected location still lands in the report.
+    var resolved = (typeof pcResolveLocation === 'function') ? String(pcResolveLocation(entry) || '').toLowerCase().trim() : '';
+    if (resolved && resolved === lc) return true;
     // Compound check: field contains the location name (e.g. "Basketball – Court 1" matches "Court 1")
-    if (fn && fn.indexOf(loc) >= 0) return true;
+    if (fnLc && fnLc.indexOf(lc) >= 0) return true;
     return false;
 }
 
