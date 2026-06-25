@@ -4071,6 +4071,8 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
+                '<button class="pc3-live-close" id="pc3-live-print-btn" title="Print the live view — one division per page" onclick="window._pc3LivePrint&&window._pc3LivePrint()">Print</button>' +
+                '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the live view as JPEG image(s)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download JPEG</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -5127,6 +5129,71 @@ function updateLivePageIndicator() {
         ind.style.display = 'none';
     }
 }
+
+// ── Live view → Print / Download as JPEG ─────────────────────────────────
+// Rasterize the live pages (exactly what's on screen — one division per page)
+// and either print them or save them as JPEGs. html2canvas is loaded on demand.
+function _pc3LoadH2C() {
+    return new Promise(function (resolve) {
+        if (window.html2canvas) return resolve(window.html2canvas);
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+        s.onload = function () { resolve(window.html2canvas || null); };
+        s.onerror = function () { resolve(null); };
+        document.head.appendChild(s);
+    });
+}
+// Capture every live page to a canvas, in order. cb(canvasesOrNull).
+function _pc3CaptureLivePages(cb) {
+    var body = el('pc3-live-body');
+    if (!body) { cb(null); return; }
+    var pages = Array.prototype.slice.call(body.querySelectorAll('[id^="lp-"]'));
+    if (!pages.length) { cb(null); return; }
+    if (window.showToast) window.showToast('Rendering image…', 'info');
+    _pc3LoadH2C().then(function (h2c) {
+        if (!h2c) { if (window.showToast) window.showToast('Could not load the image library (offline?)', 'error'); cb(null); return; }
+        if (_livePageTimer) { clearInterval(_livePageTimer); _livePageTimer = null; } // pause rotation
+        var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
+        var canvases = [], i = 0;
+        function finish() {
+            saved.forEach(function (s) { s.p.style.opacity = s.o; s.p.style.pointerEvents = s.pe; });
+            startLivePageTimer();
+            cb(canvases.length ? canvases : null);
+        }
+        function next() {
+            if (i >= pages.length) return finish();
+            pages.forEach(function (p, idx) { p.style.opacity = idx === i ? '1' : '0'; p.style.pointerEvents = 'none'; });
+            requestAnimationFrame(function () { requestAnimationFrame(function () {
+                h2c(pages[i], { backgroundColor: '#0b1220', scale: 2, logging: false, useCORS: true })
+                    .then(function (canvas) { canvases.push(canvas); i++; next(); })
+                    .catch(function () { i++; next(); });
+            }); });
+        }
+        next();
+    });
+}
+window._pc3LiveDownloadJpeg = function () {
+    _pc3CaptureLivePages(function (canvases) {
+        if (!canvases) return;
+        var dateStr = String(window.currentScheduleDate || 'schedule').replace(/[^0-9A-Za-z\-]/g, '');
+        canvases.forEach(function (canvas, idx) {
+            var a = document.createElement('a');
+            a.href = canvas.toDataURL('image/jpeg', 0.95);
+            a.download = 'schedule-' + dateStr + (canvases.length > 1 ? '-' + (idx + 1) : '') + '.jpg';
+            document.body.appendChild(a); a.click(); a.remove();
+        });
+        if (window.showToast) window.showToast('Saved ' + canvases.length + ' image' + (canvases.length > 1 ? 's' : ''), 'success');
+    });
+};
+window._pc3LivePrint = function () {
+    _pc3CaptureLivePages(function (canvases) {
+        if (!canvases) return;
+        var imgs = canvases.map(function (canvas) {
+            return '<img src="' + canvas.toDataURL('image/jpeg', 0.95) + '" style="display:block;width:100%;height:auto;page-break-after:always;">';
+        }).join('');
+        runPrint('<div style="background:#0b1220;">' + imgs + '</div>', _currentTemplate);
+    });
+};
 
 function livePageNav(dir) {
     if (_numLivePages < 1) return;
