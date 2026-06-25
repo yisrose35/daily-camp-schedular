@@ -1630,18 +1630,11 @@ function getStyles() {
     '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
     '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
     '.pc3-live-section{margin-bottom:22px;}' +
-    /* Vertical-fill: when a page is shorter than the screen, stretch its
-       sections (and their tables) to use all the height instead of leaving
-       the bottom empty. JS adds .pc3-live-fill + per-section flex-grow. */
-    '.pc3-live-fill{display:flex;flex-direction:column;height:100%;box-sizing:border-box;gap:18px;}' +
-    '.pc3-live-fill .pc3-live-section-wrap{display:flex;flex-direction:column;min-height:0;}' +
-    '.pc3-live-fill .pc3-live-section{flex:1;display:flex;flex-direction:column;min-height:0;margin-bottom:0;}' +
-    '.pc3-live-fill .pc3-live-tbl{flex:1 1 auto;height:100%;}' +
     '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
     '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;white-space:normal;word-break:break-word;font-size:clamp(16px,1.5vw,28px);}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;font-size:clamp(16px,1.5vw,28px);}' +
     '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
     '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
@@ -4848,6 +4841,24 @@ function renderLiveContent() {
         var wcScale = wcTotalH > availH ? availH / wcTotalH : 1;
         wcScale = Math.min(1, wcScale); // only ever shrink, never enlarge
 
+        // Fits with room to spare → grow each table to fill the empty vertical
+        // space (proportional to natural height) so the whole camp uses the
+        // full screen instead of clustering at the top.
+        if (wcScale >= 1 && wraps.length) {
+            var wcAvailFill = availH - 36 - 20 * wraps.length;
+            var wcTotalNat = 0;
+            wraps.forEach(function (n) { wcTotalNat += n.offsetHeight || 1; });
+            if (wcTotalNat > 0 && wcAvailFill > wcTotalNat) {
+                wraps.forEach(function (n) {
+                    var nat = n.offsetHeight || 1;
+                    var share = Math.floor(wcAvailFill * nat / wcTotalNat);
+                    var head = n.querySelector('.pc3-live-divhead');
+                    var tbl = n.querySelector('.pc3-live-tbl');
+                    if (tbl) tbl.style.height = Math.max(tbl.offsetHeight, share - (head ? head.offsetHeight + 10 : 0)) + 'px';
+                });
+            }
+        }
+
         _numLivePages = 1;
         _livePageIndex = 0;
 
@@ -4937,15 +4948,28 @@ function renderLiveContent() {
 
         var inner = document.createElement('div');
         inner.className = 'pc3-live-page-inner';
-        if (scale >= 1) {
-            // Page fits with room to spare → stretch sections vertically to fill
-            // the screen (proportional to their natural height) rather than
-            // leaving the bottom empty. Tables grow via the .pc3-live-fill CSS.
-            inner.classList.add('pc3-live-fill');
-            inner.style.cssText = 'width:100%;';
-            page.nodes.forEach(function (n) { n.style.flex = (n.offsetHeight || 1) + ' 1 0'; });
-        } else {
-            inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
+        inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
+        if (scale >= 1 && page.nodes.length) {
+            // Page fits with room to spare → grow each section's table to fill the
+            // empty vertical space, proportional to its natural height. Setting an
+            // explicit pixel height on a <table> makes the browser stretch its rows
+            // (flex/height:100% on a table does not reliably do this).
+            var padV = 36, gapV = 22; // page-inner padding + .pc3-live-section margin
+            var availFill = availH - padV - gapV * (page.nodes.length - 1);
+            var totalNat = 0;
+            page.nodes.forEach(function (n) { totalNat += n.offsetHeight || 1; });
+            if (totalNat > 0 && availFill > totalNat) {
+                page.nodes.forEach(function (n) {
+                    var nat = n.offsetHeight || 1;
+                    var share = Math.floor(availFill * nat / totalNat);
+                    var head = n.querySelector('.pc3-live-divhead');
+                    var tbl = n.querySelector('.pc3-live-tbl');
+                    if (tbl) {
+                        var headH = head ? head.offsetHeight + 10 : 0;
+                        tbl.style.height = Math.max(tbl.offsetHeight, share - headH) + 'px';
+                    }
+                });
+            }
         }
 
         // In one-division-per-page mode, label the page with the division name
