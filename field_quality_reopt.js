@@ -392,6 +392,85 @@
             }
         } catch (_eC) { try { console.warn('[FQ-REOPT C] ' + (_eC && _eC.message)); } catch (_e3) {} }
 
+        // ── PHASE D — whole-field group swap. Phases A-C move/swap atomic units
+        //   keyed by an exact (or overlapping) window, so they CANNOT fix the
+        //   common cross-division case where a senior block (e.g. one 75-min
+        //   period 740-815) spans a boundary at which a better field hands off
+        //   between two SEQUENTIAL junior occupants (e.g. 740-805 then 805-870):
+        //   every candidate move collides with the second junior, so nothing
+        //   moves. This phase exchanges the ENTIRE block set of two same-group
+        //   fields at once (all of field X ↔ all of field Y) when the WORSE-
+        //   ranked field currently holds a more-senior grade than the better-
+        //   ranked one. Moving every block wholesale preserves each field's
+        //   internal time structure, same-grade shares and locked pairs intact,
+        //   so we only re-check host + access/time per block and that each side's
+        //   peak concurrency still fits the destination field's capacity.
+        var movedD = 0;
+        try {
+            var blocksByField = {};
+            Object.keys(sa).forEach(function (bb) {
+                (sa[bb] || []).forEach(function (s) {
+                    if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                    if (!fgMap[s.field]) return;
+                    var st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                    if (st == null || en == null) return;
+                    (blocksByField[s.field] = blocksByField[s.field] || []).push({ s: s, bunk: String(bb), st: st, en: en, act: s._activity, grade: bunkGrade[String(bb)] });
+                });
+            });
+            var maxConcurrent = function (blocks) {
+                var pts = [];
+                blocks.forEach(function (b) { pts.push([b.st, 1]); pts.push([b.en, -1]); });
+                pts.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; }); // end (-1) before start (+1) at a shared boundary
+                var cur = 0, mx = 0;
+                pts.forEach(function (p) { cur += p[1]; if (cur > mx) mx = cur; });
+                return mx;
+            };
+            var maxSenOf = function (field) {
+                var bl = blocksByField[field] || []; var m = -Infinity;
+                bl.forEach(function (x) { var v = sen(x.grade); if (v > m) m = v; });
+                return m;
+            };
+            var canSwap = function (fa, fb) {
+                var ba = blocksByField[fa] || [], bb2 = blocksByField[fb] || [];
+                for (var i = 0; i < ba.length; i++) {
+                    if ((hostsBySport[ba[i].act] || []).indexOf(fb) < 0) return false;
+                    if (validate(fb, ba[i].act, ba[i].grade, ba[i].bunk, ba[i].st, ba[i].en)) return false;
+                }
+                for (var j = 0; j < bb2.length; j++) {
+                    if ((hostsBySport[bb2[j].act] || []).indexOf(fa) < 0) return false;
+                    if (validate(fa, bb2[j].act, bb2[j].grade, bb2[j].bunk, bb2[j].st, bb2[j].en)) return false;
+                }
+                if (maxConcurrent(ba) > (capMap[fb] || 2)) return false;   // peak on fa must fit fb
+                if (maxConcurrent(bb2) > (capMap[fa] || 2)) return false;  // peak on fb must fit fa
+                return true;
+            };
+            var doSwap = function (fa, fb) {
+                var ba = blocksByField[fa] || [], bb2 = blocksByField[fb] || [];
+                ba.forEach(function (x) { x.s.field = fb; x.s._fqMoved = true; });
+                bb2.forEach(function (x) { x.s.field = fa; x.s._fqMoved = true; });
+                blocksByField[fa] = bb2; blocksByField[fb] = ba;
+            };
+            Object.keys(fgGroups).forEach(function (gn) {
+                var fieldsAsc = fgGroups[gn].map(function (m) { return m.name; })
+                    .sort(function (a, b) { return fgMap[a].rank - fgMap[b].rank; }); // best (rank 1) first
+                var passes = 0, improved = true;
+                while (improved && passes++ < fieldsAsc.length + 2) {
+                    improved = false;
+                    for (var i = 0; i < fieldsAsc.length; i++) {
+                        for (var j = i + 1; j < fieldsAsc.length; j++) {
+                            var fi = fieldsAsc[i], fj = fieldsAsc[j];      // fi strictly better-ranked than fj
+                            var bi = blocksByField[fi] || [], bj = blocksByField[fj] || [];
+                            if (!bi.length || !bj.length) continue;        // only fix genuine inversions
+                            if (maxSenOf(fj) <= maxSenOf(fi)) continue;    // worse field must hold a MORE senior grade
+                            if (!canSwap(fi, fj)) continue;
+                            doSwap(fi, fj);
+                            movedD++; improved = true;
+                        }
+                    }
+                }
+            });
+        } catch (_eD) { try { console.warn('[FQ-REOPT D] ' + (_eD && _eD.message)); } catch (_e4) {} }
+
         // Continuation sync: a multi-period block stores its field on EVERY slot
         // (lead + continuations). The phases above move only the lead slot, so
         // propagate any moved lead's new field to its trailing continuation slots
@@ -410,9 +489,9 @@
             }
         });
 
-        try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved + ', overlapSwaps=' + movedC); } catch (_eL) {}
-        if (moved > 0 || movedC > 0) log('  🏟️ Field-quality re-opt: ' + moved + ' move(s), ' + movedC + ' staggered-overlap seniority swap(s).');
-        return { groups: Object.keys(fgGroups).length, moved: moved, overlapSwaps: movedC };
+        try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved + ', overlapSwaps=' + movedC + ', fieldSwaps=' + movedD); } catch (_eL) {}
+        if (moved > 0 || movedC > 0 || movedD > 0) log('  🏟️ Field-quality re-opt: ' + moved + ' move(s), ' + movedC + ' staggered-overlap swap(s), ' + movedD + ' whole-field swap(s).');
+        return { groups: Object.keys(fgGroups).length, moved: moved, overlapSwaps: movedC, fieldSwaps: movedD };
     }
 
     window.FieldQualityReopt = { run: run };
