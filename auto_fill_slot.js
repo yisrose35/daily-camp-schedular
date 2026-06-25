@@ -277,10 +277,23 @@
         const _disabledSportsByField = _curDaily.dailyDisabledSportsByField || {};
         const _disabledSpecialsLc = new Set((((_curDaily.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
 
+        // ★ CONFIG-LEVEL facility shut-off (Facilities tab → AVAILABLE/UNAVAILABLE switch =
+        //   available:false on the room's backing field entry). The PERMANENT analog of the
+        //   per-date Resource disables above. The solver/STEP 7.6 honor it (canBlockFit +
+        //   _sportFields76 filter on available!==false), but THIS fill path (STEP 7.5 silent
+        //   fallback + the manual ⚡ Auto Fill button) iterates raw config and never checked
+        //   it — re-filling sports onto a shut-off field and specials hosted in a shut-off
+        //   room. Gate the sport branch by f.available and the special branch by its host.
+        const _unavailFieldsLc = new Set((gs.app1?.fields || [])
+            .filter(f => f && f.name && f.available === false)
+            .map(f => String(f.name).toLowerCase().trim()));
+
         // Sports / field activities (skipped entirely for a Special-only slot)
         if (_kind !== 'special') (gs.app1?.fields || []).forEach(f => {
             if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
             if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
+            // ★ Field shut off in Facilities config (AVAILABLE/UNAVAILABLE switch)
+            if (f.available === false) return;
             // ★ Field disabled today in Resources
             if (_disabledLc.has(String(f.name).toLowerCase().trim())) return;
             // ★ Grade restriction — skip if this field excludes our division
@@ -321,6 +334,14 @@
                 // ★ Grade restriction
                 if (isDivisionRestricted(s, divName)) return;
                 const loc = s.location || null;
+                // ★ Special's host facility shut off in Facilities config. Resolve the host
+                //   robustly: this camp duplicates specials cap/lowercase and the dup's own
+                //   .location is often blank, so fall back to getLocationForActivity (the same
+                //   case-insensitive resolver the lock ledger uses) before checking.
+                {
+                    const _host = loc || (window.getLocationForActivity && window.getLocationForActivity(s.name)) || '';
+                    if (_host && _unavailFieldsLc.has(String(_host).toLowerCase().trim())) return;
+                }
                 // ★ Special's location/facility disabled today in Resources
                 if (loc && _disabledLc.has(String(loc).toLowerCase().trim())) return;
                 // ★ Facility-existence gate
