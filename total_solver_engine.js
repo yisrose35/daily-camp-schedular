@@ -1227,7 +1227,14 @@
             }
         }
         // Unique resources
-        if (fieldName && fieldName !== 'Free') { for (var [urAct, urCount] of _uniqueFieldMap) { if (urCount === 1 && normName(urAct) !== actNorm) { var thisFieldHostsUnique = allCandidateOptions.some(function(uc) { return uc.field === fieldName && uc.activityName === urAct; }); if (thisFieldHostsUnique) { var ourFieldCount = _uniqueFieldMap.get(act) || 0; if (ourFieldCount > 1) penalty += 5000; } } } }
+        if (fieldName && fieldName !== 'Free') { for (var [urAct, urCount] of _uniqueFieldMap) { if (urCount === 1 && normName(urAct) !== actNorm) { var thisFieldHostsUnique = allCandidateOptions.some(function(uc) { return uc.field === fieldName && uc.activityName === urAct; }); if (thisFieldHostsUnique) { var ourFieldCount = _uniqueFieldMap.get(act) || 0; if (ourFieldCount > 1) penalty += 20000; } } } }
+        // ★ Reserve a scarce single-home field for its sole occupant: the penalty above
+        //   must beat the field-group QUALITY bonus, or a flexible activity (>1 field) still
+        //   grabs a top-ranked dual-use field (e.g. Baseball the SPORT on "Baseball Turf",
+        //   the only home of the Dodgeball/"3 and 1" SPECIALS) and starves the special to
+        //   Free. Max quality bonus ≈ membersInGroup×1500 (~16.5k), so 20k guarantees the
+        //   flexible activity yields the unique home; still < the 100k Free penalty, so it
+        //   remains a legal last resort when the activity genuinely has no other field.
         // Zone/travel
         if (fieldName && fieldName !== 'Free' && bunk && block.startTime !== undefined) {
             var myZone = window.getZoneForField?.(fieldName);
