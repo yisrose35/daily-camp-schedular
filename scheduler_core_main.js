@@ -1346,6 +1346,58 @@
 
         const sharedCapacityTracker = {}; // kept for legacy compat
 
+        // ★ FAIR-SHARE SPECIAL ROOMS ACROSS OVERLAPPING ROTATION TILES (per-facility).
+        //   Two ROTATION smart tiles whose TIME windows overlap (e.g. div 7 @930-1010 and
+        //   div 8/9 @970-1020) compete for the same shared special ROOMS. Processed in job
+        //   order, the earlier division greedily claims ALL rooms, starving the later one.
+        //   So give each tile a per-window quota = the SUM, over each special ROOM it can
+        //   access, of that room's capacity split (by special-demand) among the overlapping
+        //   tiles that can ALSO access it. Key properties:
+        //     • A room only ONE tile can access → that tile gets its full capacity (no cap).
+        //       → uncontended windows are a STRICT NO-OP (quota = full accessible pool).
+        //     • Heavily contended rooms → each competing tile gets a fair slice, so the
+        //       earlier division can't monopolise; rooms are left for the later one.
+        //   "Demand" ≈ bunks / option-count (a [Special,Swim] tile sends ~half its bunks to a
+        //   special each block; [Special,Sport,Swim] ~a third) — avoids over-counting bunks
+        //   that won't seek a special in this window. Quota is an UPPER bound; real claiming
+        //   still respects room availability, so an unused quota never wastes a room.
+        const _rotSpecialQuota = {};   // `${div}|${start}|${end}` -> max specials claimable
+        const _rotSpecialClaimed = {}; // same key -> running count
+        (function _buildRotationSpecialQuotas() {
+            const rj = [];
+            filteredJobs.forEach(job => {
+                const opts = _rotationOptions(job);
+                if (!opts || !job.blockA) return;
+                if (!opts.some(o => normalizeCategoryLabel(o) === 'special'
+                    || knownSpecialNames.has(String(o).toLowerCase().trim()))) return;
+                const b = job.blockA;
+                const bunks = (divisions[job.division]?.bunks || []).length || 1;
+                const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    b.startMin, b.endMin, job.division, activityProperties, dailyFieldAvailability) || [];
+                const facs = new Map(); // facilityKey -> capacity (max seen)
+                avail.forEach(s => {
+                    const k = _claimKey(s.name);
+                    const c = (s.capacity && s.capacity > 0) ? s.capacity : 1;
+                    facs.set(k, Math.max(facs.get(k) || 0, c));
+                });
+                if (!facs.size) return;
+                rj.push({ div: job.division, s: b.startMin, e: b.endMin, demand: bunks / Math.max(1, opts.length), facs, key: `${job.division}|${b.startMin}|${b.endMin}` });
+            });
+            rj.forEach(j => {
+                let q = 0, contended = false;
+                j.facs.forEach((cap, f) => {
+                    let denom = 0, sharers = 0;
+                    rj.forEach(k => { if (k.s < j.e && k.e > j.s && k.facs.has(f)) { denom += k.demand; sharers++; } });
+                    if (denom > 0) q += cap * j.demand / denom;
+                    if (sharers > 1) contended = true;
+                });
+                // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
+                // byte-for-byte no-op for the common case.
+                _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
+                if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
+            });
+        })();
+
         filteredJobs.forEach((job, jobIdx) => {
 
             console.log(`\n[SmartTile] Job ${jobIdx + 1}: ${job.division}`);
@@ -1431,10 +1483,19 @@
                                 const _h = historicalCounts[bunk] || {};
                                 const _had = _bunkSpecialsToday[bunk];
                                 _avail.sort((a, b) => (_h[a.name] || 0) - (_h[b.name] || 0));
-                                for (const sp of _avail) {
+                                // ★ Fair-share cap: stop claiming specials once this division has taken
+                                //   its fair share of the rooms shared with an OVERLAPPING rotation tile,
+                                //   leaving the rest for the later division. Infinity quota (uncontended)
+                                //   never trips this → no behavior change.
+                                const _wQ = `${divName}|${_rStart}|${_rEnd}`;
+                                const _atQuota = (_rotSpecialQuota[_wQ] !== undefined)
+                                    && ((_rotSpecialClaimed[_wQ] || 0) >= _rotSpecialQuota[_wQ]);
+                                if (_atQuota) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" at fair-share cap (${_rotSpecialQuota[_wQ]}/window, shared rooms) → next option`);
+                                for (const sp of (_atQuota ? [] : _avail)) {
                                     if (_had && _had.has(sp.name.toLowerCase())) continue; // already had this special today
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
+                                    _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
                                     (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(sp.name.toLowerCase());
                                     console.log(`[SmartTile] ${bunk} -> ROTATION special: ${sp.name}`);
                                     window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
