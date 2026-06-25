@@ -228,22 +228,22 @@ var USER_PACKS = [
     {
         id: 'full-master',
         name: 'Full Master',
-        tagline: 'Every division and bunk — the complete schedule.',
+        tagline: 'Every division and bunk on one master grid.',
         icon: 'grid',
         scope: 'all',
         preset: 'classic',
         view: 'division',
-        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'all-bunks', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false, showPageBreaks: false }
     },
     {
         id: 'division-head',
         name: 'Division Head',
-        tagline: 'One division — all its bunks on a clean stack.',
+        tagline: 'One labeled packet per division — page-broken to hand out.',
         icon: 'user',
-        scope: 'division',
+        scope: 'all',
         preset: 'classic',
         view: 'division',
-        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false, showPageBreaks: true }
     },
     {
         id: 'head-counselor',
