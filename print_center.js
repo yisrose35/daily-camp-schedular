@@ -2673,6 +2673,22 @@ function renderSharedTimelineTable(grades) {
             grid[gr][gc] = { text: info.txt, cls: info.cls, key: info.txt + '|' + info.cls + '|' + s + '|' + e };
         }
     }
+    // Drop time rows where EVERY bunk is empty (a gap between periods where
+    // nothing is happening) — no point wasting a full row on blank space.
+    (function () {
+        var keep = [];
+        for (var ri = 0; ri < nR; ri++) {
+            var allFree = true;
+            for (var ci = 0; ci < nC; ci++) { if (grid[ri][ci].cls !== 'cell-free') { allFree = false; break; } }
+            if (!allFree) keep.push(ri);
+        }
+        if (keep.length !== nR) {
+            rows = keep.map(function (i) { return rows[i]; });
+            grid = keep.map(function (i) { return grid[i]; });
+            nR = rows.length;
+        }
+    })();
+    if (!nR) return '';
     var done = {};
     var kk = function (a, b) { return a + ':' + b; };
 
@@ -4603,6 +4619,22 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
             grid[gr][gc] = { text: ginfo.txt, cls: ginfo.cls, s: gs, e: ge, key: ginfo.txt + '|' + ginfo.cls + '|' + gs + '|' + ge };
         }
     }
+    // Drop time rows where EVERY bunk is empty (a between-period gap) so blank
+    // space doesn't waste a full row.
+    (function () {
+        var keep = [];
+        for (var ri = 0; ri < nR; ri++) {
+            var allFree = true;
+            for (var ci = 0; ci < nC; ci++) { if (grid[ri][ci].cls !== 'cell-free') { allFree = false; break; } }
+            if (!allFree) keep.push(ri);
+        }
+        if (keep.length !== nR) {
+            rows = keep.map(function (i) { return rows[i]; });
+            grid = keep.map(function (i) { return grid[i]; });
+            nR = rows.length;
+        }
+    })();
+    if (!nR) return '';
     var done = {};
     var kk = function (a, b) { return a + ':' + b; };
     rows.forEach(function (r, ri) {
