@@ -4579,8 +4579,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (!f || !f.name) return;
                 _rcfg[String(f.name).toLowerCase().trim()] = _rnorm(f.sharableWith || {});
             });
+            // Map each special NAME → its physical FACILITY (location). This camp duplicates
+            // specials cap/lowercase where the dup's own .location is blank, so resolve
+            // case-insensitively and let the FIRST entry that carries a location win (the
+            // getLocationForActivity lesson). Used below to bucket room-sharing specials
+            // (Arts & Crafts + Leather → "Arts & Crafts Shack") under ONE facility key so the
+            // sweep can see they collide — they are tracked by NAME everywhere else.
+            var _specLocByName = {};
             ((_rgs.app1 && _rgs.app1.specialActivities) || _rgs.specialActivities || []).forEach(function (s) {
                 if (!s || !s.name) return;
+                var _snm = String(s.name).toLowerCase().trim();
+                var _sloc = s.location ? String(s.location).toLowerCase().trim() : '';
+                if (_sloc && !_specLocByName[_snm]) _specLocByName[_snm] = _sloc;
                 var key = String(s.location || s.name).toLowerCase().trim();
                 if (_rcfg[key]) return; // field precedence + first-special-per-location wins (matches validator)
                 _rcfg[key] = _rnorm(s.sharableWith || {});
@@ -4635,7 +4645,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     //   real-world cap (e.g. 2 pickleball nets) is enforced at placement time by the
                     //   smart-tile direct-fill claim tracker, not by this room sweep.
                     if (e._noRoomCap) return;
-                    var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                    // Bucket by PHYSICAL FACILITY, not activity NAME. A special's .field holds
+                    // its display name; two different specials sharing one room (Arts & Crafts +
+                    // Leather → "Arts & Crafts Shack") otherwise land in separate name-keyed
+                    // buckets and never get compared. Sports/labels aren't specials → resolve to
+                    // '' → fall back to .field (the real bookable field). PASS 0 below uses _actId.
+                    var _actId = String(e._activity || e._assignedSpecial || e.field || '').toLowerCase().trim();
+                    var _fieldLc = String(e.field || '').toLowerCase().trim();
+                    var _facLc = (_actId && _specLocByName[_actId]) || (_fieldLc && _specLocByName[_fieldLc]) || '';
+                    var fl = _facLc || _fieldLc || String(e._specialLocation || '').toLowerCase().trim();
                     // NOTE: do NOT skip rooms missing from _rcfg. auto_validator defaults any
                     // field it can't resolve to {not_sharable, cap 1} and flags it — most often
                     // a misspelled/duplicate special whose NAME (written into .field) differs
@@ -4645,10 +4663,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (!fl || _rskip[fl] || /^game\s*\d+$/i.test(fl)) return;
                     var t = _rtime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     var prot = !!(e._league || e._postEdit || e._pinned);
-                    (_rbyLoc[fl] = _rbyLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: t.s, e: t.e, dur: t.e - t.s, prot: prot });
+                    (_rbyLoc[fl] = _rbyLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: t.s, e: t.e, dur: t.e - t.s, prot: prot, act: _actId });
                 });
             });
-            var _rdemoted = 0, _rstag = 0, _rcap = 0;
+            var _rdemoted = 0, _rstag = 0, _rcap = 0, _rfac = 0;
             function _rlive(u) { var c = _rsa[u.bunk] && _rsa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
             function _rdemote(u) {
                 if (!_rlive(u) || u.prot) return false; // never demote user-locked (league/post-edit/pinned)
@@ -4663,6 +4681,46 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 // Unknown room → not_sharable cap-1, exactly as auto_validator defaults it.
                 var cfg = _rcfg[fl] || { type: 'not_sharable', cap: 1, pairs: {}, divs: [] };
                 var arr = _rbyLoc[fl];
+                // PASS 0 — facility single-activity: a physical room hosts ONE activity at a
+                //   time. Occupancy here is keyed by resolved FACILITY, so two DIFFERENT
+                //   specials that share one room (Arts & Crafts + Leather → "Arts & Crafts
+                //   Shack" — tracked by NAME everywhere else, so each booked the room
+                //   independently) land in this one bucket. Keep the dominant activity; demote
+                //   overlapping occupants of any OTHER activity → Free, regardless of capacity
+                //   (a room can't run two different activities at once). For self-named/self-
+                //   located specials and sports every occupant shares one activity id, so this
+                //   never fires. STEP 7.6/7.65 below re-fill what is freed here.
+                (function () {
+                    var distinctActs = {};
+                    arr.forEach(function (u) { if (_rlive(u) && u.act) distinctActs[u.act] = 1; });
+                    if (Object.keys(distinctActs).length < 2) return;
+                    var byAct = {};
+                    arr.forEach(function (u) { if (_rlive(u) && u.act) (byAct[u.act] = byAct[u.act] || []).push(u); });
+                    // Rank activities to choose which one keeps the room: protected (league/
+                    // pinned) first, then the activity with the most occupants, then earliest
+                    // start, then name (deterministic). The top-ranked activity is never demoted.
+                    var order = Object.keys(byAct).sort(function (a, b) {
+                        var pa = byAct[a].some(function (x) { return x.prot; }) ? 1 : 0;
+                        var pb = byAct[b].some(function (x) { return x.prot; }) ? 1 : 0;
+                        if (pa !== pb) return pb - pa;
+                        if (byAct[a].length !== byAct[b].length) return byAct[b].length - byAct[a].length;
+                        var sa = Math.min.apply(null, byAct[a].map(function (x) { return x.s; }));
+                        var sb = Math.min.apply(null, byAct[b].map(function (x) { return x.s; }));
+                        if (sa !== sb) return sa - sb;
+                        return String(a).localeCompare(String(b));
+                    });
+                    var actRank = {}; order.forEach(function (a, i) { actRank[a] = i; });
+                    for (var i = 0; i < arr.length; i++) {
+                        var u = arr[i]; if (!_rlive(u) || !u.act || u.prot) continue;
+                        for (var j = 0; j < arr.length; j++) {
+                            if (j === i) continue;
+                            var o = arr[j];
+                            if (!_rlive(o) || !o.act || o.act === u.act) continue;
+                            // u overlaps a higher-ranked activity's occupant → demote u (the loser).
+                            if (o.s < u.e && o.e > u.s && actRank[o.act] < actRank[u.act]) { if (_rdemote(u)) _rfac++; break; }
+                        }
+                    }
+                })();
                 // PASS 1 — anti-stagger: among OVERLAPPING occupants keep the protected/
                 //   longest/earliest as primary; demote any non-protected overlapper whose
                 //   [start,end] differs (so the rest share one aligned window).
@@ -4697,7 +4755,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     });
                 });
             });
-            if (_rdemoted > 0) console.log('[STEP 7.55] room-capacity sweep: demoted ' + _rdemoted + ' (' + _rstag + ' staggered, ' + _rcap + ' over-cap/cross-grade) placement(s) → Free');
+            if (_rdemoted > 0) console.log('[STEP 7.55] room-capacity sweep: demoted ' + _rdemoted + ' (' + _rstag + ' staggered, ' + _rcap + ' over-cap/cross-grade, ' + _rfac + ' facility-conflict) placement(s) → Free');
             else console.log('[STEP 7.55] room-capacity sweep: ✅ no room-capacity/staggered violations');
         } catch (_e755) { console.warn('[STEP 7.55] room-capacity sweep failed:', _e755); }
 
