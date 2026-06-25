@@ -4888,6 +4888,90 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             else console.log('[STEP 7.6] Empty-field free-fill: no fillable Free slots');
 
             // ─────────────────────────────────────────────────────────────
+            // STEP 7.62: Min-share pairing — FORM a shared game from leftover
+            // under-min Free bunks. When a sport's minPlayers is set above a
+            // single bunk's size (the user does this deliberately to FORCE two
+            // bunks into one real game), the solver leaves each bunk Free: no
+            // single bunk can seed the game (it's under min), and the solver's
+            // min-repair only ADDS a partner to an already-placed game — with
+            // nothing placed, there's no seed, so the pair never forms. This
+            // pass creates the pair from scratch: it groups same-division Free
+            // bunks at the SAME time onto an empty, accessible field for a sport
+            // none of them did today, choosing up to the field's bunk-capacity
+            // so the combined size meets the sport's min and stays within its
+            // max (+2 grace). Legal by construction (empty field, one sport, one
+            // division, no repeat, min/max + capacity honored) → no conflict.
+            // ─────────────────────────────────────────────────────────────
+            try {
+                const _spMeta62 = (window.getSportMetaData && window.getSportMetaData()) || {};
+                const _bMeta62 = (window.getBunkMetaData && window.getBunkMetaData()) || {};
+                const _sizeOf62 = (b) => (_bMeta62[b] && _bMeta62[b].size) || 0;
+                const _reqOf62 = (act) => { const m = _spMeta62[act] || {}; return { min: m.minPlayers || 0, max: m.maxPlayers || 0 }; };
+                const _capOf62 = (f) => { const sw = f.sharableWith || {}; const ty = sw.type || 'not_sharable'; if (ty === 'not_sharable') return 1; return parseInt(sw.capacity) || 2; };
+                const _isFree62 = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
+                // Group sport-fillable Free slots by division|start|end (only co-timed,
+                // same-division bunks can legally share). Special-only tiles are excluded.
+                const _grp62 = {};
+                Object.keys(_sa76).forEach(b => {
+                    if (_allowed76 && !_allowed76.has(String(b))) return;
+                    const g = _b2g76[String(b)] || '?';
+                    (_sa76[b] || []).forEach((e, idx) => {
+                        if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree62(e)) return;
+                        const ck = _kindByCell76[String(b) + '|' + idx];
+                        const kind = (ck && ck !== 'any') ? ck : slotKindOf(_slotEvent76(b, g, idx, e));
+                        if (kind === 'special') return; // a special-only tile can't take a sport
+                        // The entry's own stamped time is authoritative for the sub-slot grid.
+                        const s = (e._startMin != null) ? e._startMin : null, en = (e._endMin != null) ? e._endMin : null;
+                        let t = (s != null && en != null) ? { s: s, e: en } : _stime76(b, g, idx, e);
+                        if (!t || t.s == null || t.e == null) return;
+                        const key = g + '|' + t.s + '|' + t.e;
+                        (_grp62[key] = _grp62[key] || []).push({ bunk: b, idx: idx, grade: g, s: t.s, e: t.e, size: _sizeOf62(b) });
+                    });
+                });
+                let _paired62 = 0, _games62 = 0;
+                Object.keys(_grp62).forEach(key => {
+                    let pool = _grp62[key].slice();
+                    if (pool.length < 2) return; // need ≥2 free bunks to form a share
+                    const g = pool[0].grade, s = pool[0].s, en = pool[0].e;
+                    for (let fi = 0; fi < _sportFields76.length && pool.length >= 2; fi++) {
+                        const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                        if (!_fieldFree76(fl, s, en) || !_access76(f, g) || !_fieldTimeOk76(f, s, en)) continue;
+                        const cap = _capOf62(f); if (cap < 2) continue; // a 1-bunk field can't host a forced pair
+                        const blocked = _disSportsByField76[f.name] || null;
+                        for (let ai = 0; ai < (f.activities || []).length; ai++) {
+                            const act = f.activities[ai];
+                            if (blocked && blocked.indexOf(act) !== -1) continue;
+                            const req = _reqOf62(act);
+                            if (!req.min) continue; // only sports with a real min require forced pairing
+                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]));
+                            if (elig.length < 2) continue;
+                            elig.sort((a, b2) => b2.size - a.size); // largest first to reach min fast
+                            let chosen = [], sum = 0;
+                            for (let k = 0; k < elig.length && chosen.length < cap; k++) {
+                                const cand = elig[k];
+                                if (req.max && (sum + cand.size) > req.max + 2) continue; // would bust max+2
+                                chosen.push(cand); sum += cand.size;
+                                if (sum >= req.min) break; // min satisfied — a legal shared game
+                            }
+                            if (chosen.length >= 2 && sum >= req.min && (!req.max || sum <= req.max + 2)) {
+                                chosen.forEach(c => {
+                                    _sa76[c.bunk][c.idx] = { field: f.name, sport: act, _activity: act, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minShareFilled: true, continuation: false };
+                                    (_occ76[fl] = _occ76[fl] || []).push({ s: s, e: en });
+                                    (_done76[c.bunk] = _done76[c.bunk] || {})[String(act).toLowerCase()] = 1;
+                                });
+                                _paired62 += chosen.length; _games62++;
+                                const chosenSet = new Set(chosen.map(c => c.bunk));
+                                pool = pool.filter(p => !chosenSet.has(p.bunk));
+                                break; // this field is now occupied — move to the next field
+                            }
+                        }
+                    }
+                });
+                if (_games62 > 0) console.log('[STEP 7.62] min-share pairing: formed ' + _games62 + ' shared game(s), seated ' + _paired62 + ' under-min bunk(s)');
+                else console.log('[STEP 7.62] min-share pairing: no pairable under-min Free bunks');
+            } catch (_e62) { console.warn('[STEP 7.62] min-share pairing failed:', _e62); }
+
+            // ─────────────────────────────────────────────────────────────
             // STEP 7.65: No-repeat fill. The empty-field pass only seats a Free
             // bunk on a COMPLETELY EMPTY sport field, so a bunk whose only
             // remaining fresh option was sharing a grade-mate's half-full room —
