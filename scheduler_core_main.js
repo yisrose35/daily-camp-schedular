@@ -637,7 +637,15 @@
                     //   the flag was dropped here, so a custom-named pinned period not in the
                     //   sweep's skip-list was treated as a cap-1 room and demoted to Free for
                     //   all-but-one bunk — breaking the full-division cell merge.
-                    _pinned: pick._pinned || false
+                    _pinned: pick._pinned || false,
+                    // ★ Field-less direct-fill label (e.g. a rotation tile's Swim / Pickleball
+                    //   option with NO configured field): `field` here is only a display label,
+                    //   not a bookable room. The STEP 7.55 room-capacity sweep skips entries
+                    //   carrying this flag so N bunks on the SAME label aren't treated as N
+                    //   occupants of one phantom cap-1 room (which demoted all-but-one → Free →
+                    //   STEP 7.6 refilled them with GENERIC SPORTS — the "it's giving out sports"
+                    //   bug). Default false → zero change for every real field / special placement.
+                    _noRoomCap: pick._noRoomCap || false
                 };
                 // ★ Away (off-campus) tile (e.g. an away league game): stamp travel
                 //   to/from on the lead slot so grids + print render the 🚶 Travel
@@ -828,8 +836,20 @@
         //   claims don't consume capacity the rotation never uses.
         const _rotationOptions = (job) => {
             if (!job || job.blockB || job.multiGuarantee) return null;
+            // ★ Rotation options = number of connected tiles. A smart tile has two
+            //   "mains" (Main 1 / Main 2); Main 1's Fallback is normally just Main 1's
+            //   in-slot backup (surfaced when no special is placeable — see the
+            //   exhausted→fallback path below), NOT its own rotation slot. So a 2-tile
+            //   group rotates [Main 1, Main 2]; connecting a 3rd tile PROMOTES the
+            //   Fallback to its own option → [Main 1, Fallback, Main 2]. Ungrouped /
+            //   standalone tiles (no groupSize) keep the legacy [Main1, Main2, Fallback].
+            const _gs = job.groupSize;
+            let ordered;
+            if (_gs === 2) ordered = [job.main1, job.main2];
+            else if (_gs >= 3) ordered = [job.main1, job.fallbackActivity, job.main2];
+            else ordered = [job.main1, job.main2, job.fallbackActivity];
             const seen = new Set(); const opts = [];
-            [job.main1, job.main2, job.fallbackActivity].forEach(v => {
+            ordered.forEach(v => {
                 const t = String(v || '').trim(); const k = t.toLowerCase();
                 if (!t || seen.has(k)) return; seen.add(k); opts.push(t);
             });
@@ -939,6 +959,35 @@
             const key = _claimKey(name);
             if (!_specialClaims[key]) _specialClaims[key] = [];
             _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
+        }
+
+        // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
+        //   A rotation/tile option that is NOT a configured field, special, or hosted
+        //   sport is placed as its own label — exactly like Swim (the "direct fill"
+        //   branch): the cell just reads "Pickleball", no solver and no real field
+        //   needed. Most such labels are unlimited (Swim — everyone can go), but some
+        //   have a real-world cap the camp hasn't modeled as a field (e.g. only 2
+        //   pickleball nets). Hardcode those caps here and enforce them CAMP-WIDE per
+        //   overlapping window via this tracker, so the 3rd bunk falls through to its
+        //   next rotation option (like a scarce special does) instead of over-filling.
+        //   Name match is loose so spelling variants ("Pickleball"/"Pickelball") resolve.
+        const _directFillClaims = {}; // labelKey → [{startMin, endMin}]
+        function _directFillCap(label) {
+            const n = String(label || '').toLowerCase().replace(/[^a-z]/g, '');
+            if (n.includes('pickle') || n.includes('pickel')) return 2; // pickleball: 2 bunks at a time
+            return Infinity; // Swim and other field-less labels are uncapped
+        }
+        function _canClaimDirectFill(label, startMin, endMin) {
+            const cap = _directFillCap(label);
+            if (cap === Infinity) return true;
+            const key = String(label || '').toLowerCase().trim();
+            const overlapping = (_directFillClaims[key] || []).filter(c => c.startMin < endMin && c.endMin > startMin);
+            return overlapping.length < cap;
+        }
+        function _registerDirectFillClaim(label, startMin, endMin) {
+            if (_directFillCap(label) === Infinity) return;
+            const key = String(label || '').toLowerCase().trim();
+            (_directFillClaims[key] = _directFillClaims[key] || []).push({ startMin, endMin });
         }
 
         // ★ SAME-DAY SPECIAL TRACKER (per bunk, accumulates across windows in
@@ -1374,6 +1423,9 @@
                                     window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                     _placed = true; break;
                                 }
+                                // Diagnostic: why the "Special" rotation step couldn't place (so a
+                                // fall-through to Pickleball/Swim is explained, not silent).
+                                if (!_placed) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" unplaceable @${_rStart}-${_rEnd} (${_avail.length} candidate(s): ${_avail.map(s => s.name).join(', ') || 'none available'} — all at capacity or already used today) → next option`);
                             } else {
                                 const _gT = optNorm.includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                                 console.log(`[SmartTile] ${bunk} -> ROTATION ${_gT}`);
@@ -1397,10 +1449,23 @@
                             schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                             _placed = true;
                         } else {
-                            // Direct-fill label (Swim etc.) — always placeable
-                            console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
-                            window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                            _placed = true;
+                            // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
+                            //   — no solver, no real field needed (the cell just reads the label,
+                            //   even when nothing hosts it). _noRoomCap marks it field-less so the
+                            //   STEP 7.55 room-capacity sweep leaves it alone (otherwise N bunks on
+                            //   one label collapse onto a phantom cap-1 room → demoted → refilled
+                            //   with generic sports). A few labels carry a hardcoded real-world cap
+                            //   (e.g. 2 pickleball nets, _directFillCap): when that window is full,
+                            //   leave _placed false so the bunk falls through to its NEXT rotation
+                            //   option (Swim) — exactly like a scarce special does.
+                            if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
+                                _registerDirectFillClaim(opt, _rStart, _rEnd);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
+                            } else {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION "${opt}" at capacity (${_directFillCap(opt)}/window) → next option`);
+                            }
                         }
                     }
                     if (_placed && _usedOpts && _placedOpt) _usedOpts.add(_placedOpt);
@@ -4528,6 +4593,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     // collapsing a whole division's trip. Skip trip entries —
                     // matching auto_validator.buildFieldUsageIndex (FN-59).
                     if (e._isTrip || (e.type || '').toLowerCase() === 'trip') return;
+                    // ★ Field-less direct-fill label (Swim / Pickleball rotation option with no
+                    //   configured field). Same shape of problem as a Trip above: its `field` is a
+                    //   display label, not a bookable room, so N bunks on the SAME label are NOT N
+                    //   occupants of one cap-1 room. fillBlock stamps _noRoomCap on these; skip them
+                    //   here so they aren't demoted → Free → refilled with generic sports. Their own
+                    //   real-world cap (e.g. 2 pickleball nets) is enforced at placement time by the
+                    //   smart-tile direct-fill claim tracker, not by this room sweep.
+                    if (e._noRoomCap) return;
                     var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
                     // NOTE: do NOT skip rooms missing from _rcfg. auto_validator defaults any
                     // field it can't resolve to {not_sharable, cap 1} and flags it — most often
@@ -4876,6 +4949,36 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 (_occL65[fl] = _occL65[fl] || []).push({ bunk: String(b), grade: _b2g76[String(b)] || '?', act: act, s: s, e: e, field: locName });
                 (_done76[String(b)] = _done76[String(b)] || {})[String(act).toLowerCase()] = 1;
             };
+            // ★ Combined-player cap for SPORT shares (mirror of total_solver_engine
+            //   checkSharedPlayerMaxConflict). The cfg.cap test below caps how many BUNKS
+            //   share a field; it does NOT cap the combined CAMPERS. Without this, two
+            //   same-grade bunks (e.g. 13 + 15) get seated on one court whose sport maxes
+            //   at 22 → 28 players, blowing past the rule. Grace is absolute (max+2: max =
+            //   target, +1 small grace, +2 ceiling, +3 blocked). Inert unless bunk sizes
+            //   AND a sport max are configured. Round 0 only ever ADDS a 2nd bunk to an
+            //   already-occupied field (occ.length >= 1), so a lone over-size bunk is never
+            //   reached here — matching the solver gate's "only fires on a genuine share".
+            const _bunkMeta65 = window.getBunkMetaData?.() || window.bunkMetaData || {};
+            const _bunkSize65 = (bn) => (_bunkMeta65[bn]?.size || _bunkMeta65[String(bn)]?.size || 0);
+            const _sportMax65 = (sp) => {
+                const r = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(sp);
+                if (r && r.maxPlayers) return r.maxPlayers;
+                const sm = window.getSportMetaData?.() || window.sportMetaData || {};
+                if (sm[sp] && sm[sp].maxPlayers) return sm[sp].maxPlayers;
+                const key = Object.keys(sm).find(k => k.toLowerCase() === String(sp || '').toLowerCase().trim());
+                return (key && sm[key].maxPlayers) || 0;
+            };
+            // true if seating a bunk of `mySize` alongside the bunks in `occ` (all playing
+            // the SAME sport `act`) keeps combined campers within maxPlayers + 2. Specials
+            // have no player max → always fits.
+            const _sportShareFits65 = (act, occ, mySize) => {
+                if (_isSpecial65(act)) return true;
+                const maxP = _sportMax65(act);
+                if (!maxP || !(mySize > 0)) return true;
+                let combined = mySize;
+                for (const o of occ) combined += (_bunkSize65(o.bunk) || 0);
+                return combined <= maxP + 2;
+            };
             let _shared65 = 0, _backfilled65 = 0;
             // Round 0 — share into an under-capacity same-grade location (kind-matched),
             // fresh only. Among the legal shares, prefer the room whose occupant is the
@@ -4902,6 +5005,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (kind === 'special' && !actSp) continue;            // special slot → join a special only
                         if (kind === 'sport' && actSp) continue;               // sport slot → join a sport only
                         if (_done76[String(b)] && _done76[String(b)][String(act).toLowerCase()]) continue; // never a repeat
+                        // ★ combined sport maxPlayers cap (max+2 grace) — skip a court that
+                        //   this bunk would push past the sport's limit; bunk stays Free
+                        //   rather than overfill, exactly as the solver declines the share.
+                        if (!_sportShareFits65(act, occ, _bunkSize65(b))) continue;
                         let _dist65 = Infinity;
                         occ.forEach(o => { const dd = Math.abs(_bunkNum65(o.bunk) - _myNum65); if (dd < _dist65) _dist65 = dd; });
                         if (!_best65 || _dist65 < _best65.dist) _best65 = { field: occ[0].field, act: act, dist: _dist65 };

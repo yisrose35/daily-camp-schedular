@@ -5280,6 +5280,29 @@ window.initFacilitiesTab = initFacilitiesTab;
 //   fresh objects (or empties if the facility was deleted remotely).
 (function () {
     let _facRefreshTimer = null;
+    // Is the user actively editing the detail pane right now? A hydrate event
+    // is usually just the realtime echo of THIS tab's own forceSyncToCloud
+    // (saveSpecialData fires one on every click). Tearing down + rebuilding
+    // detailPaneEl mid-edit collapses every open section (open/closed state
+    // lives only in the DOM) — so the menu the user just opened slams shut
+    // ~2s after they click. Skip the visual rebuild while they're interacting;
+    // it catches up the next time the pane is idle (FN-45's anti-stale intent
+    // is preserved — a focused tab's own edits should win anyway).
+    function _facUserIsEditing() {
+        try {
+            if (!detailPaneEl) return false;
+            const ae = document.activeElement;
+            if (ae && detailPaneEl.contains(ae) &&
+                /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName || '')) return true;
+            if (ae && detailPaneEl.contains(ae) && ae.isContentEditable) return true;
+            // Any expanded detail-section means a menu is open in front of the user.
+            const bodies = detailPaneEl.querySelectorAll('.detail-section-body');
+            for (let i = 0; i < bodies.length; i++) {
+                if (bodies[i].style.display === 'block') return true;
+            }
+        } catch (_) { /* fall through — treat as not editing */ }
+        return false;
+    }
     function _refreshFacilitiesFromStorage() {
         if (_facRefreshTimer) clearTimeout(_facRefreshTimer);
         _facRefreshTimer = setTimeout(() => {
@@ -5287,6 +5310,8 @@ window.initFacilitiesTab = initFacilitiesTab;
             try {
                 const settings = window.loadGlobalSettings?.() || {};
                 if (!Array.isArray(settings.facilities) || settings.facilities.length === 0) return;
+                // Don't rip the DOM out from under an open editor / menu.
+                if (_facUserIsEditing()) return;
                 loadData();
                 const tab = document.getElementById('facilities');
                 if (tab && tab.offsetParent !== null && facilitiesListEl) {
