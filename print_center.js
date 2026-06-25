@@ -5161,11 +5161,16 @@ function _pc3CaptureLivePages(cb) {
     _pc3LoadH2C().then(function (h2c) {
         if (!h2c) { if (window.showToast) window.showToast('Could not load the image library (offline?)', 'error'); cb(null); return; }
         if (_livePageTimer) { clearInterval(_livePageTimer); _livePageTimer = null; } // pause rotation
-        body.classList.add('pc3-live-bw'); // render output as black-and-white (Excel-style)
+        // Black-and-white: the class must sit on the captured element itself.
+        // html2canvas clones only the page subtree into a sandbox, so a class on
+        // an ancestor (pc3-live-body) is lost there and the dark cell rules win.
+        body.classList.add('pc3-live-bw');
+        pages.forEach(function (p) { p.classList.add('pc3-live-bw'); });
         var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
         var canvases = [], i = 0;
         function finish() {
             body.classList.remove('pc3-live-bw');
+            pages.forEach(function (p) { p.classList.remove('pc3-live-bw'); });
             saved.forEach(function (s) { s.p.style.opacity = s.o; s.p.style.pointerEvents = s.pe; });
             startLivePageTimer();
             cb(canvases.length ? canvases : null);
