@@ -836,18 +836,17 @@
         //   claims don't consume capacity the rotation never uses.
         const _rotationOptions = (job) => {
             if (!job || job.blockB || job.multiGuarantee) return null;
-            // ★ Rotation options = number of connected tiles. A smart tile has two
-            //   "mains" (Main 1 / Main 2); Main 1's Fallback is normally just Main 1's
-            //   in-slot backup (surfaced when no special is placeable — see the
-            //   exhausted→fallback path below), NOT its own rotation slot. So a 2-tile
-            //   group rotates [Main 1, Main 2]; connecting a 3rd tile PROMOTES the
-            //   Fallback to its own option → [Main 1, Fallback, Main 2]. Ungrouped /
-            //   standalone tiles (no groupSize) keep the legacy [Main1, Main2, Fallback].
+            // ★ Rotation options = the two "mains" (Main 1 / Main 2). Main 1's Fallback
+            //   is normally just Main 1's in-slot backup, NOT its own rotation slot — it
+            //   surfaces only when neither main can be placed (the exhausted→fallback path
+            //   below). So a SINGLE tile picks one of [Main 1, Main 2] (preferring those
+            //   over the Fallback), and a 2-tile group hands each bunk BOTH mains. Only a
+            //   3rd connected tile PROMOTES the Fallback to a first-class option →
+            //   [Main 1, Fallback, Main 2], so every bunk walks all three across the group.
             const _gs = job.groupSize;
-            let ordered;
-            if (_gs === 2) ordered = [job.main1, job.main2];
-            else if (_gs >= 3) ordered = [job.main1, job.fallbackActivity, job.main2];
-            else ordered = [job.main1, job.main2, job.fallbackActivity];
+            const ordered = (_gs >= 3)
+                ? [job.main1, job.fallbackActivity, job.main2]
+                : [job.main1, job.main2];
             const seen = new Set(); const opts = [];
             ordered.forEach(v => {
                 const t = String(v || '').trim(); const k = t.toLowerCase();
@@ -1470,8 +1469,17 @@
                     }
                     if (_placed && _usedOpts && _placedOpt) _usedOpts.add(_placedOpt);
                     if (!_placed) {
-                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → Sports Slot`);
-                        schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
+                        // ★ Neither main could be placed → fall back to the tile's CONFIGURED
+                        //   Fallback (Main 1's backup), honoring "preferably Main 1/Main 2 but
+                        //   it can also choose the Fallback". Map the fallback category to its
+                        //   slot kind: a general/"Activity" fallback → General Activity Slot;
+                        //   anything else (a Sport category, a specific name, or unset) keeps
+                        //   the Sports Slot default.
+                        const _fb = String(job.fallbackActivity || '').trim();
+                        const _fbEvent = (_fb && !_fb.toLowerCase().includes('sport') && needsGeneration(_fb))
+                            ? 'General Activity Slot' : 'Sports Slot';
+                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → ${_fbEvent} (fallback: ${_fb || 'Sport'})`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbEvent, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
                     }
                 });
                 return; // rotation handled this job — skip the A/B split machinery
