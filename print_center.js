@@ -2236,7 +2236,7 @@ function renderDivisionSheet(divName) {
         // (mirrors the Live "Shared timeline" view). Otherwise the default
         // horizontal per-bunk timeline (each bunk a row).
         if (t.sharedTimeline) {
-            html += renderAutoBunksTop(divName, bunks);
+            html += renderSharedTimelineTable([{ divName: divName, bunks: bunks }]);
         } else {
             // Each bunk may have different time slots, so we build a unified time axis
             html += renderAutoDivisionTable(divName, bunks);
@@ -2550,26 +2550,59 @@ function renderAutoDivisionTable(divName, bunks) {
     return html;
 }
 
-// ── AUTO MODE: Shared timeline (bunks on top, one vertical time axis) ──
-// Print analogue of the Live "Shared timeline" view: a single table whose
-// left column is the time axis and whose columns are the division's bunks.
-// Each bunk may have its own slot boundaries, so we build a unified set of
-// boundaries (like buildLiveUnifiedSectionHTML) and merge identical adjacent
-// tiles (same activity across bunks AND across time → one cell). Styled with
-// the same .pc3-tbl / cell-* classes as the other print sheets (light theme).
-function renderAutoBunksTop(divName, bunks) {
-    var cols = bunks.map(function (b) { return { bunk: b, segs: [] }; });
+// Group a list of selected division/grade names by parent division, mirroring
+// the Live "Shared timeline" grouping (buildSectionHtmlsForGroups). Returns an
+// ordered array of { label, grades:[{divName,bunks}] } — one entry per parent
+// division (grades with no parent stand alone). Order follows the input order.
+function packDivisionGroups(sel) {
+    var divs = getDivisions();
+    var order = [], byk = {};
+    sel.forEach(function (gradeName) {
+        var bunks = (divs[gradeName] && divs[gradeName].bunks ? divs[gradeName].bunks : []).slice();
+        if (!bunks.length) return;
+        var rp = (typeof window.getParentDivision === 'function' && window.getParentDivision(gradeName)) || null;
+        var key = rp || (' grade:' + gradeName);
+        if (!byk[key]) { byk[key] = { label: rp || gradeName, grades: [] }; order.push(key); }
+        byk[key].grades.push({ divName: gradeName, bunks: bunks });
+    });
+    return order.map(function (k) { return byk[k]; });
+}
+
+// ── Shared timeline table (one vertical time axis, bunks across the top) ──
+// Print analogue of the Live "Shared timeline" view. Accepts one or more grades
+// (grouped under a parent division) and renders ONE table: a unified time axis
+// down the left, every bunk as a column (grouped by grade in a two-row header
+// when more than one grade is present), with identical adjacent tiles merged
+// (same activity across bunks AND across time → one cell). Works for auto and
+// manual modes; styled with the light .pc3-tbl / cell-* print classes.
+function renderSharedTimelineTable(grades) {
+    var t = _currentTemplate;
+    var auto = isAutoMode();
+
+    var cols = [];
+    grades.forEach(function (g) {
+        (g.bunks || []).forEach(function (b) { cols.push({ bunk: b, grade: g.divName, segs: [] }); });
+    });
     if (!cols.length) return '';
 
-    // 1. Per-bunk segments (merge continuation slots into their parent tile).
+    // Per-bunk segments + collect every time boundary.
     var boundSet = {};
     cols.forEach(function (c) {
-        var slots = getPerBunkSchedule(c.bunk, divName);
         var segs = [];
-        for (var i = 0; i < slots.length; i++) {
-            var entry = getEntry(c.bunk, i);
-            if (entry && entry.continuation && segs.length > 0) { segs[segs.length - 1].endMin = slots[i].endMin; continue; }
-            segs.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
+        if (auto) {
+            var slots = getPerBunkSchedule(c.bunk, c.grade);
+            for (var i = 0; i < slots.length; i++) {
+                var entry = getEntry(c.bunk, i);
+                if (entry && entry.continuation && segs.length > 0) { segs[segs.length - 1].endMin = slots[i].endMin; continue; }
+                segs.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
+            }
+        } else {
+            var blocks = buildDivisionBlocks(c.grade);
+            blocks.forEach(function (bl) {
+                var si = findFirstSlotForTime(bl.startMin, c.grade);
+                var entry = si >= 0 ? getEntry(c.bunk, si) : null;
+                segs.push({ startMin: bl.startMin, endMin: bl.endMin, entry: entry, slotIdx: si, type: entry ? getEntryType(entry) : 'free', isLeague: bl.isLeague, event: bl.event });
+            });
         }
         c.segs = segs;
         segs.forEach(function (s) { boundSet[s.startMin] = 1; boundSet[s.endMin] = 1; });
@@ -2580,7 +2613,7 @@ function renderAutoBunksTop(divName, bunks) {
     var rows = [];
     for (var bi = 0; bi < bounds.length - 1; bi++) rows.push({ startMin: bounds[bi], endMin: bounds[bi + 1] });
 
-    // Map each bunk to the segment covering each row (null = gap → free/league).
+    // Map each column (bunk) to the segment covering each row (null = gap).
     cols.forEach(function (c) {
         c.rowSeg = rows.map(function (r) {
             var found = null;
@@ -2592,16 +2625,20 @@ function renderAutoBunksTop(divName, bunks) {
     function cellInfo(c, seg, r) {
         var txt, cls;
         if (!seg) {
-            var lg = pcLeagueInfoAt(divName, r.startMin);
-            if (lg) { txt = lg.label + (lg.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' │ ' + lg.matchups.join(', ') : ''); cls = 'cell-league'; }
+            var lg0 = pcLeagueInfoAt(c.grade, r.startMin);
+            if (lg0) { txt = lg0.label + (lg0.matchups.length && !t.hideLeagueMatchups ? ' │ ' + lg0.matchups.join(', ') : ''); cls = 'cell-league'; }
             else { txt = '—'; cls = 'cell-free'; }
+        } else if (!auto && seg.isLeague) {
+            txt = seg.event || 'League Game';
+            if (!t.hideLeagueMatchups) { var mm = buildLeagueMatchups(seg, c.grade); if (mm.length) txt += ' │ ' + mm.join(', '); }
+            cls = 'cell-league';
         } else {
             var isLeagueAct = !!(seg.entry && (seg.entry._h2h || seg.entry._league || seg.entry._isSpecialtyLeague || seg.entry._allMatchups));
-            var leagueInfo = (isLeagueAct || !seg.entry) ? pcLeagueInfoAt(divName, seg.startMin) : null;
+            var leagueInfo = (isLeagueAct || !seg.entry) ? pcLeagueInfoAt(c.grade, seg.startMin) : null;
             if (isLeagueAct || leagueInfo) {
                 var lbl = (seg.entry && (seg.entry._gameLabel || seg.entry._leagueName)) || (leagueInfo && leagueInfo.label) || 'League Game';
                 var ms = (leagueInfo && leagueInfo.matchups) || [];
-                txt = lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' │ ' + ms.join(', ') : '');
+                txt = lbl + (ms.length && !t.hideLeagueMatchups ? ' │ ' + ms.join(', ') : '');
                 cls = 'cell-league';
             } else {
                 txt = seg.entry ? formatEntry(seg.entry) : '—';
@@ -2611,14 +2648,24 @@ function renderAutoBunksTop(divName, bunks) {
         return { txt: txt, cls: cls };
     }
 
-    var t = _currentTemplate;
     var sheetId = pcNextSheetId();
+    var gradeCols = grades.filter(function (g) { return g.bunks && g.bunks.length; });
+    var multiGrade = gradeCols.length > 1;
     var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
-    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto-bunks-top" data-day-start="' + bounds[0] + '" data-day-end="' + bounds[bounds.length - 1] + '">';
-    html += '<thead><tr>';
-    html += '<th class="corner" data-cell-text="Time" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
-    bunks.forEach(function (b) { html += '<th data-cell-text="' + escHtml(b) + '">' + escHtml(b) + '</th>'; });
-    html += '</tr></thead><tbody>';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="shared-timeline" data-day-start="' + bounds[0] + '" data-day-end="' + bounds[bounds.length - 1] + '">';
+    html += '<thead>';
+    if (multiGrade) {
+        html += '<tr><th class="corner" rowspan="2" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+        gradeCols.forEach(function (g) { html += '<th colspan="' + g.bunks.length + '">' + escHtml(g.divName) + '</th>'; });
+        html += '</tr><tr>';
+        cols.forEach(function (c) { html += '<th>' + escHtml(c.bunk) + '</th>'; });
+        html += '</tr>';
+    } else {
+        html += '<tr><th class="corner" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+        cols.forEach(function (c) { html += '<th>' + escHtml(c.bunk) + '</th>'; });
+        html += '</tr>';
+    }
+    html += '</thead><tbody>';
 
     // Build a descriptor grid, then merge identical neighbors into rectangles.
     var nR = rows.length, nC = cols.length;
@@ -2637,7 +2684,7 @@ function renderAutoBunksTop(divName, bunks) {
     var kk = function (a, b) { return a + ':' + b; };
     rows.forEach(function (r, ri) {
         html += '<tr data-block-start="' + r.startMin + '" data-block-end="' + r.endMin + '">';
-        html += '<th class="row-head" data-cell-text="' + escHtml(minutesToTimeLabel(r.startMin)) + '">' + escHtml(minutesToTimeLabel(r.startMin)) + '</th>';
+        html += '<th class="row-head">' + escHtml(minutesToTimeLabel(r.startMin)) + '</th>';
         for (var ci = 0; ci < nC; ci++) {
             if (done[kk(ri, ci)]) continue;
             var cell = grid[ri][ci];
@@ -2657,6 +2704,25 @@ function renderAutoBunksTop(divName, bunks) {
         html += '</tr>';
     });
     html += '</tbody></table></div>';
+    return html;
+}
+
+// Wrap renderSharedTimelineTable in a titled print sheet (parent label header),
+// matching renderDivisionSheet's structure so the preview groups read cleanly.
+function renderSharedTimelineSheet(parentLabel, grades) {
+    var t = _currentTemplate;
+    var table = renderSharedTimelineTable(grades);
+    if (!table) return '';
+    var html = '<div class="pc3-sheet">';
+    if (t.showHeader !== false || t.showDivisionName) {
+        html += '<div class="pc3-sheet-head">';
+        if (t.showDivisionName) html += '<span class="pc3-sheet-title">' + escHtml(parentLabel) + '</span>';
+        if (t.campName) html += '<span class="pc3-sheet-subtitle">' + escHtml(t.campName) + '</span>';
+        if (t.showDate) html += '<span class="pc3-sheet-subtitle">' + formatDisplayDate(window.currentScheduleDate) + '</span>';
+        html += '<span class="pc3-sheet-badge">' + (isAutoMode() ? 'Auto' : 'Manual') + '</span>';
+        html += '</div>';
+    }
+    html += table + '</div>';
     return html;
 }
 
@@ -3427,7 +3493,11 @@ function liveRefresh() {
         sel = (typeof window.getUserDivisionOrder === 'function')
             ? window.getUserDivisionOrder(sel)
             : sel.slice();
-        if (_currentTemplate.layoutMode === 'all-bunks' && isAutoMode()) {
+        if (_currentTemplate.sharedTimeline) {
+            // Shared Timeline: group selected grades by parent division and
+            // render one unified table per division (bunks as columns).
+            packDivisionGroups(sel).forEach(function (g) { html += renderSharedTimelineSheet(g.label, g.grades); });
+        } else if (_currentTemplate.layoutMode === 'all-bunks' && isAutoMode()) {
             // Combined: gather ALL bunks across all selected divisions → one unified table
             var allDivBunks = [];
             sel.forEach(function (d) {
@@ -5080,7 +5150,28 @@ function runPrint(printHtml, t) {
 function buildPrintHTML(sel) {
     var t = _currentTemplate;
     var html = '';
-    sel.forEach(function (item, idx) {
+
+    // Build the list of page units. Division + Shared Timeline groups grades by
+    // parent division (one unified table per division, each on its own page);
+    // week renders once; everything else is one unit per selected item.
+    var stripHead = function (s) { return s.replace(/<div class="pc3-sheet-head"[^>]*>[\s\S]*?<\/div>/, ''); };
+    var units;
+    if (_activeView === 'division' && t.sharedTimeline) {
+        units = packDivisionGroups(sel).map(function (g) {
+            return { label: g.label, content: stripHead(renderSharedTimelineSheet(g.label, g.grades)) };
+        });
+    } else if (_activeView === 'week') {
+        units = [{ label: '', content: renderWeekSheet(sel) }];
+    } else {
+        units = sel.map(function (item) {
+            var content = _activeView === 'division' ? stripHead(renderDivisionSheet(item))
+                : _activeView === 'bunk' ? renderBunkSheet(item)
+                : _activeView === 'location' ? renderLocationSheet(item) : '';
+            return { label: item, content: content };
+        });
+    }
+
+    units.forEach(function (u, idx) {
         var pageBreak = (t.showPageBreaks && idx > 0) ? 'page-break-before:always;' : '';
         html += '<div style="' + pageBreak + 'margin-bottom:16px;position:relative;">';
 
@@ -5094,18 +5185,11 @@ function buildPrintHTML(sel) {
             html += '<div style="background:' + t.headerBgColor + ';color:' + t.headerTextColor + ';padding:12px 16px;font-family:\'' + t.headerFont + '\',sans-serif;font-size:' + t.headerFontSize + 'px;font-weight:700;">';
             if (t.campName) html += escHtml(t.campName);
             if (t.showDate) html += '<span style="float:right;font-size:' + Math.max(11, t.headerFontSize - 8) + 'px;font-weight:400;opacity:.9;">' + formatDisplayDate(window.currentScheduleDate) + '</span>';
-            if (t.showDivisionName) html += '<div style="font-size:' + Math.max(11, t.headerFontSize - 6) + 'px;font-weight:400;opacity:.85;">' + escHtml(item) + '</div>';
+            if (t.showDivisionName && u.label) html += '<div style="font-size:' + Math.max(11, t.headerFontSize - 6) + 'px;font-weight:400;opacity:.85;">' + escHtml(u.label) + '</div>';
             html += '</div>';
         }
 
-        // Content
-        if (_activeView === 'division') { html += renderDivisionSheet(item).replace(/<div class="pc3-sheet-head"[^>]*>[\s\S]*?<\/div>/, ''); }
-        else if (_activeView === 'bunk') { html += renderBunkSheet(item); }
-        else if (_activeView === 'location') { html += renderLocationSheet(item); }
-        else if (_activeView === 'week') {
-            // Week view ignores per-item iteration — render the whole grid once on the first pass.
-            if (idx === 0) html += renderWeekSheet(sel);
-        }
+        html += u.content;
 
         // Footer
         if (t.footerEnabled && t.footerText) {
