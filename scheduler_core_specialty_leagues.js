@@ -560,7 +560,24 @@
         const _gsSL = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
         const _fcfgSL = {}; ((_gsSL.app1 && _gsSL.app1.fields) || _gsSL.fields || []).forEach(f => { if (f && f.name) _fcfgSL[f.name] = f; });
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
-            availableFields = window.GlobalFieldLocks.filterAvailableFields(availableFields, slots);
+            availableFields = window.GlobalFieldLocks.filterAvailableFields(availableFields, slots, divName);
+
+            // ★ CROSS-GRADE ELECTIVE/PINNED RESERVATION: slot indices are NOT comparable
+            //   across divisions — slot N maps to a different clock time per grade — so the
+            //   slot-index filter above is blind to a lock registered on ANOTHER grade's
+            //   grid (e.g. a grade-level elective). An elective reserves its facility for
+            //   its OWN grade only; every other grade/division is off-limits at that time.
+            //   Re-filter by actual TIME so a facility reserved by another grade's elective
+            //   (or any time-locked field) can never be grabbed by this specialty league.
+            if (typeof window.GlobalFieldLocks.isFieldLockedByTime === 'function') {
+                const _dtsSL = (divName && window.divisionTimes && window.divisionTimes[divName]) || [];
+                const _wStartSL = _dtsSL[slots[0]] && _dtsSL[slots[0]].startMin;
+                const _wEndSL = _dtsSL[slots[slots.length - 1]] && _dtsSL[slots[slots.length - 1]].endMin;
+                if (_wStartSL != null && _wEndSL != null) {
+                    availableFields = availableFields.filter(f =>
+                        !window.GlobalFieldLocks.isFieldLockedByTime(f, _wStartSL, _wEndSL, divName));
+                }
+            }
 
             const lockedFields = fields.filter(f => !availableFields.includes(f));
             if (lockedFields.length > 0) {

@@ -2887,6 +2887,17 @@
             //   no other bunk may use the field then, regardless of its normal sharing cap.
             //   (No-op when there are no override claims, so normal generation is unaffected.)
             if (overlapping.some(c => c._bunkOverride && String(c.bunk) !== String(bunk))) return false;
+            // ★ FACILITY RESERVATION (custom.pinned layers, pinned specials, electives):
+            //   a field claimed by one of these is held EXCLUSIVELY for that activity's
+            //   group. Any candidate that is NOT the same reserved activity is rejected
+            //   regardless of the field's normal sharing capacity — so a sharable field
+            //   used by a pinned custom layer / pinned special / elective can never be
+            //   poached by an unrelated sport or special. Bunks running the SAME reserved
+            //   activity still share it (they pass the group match, then the normal
+            //   capacity / sharing checks below apply to them). No-op when there are no
+            //   reservation claims, so ordinary generation is byte-unchanged.
+            if (overlapping.some(c => c._reserveExclusive
+                    && String(c._reserveGroup || '') !== String(activity || ''))) return false;
             if (overlapping.length >= ledger.capacity) return false;
 
             // ★★★ CB-84: zone max-concurrent enforcement. The zone editor saves a
@@ -8386,10 +8397,19 @@
                                        Math.abs(c.endMin - blk.endMin) < 2;
                             });
                             if (!alreadyClaimed) {
+                                const _claimAct = blk._assignedSport || blk.event || 'blocked';
+                                // ★ custom.pinned layers and pinned specials reserve their
+                                //   host field EXCLUSIVELY for their own activity group — no
+                                //   unrelated fill may share it even when capacity allows.
+                                const _isReserved = (blk._classification === 'pinned')
+                                    || !!blk._customField || !!blk._assignedSpecial;
+                                const _resvGroup = blk._customActivity || blk._assignedSpecial || blk.event || _claimAct;
                                 fieldLedger[fn].claims.push({
                                     bunk: bunk, grade: grade,
-                                    activity: blk._assignedSport || blk.event || 'blocked',
-                                    startMin: blk.startMin, endMin: blk.endMin
+                                    activity: _claimAct,
+                                    startMin: blk.startMin, endMin: blk.endMin,
+                                    _reserveExclusive: _isReserved || undefined,
+                                    _reserveGroup: _isReserved ? _resvGroup : undefined
                                 });
                                 preRegistered++;
                             }
@@ -20818,7 +20838,9 @@
                         if (fieldName && fieldLedger[fieldName]) {
                             fieldLedger[fieldName].claims.push({
                                 bunk: bunk, grade: grade, activity: special.name,
-                                startMin: bestStart, endMin: bestEnd
+                                startMin: bestStart, endMin: bestEnd,
+                                // ★ pinned special wall reserves its field for the special's group
+                                _reserveExclusive: true, _reserveGroup: special.name
                             });
                         }
 
@@ -21008,7 +21030,9 @@
                             if (_custField && fieldLedger[_custField]) {
                                 fieldLedger[_custField].claims.push({
                                     bunk: bunk, grade: _p26grade, activity: _custName,
-                                    startMin: _chosen.start, endMin: _chosen.end
+                                    startMin: _chosen.start, endMin: _chosen.end,
+                                    // ★ staggered custom.pinned wall reserves its room for its group
+                                    _reserveExclusive: true, _reserveGroup: _custName
                                 });
                             }
                             try { registerCrossGrade(_p26grade, 'custom', _chosen.start, _chosen.end, _custName); } catch (_eCg) {}
