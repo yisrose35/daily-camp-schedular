@@ -4578,7 +4578,11 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
         '<span class="pc3-live-divname">' + escHtml(parentLabel) + '</span>' +
         '<span class="pc3-live-divrange">' + dayRange + '</span>' +
     '</div>';
-    html += '<table class="pc3-live-tbl pc3-live-unified" style="table-layout:fixed;width:100%;">';
+    // Fixed per-column width → the table is naturally sized (narrow for a few
+    // bunks, wide for many). The live renderer then zooms the whole page to fill
+    // the screen, so a few-bunk page scales up big instead of leaving dead space.
+    var _uniW = 155 + cols.length * 150;
+    html += '<table class="pc3-live-tbl pc3-live-unified" style="table-layout:fixed;width:' + _uniW + 'px;">';
     // Header: row 1 = grade groups, row 2 = bunk names.
     html += '<thead><tr><th class="corner" rowspan="2">Time</th>';
     grades.forEach(function (g) { if (g.bunks && g.bunks.length) html += '<th colspan="' + g.bunks.length + '" class="pc3-uni-grade">' + escHtml(g.divName) + '</th>'; });
@@ -4703,36 +4707,6 @@ function _liveContentSignature(nowMin) {
 }
 
 // —— Paginated live view renderer ————————————————————————————————————————————
-// Stretch live tables to fill leftover vertical space. When the page content
-// is shorter than the screen, grow each section's BODY ROWS (the reliable way
-// — setting height on a <table> alone doesn't stretch rows in all browsers)
-// so the schedule uses the full height instead of clustering at the top. Each
-// section gets a share proportional to its natural height. Must be called while
-// the section nodes are laid out (offsetHeight readable).
-function pcLiveStretchTables(nodes, availH, gap) {
-    if (!nodes || !nodes.length) return;
-    var padV = 36; // .pc3-live-page-inner top+bottom padding
-    var avail = availH - padV - gap * (nodes.length - 1);
-    var totalNat = 0;
-    nodes.forEach(function (n) { totalNat += n.offsetHeight || 1; });
-    var extra = avail - totalNat; // spare vertical space to distribute
-    if (totalNat <= 0 || extra <= 8) return; // nothing meaningful to fill
-    nodes.forEach(function (n) {
-        var nat = n.offsetHeight || 1;
-        // This section's share of the spare space, split across its body rows.
-        var sectionExtra = extra * (nat / totalNat);
-        var tbl = n.querySelector('.pc3-live-tbl');
-        if (!tbl) return;
-        var bodyRows = Array.prototype.slice.call(tbl.querySelectorAll('tbody tr'));
-        if (!bodyRows.length) return;
-        var addPerRow = Math.floor(sectionExtra / bodyRows.length) - 1; // -1 px safety
-        if (addPerRow < 1) return;
-        // ADD to each row's natural height (never below content) so tall wrapped
-        // rows keep their size and the total never overflows the screen.
-        bodyRows.forEach(function (tr) { tr.style.height = (tr.offsetHeight + addPerRow) + 'px'; });
-    });
-}
-
 function renderLiveContent() {
     var body = el('pc3-live-body');
     if (!body) return;
@@ -4866,26 +4840,31 @@ function renderLiveContent() {
     //     how small. Unlike the old "fit to screen", there is no readability
     //     floor and no fallback to rotation: the whole camp is always visible.
     if (_liveWholeCamp && !customActive) {
-        var wcTotalH = 36; // .pc3-live-page-inner vertical padding (18 top + 18 bottom)
-        wraps.forEach(function (wrap) { wcTotalH += wrap.offsetHeight + 20; });
-        var wcScale = wcTotalH > availH ? availH / wcTotalH : 1;
-        wcScale = Math.min(1, wcScale); // only ever shrink, never enlarge
-
-        // Fits with room to spare → grow rows to fill the empty vertical space
-        // so the whole camp uses the full screen instead of clustering at top.
-        if (wcScale >= 1) pcLiveStretchTables(wraps, availH, 20);
+        // Zoom the whole camp to fill the screen — scale up or down so the
+        // content box fits both width and height, centered.
+        var wcContentW = 1, wcContentH = 0;
+        wraps.forEach(function (wrap) {
+            var tbl = wrap.querySelector('.pc3-live-tbl');
+            var w = tbl ? tbl.offsetWidth : wrap.offsetWidth;
+            if (w > wcContentW) wcContentW = w;
+            wcContentH += wrap.offsetHeight + 20;
+        });
+        wcContentH = Math.max(1, wcContentH - 20);
+        var wcAvailW = (body.offsetWidth || window.innerWidth) - 56;
+        var wcScale = Math.min(wcAvailW / wcContentW, (availH - 36) / wcContentH);
+        wcScale = Math.max(0.15, Math.min(4, wcScale));
+        if (!(wcScale > 0)) wcScale = 1;
 
         _numLivePages = 1;
         _livePageIndex = 0;
 
         var wcPage = document.createElement('div');
         wcPage.id = 'lp-0';
-        wcPage.style.cssText = 'position:absolute;inset:0;opacity:1;pointer-events:auto;overflow:hidden;';
+        wcPage.style.cssText = 'position:absolute;inset:0;opacity:1;pointer-events:auto;overflow:hidden;display:flex;justify-content:center;align-items:flex-start;';
 
         var wcInner = document.createElement('div');
         wcInner.className = 'pc3-live-page-inner';
-        // Uniform shrink, origin top-center so the shrunken camp stays centered.
-        wcInner.style.cssText = 'transform:scale(' + wcScale.toFixed(4) + ');transform-origin:top center;width:100%;';
+        wcInner.style.cssText = 'display:inline-block;transform:scale(' + wcScale.toFixed(4) + ');transform-origin:top center;';
 
         wraps.forEach(function (n) { wcInner.appendChild(n); });
         wcPage.appendChild(wcInner);
@@ -4948,24 +4927,32 @@ function renderLiveContent() {
     _numLivePages = pages.length;
     if (_livePageIndex >= _numLivePages) _livePageIndex = 0;
 
-    // 4. Move section wrap nodes into absolutely-positioned, scale-to-fit pages
+    // 4. Move section wrap nodes into absolutely-positioned, zoom-to-fit pages.
+    //    Crop around the schedule and scale it to fill the screen — narrow pages
+    //    (few bunks / bunks-per-page) zoom UP; wide/tall pages shrink to fit.
+    var availW = (body.offsetWidth || window.innerWidth) - 56; // page-inner horiz padding
+    var availFitH = availH - 36;                               // page-inner vert padding
     pages.forEach(function (page, pi) {
-        var scale = page.totalH > availH ? availH / page.totalH : 1;
-        // One-division-per-page shrinks as far as needed (no readability floor)
-        // so an entire division always fits on its single page. Default mode
-        // keeps a 0.25 floor and paginates instead.
-        scale = (_liveOneDivPerPage || customActive) ? Math.min(1, scale) : Math.max(0.25, Math.min(1, scale));
+        var gap = 22, contentW = 1, contentH = 0;
+        page.nodes.forEach(function (n) {
+            var tbl = n.querySelector('.pc3-live-tbl');
+            var w = tbl ? tbl.offsetWidth : n.offsetWidth;
+            if (w > contentW) contentW = w;
+            contentH += n.offsetHeight + gap;
+        });
+        contentH = Math.max(1, contentH - gap);
+        var scale = Math.min(availW / contentW, availFitH / contentH);
+        scale = Math.max(0.2, Math.min(4, scale));
         if (!(scale > 0)) scale = 1;
 
         var pageDiv = document.createElement('div');
         pageDiv.id = 'lp-' + pi;
         var active = pi === _livePageIndex;
-        pageDiv.style.cssText = 'position:absolute;inset:0;opacity:' + (active ? 1 : 0) + ';transition:opacity .7s ease;pointer-events:' + (active ? 'auto' : 'none') + ';overflow:hidden;';
+        pageDiv.style.cssText = 'position:absolute;inset:0;opacity:' + (active ? 1 : 0) + ';transition:opacity .7s ease;pointer-events:' + (active ? 'auto' : 'none') + ';overflow:hidden;display:flex;justify-content:center;align-items:flex-start;';
 
         var inner = document.createElement('div');
         inner.className = 'pc3-live-page-inner';
-        inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
-        if (scale >= 1) pcLiveStretchTables(page.nodes, availH, 22);
+        inner.style.cssText = 'display:inline-block;transform:scale(' + scale.toFixed(4) + ');transform-origin:top center;';
 
         // In one-division-per-page mode, label the page with the division name
         // (only for real divisions — a lone grade with no parent already shows
