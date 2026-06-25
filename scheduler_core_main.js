@@ -1478,11 +1478,19 @@
                             if (_spFits) {
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
-                            } else {
+                                _placed = true;
+                            } else if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
+                                // No open field → place the named sport as its OWN field-less label,
+                                // but honor its hardcoded real-world cap (e.g. Pickleball = 2 nets,
+                                // _directFillCap): once the window is full the next bunk falls
+                                // through to its NEXT rotation option instead of over-piling on it.
+                                _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
+                            } else {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" at cap (${_directFillCap(opt)}/window, no open field) → next option`);
                             }
-                            _placed = true;
                         } else {
                             // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
                             //   — no solver, no real field needed (the cell just reads the label,
