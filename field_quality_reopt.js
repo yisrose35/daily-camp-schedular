@@ -77,6 +77,17 @@
 
         if (!fld) return null; // field has no config row → nothing field-level to block
 
+        // Global field locks — leagues / pinned events / electives reserve fields
+        // without putting blocks in scheduleAssignments, so the occupancy ledger
+        // can't see them. Ask the lock registry directly (skip if unavailable).
+        try {
+            var GFL = window.GlobalFieldLocks;
+            if (GFL && typeof GFL.isFieldLockedByTime === 'function' && startMin != null && endMin != null) {
+                var lk = GFL.isFieldLockedByTime(fieldName, startMin, endMin, grade);
+                if (lk) return 'globally locked (' + (lk.lockedBy || lk.reason || 'lock') + ')';
+            }
+        } catch (_eL) {}
+
         // Field access restrictions (grade + bunk). Empty divisions = misconfig → open.
         if (fld.accessRestrictions && fld.accessRestrictions.enabled
             && fld.accessRestrictions.divisions
