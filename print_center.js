@@ -4757,10 +4757,14 @@ function pcLiveFitFont(nodes, availH) {
         });
         if (!items.length) return;
         // 2. Each table fills its own band (share of the height). Binary-search
-        //    the largest font (<= word cap) whose section fits the band.
-        var contentSpace = availH - 36 - items.length * 22;
+        //    the largest font (<= word cap) whose section fits the band. The
+        //    band is the node's FULL target (it already includes the divhead,
+        //    since `nat` is the whole section-wrap height) — do not add headH
+        //    again or the page overflows and the bottom rows get clipped. The
+        //    -10 is a small safety margin so we never cut off.
+        var contentSpace = availH - 36 - items.length * 22 - 10;
         items.forEach(function (it) {
-            var band = Math.max(60, Math.round(contentSpace * (it.nat / (sumNat || 1))) + it.headH);
+            var band = Math.max(50, Math.round(contentSpace * (it.nat / (sumNat || 1))));
             var lo = 13, hi = it.cap, best = 13;
             for (var k = 0; k < 13; k++) {
                 var mid = (lo + hi) / 2;
@@ -4790,7 +4794,7 @@ function pcLiveFillTables(nodes, availH) {
         var tbl = n.querySelector('.pc3-live-tbl');
         if (tbl) { tables.push(tbl); totalTableNat += tbl.offsetHeight || 1; }
     });
-    var tableSpace = availH - overhead;
+    var tableSpace = availH - overhead - 18; // safety buffer so we never clip the bottom row
     if (totalTableNat <= 0 || tableSpace <= totalTableNat + 8) return; // no real spare room
     tables.forEach(function (tbl) {
         var share = Math.floor(tableSpace * ((tbl.offsetHeight || 1) / totalTableNat));
