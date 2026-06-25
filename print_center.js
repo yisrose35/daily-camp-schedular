@@ -1540,6 +1540,14 @@ function getStyles() {
     '.pc3-tbl .cell-pinned{background:#fff2cc;color:#000;}' +
     '.pc3-tbl .cell-league{background:#ddebf7;color:#000;}' +
     '.pc3-tbl .cell-transition{background:#f2f2f2;color:#000;font-size:11px;font-weight:400;font-style:italic;}' +
+    /* Black-and-white override for the print sheets — applied only while
+       rasterizing the preview to a JPEG / image-print (white cells, black
+       borders, black text, like an Excel printout). */
+    '.pc3-bw, .pc3-bw .pc3-sheet, .pc3-bw .pc3-sheet-head{background:#fff !important;}' +
+    '.pc3-bw .pc3-sheet-head{border-bottom:1px solid #000 !important;}' +
+    '.pc3-bw .pc3-sheet-title, .pc3-bw .pc3-sheet-subtitle, .pc3-bw .pc3-sheet-badge{color:#000 !important;background:#fff !important;}' +
+    '.pc3-bw .pc3-tbl th, .pc3-bw .pc3-tbl td{background:#fff !important;color:#000 !important;border:1px solid #000 !important;box-shadow:none !important;}' +
+    '.pc3-bw .pc3-tbl .cell-free{color:#000 !important;}' +
 
     /* ── Excel-style coordinate headers (A B C / 1 2 3) ── */
     '.pc3-tbl tr.pc3-coord-row th{background:#e6e6e6!important;color:#5f6368;font-size:10px;font-weight:600;text-align:center!important;padding:2px 6px;border:1px solid #b0b0b0;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
@@ -1856,7 +1864,9 @@ function buildMainUI() {
                 '<div class="pcx-menu" id="pc3-output-menu">' +
                     '<div class="pcx-menu-label">Download</div>' +
                     '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
+                    '<button onclick="window._pc3DownloadImage();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.download + 'Image (.jpg, B&amp;W)</button>' +
                     '<div class="pcx-menu-label">Print</div>' +
+                    '<button onclick="window._pc3PrintImage();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.print + 'Print (B&amp;W image)</button>' +
                     '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
             '</div>' +
@@ -4079,8 +4089,6 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
-                '<button class="pc3-live-close" id="pc3-live-print-btn" title="Print the live view — one division per page" onclick="window._pc3LivePrint&&window._pc3LivePrint()">Print</button>' +
-                '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the live view as JPEG image(s)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download JPEG</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
@@ -5202,6 +5210,61 @@ window._pc3LiveDownloadJpeg = function () {
 };
 window._pc3LivePrint = function () {
     _pc3CaptureLivePages(function (canvases) {
+        if (!canvases) return;
+        var imgs = canvases.map(function (canvas) {
+            return '<img src="' + canvas.toDataURL('image/jpeg', 0.95) + '" style="display:block;width:100%;height:auto;page-break-after:always;">';
+        }).join('');
+        runPrint('<div style="background:#fff;">' + imgs + '</div>', _currentTemplate);
+    });
+};
+
+// ── Print center → Download / Print the preview as a black-and-white image ──
+// Rasterizes each preview division-sheet (one division per page) to a B&W JPEG
+// so the regular print UI can export an Excel-style image. Reuses html2canvas.
+function _pc3CapturePreviewSheets(cb) {
+    var pc = el('pc3-preview-content');
+    var sheets = pc ? Array.prototype.slice.call(pc.querySelectorAll('.pc3-sheet')) : [];
+    if (!sheets.length) { if (window.showToast) window.showToast('Nothing to export — generate a schedule first.', 'error'); cb(null); return; }
+    if (window.showToast) window.showToast('Rendering image…', 'info');
+    _pc3LoadH2C().then(function (h2c) {
+        if (!h2c) { if (window.showToast) window.showToast('Could not load the image library (offline?)', 'error'); cb(null); return; }
+        var prevTransform = pc.style.transform; // capture at 100% (ignore zoom)
+        pc.style.transform = 'none';
+        // The bw class must be on each CAPTURED sheet (html2canvas clones only
+        // that subtree; a class on the parent is lost in the clone).
+        sheets.forEach(function (s) { s.classList.add('pc3-bw'); });
+        var canvases = [], i = 0;
+        function finish() {
+            sheets.forEach(function (s) { s.classList.remove('pc3-bw'); });
+            pc.style.transform = prevTransform;
+            cb(canvases.length ? canvases : null);
+        }
+        function next() {
+            if (i >= sheets.length) return finish();
+            requestAnimationFrame(function () { requestAnimationFrame(function () {
+                h2c(sheets[i], { backgroundColor: '#ffffff', scale: 2, logging: false, useCORS: true })
+                    .then(function (c) { canvases.push(c); i++; next(); })
+                    .catch(function () { i++; next(); });
+            }); });
+        }
+        next();
+    });
+}
+window._pc3DownloadImage = function () {
+    _pc3CapturePreviewSheets(function (canvases) {
+        if (!canvases) return;
+        var dateStr = String(window.currentScheduleDate || 'schedule').replace(/[^0-9A-Za-z\-]/g, '');
+        canvases.forEach(function (canvas, idx) {
+            var a = document.createElement('a');
+            a.href = canvas.toDataURL('image/jpeg', 0.95);
+            a.download = 'schedule-' + dateStr + (canvases.length > 1 ? '-' + (idx + 1) : '') + '.jpg';
+            document.body.appendChild(a); a.click(); a.remove();
+        });
+        if (window.showToast) window.showToast('Saved ' + canvases.length + ' image' + (canvases.length > 1 ? 's' : ''), 'success');
+    });
+};
+window._pc3PrintImage = function () {
+    _pc3CapturePreviewSheets(function (canvases) {
         if (!canvases) return;
         var imgs = canvases.map(function (canvas) {
             return '<img src="' + canvas.toDataURL('image/jpeg', 0.95) + '" style="display:block;width:100%;height:auto;page-break-after:always;">';
