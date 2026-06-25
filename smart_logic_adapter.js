@@ -299,6 +299,29 @@
         const _disabledSpecialsSet = new Set((((_resDaily.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
         const _disabledLocSet = new Set([...(window.currentDisabledFields || []), ...(((_resDaily.overrides || {}).disabledFields) || [])].map(n => String(n).toLowerCase().trim()));
 
+        // ★ CONFIG-LEVEL facility shut-off (Facilities tab → AVAILABLE/UNAVAILABLE switch).
+        //   The PERMANENT analog of the per-date Resource disable above: the switch writes
+        //   available:false onto the room's backing field entry (app1.fields, matched by
+        //   name). The total solver honors it for SPORTS via canBlockFit (field props
+        //   available===false → rejected), but specials are pooled by NAME and never check
+        //   their HOST facility's availability — so a special hosted in a shut-off room kept
+        //   getting distributed by smart tiles. Resolve each special's facility robustly
+        //   (case-insensitive scan for the first dup carrying a .location — this camp
+        //   duplicates specials cap/lowercase with blank-location dups) and drop it when the
+        //   host room is unavailable.
+        const _cfg = window.loadGlobalSettings?.() || {};
+        const _unavailFieldsLc = new Set((((_cfg.app1 || {}).fields) || [])
+            .filter(f => f && f.name && f.available === false)
+            .map(f => String(f.name).toLowerCase().trim()));
+        const _resolveHostLoc = (nm) => {
+            const _nl = String(nm).toLowerCase();
+            for (const _s of combinedSpecials) {
+                if (_s && String(_s.name).toLowerCase() === _nl && _s.location) return _s.location;
+            }
+            const _p = activityProps && activityProps[nm];
+            return (_p && _p.location) || (window.getLocationForActivity && window.getLocationForActivity(nm)) || '';
+        };
+
         log(`\n  Checking specials for ${divisionName} at ${startMin}-${endMin}:`);
         log(`  Found ${combinedSpecials.length} total specials to check (after rainy day filter)`);
 
@@ -332,6 +355,16 @@
                 const _specLoc = (props && props.location) || special.location || specialName;
                 if (_disabledLocSet.has(String(_specLoc).toLowerCase().trim())) {
                     log(`    ❌ ${specialName}: location "${_specLoc}" disabled today in Resources`);
+                    return;
+                }
+            }
+
+            // 0.6 CONFIG facility shut-off: the special's host room was toggled UNAVAILABLE
+            //     in the Facilities tab (available:false on its backing field entry).
+            {
+                const _hostLoc = _resolveHostLoc(specialName);
+                if (_hostLoc && _unavailFieldsLc.has(String(_hostLoc).toLowerCase().trim())) {
+                    log(`    ❌ ${specialName}: host facility "${_hostLoc}" is shut off (Facilities → Unavailable)`);
                     return;
                 }
             }
