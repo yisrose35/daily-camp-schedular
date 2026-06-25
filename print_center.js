@@ -1646,6 +1646,14 @@ function getStyles() {
     '.pc3-live-tbl .cell-past{opacity:.42;}' +
     '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
     '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
+    /* Black-and-white override — applied only while capturing the live view for
+       Print / Download so the output looks like an Excel printout (white cells,
+       black borders, black text). The on-screen kiosk stays dark. */
+    '.pc3-live-bw, .pc3-live-bw .pc3-live-page, .pc3-live-bw .pc3-live-page-inner, .pc3-live-bw .pc3-live-section{background:#fff !important;}' +
+    '.pc3-live-bw .pc3-live-divname, .pc3-live-bw .pc3-live-divrange{color:#000 !important;}' +
+    '.pc3-live-bw .pc3-live-tbl th, .pc3-live-bw .pc3-live-tbl td{background:#fff !important;color:#000 !important;border:1px solid #000 !important;font-weight:600 !important;box-shadow:none !important;opacity:1 !important;}' +
+    '.pc3-live-bw .pc3-live-tbl tr:nth-child(even) td{background:#fff !important;}' +
+    '.pc3-live-bw .pc3-live-unified th.pc3-uni-grade, .pc3-live-bw .pc3-live-unified th.pc3-uni-bunk{background:#fff !important;color:#000 !important;border:1px solid #000 !important;}' +
 
     /* ── Advanced Drawer ── */
     '.pc3-drawer{position:absolute;top:0;right:0;width:300px;height:100%;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:20;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;}' +
@@ -5153,9 +5161,11 @@ function _pc3CaptureLivePages(cb) {
     _pc3LoadH2C().then(function (h2c) {
         if (!h2c) { if (window.showToast) window.showToast('Could not load the image library (offline?)', 'error'); cb(null); return; }
         if (_livePageTimer) { clearInterval(_livePageTimer); _livePageTimer = null; } // pause rotation
+        body.classList.add('pc3-live-bw'); // render output as black-and-white (Excel-style)
         var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
         var canvases = [], i = 0;
         function finish() {
+            body.classList.remove('pc3-live-bw');
             saved.forEach(function (s) { s.p.style.opacity = s.o; s.p.style.pointerEvents = s.pe; });
             startLivePageTimer();
             cb(canvases.length ? canvases : null);
@@ -5164,7 +5174,7 @@ function _pc3CaptureLivePages(cb) {
             if (i >= pages.length) return finish();
             pages.forEach(function (p, idx) { p.style.opacity = idx === i ? '1' : '0'; p.style.pointerEvents = 'none'; });
             requestAnimationFrame(function () { requestAnimationFrame(function () {
-                h2c(pages[i], { backgroundColor: '#0b1220', scale: 2, logging: false, useCORS: true })
+                h2c(pages[i], { backgroundColor: '#ffffff', scale: 2, logging: false, useCORS: true })
                     .then(function (canvas) { canvases.push(canvas); i++; next(); })
                     .catch(function () { i++; next(); });
             }); });
@@ -5191,7 +5201,7 @@ window._pc3LivePrint = function () {
         var imgs = canvases.map(function (canvas) {
             return '<img src="' + canvas.toDataURL('image/jpeg', 0.95) + '" style="display:block;width:100%;height:auto;page-break-after:always;">';
         }).join('');
-        runPrint('<div style="background:#0b1220;">' + imgs + '</div>', _currentTemplate);
+        runPrint('<div style="background:#fff;">' + imgs + '</div>', _currentTemplate);
     });
 };
 
