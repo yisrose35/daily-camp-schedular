@@ -1058,6 +1058,9 @@ function formatEntry(entry) {
         var seFiltered = seActs.filter(function (a) { return (a || '').toLowerCase().trim() !== sePoolLc; });
         return ['Swim'].concat(seFiltered).join(', ');
     }
+    // Display-name ALIAS = the EXACT cell text the user typed; show it verbatim with
+    // no location appended (e.g. "Lake", never "Lake \u2013 VR").
+    if (entry._displayName) return entry._displayName;
     var parts = [];
     var act = pcCanonicalActivityName(entry._activity || entry.sport || '');
     var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
@@ -2784,10 +2787,12 @@ function renderAutoDivisionTable(divName, bunks) {
             var dur = a.endMin - a.startMin;
             if (dur < 1) return;
 
-            var actText = pcCanonicalActivityName(a.entry._activity || a.entry.sport || '');
+            var actText = a.entry._displayName || pcCanonicalActivityName(a.entry._activity || a.entry.sport || '');
             var locText = pcResolveLocation(a.entry);
             if (actText && locText && actText.toLowerCase() === locText.toLowerCase()) locText = '';
             if (!actText && locText) { actText = locText; locText = ''; }
+            // Display-name alias = exact label: drop the location sub-line.
+            if (a.entry._displayName) locText = '';
             var nameTxt = actText || '—';
 
             var sharers = '';
@@ -3325,6 +3330,8 @@ function renderBunkSheet(bunk) {
             act = entry._partLabel || pcCanonicalActivityName(entry._activity || entry.sport || ''); // ★ Day 19 multiPart label
             loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
             if (!act && loc) { act = loc; loc = ''; }
+            // Display-name alias = exact label: show it verbatim, no location column.
+            if (entry._displayName) { act = entry._displayName; loc = ''; }
         }
         var actDisplay = act || '\u2014';
         var locDisplay = loc;
@@ -3936,9 +3943,10 @@ function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
         : ((window.divisionTimes && window.divisionTimes[divName]) || []);
     var slot = _slots81[slotIdx];
     if (!entry) return '';
-    var act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
-    var field = (typeof entry.field === 'string') ? entry.field
-        : (entry.field && entry.field.name ? entry.field.name : '');
+    var act = entry._displayName || entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label + post-edit display alias
+    // Display-name alias = exact label: don't reveal the underlying room in the tip.
+    var field = entry._displayName ? '' : ((typeof entry.field === 'string') ? entry.field
+        : (entry.field && entry.field.name ? entry.field.name : ''));
     var title = act || field || 'Free';
     if (act && field && act !== field) title = act;
 
@@ -4999,7 +5007,7 @@ function _liveContentSignature(nowMin) {
                 var slots = getPerBunkSchedule(bunk, divName);
                 for (var i = 0; i < slots.length; i++) {
                     var s = slots[i], e = getEntry(bunk, i);
-                    var label = e ? (e._partLabel || e._activity || e.sport || (e.continuation ? '~' : '')) : '';
+                    var label = e ? (e._displayName || e._partLabel || e._activity || e.sport || (e.continuation ? '~' : '')) : '';
                     // start/end relative to now → flips exactly when a cell turns current/past
                     parts.push(s.startMin + '-' + s.endMin + ':' + label +
                         (nowMin >= s.startMin ? 's' : '') + (nowMin >= s.endMin ? 'e' : ''));
@@ -6131,6 +6139,8 @@ function getExportActivityLocation(bunk, slotIdx) {
         if (entry.continuation) return { activity: '', location: '' };
     }
 
+    // Display-name alias = exact label: export it verbatim, no location column.
+    if (entry._displayName) return { activity: entry._displayName, location: '' };
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
