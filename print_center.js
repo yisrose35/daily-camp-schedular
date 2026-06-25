@@ -1864,9 +1864,7 @@ function buildMainUI() {
                 '<div class="pcx-menu" id="pc3-output-menu">' +
                     '<div class="pcx-menu-label">Download</div>' +
                     '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
-                    '<button onclick="window._pc3DownloadImage();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.download + 'Image (.jpg, B&amp;W)</button>' +
                     '<div class="pcx-menu-label">Print</div>' +
-                    '<button onclick="window._pc3PrintImage();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.print + 'Print (B&amp;W image)</button>' +
                     '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
             '</div>' +
@@ -4088,6 +4086,7 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
+                '<button class="pc3-live-close" id="pc3-live-print-btn" title="Print the live view — one division per page" onclick="window._pc3LivePrint&&window._pc3LivePrint()">Print</button>' +
                 '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the live view as JPEG image(s)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download JPEG</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
