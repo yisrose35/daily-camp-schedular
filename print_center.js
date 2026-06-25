@@ -4865,10 +4865,6 @@ function renderLiveContent() {
         var wcScale = wcTotalH > availH ? availH / wcTotalH : 1;
         wcScale = Math.min(1, wcScale); // only ever shrink, never enlarge
 
-        // Fits with room to spare → grow the tables to fill the empty vertical
-        // space so the whole camp uses the full screen.
-        if (wcScale >= 1) pcLiveFillTables(wraps, availH);
-
         _numLivePages = 1;
         _livePageIndex = 0;
 
@@ -4883,6 +4879,9 @@ function renderLiveContent() {
         wraps.forEach(function (n) { wcInner.appendChild(n); });
         wcPage.appendChild(wcInner);
         body.appendChild(wcPage);
+        // Fits with room to spare → grow the tables to fill the empty vertical
+        // space so the whole camp uses the full screen (done after placement).
+        if (wcScale >= 1) pcLiveFillTables(wraps, availH);
 
         updateLivePageIndicator();
         if (_numLivePages !== _livePrevPageCount) {
@@ -4955,9 +4954,6 @@ function renderLiveContent() {
         var inner = document.createElement('div');
         inner.className = 'pc3-live-page-inner';
         inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
-        // Page fits with room to spare → grow the tables to fill the leftover
-        // vertical space (full-width already fills horizontally).
-        if (scale >= 1) pcLiveFillTables(page.nodes, availH);
 
         // In one-division-per-page mode, label the page with the division name
         // (only for real divisions — a lone grade with no parent already shows
@@ -4971,6 +4967,12 @@ function renderLiveContent() {
         page.nodes.forEach(function (n) { inner.appendChild(n); });
         pageDiv.appendChild(inner);
         body.appendChild(pageDiv);
+        // Now the content is placed (and reflowed at the possibly-widened width
+        // from the scale trick). Grow the rows to fill the unscaled target so
+        // that after the transform scales it, it fills the screen exactly — both
+        // when the page fits (scale 1) and when it was shrunk (scale < 1, where
+        // the width expansion otherwise leaves a gap at the bottom).
+        pcLiveFillTables(page.nodes, Math.round(availH / scale));
     });
 
     // 5. Update indicator + (re)start rotation only when the page COUNT changed,
