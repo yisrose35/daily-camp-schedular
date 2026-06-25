@@ -1944,6 +1944,28 @@ function getStyles() {
     '.pc3-live-bw .pc3-live-tbl tr:nth-child(even) td{background:#fff !important;}' +
     '.pc3-live-bw .pc3-live-unified th.pc3-uni-grade, .pc3-live-bw .pc3-live-unified th.pc3-uni-bunk{background:#fff !important;color:#000 !important;border:1px solid #000 !important;}' +
 
+    /* ── Live theme panel ── in-kiosk color controls. Own neutral palette (white
+       card, dark text) so it stays readable on top of any theme being edited. */
+    '.pc3-lvtp{position:absolute;top:74px;right:18px;width:300px;max-height:calc(100% - 96px);z-index:120;background:#ffffff;border:1px solid #d9d2c4;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-lvtp-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #ece6da;font-size:14px;font-weight:700;color:#23252a;}' +
+    '.pc3-lvtp-x{border:none;background:none;font-size:18px;line-height:1;color:#8a8377;cursor:pointer;padding:2px 4px;}' +
+    '.pc3-lvtp-x:hover{color:#23252a;}' +
+    '.pc3-lvtp-body{padding:12px 16px 16px;overflow-y:auto;}' +
+    '.pc3-lvtp-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#a79f8e;margin:4px 0 8px;}' +
+    '.pc3-lvtp-presets{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
+    '.pc3-lvtp-chip{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #e2dccf;border-radius:11px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:all .14s;}' +
+    '.pc3-lvtp-chip:hover{border-color:#147D91;}' +
+    '.pc3-lvtp-chip.active{border-color:#147D91;background:#dff1f4;box-shadow:0 0 0 1px #147D91;}' +
+    '.pc3-lvtp-sw{display:flex;height:20px;border-radius:6px;overflow:hidden;border:1px solid #e7e5e4;}' +
+    '.pc3-lvtp-sw span{flex:1;height:100%;}' +
+    '.pc3-lvtp-nm{font-size:12px;font-weight:600;color:#3a382f;}' +
+    '.pc3-lvtp-cc{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;}' +
+    '.pc3-lvtp-row{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:#5b5446;font-weight:500;}' +
+    '.pc3-lvtp-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+    '.pc3-lvtp-row input[type="color"]{width:30px;height:24px;flex-shrink:0;padding:1px;border:1px solid #e2dccf;border-radius:5px;background:#fff;cursor:pointer;}' +
+    '.pc3-lvtp-reset{width:100%;margin-top:12px;height:34px;border:1px solid #e2dccf;border-radius:9px;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#5b5446;cursor:pointer;}' +
+    '.pc3-lvtp-reset:hover{border-color:#147D91;color:#0F5F6E;}' +
+
     /* ── Advanced Drawer ── */
     '.pc3-drawer{position:absolute;top:0;right:0;width:300px;height:100%;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:20;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;}' +
     '.pc3-drawer.open{transform:translateX(0);}' +
@@ -2121,26 +2143,6 @@ function buildMainUI() {
         '.pc3.pc3-focus .pcx-bar,.pc3.pc3-focus .pcx-rail,.pc3.pc3-focus .pc3-zoom-dock,.pc3.pc3-focus .pc3-sidebar-toggle{display:none!important;}' +
         '.pc3.pc3-focus .pcx-canvas{padding:0;background:#fff;}' +
         '.pc3.pc3-focus .pc3-focus-exit{display:inline-flex;}' +
-        /* Live screen theme chips */
-        '.pcx-live-theme-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
-        '.pcx-live-theme-btn{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #e2dccf;border-radius:11px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:all .14s;}' +
-        '.pcx-live-theme-btn:hover{border-color:#147D91;}' +
-        '.pcx-live-theme-btn.active{border-color:#147D91;background:#dff1f4;box-shadow:0 0 0 1px #147D91;}' +
-        '.pcx-live-sw{display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid #e7e5e4;}' +
-        '.pcx-live-sw span{flex:1;height:100%;}' +
-        '.pcx-live-theme-nm{font-size:12px;font-weight:600;color:#3a382f;}' +
-        /* Live custom color pickers */
-        '.pcx-live-custom{margin-top:10px;border-top:1px solid #efe9dd;padding-top:8px;}' +
-        '.pcx-live-custom summary{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#a79f8e;cursor:pointer;list-style:none;user-select:none;padding:2px 0;}' +
-        '.pcx-live-custom summary::-webkit-details-marker{display:none;}' +
-        '.pcx-live-custom summary::before{content:"\\25B8  ";color:#bcb3a2;}' +
-        '.pcx-live-custom[open] summary::before{content:"\\25BE  ";color:#147D91;}' +
-        '.pcx-live-cc-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;margin:10px 0 4px;}' +
-        '.pcx-live-cc{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:#5b5446;font-weight:500;}' +
-        '.pcx-live-cc span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
-        '.pcx-live-cc input[type="color"]{width:30px;height:24px;flex-shrink:0;padding:1px;border:1px solid #e2dccf;border-radius:5px;background:#fff;cursor:pointer;}' +
-        '.pcx-live-reset{width:100%;margin-top:8px;height:32px;border:1px solid #e2dccf;border-radius:9px;background:#fff;font-family:inherit;font-size:11.5px;font-weight:600;color:#5b5446;cursor:pointer;}' +
-        '.pcx-live-reset:hover{border-color:#147D91;color:#0F5F6E;}' +
     '</style>';
 
     return getStyles() + chrome +
@@ -2212,35 +2214,6 @@ function buildMainUI() {
                     '<select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select>' +
                     '<select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select>' +
                 '</div>' +
-            '</div>' +
-            /* Live screen theme — the kiosk/TV display palette */
-            '<div class="pcx-section">' +
-                '<div class="pcx-label">Live screen theme</div>' +
-                '<div style="font-size:11px;color:#9a917f;margin:-6px 0 10px;line-height:1.4;">Colors for the fullscreen Live View on a TV or projector.</div>' +
-                '<div class="pcx-live-theme-grid" id="pc3-live-theme-grid">' +
-                    LIVE_THEMES.map(function (th) {
-                        var active = _pcGetLiveThemeId() === th.id;
-                        return '<button type="button" class="pcx-live-theme-btn' + (active ? ' active' : '') + '" data-live-theme="' + th.id + '" title="' + escHtml(th.description) + '">' +
-                            '<span class="pcx-live-sw">' + th.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
-                            '<span class="pcx-live-theme-nm">' + escHtml(th.name) + '</span>' +
-                        '</button>';
-                    }).join('') +
-                '</div>' +
-                /* Per-color fine-tuning, layered on the chosen preset */
-                '<details class="pcx-live-custom"' + (Object.keys(_pcGetLiveCustom()).length ? ' open' : '') + '>' +
-                    '<summary>Customize colors</summary>' +
-                    '<div class="pcx-live-cc-grid" id="pc3-live-custom-grid">' +
-                        (function () {
-                            var eff = _pcEffectiveLiveVars();
-                            return LIVE_CUSTOM_FIELDS.map(function (f) {
-                                var val = eff[f.vars[0]] || '#000000';
-                                return '<label class="pcx-live-cc"><span>' + escHtml(f.label) + '</span>' +
-                                    '<input type="color" data-live-custom="' + f.key + '" value="' + val + '"></label>';
-                            }).join('');
-                        })() +
-                    '</div>' +
-                    '<button type="button" class="pcx-live-reset" id="pc3-live-reset-colors">Reset to preset</button>' +
-                '</details>' +
             '</div>' +
         '</aside>' +
 
@@ -4431,12 +4404,17 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
+                '<button class="pc3-live-fit" id="pc3-live-theme-btn" title="Change the screen colors" onclick="window._pcToggleLiveThemePanel&&window._pcToggleLiveThemePanel()">🎨 Colors</button>' +
                 '<button class="pc3-live-close" id="pc3-live-print-btn" title="Print the live view — one division per page" onclick="window._pc3LivePrint&&window._pc3LivePrint()">Print</button>' +
                 '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the schedule in color — one division per page (PDF)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
+        '<div class="pc3-lvtp" id="pc3-live-theme-panel" style="display:none;">' +
+            '<div class="pc3-lvtp-head">Screen colors<button class="pc3-lvtp-x" title="Close" onclick="window._pcToggleLiveThemePanel&&window._pcToggleLiveThemePanel()">&times;</button></div>' +
+            '<div class="pc3-lvtp-body" id="pc3-live-theme-panel-body"></div>' +
+        '</div>' +
         '</div>';
 
     // Paint the camp's chosen kiosk palette onto the freshly-built overlay.
@@ -6712,55 +6690,8 @@ function bindAll() {
         });
     });
 
-    // Live screen theme chips — persist the choice and, if a kiosk window is
-    // already open, re-skin it instantly (localStorage is shared, so a fresh
-    // Live View picks it up on boot regardless). Picking a preset clears any
-    // custom color overrides so it acts as a clean starting point.
-    function _pcPushLiveTheme(id) {
-        try {
-            if (_liveWindow && !_liveWindow.closed && _liveWindow._pcApplyLiveTheme) _liveWindow._pcApplyLiveTheme(id);
-        } catch (e) {}
-    }
-    // Re-sync the custom color inputs to the current effective palette (after a
-    // preset switch or reset, the swatches must reflect the new base values).
-    function _pcSyncLiveCustomInputs() {
-        var eff = _pcEffectiveLiveVars();
-        document.querySelectorAll('[data-live-custom]').forEach(function (inp) {
-            var f = null;
-            for (var i = 0; i < LIVE_CUSTOM_FIELDS.length; i++) {
-                if (LIVE_CUSTOM_FIELDS[i].key === inp.getAttribute('data-live-custom')) { f = LIVE_CUSTOM_FIELDS[i]; break; }
-            }
-            if (f && eff[f.vars[0]]) inp.value = eff[f.vars[0]];
-        });
-    }
-    document.querySelectorAll('[data-live-theme]').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var id = this.getAttribute('data-live-theme');
-            try { localStorage.setItem(_LIVE_THEME_KEY, id); } catch (e) {}
-            _pcSetLiveCustom({}); // preset = fresh start, drop overrides
-            document.querySelectorAll('[data-live-theme]').forEach(function (b) {
-                b.classList.toggle('active', b.getAttribute('data-live-theme') === id);
-            });
-            _pcSyncLiveCustomInputs();
-            _pcPushLiveTheme(id);
-        });
-    });
-
-    // Live custom color pickers — layer per-color overrides on the preset.
-    document.querySelectorAll('[data-live-custom]').forEach(function (inp) {
-        inp.addEventListener('input', function () {
-            var custom = _pcGetLiveCustom();
-            custom[this.getAttribute('data-live-custom')] = this.value;
-            _pcSetLiveCustom(custom);
-            _pcPushLiveTheme();
-        });
-    });
-    var _lvReset = el('pc3-live-reset-colors');
-    if (_lvReset) _lvReset.addEventListener('click', function () {
-        _pcSetLiveCustom({});
-        _pcSyncLiveCustomInputs();
-        _pcPushLiveTheme();
-    });
+    // (Live View color controls now live inside the kiosk window itself — see
+    // the "🎨 Colors" button + _pcToggleLiveThemePanel/_pcLiveSetPreset/etc.)
 
     // Popovers — Packs / Output / Style / Layout
     var popoverPairs = [
@@ -7584,6 +7515,60 @@ window.livePageNav = livePageNav;
 // Exposed so the (popup) Live View can be re-skinned from its own boot AND so
 // the opener can push a theme change into an already-open kiosk window.
 window._pcApplyLiveTheme = _pcApplyLiveTheme;
+
+// ── In-kiosk theme panel ── the live "🎨 Colors" button opens this; all
+// controls live inside the Live View window so you tweak while watching the
+// real screen. Reads/writes the same localStorage keys as everything else.
+function _pcBuildLiveThemePanelInner() {
+    var curId = _pcGetLiveThemeId();
+    var eff = _pcEffectiveLiveVars();
+    var chips = LIVE_THEMES.map(function (th) {
+        return '<button type="button" class="pc3-lvtp-chip' + (curId === th.id ? ' active' : '') + '" title="' + escHtml(th.description) + '" onclick="window._pcLiveSetPreset(\'' + th.id + '\')">' +
+            '<span class="pc3-lvtp-sw">' + th.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
+            '<span class="pc3-lvtp-nm">' + escHtml(th.name) + '</span>' +
+        '</button>';
+    }).join('');
+    var pickers = LIVE_CUSTOM_FIELDS.map(function (f) {
+        var val = eff[f.vars[0]] || '#000000';
+        return '<label class="pc3-lvtp-row"><span>' + escHtml(f.label) + '</span>' +
+            '<input type="color" value="' + val + '" oninput="window._pcLiveSetCustom(\'' + f.key + '\', this.value)"></label>';
+    }).join('');
+    return '<div class="pc3-lvtp-label">Theme</div>' +
+        '<div class="pc3-lvtp-presets">' + chips + '</div>' +
+        '<div class="pc3-lvtp-label" style="margin-top:14px;">Customize</div>' +
+        '<div class="pc3-lvtp-cc">' + pickers + '</div>' +
+        '<button type="button" class="pc3-lvtp-reset" onclick="window._pcLiveResetColors()">Reset to preset</button>';
+}
+function _pcRefreshLiveThemePanel() {
+    var body = document.getElementById('pc3-live-theme-panel-body');
+    if (body) body.innerHTML = _pcBuildLiveThemePanelInner();
+}
+window._pcToggleLiveThemePanel = function () {
+    var panel = document.getElementById('pc3-live-theme-panel');
+    if (!panel) return;
+    var show = panel.style.display === 'none' || !panel.style.display;
+    if (show) _pcRefreshLiveThemePanel();
+    panel.style.display = show ? 'flex' : 'none';
+    var btn = document.getElementById('pc3-live-theme-btn');
+    if (btn) btn.classList.toggle('on', show);
+};
+window._pcLiveSetPreset = function (id) {
+    try { localStorage.setItem(_LIVE_THEME_KEY, id); } catch (e) {}
+    _pcSetLiveCustom({});            // preset = clean starting point
+    _pcApplyLiveTheme(id);
+    _pcRefreshLiveThemePanel();      // reflect new active chip + reset picker values
+};
+window._pcLiveSetCustom = function (key, val) {
+    var c = _pcGetLiveCustom();
+    c[key] = val;
+    _pcSetLiveCustom(c);
+    _pcApplyLiveTheme();             // no panel rebuild — keep the open color picker steady
+};
+window._pcLiveResetColors = function () {
+    _pcSetLiveCustom({});
+    _pcApplyLiveTheme();
+    _pcRefreshLiveThemePanel();
+};
 // "One division per page" toggle uses inline onclick="toggleLivePerDiv()",
 // which resolves against the popup window's global scope — export it like
 // livePageNav so the button isn't a silent no-op.
