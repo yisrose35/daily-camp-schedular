@@ -246,6 +246,16 @@ var USER_PACKS = [
         layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false, showPageBreaks: true }
     },
     {
+        id: 'shared-timeline',
+        name: 'Shared Timeline',
+        tagline: 'One time axis, bunks across the top — each division on its own page.',
+        icon: 'grid',
+        scope: 'all',
+        preset: 'classic',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false, showPageBreaks: true, sharedTimeline: true }
+    },
+    {
         id: 'head-counselor',
         name: 'Head Counselor',
         tagline: 'Per-bunk sheets, big type — one slip per bunk.',
@@ -297,12 +307,12 @@ function buildUserPacksMenu() {
         } else {
             control = '<button class="pcx-up-go" data-userpack="' + p.id + '">Apply</button>';
         }
-        html += '<div class="pcx-up-row">' +
-            '<span class="pcx-up-icon">' + icon + '</span>' +
-            '<div class="pcx-up-text">' +
-                '<div class="pcx-up-name">' + escHtml(p.name) + '</div>' +
-                '<div class="pcx-up-tag">' + escHtml(p.tagline) + '</div>' +
+        html += '<div class="pcx-up-card">' +
+            '<div class="pcx-up-head">' +
+                '<span class="pcx-up-icon">' + icon + '</span>' +
+                '<span class="pcx-up-name">' + escHtml(p.name) + '</span>' +
             '</div>' +
+            '<div class="pcx-up-tag">' + escHtml(p.tagline) + '</div>' +
             control +
         '</div>';
     });
@@ -1751,17 +1761,21 @@ function buildMainUI() {
         '.pcx-menu button:hover{background:#f4f1ea;}' +
         '.pcx-menu button svg{width:17px;height:17px;color:#0F5F6E;}' +
         '.pcx-menu .pcx-menu-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#b3ab9c;padding:7px 11px 3px;}' +
-        /* User Packs popover — a tailored pack per role/recipient */
-        '#pc3-userpacks-menu{min-width:300px;}' +
-        '.pcx-up-row{display:flex;align-items:center;gap:11px;width:100%;padding:9px 11px;border-radius:10px;}' +
-        '.pcx-up-row:hover{background:#f4f1ea;}' +
+        /* User Packs popover — a tailored pack per role/recipient.
+           Each pack is a stacked card (icon+name, tagline, full-width control)
+           so it stays readable at any width, including narrow/mobile. */
+        '#pc3-userpacks-menu{width:300px;max-width:calc(100vw - 24px);max-height:min(560px,80vh);overflow-y:auto;}' +
+        '.pcx-up-card{display:flex;flex-direction:column;gap:7px;width:100%;padding:11px 12px;border-radius:11px;border:1px solid transparent;box-sizing:border-box;}' +
+        '.pcx-up-card + .pcx-up-card{margin-top:2px;}' +
+        '.pcx-up-card:hover{background:#faf8f3;border-color:#ece6da;}' +
+        '.pcx-up-head{display:flex;align-items:center;gap:10px;}' +
         '.pcx-up-icon{width:30px;height:30px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;background:#e3f3f6;color:#0F5F6E;border-radius:8px;}' +
-        '.pcx-up-text{flex:1;min-width:0;}' +
-        '.pcx-up-name{font-size:13.5px;font-weight:700;color:#23252a;line-height:1.2;}' +
-        '.pcx-up-tag{font-size:11px;color:#8a8170;line-height:1.35;margin-top:1px;}' +
-        '.pcx-up-go{flex-shrink:0;width:auto;padding:7px 13px;border:1px solid #0F5F6E;background:#0F5F6E;color:#fff;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;}' +
+        '.pcx-up-icon svg{width:17px;height:17px;}' +
+        '.pcx-up-name{font-size:14px;font-weight:700;color:#23252a;line-height:1.25;}' +
+        '.pcx-up-tag{font-size:11.5px;color:#8a8170;line-height:1.4;}' +
+        '.pcx-up-go{width:100%;padding:9px 12px;border:1px solid #0F5F6E;background:#0F5F6E;color:#fff;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;text-align:center;}' +
         '.pcx-up-go:hover{background:#0c4e5a;}' +
-        '.pcx-up-sel{flex-shrink:0;max-width:140px;padding:7px 8px;border:1px solid #d9d3c7;border-radius:8px;font-family:inherit;font-size:12px;font-weight:600;color:#23252a;background:#fff;cursor:pointer;}' +
+        '.pcx-up-sel{width:100%;box-sizing:border-box;padding:9px 10px;border:1px solid #d9d3c7;border-radius:9px;font-family:inherit;font-size:12.5px;font-weight:600;color:#23252a;background:#fff;cursor:pointer;}' +
         '.pcx-up-sel:focus{outline:none;border-color:#0F5F6E;box-shadow:0 0 0 3px rgba(20,125,145,.12);}' +
         '.pcx-body{flex:1;display:flex;min-height:0;overflow:hidden;}' +
         /* RAIL — warm cream */
@@ -2214,8 +2228,15 @@ function renderDivisionSheet(divName) {
 
     if (auto) {
         // ★★★ AUTO MODE: Per-bunk rendering ★★★
-        // Each bunk may have different time slots, so we build a unified time axis
-        html += renderAutoDivisionTable(divName, bunks);
+        // Shared-timeline pack → one vertical time axis with bunks as columns
+        // (mirrors the Live "Shared timeline" view). Otherwise the default
+        // horizontal per-bunk timeline (each bunk a row).
+        if (t.sharedTimeline) {
+            html += renderAutoBunksTop(divName, bunks);
+        } else {
+            // Each bunk may have different time slots, so we build a unified time axis
+            html += renderAutoDivisionTable(divName, bunks);
+        }
     } else {
         // ★★★ MANUAL MODE: Slot-based rendering ★★★
         var blocks = buildDivisionBlocks(divName);
@@ -2522,6 +2543,116 @@ function renderAutoDivisionTable(divName, bunks) {
     });
 
     html += '</div></div>';
+    return html;
+}
+
+// ── AUTO MODE: Shared timeline (bunks on top, one vertical time axis) ──
+// Print analogue of the Live "Shared timeline" view: a single table whose
+// left column is the time axis and whose columns are the division's bunks.
+// Each bunk may have its own slot boundaries, so we build a unified set of
+// boundaries (like buildLiveUnifiedSectionHTML) and merge identical adjacent
+// tiles (same activity across bunks AND across time → one cell). Styled with
+// the same .pc3-tbl / cell-* classes as the other print sheets (light theme).
+function renderAutoBunksTop(divName, bunks) {
+    var cols = bunks.map(function (b) { return { bunk: b, segs: [] }; });
+    if (!cols.length) return '';
+
+    // 1. Per-bunk segments (merge continuation slots into their parent tile).
+    var boundSet = {};
+    cols.forEach(function (c) {
+        var slots = getPerBunkSchedule(c.bunk, divName);
+        var segs = [];
+        for (var i = 0; i < slots.length; i++) {
+            var entry = getEntry(c.bunk, i);
+            if (entry && entry.continuation && segs.length > 0) { segs[segs.length - 1].endMin = slots[i].endMin; continue; }
+            segs.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
+        }
+        c.segs = segs;
+        segs.forEach(function (s) { boundSet[s.startMin] = 1; boundSet[s.endMin] = 1; });
+    });
+
+    var bounds = Object.keys(boundSet).map(Number).sort(function (a, b) { return a - b; });
+    if (bounds.length < 2) return '';
+    var rows = [];
+    for (var bi = 0; bi < bounds.length - 1; bi++) rows.push({ startMin: bounds[bi], endMin: bounds[bi + 1] });
+
+    // Map each bunk to the segment covering each row (null = gap → free/league).
+    cols.forEach(function (c) {
+        c.rowSeg = rows.map(function (r) {
+            var found = null;
+            c.segs.forEach(function (s) { if (s.startMin <= r.startMin && s.endMin >= r.endMin) found = s; });
+            return found;
+        });
+    });
+
+    function cellInfo(c, seg, r) {
+        var txt, cls;
+        if (!seg) {
+            var lg = pcLeagueInfoAt(divName, r.startMin);
+            if (lg) { txt = lg.label + (lg.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' │ ' + lg.matchups.join(', ') : ''); cls = 'cell-league'; }
+            else { txt = '—'; cls = 'cell-free'; }
+        } else {
+            var isLeagueAct = !!(seg.entry && (seg.entry._h2h || seg.entry._league || seg.entry._isSpecialtyLeague || seg.entry._allMatchups));
+            var leagueInfo = (isLeagueAct || !seg.entry) ? pcLeagueInfoAt(divName, seg.startMin) : null;
+            if (isLeagueAct || leagueInfo) {
+                var lbl = (seg.entry && (seg.entry._gameLabel || seg.entry._leagueName)) || (leagueInfo && leagueInfo.label) || 'League Game';
+                var ms = (leagueInfo && leagueInfo.matchups) || [];
+                txt = lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' │ ' + ms.join(', ') : '');
+                cls = 'cell-league';
+            } else {
+                txt = seg.entry ? formatEntry(seg.entry) : '—';
+                cls = 'cell-' + seg.type;
+            }
+        }
+        return { txt: txt, cls: cls };
+    }
+
+    var t = _currentTemplate;
+    var sheetId = pcNextSheetId();
+    var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
+    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto-bunks-top" data-day-start="' + bounds[0] + '" data-day-end="' + bounds[bounds.length - 1] + '">';
+    html += '<thead><tr>';
+    html += '<th class="corner" data-cell-text="Time" style="min-width:' + t.timeColWidth + 'px;">Time</th>';
+    bunks.forEach(function (b) { html += '<th data-cell-text="' + escHtml(b) + '">' + escHtml(b) + '</th>'; });
+    html += '</tr></thead><tbody>';
+
+    // Build a descriptor grid, then merge identical neighbors into rectangles.
+    var nR = rows.length, nC = cols.length;
+    var grid = [];
+    for (var gr = 0; gr < nR; gr++) {
+        grid[gr] = [];
+        for (var gc = 0; gc < nC; gc++) {
+            var seg = cols[gc].rowSeg[gr];
+            var info = cellInfo(cols[gc], seg, rows[gr]);
+            var s = seg ? seg.startMin : rows[gr].startMin;
+            var e = seg ? seg.endMin : rows[gr].endMin;
+            grid[gr][gc] = { text: info.txt, cls: info.cls, key: info.txt + '|' + info.cls + '|' + s + '|' + e };
+        }
+    }
+    var done = {};
+    var kk = function (a, b) { return a + ':' + b; };
+    rows.forEach(function (r, ri) {
+        html += '<tr data-block-start="' + r.startMin + '" data-block-end="' + r.endMin + '">';
+        html += '<th class="row-head" data-cell-text="' + escHtml(minutesToTimeLabel(r.startMin)) + '">' + escHtml(minutesToTimeLabel(r.startMin)) + '</th>';
+        for (var ci = 0; ci < nC; ci++) {
+            if (done[kk(ri, ci)]) continue;
+            var cell = grid[ri][ci];
+            var colspan = 1;
+            while (ci + colspan < nC && !done[kk(ri, ci + colspan)] && grid[ri][ci + colspan].key === cell.key) colspan++;
+            var rowspan = 1;
+            extend: while (ri + rowspan < nR) {
+                for (var cc = ci; cc < ci + colspan; cc++) {
+                    if (done[kk(ri + rowspan, cc)] || grid[ri + rowspan][cc].key !== cell.key) break extend;
+                }
+                rowspan++;
+            }
+            for (var rr = ri; rr < ri + rowspan; rr++) for (var c2 = ci; c2 < ci + colspan; c2++) done[kk(rr, c2)] = 1;
+            html += '<td class="' + cell.cls + '"' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
+                ' data-cell-text="' + escHtml(cell.text) + '" style="text-align:center;">' + escHtml(cell.text) + '</td>';
+        }
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
     return html;
 }
 
@@ -6383,7 +6514,9 @@ window._pc3ApplyUserPack = function (packId, divisionName) {
     if (!pack) return;
     // 1. Preset (color scheme)
     if (pack.preset) window._pc3ApplyPreset(pack.preset);
-    // 2. Layout flags
+    // 2. Layout flags. Clear opt-in flags first so they never leak between
+    //    packs (only the Shared Timeline pack turns sharedTimeline back on).
+    _currentTemplate.sharedTimeline = false;
     if (pack.layout) {
         Object.keys(pack.layout).forEach(function (k) { _currentTemplate[k] = pack.layout[k]; });
         if (Object.prototype.hasOwnProperty.call(pack.layout, 'pageBreakPerBunk')) {
