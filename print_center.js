@@ -4079,7 +4079,6 @@ function runLiveStandalone() {
         '<div class="pc3-live-overlay" id="pc3-live-overlay" style="position:fixed;inset:0;">' +
         '<div class="pc3-live-header">' +
             '<div class="pc3-live-headleft">' +
-                '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
                 '<div class="pc3-live-date" id="pc3-live-date"></div>' +
             '</div>' +
             '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:8px;"></div>' +
@@ -4089,6 +4088,7 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
+                '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the live view as JPEG image(s)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download JPEG</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
