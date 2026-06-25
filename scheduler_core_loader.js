@@ -42,24 +42,43 @@
     function filterSpecialsByFacility(specials) {
         if (!Array.isArray(specials) || specials.length === 0) return specials || [];
         let valid;
+        let unavailable;
         try {
             const facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
             const facNames = Array.isArray(facs) ? facs.map(f => (f && f.name) || f) : (facs ? Object.keys(facs) : []);
-            const fieldNames = (getApp1Settings().fields || []).map(f => (f && f.name) || f);
+            const allFields = (getApp1Settings().fields || []);
+            const fieldNames = allFields.map(f => (f && f.name) || f);
             const names = facNames.concat(fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
             if (!names.length) return specials; // registry unavailable → fail open
             valid = new Set(names);
+            // ★ CONFIG-LEVEL facility shut-off: the Facilities tab AVAILABLE/UNAVAILABLE
+            //   switch writes available:false onto the room's backing field entry. Specials
+            //   are pooled by NAME so the solver never checks the host room's availability —
+            //   drop specials whose host facility is shut off (parity with the SmartTile +
+            //   fill-pass gates; the per-date Resource version is handled elsewhere).
+            unavailable = new Set(allFields
+                .filter(f => f && f.name && f.available === false)
+                .map(f => String(f.name).trim().toLowerCase()));
         } catch (_e) { return specials; }
         const dropped = [];
+        const offline = [];
         const kept = specials.filter(s => {
             const loc = s && s.location;
             if (!loc || !String(loc).trim()) return true;                 // no location requirement → keep
-            if (valid.has(String(loc).trim().toLowerCase())) return true; // location exists → keep
+            const locLc = String(loc).trim().toLowerCase();
+            if (unavailable.has(locLc)) {                                 // host room shut off → drop
+                offline.push((s && s.name || '?') + ' → "' + loc + '"');
+                return false;
+            }
+            if (valid.has(locLc)) return true;                           // location exists → keep
             dropped.push((s && s.name || '?') + ' → "' + loc + '"');
             return false;                                                 // orphan location → drop
         });
         if (dropped.length) {
             console.warn('[LoadData] ⚠️ Skipped ' + dropped.length + ' special activity(ies) with a missing facility — create the facility or remove the activity: ' + dropped.join(', '));
+        }
+        if (offline.length) {
+            console.warn('[LoadData] ⚠️ Skipped ' + offline.length + ' special activity(ies) whose facility is shut off (Facilities → Unavailable): ' + offline.join(', '));
         }
         return kept;
     }
