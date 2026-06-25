@@ -4703,16 +4703,17 @@ function _liveContentSignature(nowMin) {
 }
 
 // —— Paginated live view renderer ————————————————————————————————————————————
-// Size each table's font to its ACTUAL content (fully dynamic — no magic
-// per-column factor). For every body cell we measure its real rendered width
-// (which already accounts for colspan) and the pixel width of its widest single
-// word; the table font is the largest size at which no word overflows its own
-// cell. So a few-bunk table (wide columns) gets big text and a many-bunk table
-// (narrow columns) gets just enough to keep words whole — adapting to whatever
-// the schedule actually contains and to the screen size. Cells are em-based, so
-// one table font-size scales every cell + the bunk/grade/time headers. Run
-// BEFORE pcLiveFillTables (font changes row heights; the fill then tops off).
-function pcLiveFitFont(nodes) {
+// Size each table's font fully dynamically to MAXIMIZE pixel usage. For each
+// table we grow the font as large as possible until EITHER a single word would
+// overflow its cell (no mid-word breaks) OR the table fills its vertical band
+// (its share of the screen) — whichever comes first. So a few-bunk table (wide
+// columns, few rows) gets big text that fills its band, while a many-bunk table
+// (narrow columns) gets just enough to keep words whole, and the row-fill then
+// tops off any band it couldn't fill with font alone. No magic constants beyond
+// a sane floor/ceiling; everything else is measured from the real content and
+// the real screen size. Cells are em-based, so one table font-size scales every
+// cell + the bunk/grade/time headers. `availH` is the unscaled target height.
+function pcLiveFitFont(nodes, availH) {
     if (!nodes || !nodes.length) return;
     var meas = document.createElement('span');
     meas.style.cssText = 'position:absolute;left:-9999px;top:-9999px;white-space:nowrap;font-weight:700;visibility:hidden;';
@@ -4726,27 +4727,47 @@ function pcLiveFitFont(nodes) {
         cache[k] = v; return v;
     }
     try {
+        // 1. Per table: word-break ceiling (largest font keeping every word in
+        //    its cell) + natural size (to share out the screen height).
+        var items = [], sumNat = 0;
         nodes.forEach(function (n) {
             var tbl = n.querySelector('.pc3-live-tbl');
             if (!tbl) return;
             var fam = getComputedStyle(tbl).fontFamily;
             var cells = tbl.querySelectorAll('tbody td');
-            var cap = 44; // px — the largest font that keeps every word in its cell
+            var cap = 120;
             for (var i = 0; i < cells.length; i++) {
                 var cell = cells[i];
-                var usable = cell.clientWidth - 18; // minus cell padding + slack
+                var usable = cell.clientWidth - 18;
                 if (usable < 8) continue;
                 var words = (cell.textContent || '').trim().split(/\s+/);
                 var widest = 0;
                 for (var w = 0; w < words.length; w++) {
-                    if (!words[w] || words[w] === '—') continue; // skip the "—" free marker
+                    if (!words[w] || words[w] === '—') continue;
                     var pp = wordPerPx(words[w], fam);
                     if (pp > widest) widest = pp;
                 }
-                if (widest > 0) { var maxFs = usable / widest; if (maxFs < cap) cap = maxFs; }
+                if (widest > 0) { var mf = usable / widest; if (mf < cap) cap = mf; }
             }
-            var fs = Math.max(13, Math.min(40, Math.floor(cap)));
-            tbl.style.fontSize = fs + 'px';
+            cap = Math.max(13, Math.min(120, Math.floor(cap)));
+            var head = n.querySelector('.pc3-live-divhead');
+            var nat = n.offsetHeight;
+            sumNat += nat;
+            items.push({ tbl: tbl, cap: cap, node: n, nat: nat, headH: head ? head.offsetHeight : 0 });
+        });
+        if (!items.length) return;
+        // 2. Each table fills its own band (share of the height). Binary-search
+        //    the largest font (<= word cap) whose section fits the band.
+        var contentSpace = availH - 36 - items.length * 22;
+        items.forEach(function (it) {
+            var band = Math.max(60, Math.round(contentSpace * (it.nat / (sumNat || 1))) + it.headH);
+            var lo = 13, hi = it.cap, best = 13;
+            for (var k = 0; k < 13; k++) {
+                var mid = (lo + hi) / 2;
+                it.tbl.style.fontSize = mid + 'px';
+                if (it.node.offsetHeight <= band) { best = mid; lo = mid; } else { hi = mid; }
+            }
+            it.tbl.style.fontSize = Math.floor(best) + 'px';
         });
     } finally {
         document.body.removeChild(meas);
@@ -4929,9 +4950,9 @@ function renderLiveContent() {
         wraps.forEach(function (n) { wcInner.appendChild(n); });
         wcPage.appendChild(wcInner);
         body.appendChild(wcPage);
-        // Size fonts to columns, then fill any leftover vertical space so the
-        // whole camp uses the full screen (done after placement).
-        pcLiveFitFont(wraps);
+        // Grow fonts to fill (per table), then fill any leftover vertical space
+        // so the whole camp uses the full screen (done after placement).
+        pcLiveFitFont(wraps, Math.round(availH / Math.max(wcScale, 0.05)));
         if (wcScale >= 1) pcLiveFillTables(wraps, availH);
 
         updateLivePageIndicator();
@@ -5023,7 +5044,7 @@ function renderLiveContent() {
         // (big text where bunks are few), then grow the rows to fill the unscaled
         // target so that after the transform scales it, it fills the screen
         // exactly — both when the page fits (scale 1) and when it was shrunk.
-        pcLiveFitFont(page.nodes);
+        pcLiveFitFont(page.nodes, Math.round(availH / scale));
         pcLiveFillTables(page.nodes, Math.round(availH / scale));
     });
 
