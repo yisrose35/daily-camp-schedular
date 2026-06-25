@@ -5159,7 +5159,7 @@ function _pc3LoadH2C() {
     });
 }
 // Capture every live page to a canvas, in order. cb(canvasesOrNull).
-function _pc3CaptureLivePages(cb) {
+function _pc3CaptureLivePages(cb, bw) {
     var body = el('pc3-live-body');
     if (!body) { cb(null); return; }
     var pages = Array.prototype.slice.call(body.querySelectorAll('[id^="lp-"]'));
@@ -5168,16 +5168,16 @@ function _pc3CaptureLivePages(cb) {
     _pc3LoadH2C().then(function (h2c) {
         if (!h2c) { if (window.showToast) window.showToast('Could not load the image library (offline?)', 'error'); cb(null); return; }
         if (_livePageTimer) { clearInterval(_livePageTimer); _livePageTimer = null; } // pause rotation
-        // Black-and-white: the class must sit on the captured element itself.
-        // html2canvas clones only the page subtree into a sandbox, so a class on
-        // an ancestor (pc3-live-body) is lost there and the dark cell rules win.
-        body.classList.add('pc3-live-bw');
-        pages.forEach(function (p) { p.classList.add('pc3-live-bw'); });
+        // Optional black-and-white (Excel-style) for print. JPEG keeps the actual
+        // colored schedule. The bw class must sit on each captured element —
+        // html2canvas clones only the page subtree, so a class on an ancestor is
+        // lost there and the dark cell rules win.
+        if (bw) { body.classList.add('pc3-live-bw'); pages.forEach(function (p) { p.classList.add('pc3-live-bw'); }); }
+        var bg = bw ? '#ffffff' : '#0b1220';
         var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
         var canvases = [], i = 0;
         function finish() {
-            body.classList.remove('pc3-live-bw');
-            pages.forEach(function (p) { p.classList.remove('pc3-live-bw'); });
+            if (bw) { body.classList.remove('pc3-live-bw'); pages.forEach(function (p) { p.classList.remove('pc3-live-bw'); }); }
             saved.forEach(function (s) { s.p.style.opacity = s.o; s.p.style.pointerEvents = s.pe; });
             startLivePageTimer();
             cb(canvases.length ? canvases : null);
@@ -5186,7 +5186,7 @@ function _pc3CaptureLivePages(cb) {
             if (i >= pages.length) return finish();
             pages.forEach(function (p, idx) { p.style.opacity = idx === i ? '1' : '0'; p.style.pointerEvents = 'none'; });
             requestAnimationFrame(function () { requestAnimationFrame(function () {
-                h2c(pages[i], { backgroundColor: '#ffffff', scale: 2, logging: false, useCORS: true })
+                h2c(pages[i], { backgroundColor: bg, scale: 2, logging: false, useCORS: true })
                     .then(function (canvas) { canvases.push(canvas); i++; next(); })
                     .catch(function () { i++; next(); });
             }); });
@@ -5205,7 +5205,7 @@ window._pc3LiveDownloadJpeg = function () {
             document.body.appendChild(a); a.click(); a.remove();
         });
         if (window.showToast) window.showToast('Saved ' + canvases.length + ' image' + (canvases.length > 1 ? 's' : ''), 'success');
-    });
+    }, false); // JPEG = actual colored schedule
 };
 window._pc3LivePrint = function () {
     _pc3CaptureLivePages(function (canvases) {
@@ -5214,7 +5214,7 @@ window._pc3LivePrint = function () {
             return '<img src="' + canvas.toDataURL('image/jpeg', 0.95) + '" style="display:block;width:100%;height:auto;page-break-after:always;">';
         }).join('');
         runPrint('<div style="background:#fff;">' + imgs + '</div>', _currentTemplate);
-    });
+    }, true); // Print = black & white (Excel-style)
 };
 
 // ── Print center → Download / Print the preview as a black-and-white image ──
