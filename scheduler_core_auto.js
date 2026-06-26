@@ -25491,9 +25491,21 @@
 });
             const masterSpecials = gs.app1?.specialActivities || gs.specialActivities || [];
 
+            // ★ CONFIG-LEVEL shut-off (Facilities tab AVAILABLE/UNAVAILABLE toggle).
+            //   A field/special toggled off writes available:false on its record. The
+            //   auto builder's MAIN path filters these out independently (field filter
+            //   ~L30021, todaysSpecials ~L1384), but the CSP sub-engines below
+            //   (AutoSolverEngine.solve / TotalSolver fallback) consume THIS config's
+            //   masterFields/masterSpecials/fieldsBySport verbatim and only checked the
+            //   per-date disabledFields set — so a permanently-disabled field or special
+            //   still got placed by them. Filter once here so every consumer of
+            //   solverConfig (and the fieldsBySport map built from it) is clean.
+            const availFields = masterFields.filter(f => f && f.available !== false);
+            const availSpecials = masterSpecials.filter(s => s && s.available !== false);
+
             // Build fieldsBySport map
             const fbs = {};
-            masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
+            availFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
             window.fieldsBySport = fbs;
 
             // ★ Daily sport-on-field overrides (e.g. "Hockey is disabled on
@@ -25515,8 +25527,8 @@
 
             return {
                 activityProperties: window.activityProperties || {},
-                masterFields,
-                masterSpecials,
+                masterFields: availFields,
+                masterSpecials: availSpecials,
                 divisions,
                 fieldsBySport: fbs,
                 disabledFields: (window.currentDisabledFields && window.currentDisabledFields.length)

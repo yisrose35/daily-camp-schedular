@@ -118,6 +118,11 @@
         const fieldsBySport = {};
         fields.forEach(f => {
             if (disabled.has(f.name)) return;
+            // ★ Config-level shut-off: a field toggled UNAVAILABLE in Facilities
+            //   (available:false) must never produce sport candidates. solverConfig
+            //   already filters this upstream; keep the gate here too so the engine
+            //   is correct regardless of how its config was assembled.
+            if (f.available === false) return;
             const rawType = f.sharableWith?.type || 'same_division';
             const divs = f.sharableWith?.divisions || [];
             const allowedPairs = f.sharableWith?.allowedPairs || {};

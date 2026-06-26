@@ -736,6 +736,8 @@
         var disabledSet = new Set(disabledFields);
         config.masterFields?.forEach(function(f) {
             if (disabledSet.has(f.name)) return;
+            // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities.
+            if (f.available === false) return;
             (f.activities || []).forEach(function(sport) {
                 var key = f.name + '|' + sport;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: f.name, sport: sport, activityName: sport, type: 'sport', _fieldNorm: normName(f.name), _actNorm: normName(sport) }); }
@@ -743,6 +745,8 @@
         });
         config.masterSpecials?.forEach(function(s) {
             if (!s.name || disabledSet.has(s.name)) return;
+            // ★ Config-level shut-off: special toggled UNAVAILABLE in Facilities.
+            if (s.available === false) return;
             var key = s.name + '|special';
             if (seenKeys.has(key)) return;
             seenKeys.add(key);

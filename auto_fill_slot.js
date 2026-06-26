@@ -342,6 +342,10 @@
             (gs.app1?.specialActivities || []).forEach(s => {
                 if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
                 if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
+                // ★ Special toggled UNAVAILABLE in Facilities (config-level available:false).
+                //   The PERMANENT analog of the per-date Resource disable below — the sport
+                //   branch above gates on f.available; this is the parity gate for specials.
+                if (s.available === false) return;
                 // ★ Special disabled today (e.g. its facility was toggled off → cascade)
                 if (_disabledSpecialsLc.has(String(s.name).toLowerCase().trim())) return;
                 // ★ Grade restriction
