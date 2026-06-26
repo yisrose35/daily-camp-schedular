@@ -4886,14 +4886,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     // them and default to cap-1 below, matching the validator.
                     if (!fl || _rskip[fl] || /^game\s*\d+$/i.test(fl)) return;
                     var t = _rtime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                    var prot = !!(e._league || e._postEdit || e._pinned);
+                    var prot = !!(e._league || e._postEdit || e._pinned || e._bunkOverride);
                     (_rbyLoc[fl] = _rbyLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: t.s, e: t.e, dur: t.e - t.s, prot: prot, act: _actId });
                 });
             });
             var _rdemoted = 0, _rstag = 0, _rcap = 0, _rfac = 0;
             function _rlive(u) { var c = _rsa[u.bunk] && _rsa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
             function _rdemote(u) {
-                if (!_rlive(u) || u.prot) return false; // never demote user-locked (league/post-edit/pinned)
+                if (!_rlive(u) || u.prot) return false; // never demote user-locked (league/post-edit/pinned/bunk-override)
                 // Preserve the slot's start/end so the STEP 7.6 free-fill below can resolve
                 // its time and refill it (without these the slot reads as time-null and is skipped).
                 _rsa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: u.s, _endMin: u.e, _fixed: true, _constraintDemoted: true, _demotedReason: 'manual_room_cap', continuation: false };
