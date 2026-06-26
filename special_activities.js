@@ -271,119 +271,6 @@ function validateAllActivities(activities) { if (!Array.isArray(activities)) ret
 // =========================================================================
 // INIT — v3.4: Nested accordion layout
 // =========================================================================
-// ═══ CAMP-WIDE SPECIALS PRIORITY (opt-in) ═══════════════════════════════
-// One ranked grade order, set once for the whole camp, that the auto builder
-// uses to lean special activities toward the higher-ranked grades. When two or
-// more grades are eligible for the same limited special, the higher-ranked one
-// gets it first — so younger/lower divisions can't drain the pool before the
-// older grades are reached. Persists to globalSettings.app1.specialsGradePriority
-// = { enabled, order: [grade, ...] } (index 0 = highest priority), which the
-// solver reads (scheduler_core_auto.js _buildSpecialGradePriority). OFF by
-// default → strict no-op for every other camp.
-function _spCanEdit() {
-    return !(window.AccessControl && typeof window.AccessControl.canEditGlobalFields === 'function')
-        || window.AccessControl.canEditGlobalFields();
-}
-function _spOrderedGrades(saved) {
-    const all = (window.getDivisionAgeOrder
-        ? window.getDivisionAgeOrder(Object.keys(window.divisions || {}))
-        : Object.keys(window.divisions || {})) || [];
-    const out = Array.isArray(saved) ? saved.filter(function (g) { return all.indexOf(g) !== -1; }) : [];
-    all.forEach(function (g) { if (out.indexOf(g) === -1) out.push(g); });
-    return out;
-}
-function _spSave(app1Obj) {
-    if (!_spCanEdit()) return;
-    if (window.saveGlobalSettings) window.saveGlobalSettings('app1', app1Obj);
-    if (window.forceSyncToCloud) { try { window.forceSyncToCloud(); } catch (_e) {} }
-    renderSpecialsPriorityPanel();
-}
-function _spMove(order, from, to) {
-    if (to < 0 || to >= order.length) return;
-    const t = order[from]; order[from] = order[to]; order[to] = t;
-    const g = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
-    if (!g.app1) g.app1 = {};
-    const c = (g.app1.specialsGradePriority && typeof g.app1.specialsGradePriority === 'object')
-        ? g.app1.specialsGradePriority : { enabled: true, order: [] };
-    c.order = order.slice();
-    c.enabled = true;
-    g.app1.specialsGradePriority = c;
-    _spSave(g.app1);
-}
-function renderSpecialsPriorityPanel() {
-    const host = document.getElementById('specials-priority-panel');
-    if (!host) return;
-    host.innerHTML = '';
-    const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
-    const app1 = gs.app1 || {};
-    const cfg = (app1.specialsGradePriority && typeof app1.specialsGradePriority === 'object')
-        ? app1.specialsGradePriority : { enabled: false, order: [] };
-    const canEdit = _spCanEdit();
-
-    const card = document.createElement('div');
-    card.style.cssText = 'background:white; border:1px solid #E5E7EB; border-radius:12px; padding:16px;';
-
-    const head = document.createElement('div');
-    head.style.cssText = 'display:flex; justify-content:space-between; align-items:flex-start; gap:12px;';
-    const txt = document.createElement('div');
-    txt.innerHTML = '<div style="font-weight:600; font-size:0.95rem;">Specials Priority by Division</div>'
-        + '<p style="font-size:0.78rem; color:#6B7280; margin:4px 0 0 0; max-width:560px;">'
-        + 'When ON, special activities lean toward the higher-ranked grades below. If two or more grades are eligible '
-        + 'for the same limited special, the higher-ranked grade gets it first — so younger / lower divisions can’t take '
-        + 'them all before the older grades are reached. Applies to every special at once.</p>';
-    head.appendChild(txt);
-
-    const tog = document.createElement('label');
-    tog.style.cssText = 'display:inline-flex; align-items:center; gap:6px; font-size:0.8rem; white-space:nowrap; cursor:' + (canEdit ? 'pointer' : 'default') + ';';
-    const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = cfg.enabled === true; cb.disabled = !canEdit;
-    cb.onchange = function () {
-        const g = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
-        if (!g.app1) g.app1 = {};
-        const c = (g.app1.specialsGradePriority && typeof g.app1.specialsGradePriority === 'object')
-            ? g.app1.specialsGradePriority : { enabled: false, order: [] };
-        c.enabled = cb.checked;
-        if (cb.checked && (!Array.isArray(c.order) || c.order.length === 0)) c.order = _spOrderedGrades(c.order);
-        g.app1.specialsGradePriority = c;
-        _spSave(g.app1);
-    };
-    const tlabel = document.createElement('span'); tlabel.textContent = cb.checked ? 'On' : 'Off';
-    tog.appendChild(cb); tog.appendChild(tlabel);
-    head.appendChild(tog);
-    card.appendChild(head);
-
-    if (cfg.enabled) {
-        const order = _spOrderedGrades(cfg.order);
-        const list = document.createElement('div');
-        list.style.cssText = 'margin-top:12px; display:flex; flex-direction:column; gap:6px;';
-        if (order.length === 0) {
-            list.innerHTML = '<div style="font-size:0.8rem; color:#9CA3AF;">No divisions configured yet.</div>';
-        }
-        order.forEach(function (gName, idx) {
-            const row = document.createElement('div');
-            row.style.cssText = 'display:flex; align-items:center; gap:10px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; padding:6px 10px;';
-            const num = document.createElement('span');
-            num.textContent = (idx + 1);
-            num.style.cssText = 'width:22px; height:22px; border-radius:50%; background:#111; color:white; font-size:0.75rem; display:inline-flex; align-items:center; justify-content:center; flex:none;';
-            const nm = document.createElement('span'); nm.textContent = gName; nm.style.cssText = 'flex:1; font-size:0.85rem;';
-            const up = document.createElement('button'); up.textContent = '↑'; up.disabled = idx === 0 || !canEdit;
-            const dn = document.createElement('button'); dn.textContent = '↓'; dn.disabled = idx === order.length - 1 || !canEdit;
-            [up, dn].forEach(function (b) { b.style.cssText = 'border:1px solid #D1D5DB; background:white; border-radius:6px; width:28px; height:26px; cursor:pointer; font-size:0.9rem;'; });
-            up.onclick = function () { _spMove(order, idx, idx - 1); };
-            dn.onclick = function () { _spMove(order, idx, idx + 1); };
-            row.appendChild(num); row.appendChild(nm); row.appendChild(up); row.appendChild(dn);
-            list.appendChild(row);
-        });
-        card.appendChild(list);
-        const hint = document.createElement('p');
-        hint.style.cssText = 'font-size:0.72rem; color:#9CA3AF; margin:10px 0 0 0;';
-        hint.textContent = 'Rank 1 = first access to limited specials. Tip: pair this with a special’s per-grade Min/Max to guarantee or cap exact amounts.';
-        card.appendChild(hint);
-    }
-
-    host.appendChild(card);
-}
-
 function initSpecialActivitiesTab() {
     const container = document.getElementById("special_activities");
     if (!container) { console.warn("[SPECIAL_ACTIVITIES] Container element not found"); return; }
@@ -430,7 +317,6 @@ function initSpecialActivitiesTab() {
                 <p>Configure special camp programs, availability, sharing, division access, and rotation rules.</p>
               </div>
             </div>
-            <div id="specials-priority-panel" style="margin-bottom:20px;"></div>
             <div style="display:flex; flex-wrap:wrap; gap:24px;">
               <div style="flex:1; min-width:280px;">
                 <div style="display:flex; justify-content:space-between; align-items:end; margin-bottom:8px;">
@@ -474,7 +360,7 @@ function initSpecialActivitiesTab() {
     if (addRainyDayBtn) addRainyDayBtn.onclick = addRainyDayActivity;
     if (addRainyDayInput) addRainyDayInput.onkeyup = e => { if (e.key === "Enter") addRainyDayActivity(); };
     setupTabListeners(); setupCloudSyncListener(); setupBeforeUnloadHandler(); _isInitialized = true;
-    renderMasterList(); renderRainyDayList(); renderDetailPane(); renderSpecialsPriorityPanel();
+    renderMasterList(); renderRainyDayList(); renderDetailPane();
     console.log("[SPECIAL_ACTIVITIES] Initialized:", { specials: specialActivities.length, rainyDay: rainyDayActivities.length });
 }
 

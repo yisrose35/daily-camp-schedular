@@ -652,6 +652,159 @@
         }
     }
     
+    // ==================== SPECIALS PRIORITY BY DIVISION (opt-in) ====================
+    // Camp-wide ranking the Auto Builder uses to lean special activities toward the
+    // divisions in the order set here: 1st gets first pick of limited specials, then
+    // 2nd, then 3rd — so a lower division can't take them all before the higher ones
+    // are reached. Persists to globalSettings.app1.specialsGradePriority =
+    // { enabled, order: [divisionName, ...] } and round-trips to camp_state_kv via the
+    // existing app1 merge-sync. The solver expands each division to its grades
+    // (scheduler_core_auto.js _buildSpecialGradePriority). OFF by default → no-op.
+
+    // Ordered list of the camp's parent divisions (what owners call "divisions").
+    // Falls back to grade keys for flat camps with no parent grouping.
+    function _spDivisionUnits() {
+        const divs = window.divisions || {};
+        const gradeKeys = Object.keys(divs);
+        const ordered = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(gradeKeys) : gradeKeys;
+        const parents = [];
+        ordered.forEach(function (g) {
+            const p = (divs[g] && divs[g].parentDivision) || g;
+            if (p && parents.indexOf(p) === -1) parents.push(p);
+        });
+        return parents;
+    }
+    // Keep the saved order valid: drop divisions that no longer exist, append new ones.
+    function _spReconcile(saved, units) {
+        const out = Array.isArray(saved) ? saved.filter(function (u) { return units.indexOf(u) !== -1; }) : [];
+        units.forEach(function (u) { if (out.indexOf(u) === -1) out.push(u); });
+        return out;
+    }
+    function _spCanEditPriority() {
+        return !(window.AccessControl && typeof window.AccessControl.canEditGlobalFields === 'function')
+            || window.AccessControl.canEditGlobalFields();
+    }
+    function _spSavePriority(app1Obj) {
+        if (!_spCanEditPriority()) return;
+        window.saveGlobalSettings?.('app1', app1Obj);
+        window.forceSyncToCloud?.();
+        renderSpecialsPriorityPanel();
+    }
+    function _spMovePriority(order, from, to) {
+        if (to < 0 || to >= order.length) return;
+        const t = order[from]; order[from] = order[to]; order[to] = t;
+        const g = window.loadGlobalSettings?.() || {};
+        if (!g.app1) g.app1 = {};
+        const c = (g.app1.specialsGradePriority && typeof g.app1.specialsGradePriority === 'object')
+            ? g.app1.specialsGradePriority : { enabled: true, order: [] };
+        c.order = order.slice();
+        c.enabled = true;
+        g.app1.specialsGradePriority = c;
+        _spSavePriority(g.app1);
+    }
+    function renderSpecialsPriorityPanel() {
+        const divBtns = document.getElementById('divisionButtons');
+        if (!divBtns) return; // setup tab not mounted
+
+        // Re-render fresh each time (toggle, reorder, cloud hydration).
+        const existing = document.getElementById('specials-priority-container');
+        if (existing) existing.remove();
+
+        // Re-render once after cloud hydration so the saved order shows up.
+        if (!window.__spPriorityHydrationHook) {
+            window.__spPriorityHydrationHook = true;
+            window.addEventListener('campistry-cloud-hydrated', function () {
+                try { renderSpecialsPriorityPanel(); } catch (_e) {}
+            });
+        }
+
+        const gs = window.loadGlobalSettings?.() || {};
+        const app1 = gs.app1 || {};
+        const cfg = (app1.specialsGradePriority && typeof app1.specialsGradePriority === 'object')
+            ? app1.specialsGradePriority : { enabled: false, order: [] };
+        const canEdit = _spCanEditPriority();
+        const units = _spDivisionUnits();
+        const order = _spReconcile(cfg.order, units);
+
+        const wrapper = document.createElement('div');
+        wrapper.id = 'specials-priority-container';
+        wrapper.style.cssText = 'margin:0 0 16px 0;';
+
+        const card = document.createElement('div');
+        card.style.cssText = 'background:white; border:1px solid #E5E7EB; border-radius:12px; padding:16px;';
+        wrapper.appendChild(card);
+
+        const head = document.createElement('div');
+        head.style.cssText = 'display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;';
+        const txt = document.createElement('div');
+        txt.innerHTML = '<div style="font-weight:600; font-size:0.95rem;">Specials Priority by Division</div>'
+            + '<p style="font-size:0.78rem; color:#6B7280; margin:4px 0 0 0; max-width:560px;">'
+            + 'When ON, the Auto Builder leans special activities toward the divisions in the order below — 1st gets '
+            + 'first pick of limited specials, then 2nd, then 3rd. So a lower division can’t take them all before the '
+            + 'higher divisions are reached.</p>';
+        head.appendChild(txt);
+
+        const tog = document.createElement('label');
+        tog.style.cssText = 'display:inline-flex; align-items:center; gap:6px; font-size:0.8rem; white-space:nowrap; cursor:' + (canEdit ? 'pointer' : 'default') + ';';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = cfg.enabled === true; cb.disabled = !canEdit;
+        cb.onchange = function () {
+            const g = window.loadGlobalSettings?.() || {};
+            if (!g.app1) g.app1 = {};
+            const c = (g.app1.specialsGradePriority && typeof g.app1.specialsGradePriority === 'object')
+                ? g.app1.specialsGradePriority : { enabled: false, order: [] };
+            c.enabled = cb.checked;
+            if (cb.checked && (!Array.isArray(c.order) || c.order.length === 0)) c.order = _spReconcile(c.order, _spDivisionUnits());
+            g.app1.specialsGradePriority = c;
+            _spSavePriority(g.app1);
+        };
+        const tl = document.createElement('span'); tl.textContent = cb.checked ? 'On' : 'Off';
+        tog.appendChild(cb); tog.appendChild(tl);
+        head.appendChild(tog);
+        card.appendChild(head);
+
+        if (cfg.enabled) {
+            const list = document.createElement('div');
+            list.style.cssText = 'margin-top:12px; display:flex; flex-direction:column; gap:6px;';
+            if (order.length === 0) {
+                list.innerHTML = '<div style="font-size:0.8rem; color:#9CA3AF;">No divisions yet. Create them in Campistry Me first.</div>';
+            }
+            order.forEach(function (uName, idx) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:10px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; padding:6px 10px;';
+                const num = document.createElement('span');
+                num.textContent = (idx + 1);
+                num.style.cssText = 'width:22px; height:22px; border-radius:50%; background:#111; color:white; font-size:0.75rem; display:inline-flex; align-items:center; justify-content:center; flex:none;';
+                const nm = document.createElement('span'); nm.textContent = uName; nm.style.cssText = 'flex:1; font-size:0.85rem;';
+                const up = document.createElement('button'); up.type = 'button'; up.textContent = '↑'; up.disabled = idx === 0 || !canEdit;
+                const dn = document.createElement('button'); dn.type = 'button'; dn.textContent = '↓'; dn.disabled = idx === order.length - 1 || !canEdit;
+                [up, dn].forEach(function (b) { b.style.cssText = 'border:1px solid #D1D5DB; background:white; border-radius:6px; width:28px; height:26px; cursor:pointer; font-size:0.9rem;'; });
+                up.onclick = function () { _spMovePriority(order, idx, idx - 1); };
+                dn.onclick = function () { _spMovePriority(order, idx, idx + 1); };
+                row.appendChild(num); row.appendChild(nm); row.appendChild(up); row.appendChild(dn);
+                list.appendChild(row);
+            });
+            card.appendChild(list);
+            const hint = document.createElement('p');
+            hint.style.cssText = 'font-size:0.72rem; color:#9CA3AF; margin:10px 0 0 0;';
+            hint.textContent = 'Auto Builder only. Rank 1 = first pick of limited specials. For a guaranteed minimum per division, use a special’s per-grade Min frequency.';
+            card.appendChild(hint);
+        }
+
+        // Mount just below the builder-mode slider, else above the setup grid.
+        const bmc = document.getElementById('builder-mode-container');
+        if (bmc && bmc.parentNode) { bmc.parentNode.insertBefore(wrapper, bmc.nextSibling); return; }
+        let layoutContainer = divBtns.parentElement;
+        while (layoutContainer && layoutContainer.tagName !== 'BODY') {
+            const st = window.getComputedStyle(layoutContainer);
+            if (st.display === 'flex' || st.display === 'grid') break;
+            layoutContainer = layoutContainer.parentElement;
+        }
+        if (layoutContainer && layoutContainer.tagName !== 'BODY') layoutContainer.parentNode.insertBefore(wrapper, layoutContainer);
+        else divBtns.parentNode.insertBefore(wrapper, divBtns);
+    }
+
     /**
      * Render grade cards in the left panel, grouped by parent division
      */
@@ -1230,7 +1383,9 @@
         
         // Render the top builder mode slider
         renderBuilderModeSlider();
-        
+        // Render the camp-wide specials-priority-by-division panel
+        renderSpecialsPriorityPanel();
+
         // Style detail pane
         const detailPane = document.getElementById("division-detail-pane");
         if (detailPane) {

@@ -2053,18 +2053,35 @@
                 }
             });
             // ★ CAMP-WIDE specials priority (opt-in). When the camp enables
-            //   globalSettings.app1.specialsGradePriority, its single ranked grade
-            //   order applies to EVERY special at once — the camp ranks grades once
-            //   instead of editing each special. It is the DOMINANT signal: a grade
-            //   the camp lists outranks any grade ranked only by an individual
-            //   special's own Priority Order; per-special order then breaks ties among
-            //   grades the camp-wide list does not mention. Highest priority = index 0.
+            //   globalSettings.app1.specialsGradePriority, its single ranked DIVISION
+            //   order applies to EVERY special at once — the camp ranks divisions once
+            //   (Setup & Config tab) instead of editing each special. Each entry is a
+            //   parent-division name (or a grade name in flat camps); it expands to all
+            //   of that division's grades, which get consecutive ranks so division #1's
+            //   grades all outrank division #2's. It is the DOMINANT signal: a grade the
+            //   camp lists outranks one ranked only by an individual special's own
+            //   Priority Order; per-special order then breaks ties among grades the
+            //   camp-wide list does not mention. Highest priority = lowest rank.
             const globalRank = {};
             let globalActive = false;
             try {
                 const gp = globalSettings && globalSettings.app1 && globalSettings.app1.specialsGradePriority;
                 if (gp && gp.enabled && Array.isArray(gp.order) && gp.order.length > 0) {
-                    gp.order.forEach(function (g, idx) { if (g != null && globalRank[g] === undefined) globalRank[g] = idx; });
+                    const _divs = divisions || {};
+                    let _rankCursor = 0;
+                    gp.order.forEach(function (unit) {
+                        if (unit == null) return;
+                        // Direct grade entry (flat camps / grade-level lists).
+                        if (_divs[unit] !== undefined) {
+                            if (globalRank[unit] === undefined) globalRank[unit] = _rankCursor++;
+                            return;
+                        }
+                        // Parent-division entry → rank all its grades, grouped & consecutive.
+                        Object.keys(_divs).forEach(function (gname) {
+                            const parent = (_divs[gname] && _divs[gname].parentDivision) || gname;
+                            if (parent === unit && globalRank[gname] === undefined) globalRank[gname] = _rankCursor++;
+                        });
+                    });
                     globalActive = Object.keys(globalRank).length > 0;
                 }
             } catch (_egp) { globalActive = false; }
