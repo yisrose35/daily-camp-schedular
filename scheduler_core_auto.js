@@ -2052,18 +2052,47 @@
                     });
                 }
             });
-            const active = Object.keys(score).length > 0;
+            // ★ CAMP-WIDE specials priority (opt-in). When the camp enables
+            //   globalSettings.app1.specialsGradePriority, its single ranked grade
+            //   order applies to EVERY special at once — the camp ranks grades once
+            //   instead of editing each special. It is the DOMINANT signal: a grade
+            //   the camp lists outranks any grade ranked only by an individual
+            //   special's own Priority Order; per-special order then breaks ties among
+            //   grades the camp-wide list does not mention. Highest priority = index 0.
+            const globalRank = {};
+            let globalActive = false;
+            try {
+                const gp = globalSettings && globalSettings.app1 && globalSettings.app1.specialsGradePriority;
+                if (gp && gp.enabled && Array.isArray(gp.order) && gp.order.length > 0) {
+                    gp.order.forEach(function (g, idx) { if (g != null && globalRank[g] === undefined) globalRank[g] = idx; });
+                    globalActive = Object.keys(globalRank).length > 0;
+                }
+            } catch (_egp) { globalActive = false; }
+            const perSpecialActive = Object.keys(score).length > 0;
+            const active = globalActive || perSpecialActive;
+            function _perSpecialCmp(a, b) {
+                const cA = count[a] || 0, cB = count[b] || 0;
+                if (cA === 0 && cB === 0) return 0;
+                if (cA === 0) return 1;   // ungraded sorts AFTER ranked grades
+                if (cB === 0) return -1;
+                return (score[a] / cA) - (score[b] / cB);
+            }
             return {
                 active: active,
-                // Lower average vote rank = higher priority. Grades with no votes sort
-                // AFTER ranked grades. Returns 0 (no preference) when priority inactive.
+                // Camp-wide rank wins (lower index = higher priority; grades the camp
+                // didn't list sort last and then fall back to per-special votes). When
+                // no camp-wide ranking is set, behaves exactly like the per-special
+                // vote averaging. Returns 0 (no preference) when nothing uses priority.
                 cmp: function (a, b) {
                     if (!active) return 0;
-                    const cA = count[a] || 0, cB = count[b] || 0;
-                    if (cA === 0 && cB === 0) return 0;
-                    if (cA === 0) return 1;
-                    if (cB === 0) return -1;
-                    return (score[a] / cA) - (score[b] / cB);
+                    if (globalActive) {
+                        const ra = (globalRank[a] === undefined) ? Infinity : globalRank[a];
+                        const rb = (globalRank[b] === undefined) ? Infinity : globalRank[b];
+                        if (ra !== rb) return ra - rb;
+                        if (ra !== Infinity) return 0;   // same camp rank (unique ⇒ a===b)
+                        // both grades unlisted by the camp → defer to per-special votes
+                    }
+                    return perSpecialActive ? _perSpecialCmp(a, b) : 0;
                 }
             };
         }
