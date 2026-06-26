@@ -117,31 +117,47 @@
     if (!fieldName || ctx.startMin == null || ctx.endMin == null) return false;
     var nf = norm(fieldName);
     var ownField = ctx.game ? norm(ctx.game.field) : '';
+    // The game's own current field is never a conflict for itself.
+    if (nf === ownField) return false;
 
     // (a) GlobalFieldLocks (other league/elective claims) — time-based.
     var GFL = window.GlobalFieldLocks;
     if (GFL && typeof GFL.isFieldLockedByTime === 'function') {
       try {
-        var lock = GFL.isFieldLockedByTime(fieldName, ctx.startMin, ctx.endMin, ctx.divName);
-        // A lock on the game's CURRENT field is this game itself — ignore it.
-        if (lock && nf !== ownField) return true;
+        if (GFL.isFieldLockedByTime(fieldName, ctx.startMin, ctx.endMin, ctx.divName)) return true;
       } catch (e) { /* fall through */ }
     }
 
-    // (b) Any scheduled entry on this field whose TIME window overlaps ours.
+    // (b) Any scheduled entry whose TIME window overlaps ours and that uses this
+    //     field. CRITICAL: a league entry's `field` is "League: X" — the real
+    //     field lives in the matchup STRING / _assignments. So a senior-division
+    //     league on this field (different grade!) is only visible by parsing those.
     var sa = window.scheduleAssignments || {};
     for (var bunk in sa) {
       if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
       var row = sa[bunk]; if (!Array.isArray(row)) continue;
       for (var i = 0; i < row.length; i++) {
         var e = row[i]; if (!e) continue;
-        var label = (typeof window.fieldLabel === 'function') ? window.fieldLabel(e.field) : e.field;
-        if (norm(label) !== nf) continue;
-        if (nf === ownField) continue; // participants of this game sit on the old field
         var s = (e._startMin != null) ? e._startMin : null;
         var en = (e._endMin != null) ? e._endMin : null;
         if (s == null || en == null) continue;
-        if (s < ctx.endMin && en > ctx.startMin) return true; // overlap (even 1 min)
+        if (!(s < ctx.endMin && en > ctx.startMin)) continue; // no time overlap
+        // Every field this entry occupies at that time: its own field + any
+        // field named inside its league matchups.
+        var label = (typeof window.fieldLabel === 'function') ? window.fieldLabel(e.field) : e.field;
+        if (label && norm(label) === nf) return true;
+        if (Array.isArray(e._allMatchups)) {
+          for (var k = 0; k < e._allMatchups.length; k++) {
+            var p = PEFC.parseMatchup(e._allMatchups[k]);
+            if (p.field && norm(p.field) === nf) return true;
+          }
+        }
+        if (Array.isArray(e._assignments)) {
+          for (var j = 0; j < e._assignments.length; j++) {
+            var a = e._assignments[j];
+            if (a && a.field && norm(a.field) === nf) return true;
+          }
+        }
       }
     }
     return false;
@@ -157,39 +173,44 @@
   // explicitly here so partial overlaps can never slip through.
   function candidateFields(ctx) {
     var sport = ctx.selectedSport || (ctx.game && ctx.game.sport) || '';
-    var hosts = [];
+    var ownField = ctx.game ? norm(ctx.game.field) : '';
+    var seen = {}, rows = [];
+    function add(name, capacity, freeFlag) {
+      var k = norm(name); if (seen[k]) return; seen[k] = 1;
+      var isCur = k === ownField;
+      rows.push({ name: name, capacity: capacity || 1, current: isCur, free: isCur ? false : !!freeFlag });
+    }
 
+    var usedFinder = false;
     if (typeof window.findFieldsForActivity === 'function' && sport) {
       var res;
       try { res = window.findFieldsForActivity(sport, ctx.slots || [], ctx.divName, null, ctx.startMin, ctx.endMin); }
       catch (e) { res = null; }
       if (res) {
-        // open + busy both "host the sport". Drop access_restricted (stage 2:
-        // not available to this grade). Everything else is a host candidate;
-        // stage 3 (time overlap / capacity) decides free vs busy below.
-        (res.open || []).concat(res.busy || []).forEach(function (f) {
+        usedFinder = true;
+        // RESPECT the generator's verdict. `open` = free per the solver, but a
+        // SHARED (under-capacity) field is still taken for an exclusive league
+        // game, and our own time-overlap gate can only make it stricter.
+        (res.open || []).forEach(function (f) {
+          add(f.name, f.capacity, !f.shared && !fieldHasTimeConflict(f.name, ctx));
+        });
+        // `busy` = blocked by the solver (league_locked / capacity / time rules /
+        // combo). Keep them listed as unavailable; DROP access_restricted (stage 2
+        // — not available to this grade) so they're not even shown.
+        (res.busy || []).forEach(function (f) {
           if (f.reason === 'access_restricted') return;
-          hosts.push({ name: f.name, capacity: f.capacity || 1 });
+          add(f.name, f.capacity, false);
         });
       }
     }
     // Fallback when the generator finder isn't loaded: getAllLocations by sport.
-    if (!hosts.length) {
+    if (!usedFinder) {
       var locs = (typeof window.getAllLocations === 'function') ? (window.getAllLocations() || []) : [];
       locs.filter(function (l) {
         return l && l.type === 'field' && (!sport || (l.activities || []).some(function (a) { return norm(a) === norm(sport); }));
-      }).forEach(function (l) { hosts.push({ name: l.name, capacity: l.capacity || 1 }); });
+      }).forEach(function (l) { add(l.name, l.capacity, !fieldHasTimeConflict(l.name, ctx)); });
     }
-
-    // Dedup, then apply the explicit time-overlap gate.
-    var seen = {}, out = [];
-    hosts.forEach(function (h) {
-      var key = norm(h.name);
-      if (seen[key]) return; seen[key] = 1;
-      var isCur = ctx.game && key === norm(ctx.game.field);
-      out.push({ name: h.name, capacity: h.capacity, current: !!isCur, free: !isCur && !fieldHasTimeConflict(h.name, ctx) });
-    });
-    return out.sort(function (a, b) { return (b.free - a.free) || a.name.localeCompare(b.name); });
+    return rows.sort(function (a, b) { return (b.free - a.free) || a.name.localeCompare(b.name); });
   }
 
   // Used by applyFieldChange's final guard.
@@ -312,9 +333,13 @@
       if (changed) touchedBunks.push(bunk);
     }
 
-    // (2) leagueAssignments[div]: scan every slot key (string arrays + structured).
-    var la = (window.leagueAssignments && window.leagueAssignments[ctx.divName]) || null;
-    if (la) {
+    // (2) leagueAssignments — scan EVERY division, not just ctx.divName. When two
+    //     grades are CONNECTED in a league they each hold a copy of the same game
+    //     (matched by team-pair + old field), so a field/sport change made from
+    //     one grade auto-updates the other.
+    var laAll = window.leagueAssignments || {};
+    Object.keys(laAll).forEach(function (dn) {
+      var la = laAll[dn]; if (!la) return;
       Object.keys(la).forEach(function (slotKey) {
         var laEntry = la[slotKey];
         if (!laEntry) return;
@@ -331,7 +356,7 @@
           }
         });
       });
-    }
+    });
 
     // (3) Specialty history gameLog — best-effort (drives the bracket/print).
     if (ctx.kind === 'specialty') {
