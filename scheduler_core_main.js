@@ -1514,6 +1514,12 @@
                                 if (_atQuota) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" at fair-share cap (${_rotSpecialQuota[_wQ]}/window, shared rooms) → next option`);
                                 for (const sp of (_atQuota ? [] : _avail)) {
                                     if (_had && _had.has(sp.name.toLowerCase())) continue; // already had this special today
+                                    // ★ Bunk-level access — getAvailableSpecialsForTimeBlock filters the
+                                    //   pool at DIVISION level only, so a special restricted to specific
+                                    //   bunks within an allowed grade could otherwise be rotated onto a
+                                    //   bunk that has no access (e.g. "Sushi" gated to certain bunks).
+                                    if (typeof window.isSpecialAvailableForBunk === 'function'
+                                        && !window.isSpecialAvailableForBunk(sp.name, divName, bunk, window.loadGlobalSettings?.())) continue;
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
                                     _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
