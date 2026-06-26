@@ -1399,14 +1399,15 @@
         // ★ Defensive dedupe. Previously cloud-sync races could produce
         //   thousands of duplicate rows for the same special (one user hit
         //   216× per rainy-only entry). De-dup by name here so corruption
-        //   can't survive a save round-trip. First occurrence wins.
+        //   can't survive a save round-trip.
+        //   ★ Now CASE-INSENSITIVE (shared helper) so a casing-drift duplicate
+        //   ("Sushi"/"sushi") is healed too — the old exact-name dedupe let both
+        //   survive and the unrestricted phantom copy defeated the user's access
+        //   restriction. The helper prefers the restricted/real row.
         const _input = Array.isArray(updatedActivities) ? updatedActivities : [];
-        const _seen = new Map();
-        for (const a of _input) {
-            if (!a || !a.name) continue;
-            if (!_seen.has(a.name)) _seen.set(a.name, a);
-        }
-        const cleaned = [..._seen.values()];
+        const cleaned = window.dedupeSpecialsByName
+            ? window.dedupeSpecialsByName(_input)
+            : (() => { const m = new Map(); for (const a of _input) { if (a && a.name) { const k = String(a.name).trim().toLowerCase(); if (!m.has(k)) m.set(k, a); } } return [...m.values()]; })();
         if (cleaned.length !== _input.length) {
             console.warn('[saveGlobalSpecialActivities] de-duplicated', _input.length - cleaned.length, 'rows');
         }

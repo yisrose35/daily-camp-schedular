@@ -3018,8 +3018,25 @@ function renderSpecialAccess(saData) {
                     bChip.style.cursor = 'pointer';
                     bChip.style.fontSize = '0.75rem';
                     bChip.onclick = () => {
-                        if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
-                        else rules.divisions[divName] = bunkList.concat([bunkName]);
+                        if (isOn) {
+                            const _next = bunkList.filter(b => b !== bunkName);
+                            // ★ Deselecting the LAST bunk = "no one in this grade".
+                            //   An empty array means "ALL bunks" to the scheduler
+                            //   (isSpecialAvailableForBunk / canBunkAccessSpecial treat
+                            //   []  as no per-bunk restriction), so leaving [] here would
+                            //   silently grant the activity to the WHOLE grade — the exact
+                            //   opposite of the user's intent. Excluding the grade (drop the
+                            //   key) is the only representation the scheduler reads as
+                            //   "shut off for this grade".
+                            if (_next.length === 0) {
+                                delete rules.divisions[divName];
+                                rules.priorityList = (rules.priorityList || []).filter(d => d !== divName);
+                            } else {
+                                rules.divisions[divName] = _next;
+                            }
+                        } else {
+                            rules.divisions[divName] = bunkList.concat([bunkName]);
+                        }
                         saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                     };
                     bunkWrap.appendChild(bChip);

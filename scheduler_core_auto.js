@@ -127,9 +127,21 @@
         const fromApp1   = (gs && gs.app1 && gs.app1.specialActivities) || [];
         const fromGlobal = window.getGlobalSpecialActivities ? window.getGlobalSpecialActivities() : [];
         const fromGetAll = window.getAllSpecialActivities   ? window.getAllSpecialActivities()   : [];
+        // ★ Key case-INSENSITIVELY so a casing-drift duplicate ("Sushi"/"sushi")
+        //   collapses to one entry — otherwise the scheduler treats the two as
+        //   separate placeable specials and the unrestricted phantom copy could
+        //   be scheduled past the user's access restriction. Last-write-wins
+        //   preserves the app1 priority, EXCEPT an unrestricted copy never
+        //   overwrites one that carries an enabled access restriction.
         const merged = new Map();
         [...fromGetAll, ...fromGlobal, ...fromApp1].forEach(function(s) {
-            if (s && s.name) merged.set(s.name, s);
+            if (!s || !s.name) return;
+            const k = String(s.name).toLowerCase().trim();
+            const ex = merged.get(k);
+            if (!ex) { merged.set(k, s); return; }
+            const exR = !!(ex.accessRestrictions && ex.accessRestrictions.enabled);
+            const sR  = !!(s.accessRestrictions  && s.accessRestrictions.enabled);
+            if (sR || !exR) merged.set(k, s);
         });
         // ★ Day 19: 'not_sharable' means exactly 1 bunk at a time (matches the UI's
         // "1 bunk at a time" display). Existing configs carry a stale capacity:2
@@ -551,37 +563,60 @@
         return true;
     }
 
+    // ★ Duplicate-safe config lookup. This camp's data carries duplicate special
+    //   rows that differ only by case ("Sushi" vs "sushi"), and the duplicate
+    //   often has NO access restriction. A plain first-match getSpecialConfig
+    //   could resolve to the unrestricted copy and silently open access the user
+    //   closed on the real copy. So the access checks below consider EVERY copy
+    //   matching the name case-insensitively and fail CLOSED — a restriction on
+    //   any copy is enforced.
+    function _specialConfigMatches(specialName, gs) {
+        const specials = getSpecialActivitiesList(gs);
+        const key = String(specialName || '').toLowerCase().trim();
+        return specials.filter(s => s && s.name && String(s.name).toLowerCase().trim() === key);
+    }
     function isSpecialAvailableForDivision(specialName, divName, gs) {
-        const cfg = getSpecialConfig(specialName, gs);
-        if (!cfg) return true;
-        const rules = cfg.accessRestrictions;
-        if (!rules || !rules.enabled) return true;
-        const allowed = rules.divisions;
-        if (!allowed || typeof allowed !== 'object') return true;
-        if (Array.isArray(allowed)) return allowed.includes(divName);
-        return divName in allowed;
+        const matches = _specialConfigMatches(specialName, gs);
+        if (!matches.length) return true;
+        for (const cfg of matches) {
+            const rules = cfg.accessRestrictions;
+            if (!rules || !rules.enabled) continue;
+            const allowed = rules.divisions;
+            if (!allowed || typeof allowed !== 'object') continue;
+            if (Array.isArray(allowed)) { if (!allowed.includes(divName)) return false; }
+            else if (!(divName in allowed)) return false;
+        }
+        return true;
     }
     // Per-bunk access check. Honors the per-bunk filter inside
     // accessRestrictions.divisions[grade]: an empty array (or missing) means
     // "all bunks in this grade", a non-empty array means only those
-    // listed bunks are allowed.
+    // listed bunks are allowed. Duplicate-safe (see _specialConfigMatches).
     function isSpecialAvailableForBunk(specialName, divName, bunkName, gs) {
         if (!isSpecialAvailableForDivision(specialName, divName, gs)) return false;
-        const cfg = getSpecialConfig(specialName, gs);
-        if (!cfg) return true;
-        const rules = cfg.accessRestrictions;
-        if (!rules || !rules.enabled) return true;
-        const allowed = rules.divisions;
-        if (!allowed || typeof allowed !== 'object' || Array.isArray(allowed)) return true;
-        const bunkList = allowed[divName];
-        if (!Array.isArray(bunkList) || bunkList.length === 0) return true; // all bunks
-        return bunkList.map(String).includes(String(bunkName));
+        const matches = _specialConfigMatches(specialName, gs);
+        if (!matches.length) return true;
+        for (const cfg of matches) {
+            const rules = cfg.accessRestrictions;
+            if (!rules || !rules.enabled) continue;
+            const allowed = rules.divisions;
+            if (!allowed || typeof allowed !== 'object' || Array.isArray(allowed)) continue;
+            const bunkList = allowed[divName];
+            if (!Array.isArray(bunkList) || bunkList.length === 0) continue; // all bunks for this copy
+            if (!bunkList.map(String).includes(String(bunkName))) return false;
+        }
+        return true;
     }
     // ★ FN-5: expose for the MANUAL rotation-cohort eligibility filter
     //   (rotation_engine.js) so manual cohort membership matches the auto
     //   planner exactly — single source of truth. Read-only; safe with a null
     //   gs (getSpecialActivitiesList falls back to the window special readers).
     try { if (typeof window !== 'undefined') window.isSpecialAvailableForBunk = isSpecialAvailableForBunk; } catch (_eExpose) {}
+    // ★ Also expose the division-level check so the MANUAL special pool
+    //   (smart_logic_adapter.getAvailableSpecialsForTimeBlock) can apply the
+    //   same duplicate-safe gate — its props-based check reads one copy's props
+    //   and would miss a restriction living on a differently-cased duplicate.
+    try { if (typeof window !== 'undefined') window.isSpecialAvailableForDivision = isSpecialAvailableForDivision; } catch (_eExpose2) {}
 
     function getLocationForSpecial(specialName, activityProperties, gs) {
         const props = activityProperties && activityProperties[specialName];
