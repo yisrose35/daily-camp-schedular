@@ -146,3 +146,62 @@ test('applyFieldChange — refuses an occupied field (hard block)', () => {
   // No rewrite happened.
   assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups[0], 'Lions vs Tigers @ Field A (Soccer)');
 });
+
+test('applyFieldChange — refuses a field with a PARTIAL time overlap (even a few minutes)', () => {
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] }],
+    // Another bunk sits on Field B 640–700: only a 5-minute overlap with 600–645.
+    Other: [null, { field: 'Field B', _startMin: 640, _endMin: 700 }],
+  };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] } } };
+  global.window.divisionTimes = { Majors: [null, { startMin: 600, endMin: 645 }] };
+  global.window.fieldLabel = (f) => f;
+  global.window.GlobalFieldLocks = { isFieldLockedByTime: () => null, unlockField: () => {}, lockField: () => true };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'L', slots: [1],
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  const res = PEFC.applyFieldChange(ctx, 'Field B');
+  assert.strictEqual(res.ok, false, 'a 5-minute overlap should block the move');
+  assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups[0], 'Lions vs Tigers @ Field A (Soccer)');
+});
+
+test('applyFieldChange — changes the SPORT on a regular-league matchup (same field)', () => {
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] }],
+  };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] } } };
+  global.window.divisionTimes = { Majors: [null, { startMin: 600, endMin: 645 }] };
+  global.window.GlobalFieldLocks = { isFieldLockedByTime: () => null, unlockField: () => {}, lockField: () => true };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'L', slots: [1],
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  const res = PEFC.applyFieldChange(ctx, 'Field A', 'Hockey');
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups[0], 'Lions vs Tigers @ Field A (Hockey)');
+  assert.strictEqual(window.leagueAssignments.Majors[1]._allMatchups[0], 'Lions vs Tigers @ Field A (Hockey)');
+});
+
+test('applyFieldChange — changes sport AND field together', () => {
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] }],
+  };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] } } };
+  global.window.divisionTimes = { Majors: [null, { startMin: 600, endMin: 645 }] };
+  global.window.fieldLabel = (f) => f;
+  global.window.GlobalFieldLocks = { isFieldLockedByTime: () => null, unlockField: () => {}, lockField: () => true };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'L', slots: [1],
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  const res = PEFC.applyFieldChange(ctx, 'Hockey Rink', 'Hockey');
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups[0], 'Lions vs Tigers @ Hockey Rink (Hockey)');
+});

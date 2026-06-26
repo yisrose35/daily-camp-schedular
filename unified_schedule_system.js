@@ -7928,6 +7928,10 @@ window.submitMultiBunkEdit = submitMultiBunkEdit;
     window.checkLocationConflict = checkLocationConflict;
     window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
+    // Exposed for PostEditFieldChange: reuse the generator's own field finder
+    // (hosts-the-sport → grade access → league-lock + capacity/time) so the
+    // post-edit field picker offers exactly the fields the solver would allow.
+    window.findFieldsForActivity = findFieldsForActivity;
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
