@@ -25591,9 +25591,25 @@
             };
         })();
 
+        // ★ Config-level shut-off sets (Facilities AVAILABLE/UNAVAILABLE toggle).
+        //   The keep-fixed branch below preserves _fixed/_league/_autoSpecial
+        //   placements across regen WITHOUT re-checking availability — so a
+        //   special or field placed BEFORE being disabled survived every regen.
+        //   Drop any carried-forward placement whose special or host field is now
+        //   toggled off, regardless of its _fixed/_league/_autoSpecial status.
+        const _gsClr = getGlobalSettings();
+        const _offSpecialClr = new Set(((_gsClr.app1?.specialActivities) || []).filter(s => s && s.available === false).map(s => String(s.name).toLowerCase().trim()));
+        const _offFieldClr = new Set(((_gsClr.app1?.fields) || []).filter(f => f && f.available === false).map(f => String(f.name).toLowerCase().trim()));
         // Clear non-fixed assignments before solving (respect LNS locks)
         Object.keys(window.scheduleAssignments).forEach(bk => {
             (window.scheduleAssignments[bk] || []).forEach((s, i) => {
+                if (!s) return;
+                const _actLc = String(s._activity || s.sport || '').toLowerCase().trim();
+                const _fieldLc = String(s.field || s._location || '').toLowerCase().trim();
+                if ((_actLc && _offSpecialClr.has(_actLc)) || (_fieldLc && _offFieldClr.has(_fieldLc))) {
+                    window.scheduleAssignments[bk][i] = null;
+                    return;
+                }
                 if (s && !s._fixed && !s._league && !s._autoSpecial) {
                     if (_lnsLockSet && _lnsLockSet[bk + '|' + i] && s.field !== 'Free') {
                         s._locked = true;

@@ -136,6 +136,10 @@
                 let fld = null;
                 if (fieldName && fieldName !== 'Free') {
                     fld = _allFields.find(f => f && f.name === fieldName);
+                    // ★ Config-level shut-off: host field toggled UNAVAILABLE in
+                    //   Facilities (available:false). A placement pinned BEFORE the
+                    //   field was disabled must not be carried forward.
+                    if (fld && fld.available === false) return false;
                     if (fld?.accessRestrictions?.enabled && !_accessAllowsBunk(fld.accessRestrictions)) {
                         return false;
                     }
@@ -145,6 +149,10 @@
                 //    activity is a configured special)
                 if (actName) {
                     const sp = _allSpecials.find(s => s && s.name === actName);
+                    // ★ Config-level shut-off: special toggled UNAVAILABLE in
+                    //   Facilities (available:false). Drop the carried-forward pin
+                    //   so a disabled special is never restored into the schedule.
+                    if (sp && sp.available === false) return false;
                     if (sp?.accessRestrictions?.enabled && !_accessAllowsBunk(sp.accessRestrictions)) {
                         return false;
                     }

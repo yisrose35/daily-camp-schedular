@@ -529,6 +529,30 @@
             }
         }
         
+        // ★ Config-level shut-off (Facilities AVAILABLE/UNAVAILABLE toggle):
+        //   never write a placement whose SPECIAL or host FIELD is disabled.
+        //   activityProperties carries the `available` flag for both specials and
+        //   fields (buildActivityProperties). This is the universal manual-mode
+        //   chokepoint — it covers every caller (rotation-special at L1559,
+        //   direct-fill, bunk-override, smart-tile) that passes _fixed:true,
+        //   several of which only checked capacity/"had-today", never availability.
+        //   League fills are exempt (handled/returned above) and label/transition
+        //   writes (Swim, Free, Change) have no activityProperties entry so they
+        //   pass through untouched.
+        if (!isLeagueFill && activityProperties) {
+            const _avLook = (n) => {
+                if (!n) return undefined;
+                return activityProperties[n] || activityProperties[String(n).toLowerCase().trim()];
+            };
+            const _apAct = _avLook(pick && pick._activity);
+            const _apFld = _avLook(pick && pick.field);
+            if ((_apAct && _apAct.available === false) || (_apFld && _apFld.available === false)) {
+                console.log('[fillBlock] skip — "' + ((pick && (pick._activity || pick.field)) || '?') +
+                    '" is UNAVAILABLE in Facilities (config toggle off)');
+                return;
+            }
+        }
+
         const fName = Utils.fieldLabel(pick.field);
         const trans = Utils.getTransitionRules(fName, activityProperties);
         const {
