@@ -1514,6 +1514,12 @@
                                 if (_atQuota) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" at fair-share cap (${_rotSpecialQuota[_wQ]}/window, shared rooms) → next option`);
                                 for (const sp of (_atQuota ? [] : _avail)) {
                                     if (_had && _had.has(sp.name.toLowerCase())) continue; // already had this special today
+                                    // ★ Bunk-level access — getAvailableSpecialsForTimeBlock filters the
+                                    //   pool at DIVISION level only, so a special restricted to specific
+                                    //   bunks within an allowed grade could otherwise be rotated onto a
+                                    //   bunk that has no access (e.g. "Sushi" gated to certain bunks).
+                                    if (typeof window.isSpecialAvailableForBunk === 'function'
+                                        && !window.isSpecialAvailableForBunk(sp.name, divName, bunk, window.loadGlobalSettings?.())) continue;
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
                                     _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
@@ -2577,6 +2583,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const originalCount = masterSpecials.length;
 
             masterSpecials = masterSpecials.filter(s => {
+                // ★ Config-level shut-off: the Facilities tab AVAILABLE/UNAVAILABLE
+                //   toggle writes available:false onto the special. Mirror the auto
+                //   builder (scheduler_core_auto.js todaysSpecials filter) so the
+                //   manual builder's total solver never gets a disabled special in
+                //   config.masterSpecials. The SmartTile path already gates on this
+                //   (smart_logic_adapter.js props.available === false), but the total
+                //   solver's candidate generation only checked the per-date disable
+                //   set — so a toggled-off special still got placed in manual mode.
+                if (s.available === false) return false;
+
                 if (!isRainyMode) {
                     if (s.rainyDayOnly === true || s.rainyDayExclusive === true) return false;
                 }

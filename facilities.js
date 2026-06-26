@@ -1109,8 +1109,45 @@ function renderSpecialConfig(container, fac) {
             renderDetailPane();
         };
 
+        // ── Availability toggle ──────────────────────────────────────
+        //   Mirrors the sports field "AVAILABLE/UNAVAILABLE" switch. When a
+        //   special is toggled off (saData.available === false) the solver
+        //   skips it entirely (scheduler_core_auto.js filters todaysSpecials
+        //   on `s.available === false`; rotation_engine scores it Infinity).
+        //   This lets the user disable a special without deleting it.
+        const isAvail = saData.available !== false;
+
+        const saRight = document.createElement("div");
+        saRight.style.cssText = "display:flex; align-items:center; gap:10px;";
+
+        const availToggle = document.createElement("label");
+        availToggle.className = "switch";
+        availToggle.title = isAvail ? "Special is on — click to turn off" : "Special is off — click to turn on";
+        availToggle.onclick = e => e.stopPropagation();
+        const availCb = document.createElement("input");
+        availCb.type = "checkbox";
+        availCb.checked = isAvail;
+        availCb.onchange = () => {
+            saData.available = availCb.checked;
+            saveSpecialData(saData);
+            renderDetailPane();
+        };
+        const availSlider = document.createElement("span");
+        availSlider.className = "slider";
+        availToggle.appendChild(availCb);
+        availToggle.appendChild(availSlider);
+        saRight.appendChild(availToggle);
+        saRight.appendChild(saDelBtn);
+
+        // Dim the card and mute the title when the special is turned off so
+        // the disabled state is obvious at a glance.
+        if (!isAvail) {
+            saCard.style.opacity = "0.6";
+            saTitle.style.color = "#9CA3AF";
+        }
+
         saHeader.appendChild(saTitle);
-        saHeader.appendChild(saDelBtn);
+        saHeader.appendChild(saRight);
         saCard.appendChild(saHeader);
 
         // Special activity config sections
@@ -2981,8 +3018,25 @@ function renderSpecialAccess(saData) {
                     bChip.style.cursor = 'pointer';
                     bChip.style.fontSize = '0.75rem';
                     bChip.onclick = () => {
-                        if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
-                        else rules.divisions[divName] = bunkList.concat([bunkName]);
+                        if (isOn) {
+                            const _next = bunkList.filter(b => b !== bunkName);
+                            // ★ Deselecting the LAST bunk = "no one in this grade".
+                            //   An empty array means "ALL bunks" to the scheduler
+                            //   (isSpecialAvailableForBunk / canBunkAccessSpecial treat
+                            //   []  as no per-bunk restriction), so leaving [] here would
+                            //   silently grant the activity to the WHOLE grade — the exact
+                            //   opposite of the user's intent. Excluding the grade (drop the
+                            //   key) is the only representation the scheduler reads as
+                            //   "shut off for this grade".
+                            if (_next.length === 0) {
+                                delete rules.divisions[divName];
+                                rules.priorityList = (rules.priorityList || []).filter(d => d !== divName);
+                            } else {
+                                rules.divisions[divName] = _next;
+                            }
+                        } else {
+                            rules.divisions[divName] = bunkList.concat([bunkName]);
+                        }
                         saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                     };
                     bunkWrap.appendChild(bChip);

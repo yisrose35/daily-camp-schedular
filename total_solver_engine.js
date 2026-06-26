@@ -736,6 +736,8 @@
         var disabledSet = new Set(disabledFields);
         config.masterFields?.forEach(function(f) {
             if (disabledSet.has(f.name)) return;
+            // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities.
+            if (f.available === false) return;
             (f.activities || []).forEach(function(sport) {
                 var key = f.name + '|' + sport;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: f.name, sport: sport, activityName: sport, type: 'sport', _fieldNorm: normName(f.name), _actNorm: normName(sport) }); }
@@ -743,6 +745,8 @@
         });
         config.masterSpecials?.forEach(function(s) {
             if (!s.name || disabledSet.has(s.name)) return;
+            // ★ Config-level shut-off: special toggled UNAVAILABLE in Facilities.
+            if (s.available === false) return;
             var key = s.name + '|special';
             if (seenKeys.has(key)) return;
             seenKeys.add(key);
@@ -946,6 +950,16 @@
         if (rotationPenalty === Infinity) return 999999;
        var specialRule = activityProperties[act];
         if (specialRule) {
+            // ★ HARD GATE: the special's OWN access restriction (grade + bunk).
+            //   The field-access gate above only checks the HOSTING field — a
+            //   special hosted on a field that admits this grade (e.g. "Basketball
+            //   Clinic" at "Jump Shot") would otherwise be placed for a grade the
+            //   special itself excludes. Duplicate-safe; no-op for non-specials and
+            //   unrestricted specials (isSpecialAvailableForBunk returns true).
+            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                var _accGrade = (block && block._divName) || blockDivName;
+                if (_accGrade != null && !window.isSpecialAvailableForBunk(act, _accGrade, bunk, window.globalSettings || null)) return 999999;
+            }
             // ★ Per-grade cap: use grade-specific override if available
             var _effectiveMax = specialRule.maxUsage || 0;
             var _blockDiv = block?._divName || blockDivName;
@@ -1738,6 +1752,16 @@
             fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free';
         }
     }    var _actName = pick._activity || pick.activityName || pick.sport || fName;
+    // ★ Safety net: enforce a special's OWN access restriction at the single
+    //   write chokepoint every selection path funnels through. The scorer's
+    //   field-access gate doesn't cover a special hosted on a field that admits
+    //   the grade while the SPECIAL excludes it — downgrade to Free here so no
+    //   selection route can leak it. No-op for non-specials / unrestricted.
+    if (fName && fName !== 'Free' && block.divName != null
+        && typeof window.isSpecialAvailableForBunk === 'function'
+        && !window.isSpecialAvailableForBunk(_actName, block.divName, bunk, window.globalSettings || null)) {
+        fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free'; _actName = 'Free';
+    }
     // ★ Day-19 special features (durations[] best-fit / multiPart part labels /
     //   prep lead-in) for the manual solver's MAIN write path. This is where
     //   sports AND specials are written by the solver — fillBlock only handles

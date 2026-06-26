@@ -388,6 +388,185 @@ var STYLE_PRESETS = [
         }
     }
 ];
+// ── Live View screen themes ──────────────────────────────────────────────
+// The fullscreen kiosk (Live View) has its OWN palette, independent of the
+// print-sheet template above — a TV/projector in a bright dining hall needs
+// different colors than a printed handout. Each theme is just a map of CSS
+// custom properties applied to the live overlay root (see _pcApplyLiveTheme).
+// "midnight" reproduces the original hardcoded dark look exactly, so existing
+// screens are unchanged until a camp picks something else.
+var LIVE_THEMES = [
+    {
+        id: 'midnight', name: 'Midnight',
+        description: 'Bright text on near-black — best for TVs in dim rooms (the classic look).',
+        swatch: ['#0b1220', '#fbbf24', '#0e7490'],
+        vars: {
+            '--lv-bg': '#0b1220', '--lv-header-bg': '#060a16', '--lv-header-border': '#1e293b',
+            '--lv-title': '#ffffff', '--lv-date': '#fcd34d', '--lv-clock': '#e2e8f0',
+            '--lv-close-border': 'rgba(255,255,255,.22)', '--lv-close-bg': 'rgba(255,255,255,.10)',
+            '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.2)',
+            '--lv-loading': '#94a3b8', '--lv-nav': 'rgba(255,255,255,.6)', '--lv-nav-hover': '#fbbf24',
+            '--lv-accent': '#fbbf24', '--lv-divrange': '#8aa0bd', '--lv-cell-border': '#2b3a55',
+            '--lv-th-bg': '#16233e', '--lv-th-text': '#f8fafc', '--lv-rowhead-text': '#aab8cc',
+            '--lv-cell-bg': '#1c2a46', '--lv-cell-bg-alt': '#16223a', '--lv-cell-text': '#f1f5f9',
+            '--lv-free-bg': '#131f33', '--lv-free-text': '#42536c',
+            '--lv-current-bg': '#0e7490', '--lv-current-ring': '#22d3ee',
+            '--lv-current-glow': 'rgba(34,211,238,.35)', '--lv-current-text': '#ffffff',
+            '--lv-pinned-bg': '#3a2206', '--lv-pinned-text': '#fcd34d',
+            '--lv-league-bg': '#262150', '--lv-league-text': '#c4b5fd',
+            '--lv-curcol-bg': '#0e7490', '--lv-curcol-text': '#a5f3fc', '--lv-curcol-underline': '#fbbf24',
+            '--lv-banner-border': 'rgba(251,191,36,.35)',
+            '--lv-uni-grade-bg': '#0e1830', '--lv-uni-grade-text': '#fcd34d',
+            '--lv-uni-bunk-bg': '#0b1326', '--lv-uni-bunk-text': '#cbd5e1', '--lv-fit-on-text': '#1f2937',
+            '--lv-dot-idle': 'rgba(255,255,255,.3)'
+        }
+    },
+    {
+        id: 'daylight', name: 'Daylight',
+        description: 'Dark text on white — best for bright rooms, windows, and projectors.',
+        swatch: ['#ffffff', '#0e7490', '#f1f5f9'],
+        vars: {
+            '--lv-bg': '#f1f5f9', '--lv-header-bg': '#ffffff', '--lv-header-border': '#e2e8f0',
+            '--lv-title': '#0f172a', '--lv-date': '#b45309', '--lv-clock': '#334155',
+            '--lv-close-border': 'rgba(15,23,42,.18)', '--lv-close-bg': 'rgba(15,23,42,.05)',
+            '--lv-close-text': '#0f172a', '--lv-close-bg-hover': 'rgba(15,23,42,.12)',
+            '--lv-loading': '#64748b', '--lv-nav': 'rgba(15,23,42,.45)', '--lv-nav-hover': '#0e7490',
+            '--lv-accent': '#0f6e80', '--lv-divrange': '#64748b', '--lv-cell-border': '#cbd5e1',
+            '--lv-th-bg': '#e2e8f0', '--lv-th-text': '#0f172a', '--lv-rowhead-text': '#475569',
+            '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f8fafc', '--lv-cell-text': '#1e293b',
+            '--lv-free-bg': '#f1f5f9', '--lv-free-text': '#94a3b8',
+            '--lv-current-bg': '#cffafe', '--lv-current-ring': '#0e7490',
+            '--lv-current-glow': 'rgba(14,116,144,.25)', '--lv-current-text': '#0c4a6e',
+            '--lv-pinned-bg': '#fef3c7', '--lv-pinned-text': '#92400e',
+            '--lv-league-bg': '#ede9fe', '--lv-league-text': '#5b21b6',
+            '--lv-curcol-bg': '#cffafe', '--lv-curcol-text': '#0c4a6e', '--lv-curcol-underline': '#0e7490',
+            '--lv-banner-border': 'rgba(14,116,144,.3)',
+            '--lv-uni-grade-bg': '#e2e8f0', '--lv-uni-grade-text': '#0f172a',
+            '--lv-uni-bunk-bg': '#f1f5f9', '--lv-uni-bunk-text': '#475569', '--lv-fit-on-text': '#ffffff',
+            '--lv-dot-idle': 'rgba(15,23,42,.2)'
+        }
+    },
+    {
+        id: 'teal', name: 'Camp Teal',
+        description: 'On-brand teal header over a soft cyan board — friendly and easy on the eyes.',
+        swatch: ['#147D91', '#ecfeff', '#fbbf24'],
+        vars: {
+            '--lv-bg': '#ecfeff', '--lv-header-bg': '#147D91', '--lv-header-border': '#0F5F6E',
+            '--lv-title': '#ffffff', '--lv-date': '#fde68a', '--lv-clock': '#ecfeff',
+            '--lv-close-border': 'rgba(255,255,255,.3)', '--lv-close-bg': 'rgba(255,255,255,.14)',
+            '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.26)',
+            '--lv-loading': '#0f6e80', '--lv-nav': 'rgba(15,95,110,.5)', '--lv-nav-hover': '#0F5F6E',
+            '--lv-accent': '#0F5F6E', '--lv-divrange': '#5b8a93', '--lv-cell-border': '#b6e3ea',
+            '--lv-th-bg': '#cdeef3', '--lv-th-text': '#0F5F6E', '--lv-rowhead-text': '#0f6e80',
+            '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f3fcfd', '--lv-cell-text': '#134e57',
+            '--lv-free-bg': '#ecfeff', '--lv-free-text': '#93b8bf',
+            '--lv-current-bg': '#147D91', '--lv-current-ring': '#fbbf24',
+            '--lv-current-glow': 'rgba(20,125,145,.3)', '--lv-current-text': '#ffffff',
+            '--lv-pinned-bg': '#fff4d6', '--lv-pinned-text': '#92560e',
+            '--lv-league-bg': '#e9e5ff', '--lv-league-text': '#5b21b6',
+            '--lv-curcol-bg': '#147D91', '--lv-curcol-text': '#ecfeff', '--lv-curcol-underline': '#fbbf24',
+            '--lv-banner-border': 'rgba(15,95,110,.3)',
+            '--lv-uni-grade-bg': '#cdeef3', '--lv-uni-grade-text': '#0F5F6E',
+            '--lv-uni-bunk-bg': '#e3f6f9', '--lv-uni-bunk-text': '#0f6e80', '--lv-fit-on-text': '#ffffff',
+            '--lv-dot-idle': 'rgba(15,95,110,.25)'
+        }
+    },
+    {
+        id: 'contrast', name: 'High Contrast',
+        description: 'Pure black on white with bold weights — maximum legibility from across a field.',
+        swatch: ['#000000', '#ffffff', '#ffeb00'],
+        vars: {
+            '--lv-bg': '#ffffff', '--lv-header-bg': '#000000', '--lv-header-border': '#000000',
+            '--lv-title': '#ffffff', '--lv-date': '#ffd400', '--lv-clock': '#ffffff',
+            '--lv-close-border': 'rgba(255,255,255,.5)', '--lv-close-bg': 'rgba(255,255,255,.15)',
+            '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.3)',
+            '--lv-loading': '#000000', '--lv-nav': '#000000', '--lv-nav-hover': '#0e7490',
+            '--lv-accent': '#000000', '--lv-divrange': '#333333', '--lv-cell-border': '#000000',
+            '--lv-th-bg': '#000000', '--lv-th-text': '#ffffff', '--lv-rowhead-text': '#ffffff',
+            '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f2f2f2', '--lv-cell-text': '#000000',
+            '--lv-free-bg': '#ffffff', '--lv-free-text': '#999999',
+            '--lv-current-bg': '#ffeb00', '--lv-current-ring': '#000000',
+            '--lv-current-glow': 'rgba(0,0,0,.3)', '--lv-current-text': '#000000',
+            '--lv-pinned-bg': '#ffe08a', '--lv-pinned-text': '#000000',
+            '--lv-league-bg': '#d9d2ff', '--lv-league-text': '#000000',
+            '--lv-curcol-bg': '#000000', '--lv-curcol-text': '#ffeb00', '--lv-curcol-underline': '#ffeb00',
+            '--lv-banner-border': '#000000',
+            '--lv-uni-grade-bg': '#000000', '--lv-uni-grade-text': '#ffffff',
+            '--lv-uni-bunk-bg': '#222222', '--lv-uni-bunk-text': '#ffffff', '--lv-fit-on-text': '#ffffff',
+            '--lv-dot-idle': 'rgba(0,0,0,.25)'
+        }
+    }
+];
+var _LIVE_THEME_KEY = 'pc3LiveTheme';
+var _LIVE_CUSTOM_KEY = 'pc3LiveThemeCustom';
+
+// Custom color controls — a curated subset of the --lv-* vars exposed as color
+// pickers so a camp can fine-tune a preset. Each control drives one or more vars
+// (grouped so related surfaces stay consistent — e.g. both cell shades together).
+// Overrides are layered ON TOP of the chosen preset and stored as {key:'#hex'};
+// picking a preset clears them (preset = a known-good starting point).
+var LIVE_CUSTOM_FIELDS = [
+    { key: 'bg',       label: 'Screen background', vars: ['--lv-bg'] },
+    { key: 'header',   label: 'Header bar',        vars: ['--lv-header-bg'] },
+    { key: 'headtext', label: 'Header text',       vars: ['--lv-title', '--lv-clock'] },
+    { key: 'accent',   label: 'Accent (titles, date, dots)', vars: ['--lv-accent', '--lv-date', '--lv-banner-border'] },
+    { key: 'gradehdr', label: 'Column headers',    vars: ['--lv-th-bg', '--lv-uni-grade-bg', '--lv-uni-bunk-bg'] },
+    { key: 'gradetxt', label: 'Header label text', vars: ['--lv-th-text', '--lv-rowhead-text', '--lv-uni-grade-text', '--lv-uni-bunk-text'] },
+    { key: 'cellbg',   label: 'Activity cells',    vars: ['--lv-cell-bg', '--lv-cell-bg-alt'] },
+    { key: 'celltext', label: 'Activity text',     vars: ['--lv-cell-text'] },
+    { key: 'now',      label: 'Happening-now',     vars: ['--lv-current-bg', '--lv-curcol-bg'] }
+];
+
+// Resolve the camp's chosen live theme (defaults to Midnight = original look).
+function _pcGetLiveThemeId() {
+    try {
+        var id = localStorage.getItem(_LIVE_THEME_KEY);
+        if (id && LIVE_THEMES.some(function (t) { return t.id === id; })) return id;
+    } catch (e) {}
+    return 'midnight';
+}
+function _pcGetLiveTheme(id) {
+    id = id || _pcGetLiveThemeId();
+    for (var i = 0; i < LIVE_THEMES.length; i++) { if (LIVE_THEMES[i].id === id) return LIVE_THEMES[i]; }
+    return LIVE_THEMES[0];
+}
+// Per-camp custom color overrides ({fieldKey:'#hex'}), layered over the preset.
+function _pcGetLiveCustom() {
+    try { return JSON.parse(localStorage.getItem(_LIVE_CUSTOM_KEY) || '{}') || {}; }
+    catch (e) { return {}; }
+}
+function _pcSetLiveCustom(obj) {
+    try {
+        if (obj && Object.keys(obj).length) localStorage.setItem(_LIVE_CUSTOM_KEY, JSON.stringify(obj));
+        else localStorage.removeItem(_LIVE_CUSTOM_KEY);
+    } catch (e) {}
+}
+// The effective var map = preset vars with any custom overrides applied.
+function _pcEffectiveLiveVars(id) {
+    var vars = Object.assign({}, _pcGetLiveTheme(id).vars);
+    var custom = _pcGetLiveCustom();
+    LIVE_CUSTOM_FIELDS.forEach(function (f) {
+        var v = custom[f.key];
+        if (v) f.vars.forEach(function (k) { vars[k] = v; });
+    });
+    return vars;
+}
+// Apply the effective palette (preset + custom) to the live overlay root +
+// page background. Safe to call in either window; no-op if the overlay is absent.
+function _pcApplyLiveTheme(id) {
+    var vars = _pcEffectiveLiveVars(id);
+    var overlay = document.getElementById('pc3-live-overlay');
+    if (overlay) {
+        Object.keys(vars).forEach(function (k) { overlay.style.setProperty(k, vars[k]); });
+    }
+    // The standalone kiosk paints #print as the backdrop behind the overlay.
+    var printTab = document.getElementById('print');
+    if (printTab && document.documentElement.classList.contains('pc3-live-standalone')) {
+        printTab.style.background = vars['--lv-bg'];
+    }
+    return vars;
+}
+
 var _previewHtml = '';
 var _cloudSyncTimeout = null;
 var _liveInterval = null;
@@ -808,16 +987,65 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
 var _pcSpecialLocCache = {};
 function pcConfiguredSpecialLocation(act) {
     if (!act) return '';
-    if (Object.prototype.hasOwnProperty.call(_pcSpecialLocCache, act)) return _pcSpecialLocCache[act];
+    var key = String(act).toLowerCase().trim();
+    if (Object.prototype.hasOwnProperty.call(_pcSpecialLocCache, key)) return _pcSpecialLocCache[key];
     var loc = '';
     try {
-        if (typeof window.getLocationForActivity === 'function') {
+        // ★ This camp duplicates specials cap + lowercase, and the lowercase dup
+        //   often has a BLANK location. getLocationForActivity is first-match-wins,
+        //   so it can return '' for the dup even though a sibling entry carries the
+        //   room. Scan all specials case-insensitively for the FIRST one that
+        //   actually has a location before falling back.
+        var specials = (typeof window.getGlobalSpecialActivities === 'function' && window.getGlobalSpecialActivities())
+            || (window.loadGlobalSettings && window.loadGlobalSettings().app1 && window.loadGlobalSettings().app1.specialActivities)
+            || [];
+        for (var i = 0; i < specials.length; i++) {
+            var s = specials[i];
+            if (s && s.name && String(s.name).toLowerCase().trim() === key && s.location) { loc = s.location; break; }
+        }
+        if (!loc && typeof window.getLocationForActivity === 'function') {
             var l = window.getLocationForActivity(act);
             if (l && typeof l === 'string') loc = l;
         }
     } catch (e) { /* ignore */ }
-    _pcSpecialLocCache[act] = loc;
+    _pcSpecialLocCache[key] = loc;
     return loc;
+}
+
+// ★ Canonical display name. The schedule can store a non-canonical variant of an
+//   activity/facility name — most commonly the all-lowercase duplicate this camp
+//   keeps alongside the proper-cased special (e.g. "arts & crafts" vs the
+//   configured "Arts & Crafts"). Map a stored name back to the configured casing
+//   by a case-insensitive lookup across specials, facilities and fields,
+//   preferring a variant that carries capitals over an all-lowercase duplicate.
+//   Returns the name unchanged when there is no config match (sports, custom
+//   tiles, etc.) — a complete no-op for correctly-cased entries.
+var _pcCanonNameMap = null;
+function pcCanonicalActivityName(name) {
+    if (!name) return name;
+    if (!_pcCanonNameMap) {
+        _pcCanonNameMap = {};
+        try {
+            var g = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+            var names = [];
+            var specials = (typeof window.getGlobalSpecialActivities === 'function' && window.getGlobalSpecialActivities())
+                || (g.app1 && g.app1.specialActivities) || [];
+            specials.forEach(function (s) { if (s && s.name) names.push(s.name); });
+            var facs = (typeof window.getFacilities === 'function' && window.getFacilities()) || [];
+            facs.forEach(function (f) { var nm = (typeof f === 'string') ? f : (f && f.name); if (nm) names.push(nm); });
+            var fields = (g.app1 && g.app1.fields) || [];
+            fields.forEach(function (f) { var nm = (typeof f === 'string') ? f : (f && f.name); if (nm) names.push(nm); });
+            names.forEach(function (nm) {
+                var k = String(nm).toLowerCase().trim();
+                if (!k) return;
+                var cur = _pcCanonNameMap[k];
+                // First writer wins, but a capitalized variant always beats an
+                // all-lowercase duplicate of the same name.
+                if (!cur || (cur === cur.toLowerCase() && nm !== nm.toLowerCase())) _pcCanonNameMap[k] = nm;
+            });
+        } catch (e) { /* ignore */ }
+    }
+    return _pcCanonNameMap[String(name).toLowerCase().trim()] || name;
 }
 
 function pcResolveLocation(entry) {
@@ -869,8 +1097,11 @@ function formatEntry(entry) {
         var seFiltered = seActs.filter(function (a) { return (a || '').toLowerCase().trim() !== sePoolLc; });
         return ['Swim'].concat(seFiltered).join(', ');
     }
+    // Display-name ALIAS = the EXACT cell text the user typed; show it verbatim with
+    // no location appended (e.g. "Lake", never "Lake \u2013 VR").
+    if (entry._displayName) return entry._displayName;
     var parts = [];
-    var act = entry._activity || entry.sport || '';
+    var act = pcCanonicalActivityName(entry._activity || entry.sport || '');
     var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
     // Always show "Activity \u2013 Location" (activity name first), for sports AND
@@ -1102,7 +1333,7 @@ function pcLeagueInfoAt(divName, startMin) {
 }
 
 // Returns matchup lines for a manual league block, formatted as
-// "Football - Football Field 1 - Bunk 1 vs 2". When `bunk` is given and the
+// "Football - Football Field 1 - Team 1 vs Team 2". When `bunk` is given and the
 // teams are bunk-like, returns only that bunk's game; otherwise all games.
 function buildLeagueMatchups(eventBlock, divName, bunk) {
     var raw = [];
@@ -1188,12 +1419,15 @@ function pcParseMatchup(m) {
     return { a: a, b: b, sport: sport, field: field };
 }
 
-// Format one parsed matchup as "Bunk 1 vs 2 - Football - Football Field 1"
+// Format one parsed matchup as "Team 1 vs Team 2 - Football - Football Field 1"
 // (teams first, then sport, then field — easiest to scan on the live screen).
+// League teams are separate entities from bunks, so numeric labels get a
+// "Team " prefix (NOT "Bunk ").
 function pcFormatMatchupLine(p) {
     var sport = p.sport ? (p.sport.charAt(0).toUpperCase() + p.sport.slice(1)) : '';
-    var a = /^\d+$/.test(String(p.a).trim()) ? 'Bunk ' + p.a : p.a;
-    return [a + ' vs ' + p.b, sport, p.field].filter(Boolean).join(' - ');
+    var a = /^\d+$/.test(String(p.a).trim()) ? 'Team ' + p.a : p.a;
+    var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
+    return [a + ' vs ' + b, sport, p.field].filter(Boolean).join(' - ');
 }
 
 // Build a league/specialty-league cell for the live view: the game/league label
@@ -1230,7 +1464,7 @@ function pcLeagueSlotRecord(divName, startMin) {
     return null;
 }
 
-// Build a rich league label for a bunk's game: "Football - Football Field 1 - Bunk 1 vs 2".
+// Build a rich league label for a bunk's game: "Football - Football Field 1 - Team 1 vs Team 2".
 // Returns { sport, field, matchup, full }. Picks the matchup involving `bunk` when the
 // teams are bunk-like; otherwise lists all matchups for the game.
 function pcLeagueLabel(entry, bunk, divName, startMin) {
@@ -1258,8 +1492,10 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
     var chosen = (mine && mine.length) ? mine : parsed;
 
     var fmtPair = function (p) {
-        var a = /^\d+$/.test(String(p.a).trim()) ? 'Bunk ' + p.a : p.a;
-        return a + ' vs ' + p.b;
+        // League teams are separate entities from bunks → "Team " prefix.
+        var a = /^\d+$/.test(String(p.a).trim()) ? 'Team ' + p.a : p.a;
+        var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
+        return a + ' vs ' + b;
     };
     var matchStrs = chosen.map(fmtPair);
 
@@ -1640,19 +1876,35 @@ function getStyles() {
     /* ── League Matchups ── */
     '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 7px;background:#ddebf7;border:1px solid #9bc2e6;border-radius:2px;font-size:10px;white-space:nowrap;color:#1f3864;}' +
 
-    /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
-    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
-    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:#060a16;border-bottom:1px solid #1e293b;flex-shrink:0;}' +
+    /* ── Live Mode ── kiosk theme (TV / big-screen friendly). Colors are driven
+       by --lv-* custom properties so a camp can re-skin the screen via the Live
+       theme picker; the defaults below are the original "Midnight" palette, so
+       an un-themed overlay looks identical to before. See LIVE_THEMES. */
+    '.pc3-live-overlay{' +
+        '--lv-bg:#0b1220;--lv-header-bg:#060a16;--lv-header-border:#1e293b;' +
+        '--lv-title:#ffffff;--lv-date:#fcd34d;--lv-clock:#e2e8f0;' +
+        '--lv-close-border:rgba(255,255,255,.22);--lv-close-bg:rgba(255,255,255,.10);--lv-close-text:#ffffff;--lv-close-bg-hover:rgba(255,255,255,.2);' +
+        '--lv-loading:#94a3b8;--lv-nav:rgba(255,255,255,.6);--lv-nav-hover:#fbbf24;' +
+        '--lv-accent:#fbbf24;--lv-divrange:#8aa0bd;--lv-cell-border:#2b3a55;' +
+        '--lv-th-bg:#16233e;--lv-th-text:#f8fafc;--lv-rowhead-text:#aab8cc;' +
+        '--lv-cell-bg:#1c2a46;--lv-cell-bg-alt:#16223a;--lv-cell-text:#f1f5f9;' +
+        '--lv-free-bg:#131f33;--lv-free-text:#42536c;' +
+        '--lv-current-bg:#0e7490;--lv-current-ring:#22d3ee;--lv-current-glow:rgba(34,211,238,.35);--lv-current-text:#ffffff;' +
+        '--lv-pinned-bg:#3a2206;--lv-pinned-text:#fcd34d;--lv-league-bg:#262150;--lv-league-text:#c4b5fd;' +
+        '--lv-curcol-bg:#0e7490;--lv-curcol-text:#a5f3fc;--lv-curcol-underline:#fbbf24;--lv-dot-idle:rgba(255,255,255,.3);' +
+        '--lv-banner-border:rgba(251,191,36,.35);--lv-uni-grade-bg:#0e1830;--lv-uni-grade-text:#fcd34d;--lv-uni-bunk-bg:#0b1326;--lv-uni-bunk-text:#cbd5e1;--lv-fit-on-text:#1f2937;' +
+        'position:absolute;inset:0;z-index:100;background:var(--lv-bg);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:var(--lv-header-bg);border-bottom:1px solid var(--lv-header-border);flex-shrink:0;}' +
     '.pc3-live-headleft{display:flex;align-items:baseline;gap:14px;min-width:0;}' +
-    '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:#ffffff;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-    '.pc3-live-date{font-size:16px;font-weight:600;color:#fcd34d;white-space:nowrap;}' +
+    '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:var(--lv-title);letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.pc3-live-date{font-size:16px;font-weight:600;color:var(--lv-date);white-space:nowrap;}' +
     '.pc3-live-headright{display:flex;align-items:center;gap:18px;flex-shrink:0;}' +
-    '.pc3-live-clock{font-size:34px;font-weight:300;color:#e2e8f0;font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
-    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
-    '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
-    '.pc3-live-divbanner{font-size:26px;font-weight:800;color:#fbbf24;letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid rgba(251,191,36,.35);}' +
-    '.pc3-live-unified th.pc3-uni-grade{font-size:.85em;font-weight:800;text-align:center;background:#0e1830;color:#fcd34d;border-bottom:1px solid #1e293b;white-space:nowrap;padding:5px 4px;}' +
-    '.pc3-live-unified th.pc3-uni-bunk{font-size:.72em;font-weight:700;text-align:center;background:#0b1326;color:#cbd5e1;white-space:nowrap;padding:4px 3px;}' +
+    '.pc3-live-clock{font-size:34px;font-weight:300;color:var(--lv-clock);font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
+    '.pc3-live-close{padding:8px 16px;border:1px solid var(--lv-close-border);border-radius:9px;background:var(--lv-close-bg);color:var(--lv-close-text);font-size:13px;font-weight:600;cursor:pointer;}' +
+    '.pc3-live-close:hover{background:var(--lv-close-bg-hover);}' +
+    '.pc3-live-divbanner{font-size:26px;font-weight:800;color:var(--lv-accent);letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid var(--lv-banner-border);}' +
+    '.pc3-live-unified th.pc3-uni-grade{font-size:.85em;font-weight:800;text-align:center;background:var(--lv-uni-grade-bg);color:var(--lv-uni-grade-text);border-bottom:1px solid var(--lv-header-border);white-space:nowrap;padding:5px 4px;}' +
+    '.pc3-live-unified th.pc3-uni-bunk{font-size:.72em;font-weight:700;text-align:center;background:var(--lv-uni-bunk-bg);color:var(--lv-uni-bunk-text);white-space:nowrap;padding:4px 3px;}' +
     '.pc3-live-unified th.row-head{white-space:nowrap;font-variant-numeric:tabular-nums;}' +
     '#pc3-cp-modal{position:fixed;inset:0;background:rgba(2,6,16,.72);z-index:100000;display:flex;align-items:center;justify-content:center;}' +
     '#pc3-cp-modal .pc3-cp-panel{background:#0b1326;border:1px solid #1e293b;border-radius:14px;width:min(560px,92vw);max-height:86vh;display:flex;flex-direction:column;color:#e2e8f0;box-shadow:0 20px 60px rgba(0,0,0,.5);}' +
@@ -1668,31 +1920,32 @@ function getStyles() {
     '#pc3-cp-modal .pc3-cp-btn{padding:9px 18px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:14px;font-weight:600;cursor:pointer;}' +
     '#pc3-cp-modal .pc3-cp-btn:hover{background:rgba(255,255,255,.2);}' +
     '#pc3-cp-modal .pc3-cp-apply{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
-    '.pc3-live-fit{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
-    '.pc3-live-fit:hover{background:rgba(255,255,255,.2);}' +
-    '.pc3-live-fit.on{background:#fbbf24;border-color:#fbbf24;color:#1f2937;}' +
-    '.pc3-live-loading{color:#94a3b8;padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
+    '.pc3-live-fit{padding:8px 16px;border:1px solid var(--lv-close-border);border-radius:9px;background:var(--lv-close-bg);color:var(--lv-close-text);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,color .15s;}' +
+    '.pc3-live-fit:hover{background:var(--lv-close-bg-hover);}' +
+    '.pc3-live-fit.on{background:var(--lv-accent);border-color:var(--lv-accent);color:var(--lv-fit-on-text);}' +
+    '.pc3-live-loading{color:var(--lv-loading);padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
     '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
     '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
     '.pc3-live-page-inner{padding:18px 28px;}' +
-    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
-    '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
+    '.pc3-live-nav-btn{background:none;border:none;color:var(--lv-nav);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
+    '.pc3-live-nav-btn:hover{color:var(--lv-nav-hover);}' +
     '.pc3-live-section{margin-bottom:22px;}' +
     '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
-    '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
-    '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:var(--lv-accent);letter-spacing:.2px;}' +
+    '.pc3-live-divrange{font-size:14px;font-weight:600;color:var(--lv-divrange);font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;font-size:20px;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
-    '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid var(--lv-cell-border);padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
+    '.pc3-live-tbl th{background:var(--lv-th-bg);color:var(--lv-th-text);font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
-    '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:pre-line;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:700;}' +
-    '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
-    '.pc3-live-tbl .cell-free{color:#42536c !important;font-style:normal;background:#131f33 !important;font-weight:400;}' +
-    '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee,0 0 18px rgba(34,211,238,.35);color:#ffffff !important;font-weight:800 !important;}' +
+    '.pc3-live-tbl th.row-head{color:var(--lv-rowhead-text);font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:pre-line;word-break:break-word;overflow:hidden;background:var(--lv-th-bg);font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-tbl th.lv-curcol{background:var(--lv-curcol-bg);color:var(--lv-curcol-text);box-shadow:inset 0 -3px 0 var(--lv-curcol-underline);}' +
+    '.pc3-live-tbl td{color:var(--lv-cell-text);background:var(--lv-cell-bg);font-weight:700;}' +
+    '.pc3-live-tbl tr:nth-child(even) td{background:var(--lv-cell-bg-alt);}' +
+    '.pc3-live-tbl .cell-free{color:var(--lv-free-text) !important;font-style:normal;background:var(--lv-free-bg) !important;font-weight:400;}' +
+    '.pc3-live-tbl .cell-current{background:var(--lv-current-bg) !important;box-shadow:inset 0 0 0 3px var(--lv-current-ring),0 0 18px var(--lv-current-glow);color:var(--lv-current-text) !important;font-weight:800 !important;}' +
     '.pc3-live-tbl .cell-past{opacity:.42;}' +
-    '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
-    '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
+    '.pc3-live-tbl .cell-pinned{background:var(--lv-pinned-bg) !important;color:var(--lv-pinned-text) !important;font-weight:700;}' +
+    '.pc3-live-tbl .cell-league{background:var(--lv-league-bg) !important;color:var(--lv-league-text) !important;font-weight:700;}' +
     /* Matchup / multi-line cell grid: each line its own bordered row. */
     '.pc3-live-tbl td .pc3-mu{display:block;padding:4px 6px;border-bottom:1px solid rgba(148,163,184,.45);line-height:1.2;}' +
     '.pc3-live-tbl td .pc3-mu:first-child{padding-top:0;}' +
@@ -1707,6 +1960,28 @@ function getStyles() {
     '.pc3-live-bw .pc3-live-tbl th, .pc3-live-bw .pc3-live-tbl td{background:#fff !important;color:#000 !important;border:1px solid #000 !important;font-weight:600 !important;box-shadow:none !important;opacity:1 !important;}' +
     '.pc3-live-bw .pc3-live-tbl tr:nth-child(even) td{background:#fff !important;}' +
     '.pc3-live-bw .pc3-live-unified th.pc3-uni-grade, .pc3-live-bw .pc3-live-unified th.pc3-uni-bunk{background:#fff !important;color:#000 !important;border:1px solid #000 !important;}' +
+
+    /* ── Live theme panel ── in-kiosk color controls. Own neutral palette (white
+       card, dark text) so it stays readable on top of any theme being edited. */
+    '.pc3-lvtp{position:absolute;top:74px;right:18px;width:300px;max-height:calc(100% - 96px);z-index:120;background:#ffffff;border:1px solid #d9d2c4;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-lvtp-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #ece6da;font-size:14px;font-weight:700;color:#23252a;}' +
+    '.pc3-lvtp-x{border:none;background:none;font-size:18px;line-height:1;color:#8a8377;cursor:pointer;padding:2px 4px;}' +
+    '.pc3-lvtp-x:hover{color:#23252a;}' +
+    '.pc3-lvtp-body{padding:12px 16px 16px;overflow-y:auto;}' +
+    '.pc3-lvtp-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#a79f8e;margin:4px 0 8px;}' +
+    '.pc3-lvtp-presets{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
+    '.pc3-lvtp-chip{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #e2dccf;border-radius:11px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:all .14s;}' +
+    '.pc3-lvtp-chip:hover{border-color:#147D91;}' +
+    '.pc3-lvtp-chip.active{border-color:#147D91;background:#dff1f4;box-shadow:0 0 0 1px #147D91;}' +
+    '.pc3-lvtp-sw{display:flex;height:20px;border-radius:6px;overflow:hidden;border:1px solid #e7e5e4;}' +
+    '.pc3-lvtp-sw span{flex:1;height:100%;}' +
+    '.pc3-lvtp-nm{font-size:12px;font-weight:600;color:#3a382f;}' +
+    '.pc3-lvtp-cc{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;}' +
+    '.pc3-lvtp-row{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;color:#5b5446;font-weight:500;}' +
+    '.pc3-lvtp-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+    '.pc3-lvtp-row input[type="color"]{width:30px;height:24px;flex-shrink:0;padding:1px;border:1px solid #e2dccf;border-radius:5px;background:#fff;cursor:pointer;}' +
+    '.pc3-lvtp-reset{width:100%;margin-top:12px;height:34px;border:1px solid #e2dccf;border-radius:9px;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#5b5446;cursor:pointer;}' +
+    '.pc3-lvtp-reset:hover{border-color:#147D91;color:#0F5F6E;}' +
 
     /* ── Advanced Drawer ── */
     '.pc3-drawer{position:absolute;top:0;right:0;width:300px;height:100%;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:20;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;}' +
@@ -2568,10 +2843,12 @@ function renderAutoDivisionTable(divName, bunks) {
             var dur = a.endMin - a.startMin;
             if (dur < 1) return;
 
-            var actText = a.entry._activity || a.entry.sport || '';
+            var actText = a.entry._displayName || pcCanonicalActivityName(a.entry._activity || a.entry.sport || '');
             var locText = pcResolveLocation(a.entry);
             if (actText && locText && actText.toLowerCase() === locText.toLowerCase()) locText = '';
             if (!actText && locText) { actText = locText; locText = ''; }
+            // Display-name alias = exact label: drop the location sub-line.
+            if (a.entry._displayName) locText = '';
             var nameTxt = actText || '—';
 
             var sharers = '';
@@ -3106,9 +3383,11 @@ function renderBunkSheet(bunk) {
         var type = getEntryType(entry);
         var act = '', loc = '';
         if (entry && !entry.continuation) {
-            act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
+            act = entry._partLabel || pcCanonicalActivityName(entry._activity || entry.sport || ''); // ★ Day 19 multiPart label
             loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
             if (!act && loc) { act = loc; loc = ''; }
+            // Display-name alias = exact label: show it verbatim, no location column.
+            if (entry._displayName) { act = entry._displayName; loc = ''; }
         }
         var actDisplay = act || '\u2014';
         var locDisplay = loc;
@@ -3311,12 +3590,22 @@ function scanLocationAcrossBunks(loc) {
  * Handles string fields, object fields, compound "Activity – Location" fields, and _activity.
  */
 function matchesLocation(entry, loc) {
-    if (!entry) return false;
+    if (!entry || !loc) return false;
+    var lc = String(loc).toLowerCase().trim();
     var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
-    if (fn === loc) return true;
-    if (entry._activity && entry._activity === loc) return true;
+    var fnLc = String(fn).toLowerCase().trim();
+    if (fnLc && fnLc === lc) return true;
+    var actLc = String(entry._activity || '').toLowerCase().trim();
+    if (actLc && actLc === lc) return true;
+    // ★ Name-only specials store field = the special's NAME, not its room. Resolve
+    //   the configured room so the special shows up under its facility (e.g. a
+    //   lowercase-dup "arts & crafts" → "Arts & Crafts Shack"). Also makes the
+    //   whole match case-insensitive, so a facility/activity stored in a different
+    //   casing than the selected location still lands in the report.
+    var resolved = (typeof pcResolveLocation === 'function') ? String(pcResolveLocation(entry) || '').toLowerCase().trim() : '';
+    if (resolved && resolved === lc) return true;
     // Compound check: field contains the location name (e.g. "Basketball – Court 1" matches "Court 1")
-    if (fn && fn.indexOf(loc) >= 0) return true;
+    if (fnLc && fnLc.indexOf(lc) >= 0) return true;
     return false;
 }
 
@@ -3710,9 +3999,10 @@ function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
         : ((window.divisionTimes && window.divisionTimes[divName]) || []);
     var slot = _slots81[slotIdx];
     if (!entry) return '';
-    var act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
-    var field = (typeof entry.field === 'string') ? entry.field
-        : (entry.field && entry.field.name ? entry.field.name : '');
+    var act = entry._displayName || entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label + post-edit display alias
+    // Display-name alias = exact label: don't reveal the underlying room in the tip.
+    var field = entry._displayName ? '' : ((typeof entry.field === 'string') ? entry.field
+        : (entry.field && entry.field.name ? entry.field.name : ''));
     var title = act || field || 'Free';
     if (act && field && act !== field) title = act;
 
@@ -4108,7 +4398,7 @@ function runLiveStandalone() {
         printTab.style.display = 'block';
         printTab.style.position = 'fixed';
         printTab.style.inset = '0';
-        printTab.style.background = '#0b1220';
+        printTab.style.background = _pcEffectiveLiveVars()['--lv-bg'];
         printTab.style.zIndex = '9999';
     }
 
@@ -4131,13 +4421,21 @@ function runLiveStandalone() {
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
                 '<button class="pc3-live-fit' + (_liveSharedTimeline ? ' on' : '') + '" id="pc3-live-shared-btn" title="One shared time axis per division with bunks as columns (denser)" onclick="toggleLiveSharedTimeline()">Shared timeline</button>' +
                 '<button class="pc3-live-fit' + (_liveCustomPages ? ' on' : '') + '" id="pc3-live-custompages-btn" title="Choose which bunks appear on each page" onclick="openLiveBunkPageConfig()">Bunks per page…</button>' +
+                '<button class="pc3-live-fit" id="pc3-live-theme-btn" title="Change the screen colors" onclick="window._pcToggleLiveThemePanel&&window._pcToggleLiveThemePanel()">🎨 Colors</button>' +
                 '<button class="pc3-live-close" id="pc3-live-print-btn" title="Print the live view — one division per page" onclick="window._pc3LivePrint&&window._pc3LivePrint()">Print</button>' +
                 '<button class="pc3-live-close" id="pc3-live-jpeg-btn" title="Download the schedule in color — one division per page (PDF)" onclick="window._pc3LiveDownloadJpeg&&window._pc3LiveDownloadJpeg()">Download</button>' +
                 '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
             '</div>' +
         '</div>' +
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
+        '<div class="pc3-lvtp" id="pc3-live-theme-panel" style="display:none;">' +
+            '<div class="pc3-lvtp-head">Screen colors<button class="pc3-lvtp-x" title="Close" onclick="window._pcToggleLiveThemePanel&&window._pcToggleLiveThemePanel()">&times;</button></div>' +
+            '<div class="pc3-lvtp-body" id="pc3-live-theme-panel-body"></div>' +
+        '</div>' +
         '</div>';
+
+    // Paint the camp's chosen kiosk palette onto the freshly-built overlay.
+    try { _pcApplyLiveTheme(); } catch (e) {}
 
     // Camp name for the Live header. The settings copies (app1.campName /
     // campName / camp_name in localStorage) only get refreshed on an explicit
@@ -4324,7 +4622,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
         html += '<thead><tr><th class="corner">Bunk</th>';
         lTimeCols.forEach(function (tc) {
             var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="font-size:12px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#0e7490;color:#a5f3fc;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+            html += '<th' + (isCurCol ? ' class="lv-curcol"' : '') + ' data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="font-size:12px;text-align:center;white-space:nowrap;">' + tc.label + '</th>';
         });
         html += '</tr></thead><tbody>';
 
@@ -4770,7 +5068,7 @@ function _liveContentSignature(nowMin) {
                 var slots = getPerBunkSchedule(bunk, divName);
                 for (var i = 0; i < slots.length; i++) {
                     var s = slots[i], e = getEntry(bunk, i);
-                    var label = e ? (e._partLabel || e._activity || e.sport || (e.continuation ? '~' : '')) : '';
+                    var label = e ? (e._displayName || e._partLabel || e._activity || e.sport || (e.continuation ? '~' : '')) : '';
                     // start/end relative to now → flips exactly when a cell turns current/past
                     parts.push(s.startMin + '-' + s.endMin + ':' + label +
                         (nowMin >= s.startMin ? 's' : '') + (nowMin >= s.endMin ? 'e' : ''));
@@ -5174,7 +5472,7 @@ function updateLivePageIndicator() {
         ind.style.display = 'flex';
         var dots = '';
         for (var i = 0; i < _numLivePages; i++) {
-            dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? '#fbbf24' : 'rgba(255,255,255,.3)') + ';transition:background .3s;"></span>';
+            dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? 'var(--lv-accent,#fbbf24)' : 'var(--lv-dot-idle,rgba(255,255,255,.3))') + ';transition:background .3s;"></span>';
         }
         ind.innerHTML =
             '<button class="pc3-live-nav-btn" onclick="livePageNav(-1)">&#8249;</button>' +
@@ -5213,7 +5511,7 @@ function _pc3CaptureLivePages(cb, bw) {
         // html2canvas clones only the page subtree, so a class on an ancestor is
         // lost there and the dark cell rules win.
         if (bw) { body.classList.add('pc3-live-bw'); pages.forEach(function (p) { p.classList.add('pc3-live-bw'); }); }
-        var bg = bw ? '#ffffff' : '#0b1220';
+        var bg = bw ? '#ffffff' : _pcEffectiveLiveVars()['--lv-bg'];
         var saved = pages.map(function (p) { return { p: p, o: p.style.opacity, pe: p.style.pointerEvents }; });
         var canvases = [], i = 0;
         function finish() {
@@ -5902,6 +6200,8 @@ function getExportActivityLocation(bunk, slotIdx) {
         if (entry.continuation) return { activity: '', location: '' };
     }
 
+    // Display-name alias = exact label: export it verbatim, no location column.
+    if (entry._displayName) return { activity: entry._displayName, location: '' };
     var act = entry._activity || entry.sport || '';
     var label = entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
     var field = pcResolveLocation(entry);
@@ -6406,6 +6706,9 @@ function bindAll() {
             liveRefresh();
         });
     });
+
+    // (Live View color controls now live inside the kiosk window itself — see
+    // the "🎨 Colors" button + _pcToggleLiveThemePanel/_pcLiveSetPreset/etc.)
 
     // Popovers — Packs / Output / Style / Layout
     var popoverPairs = [
@@ -7226,6 +7529,63 @@ window._pc3RunLiveStandalone = runLiveStandalone;
 // resolves against the (popup) window's GLOBAL scope. livePageNav is defined
 // inside this file's IIFE, so without this export the arrows silently no-op.
 window.livePageNav = livePageNav;
+// Exposed so the (popup) Live View can be re-skinned from its own boot AND so
+// the opener can push a theme change into an already-open kiosk window.
+window._pcApplyLiveTheme = _pcApplyLiveTheme;
+
+// ── In-kiosk theme panel ── the live "🎨 Colors" button opens this; all
+// controls live inside the Live View window so you tweak while watching the
+// real screen. Reads/writes the same localStorage keys as everything else.
+function _pcBuildLiveThemePanelInner() {
+    var curId = _pcGetLiveThemeId();
+    var eff = _pcEffectiveLiveVars();
+    var chips = LIVE_THEMES.map(function (th) {
+        return '<button type="button" class="pc3-lvtp-chip' + (curId === th.id ? ' active' : '') + '" title="' + escHtml(th.description) + '" onclick="window._pcLiveSetPreset(\'' + th.id + '\')">' +
+            '<span class="pc3-lvtp-sw">' + th.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
+            '<span class="pc3-lvtp-nm">' + escHtml(th.name) + '</span>' +
+        '</button>';
+    }).join('');
+    var pickers = LIVE_CUSTOM_FIELDS.map(function (f) {
+        var val = eff[f.vars[0]] || '#000000';
+        return '<label class="pc3-lvtp-row"><span>' + escHtml(f.label) + '</span>' +
+            '<input type="color" value="' + val + '" oninput="window._pcLiveSetCustom(\'' + f.key + '\', this.value)"></label>';
+    }).join('');
+    return '<div class="pc3-lvtp-label">Theme</div>' +
+        '<div class="pc3-lvtp-presets">' + chips + '</div>' +
+        '<div class="pc3-lvtp-label" style="margin-top:14px;">Customize</div>' +
+        '<div class="pc3-lvtp-cc">' + pickers + '</div>' +
+        '<button type="button" class="pc3-lvtp-reset" onclick="window._pcLiveResetColors()">Reset to preset</button>';
+}
+function _pcRefreshLiveThemePanel() {
+    var body = document.getElementById('pc3-live-theme-panel-body');
+    if (body) body.innerHTML = _pcBuildLiveThemePanelInner();
+}
+window._pcToggleLiveThemePanel = function () {
+    var panel = document.getElementById('pc3-live-theme-panel');
+    if (!panel) return;
+    var show = panel.style.display === 'none' || !panel.style.display;
+    if (show) _pcRefreshLiveThemePanel();
+    panel.style.display = show ? 'flex' : 'none';
+    var btn = document.getElementById('pc3-live-theme-btn');
+    if (btn) btn.classList.toggle('on', show);
+};
+window._pcLiveSetPreset = function (id) {
+    try { localStorage.setItem(_LIVE_THEME_KEY, id); } catch (e) {}
+    _pcSetLiveCustom({});            // preset = clean starting point
+    _pcApplyLiveTheme(id);
+    _pcRefreshLiveThemePanel();      // reflect new active chip + reset picker values
+};
+window._pcLiveSetCustom = function (key, val) {
+    var c = _pcGetLiveCustom();
+    c[key] = val;
+    _pcSetLiveCustom(c);
+    _pcApplyLiveTheme();             // no panel rebuild — keep the open color picker steady
+};
+window._pcLiveResetColors = function () {
+    _pcSetLiveCustom({});
+    _pcApplyLiveTheme();
+    _pcRefreshLiveThemePanel();
+};
 // "One division per page" toggle uses inline onclick="toggleLivePerDiv()",
 // which resolves against the popup window's global scope — export it like
 // livePageNav so the button isn't a silent no-op.

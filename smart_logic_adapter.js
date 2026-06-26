@@ -164,13 +164,24 @@
         // Check accessRestrictions restrictions
         if (props.accessRestrictions?.enabled) {
             const allowedDivisions = props.accessRestrictions.divisions || {};
-            
+
             // If accessRestrictions is enabled, division must be in the allowed list
             if (!(divisionName in allowedDivisions)) {
                 return false;
             }
         }
-        
+
+        // ★ Duplicate-safe gate. `props` is resolved from ONE entry's properties,
+        //   but this camp duplicates specials by case ("Sushi"/"sushi") and the
+        //   duplicate may carry no restriction — so the props-based check above
+        //   can miss a restriction living on the other copy. The authoritative
+        //   check (scheduler_core_auto.js) considers EVERY copy of the name and
+        //   fails closed. Fail-open only if it isn't loaded yet.
+        if (typeof window.isSpecialAvailableForDivision === 'function'
+            && !window.isSpecialAvailableForDivision(specialName, divisionName, window.loadGlobalSettings?.())) {
+            return false;
+        }
+
         // Check preferences.exclusive
         if (props.preferences?.enabled && props.preferences?.exclusive) {
             const preferredList = props.preferences.list || [];

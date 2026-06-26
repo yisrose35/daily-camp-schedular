@@ -342,10 +342,25 @@
             (gs.app1?.specialActivities || []).forEach(s => {
                 if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
                 if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
+                // ★ Special toggled UNAVAILABLE in Facilities (config-level available:false).
+                //   The PERMANENT analog of the per-date Resource disable below — the sport
+                //   branch above gates on f.available; this is the parity gate for specials.
+                if (s.available === false) return;
                 // ★ Special disabled today (e.g. its facility was toggled off → cascade)
                 if (_disabledSpecialsLc.has(String(s.name).toLowerCase().trim())) return;
-                // ★ Grade restriction
-                if (isDivisionRestricted(s, divName)) return;
+                // ★ Access restriction — division AND bunk level. The canonical
+                //   check (scheduler_core_auto.js, exposed as window.isSpecialAvailableForBunk)
+                //   reads the authoritative special config and honors the per-bunk
+                //   allow-list inside accessRestrictions.divisions[grade]. Previously
+                //   this only consulted isDivisionRestricted (division/grade level),
+                //   so a special restricted to specific bunks within an allowed grade
+                //   (e.g. "Sushi" gated to certain bunks) could still be filled into a
+                //   General Activity / free slot for a bunk that should never get it.
+                if (typeof window.isSpecialAvailableForBunk === 'function') {
+                    if (!window.isSpecialAvailableForBunk(s.name, divName, bunk, gs)) return;
+                } else if (isDivisionRestricted(s, divName)) {
+                    return; // fallback: division-level only when canonical check unavailable
+                }
                 const loc = s.location || null;
                 // ★ Special's host facility shut off in Facilities config. Resolve the host
                 //   robustly: this camp duplicates specials cap/lowercase and the dup's own
