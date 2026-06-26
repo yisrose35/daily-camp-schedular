@@ -2030,6 +2030,44 @@
             return result;
         }
 
+        // ★ PER-SPECIAL GRADE PRIORITY (auto-mode contention resolver).
+        //   Each special whose Access & Restrictions enable a Priority Order contributes
+        //   per-grade rank votes (priorityList index, lower index = higher priority).
+        //   When two or more divisions are all eligible for the SAME scarce/limited
+        //   special, the higher-priority division is offered it FIRST — so a younger /
+        //   lower-priority division can't drain all the specials before the older /
+        //   higher-priority divisions are reached. Mirrors the manual solver's
+        //   _gradePriorityCmp (scheduler_core_main.js). STRICT NO-OP when no special
+        //   uses a Priority Order: active === false → cmp() returns 0 and every grade
+        //   sort below is byte-identical to the previous behavior.
+        function _buildSpecialGradePriority() {
+            const score = {}, count = {};
+            (todaysSpecials || []).forEach(function (sp) {
+                const cfg = getSpecialConfig(sp.name, globalSettings);
+                const ar = cfg && cfg.accessRestrictions;
+                if (ar && ar.usePriority && Array.isArray(ar.priorityList) && ar.priorityList.length > 0) {
+                    ar.priorityList.forEach(function (g, idx) {
+                        score[g] = (score[g] || 0) + idx;
+                        count[g] = (count[g] || 0) + 1;
+                    });
+                }
+            });
+            const active = Object.keys(score).length > 0;
+            return {
+                active: active,
+                // Lower average vote rank = higher priority. Grades with no votes sort
+                // AFTER ranked grades. Returns 0 (no preference) when priority inactive.
+                cmp: function (a, b) {
+                    if (!active) return 0;
+                    const cA = count[a] || 0, cB = count[b] || 0;
+                    if (cA === 0 && cB === 0) return 0;
+                    if (cA === 0) return 1;
+                    if (cB === 0) return -1;
+                    return (score[a] / cA) - (score[b] / cB);
+                }
+            };
+        }
+
         // ★ PRIORITY ORDERING: sort grades so higher-priority grades are processed first.
         // Each field with usePriority=true contributes rank votes; grades that rank first
         // across the most fields get processed earliest → they claim contested fields first.
@@ -20077,8 +20115,20 @@
                     return false;
                 }
 
-                // Process grades in most-constrained-first order
+                // Process grades in priority-first, then most-constrained-first order.
+                // ★ When any special uses a Priority Order, higher-priority divisions are
+                //   offered scarce specials BEFORE lower-priority ones here in Phase 2.5
+                //   (where ~all specials are pre-placed) — this is what stops a younger /
+                //   lower-priority division from draining every special before the older /
+                //   higher-priority divisions are reached. Constraint-tightness remains the
+                //   tiebreak within equal priority. STRICT NO-OP when no special uses a
+                //   Priority Order (cmp returns 0 → ordering identical to before).
+                var _sgp25 = _buildSpecialGradePriority();
                 var gradesByConstraint = allGrades.slice().sort(function(a, b) {
+                    if (_sgp25.active) {
+                        var _pc = _sgp25.cmp(a, b);
+                        if (_pc !== 0) return _pc;
+                    }
                     var aSlack = 0, bSlack = 0, aCount = 0, bCount = 0;
                     getBunksForGrade(a, divisions).forEach(function(bk) {
                         var f = feasibilityMap[bk]; if (f) { aSlack += f.slack; aCount++; }
@@ -20088,6 +20138,9 @@
                     });
                     return (aCount ? aSlack / aCount : 999) - (bCount ? bSlack / bCount : 999);
                 });
+                if (_sgp25.active) {
+                    log('[Phase 2.5] Special-priority grade order: ' + gradesByConstraint.join(', '));
+                }
 
                 gradesByConstraint.forEach(grade => {
                     preplacedByGrade[grade] = 0;
