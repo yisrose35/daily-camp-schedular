@@ -110,56 +110,123 @@
   }
 
   // ── field availability (HARD BLOCK) ──────────────────────────────────────
-  // Free unless: a GlobalFieldLock covers the time on a DIFFERENT field-claim,
-  // or another bunk occupies the field at an overlapping time.
-  function fieldIsFree(fieldName, ctx) {
-    if (!fieldName) return false;
-    // The game's current field is always "free" for itself (no-op move).
-    if (ctx.game && norm(fieldName) === norm(ctx.game.field)) return true;
+  // TIME-OVERLAP conflict: a field is taken if anything else overlaps the game's
+  // window AT ALL — even by a few minutes into the start or end. Standard overlap
+  // test (otherStart < endMin && otherEnd > startMin) catches any partial overlap.
+  function fieldHasTimeConflict(fieldName, ctx) {
+    if (!fieldName || ctx.startMin == null || ctx.endMin == null) return false;
+    var nf = norm(fieldName);
+    var ownField = ctx.game ? norm(ctx.game.field) : '';
+    // The game's own current field is never a conflict for itself.
+    if (nf === ownField) return false;
 
+    // (a) GlobalFieldLocks (other league/elective claims) — time-based.
     var GFL = window.GlobalFieldLocks;
-    if (GFL && typeof GFL.isFieldLockedByTime === 'function' && ctx.startMin != null && ctx.endMin != null) {
+    if (GFL && typeof GFL.isFieldLockedByTime === 'function') {
       try {
-        var lock = GFL.isFieldLockedByTime(fieldName, ctx.startMin, ctx.endMin, ctx.divName);
-        if (lock) return false;
-      } catch (e) { /* fall through to schedule scan */ }
+        if (GFL.isFieldLockedByTime(fieldName, ctx.startMin, ctx.endMin, ctx.divName)) return true;
+      } catch (e) { /* fall through */ }
     }
 
-    // Per-bunk occupancy scan (catches regular sports sharing the field).
+    // (b) Any scheduled entry whose TIME window overlaps ours and that uses this
+    //     field. CRITICAL: a league entry's `field` is "League: X" — the real
+    //     field lives in the matchup STRING / _assignments. So a senior-division
+    //     league on this field (different grade!) is only visible by parsing those.
     var sa = window.scheduleAssignments || {};
-    var nf = norm(fieldName);
     for (var bunk in sa) {
       if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
       var row = sa[bunk]; if (!Array.isArray(row)) continue;
-      for (var i = 0; i < ctx.slots.length; i++) {
-        var entry = row[ctx.slots[i]];
-        if (!entry) continue;
-        var ef = entry.field;
-        var label = (typeof window.fieldLabel === 'function') ? window.fieldLabel(ef) : ef;
-        if (norm(label) === nf) {
-          // Ignore entries that ARE this same game (its participants already on old field).
-          if (ctx.game && norm(ctx.game.field) === nf) continue;
-          return false;
+      for (var i = 0; i < row.length; i++) {
+        var e = row[i]; if (!e) continue;
+        var s = (e._startMin != null) ? e._startMin : null;
+        var en = (e._endMin != null) ? e._endMin : null;
+        if (s == null || en == null) continue;
+        if (!(s < ctx.endMin && en > ctx.startMin)) continue; // no time overlap
+        // Every field this entry occupies at that time: its own field + any
+        // field named inside its league matchups.
+        var label = (typeof window.fieldLabel === 'function') ? window.fieldLabel(e.field) : e.field;
+        if (label && norm(label) === nf) return true;
+        if (Array.isArray(e._allMatchups)) {
+          for (var k = 0; k < e._allMatchups.length; k++) {
+            var p = PEFC.parseMatchup(e._allMatchups[k]);
+            if (p.field && norm(p.field) === nf) return true;
+          }
+        }
+        if (Array.isArray(e._assignments)) {
+          for (var j = 0; j < e._assignments.length; j++) {
+            var a = e._assignments[j];
+            if (a && a.field && norm(a.field) === nf) return true;
+          }
         }
       }
     }
-    return true;
+    return false;
   }
 
-  // Fields that can host this game's sport, split into free / busy.
+  // Three-stage candidate filter (per the spec):
+  //   1. fields that can HOST the sport,
+  //   2. that are AVAILABLE TO THE GRADE (access restrictions),
+  //   3. that are FREE at the time — nobody else on it, even a few minutes of
+  //      overlap, and no over-capacity.
+  // Reuses the generator's own findFieldsForActivity for (1)+(2)+capacity so the
+  // picker matches what the solver would allow; (3)'s time-overlap is enforced
+  // explicitly here so partial overlaps can never slip through.
   function candidateFields(ctx) {
-    var locs = (typeof window.getAllLocations === 'function') ? (window.getAllLocations() || []) : [];
-    var fields = locs.filter(function (l) { return l && l.type === 'field'; });
-    var sport = ctx.game && ctx.game.sport;
-    var supporting = fields;
-    if (sport) {
-      var s = norm(sport);
-      var match = fields.filter(function (l) { return (l.activities || []).some(function (a) { return norm(a) === s; }); });
-      if (match.length) supporting = match;
+    var sport = ctx.selectedSport || (ctx.game && ctx.game.sport) || '';
+    var ownField = ctx.game ? norm(ctx.game.field) : '';
+    var seen = {}, rows = [];
+    function add(name, capacity, freeFlag) {
+      var k = norm(name); if (seen[k]) return; seen[k] = 1;
+      var isCur = k === ownField;
+      rows.push({ name: name, capacity: capacity || 1, current: isCur, free: isCur ? false : !!freeFlag });
     }
-    return supporting.map(function (l) {
-      return { name: l.name, capacity: l.capacity || 1, free: fieldIsFree(l.name, ctx) };
-    }).sort(function (a, b) { return (b.free - a.free) || a.name.localeCompare(b.name); });
+
+    var usedFinder = false;
+    if (typeof window.findFieldsForActivity === 'function' && sport) {
+      var res;
+      try { res = window.findFieldsForActivity(sport, ctx.slots || [], ctx.divName, null, ctx.startMin, ctx.endMin); }
+      catch (e) { res = null; }
+      if (res) {
+        usedFinder = true;
+        // RESPECT the generator's verdict. `open` = free per the solver, but a
+        // SHARED (under-capacity) field is still taken for an exclusive league
+        // game, and our own time-overlap gate can only make it stricter.
+        (res.open || []).forEach(function (f) {
+          add(f.name, f.capacity, !f.shared && !fieldHasTimeConflict(f.name, ctx));
+        });
+        // `busy` = blocked by the solver (league_locked / capacity / time rules /
+        // combo). Keep them listed as unavailable; DROP access_restricted (stage 2
+        // — not available to this grade) so they're not even shown.
+        (res.busy || []).forEach(function (f) {
+          if (f.reason === 'access_restricted') return;
+          add(f.name, f.capacity, false);
+        });
+      }
+    }
+    // Fallback when the generator finder isn't loaded: getAllLocations by sport.
+    if (!usedFinder) {
+      var locs = (typeof window.getAllLocations === 'function') ? (window.getAllLocations() || []) : [];
+      locs.filter(function (l) {
+        return l && l.type === 'field' && (!sport || (l.activities || []).some(function (a) { return norm(a) === norm(sport); }));
+      }).forEach(function (l) { add(l.name, l.capacity, !fieldHasTimeConflict(l.name, ctx)); });
+    }
+    return rows.sort(function (a, b) { return (b.free - a.free) || a.name.localeCompare(b.name); });
+  }
+
+  // Used by applyFieldChange's final guard.
+  function fieldIsFree(fieldName, ctx) {
+    if (!fieldName) return false;
+    if (ctx.game && norm(fieldName) === norm(ctx.game.field)) return true;
+    return !fieldHasTimeConflict(fieldName, ctx);
+  }
+
+  // Sports that have at least one hosting field (for the sport dropdown).
+  function allSports() {
+    var locs = (typeof window.getAllLocations === 'function') ? (window.getAllLocations() || []) : [];
+    var set = {};
+    locs.filter(function (l) { return l && l.type === 'field'; })
+      .forEach(function (l) { (l.activities || []).forEach(function (a) { if (a) set[a] = true; }); });
+    return Object.keys(set).sort();
   }
 
   // ── context builder ──────────────────────────────────────────────────────
@@ -193,6 +260,12 @@
 
     if (!games.length) return null;
 
+    // Specialty fallback: when the league flag wasn't carried on the hint/entry,
+    // the matchup STRING format reveals it — specialty uses "A vs B — Field"
+    // (dash), regular uses "A vs B @ Field (Sport)" (at). This keeps the gameLog
+    // history update firing for specialty games reached via the unified cell.
+    if (!isSpecialty && games.some(function (g) { return g.kind === 'dash'; })) isSpecialty = true;
+
     return {
       kind: isSpecialty ? 'specialty' : 'regular',
       divName: divName, slotIdx: slotIdx,
@@ -207,11 +280,20 @@
   // ── APPLY ────────────────────────────────────────────────────────────────
   // Rewrites the field of ctx.game across every store, swaps the field lock,
   // and persists. Returns { ok, message }.
-  PEFC.applyFieldChange = function (ctx, newField) {
+  PEFC.applyFieldChange = function (ctx, newField, newSport) {
     if (!ctx || !ctx.game || !newField) return { ok: false, message: 'Nothing to change.' };
     var oldField = ctx.game.field;
-    if (norm(oldField) === norm(newField)) return { ok: false, message: 'That is already the field.' };
-    if (!fieldIsFree(newField, ctx)) return { ok: false, message: newField + ' is already in use at this time.' };
+    // A sport change alone (same field) is allowed; otherwise require the field free.
+    var changeSport = !!(newSport && norm(newSport) !== norm(ctx.game.sport || ''));
+    if (norm(oldField) === norm(newField) && !changeSport) return { ok: false, message: 'That is already the field.' };
+    if (norm(oldField) !== norm(newField) && !fieldIsFree(newField, ctx)) return { ok: false, message: newField + ' is already in use at this time.' };
+
+    // Rebuild a matchup string with the new field AND (for regular-league "@"
+    // matchups, which carry the sport) the new sport.
+    function rebuilt(p) {
+      if (changeSport) p.sport = newSport;
+      return PEFC.rebuildMatchup(p, newField);
+    }
 
     var touchedBunks = [];
 
@@ -239,21 +321,25 @@
         if (Array.isArray(entry._allMatchups)) {
           for (var k = 0; k < entry._allMatchups.length; k++) {
             var p = PEFC.parseMatchup(entry._allMatchups[k]);
-            if (isTarget(p)) { entry._allMatchups[k] = PEFC.rebuildMatchup(p, newField); changed = true; }
+            if (isTarget(p)) { entry._allMatchups[k] = rebuilt(p); changed = true; }
           }
         }
         if (Array.isArray(entry._assignments)) {
           entry._assignments.forEach(function (a) {
-            if (a && isTargetObj(a)) { a.field = newField; changed = true; }
+            if (a && isTargetObj(a)) { a.field = newField; if (changeSport) a.sport = newSport; changed = true; }
           });
         }
       }
       if (changed) touchedBunks.push(bunk);
     }
 
-    // (2) leagueAssignments[div]: scan every slot key (string arrays + structured).
-    var la = (window.leagueAssignments && window.leagueAssignments[ctx.divName]) || null;
-    if (la) {
+    // (2) leagueAssignments — scan EVERY division, not just ctx.divName. When two
+    //     grades are CONNECTED in a league they each hold a copy of the same game
+    //     (matched by team-pair + old field), so a field/sport change made from
+    //     one grade auto-updates the other.
+    var laAll = window.leagueAssignments || {};
+    Object.keys(laAll).forEach(function (dn) {
+      var la = laAll[dn]; if (!la) return;
       Object.keys(la).forEach(function (slotKey) {
         var laEntry = la[slotKey];
         if (!laEntry) return;
@@ -263,14 +349,14 @@
             var item = laEntry[key][k];
             if (typeof item === 'string') {
               var p = PEFC.parseMatchup(item);
-              if (isTarget(p)) laEntry[key][k] = PEFC.rebuildMatchup(p, newField);
+              if (isTarget(p)) laEntry[key][k] = rebuilt(p);
             } else if (item && typeof item === 'object' && (item.teamA || item.team1)) {
-              if (isTargetObj(item)) item.field = newField;
+              if (isTargetObj(item)) { item.field = newField; if (changeSport) item.sport = newSport; }
             }
           }
         });
       });
-    }
+    });
 
     // (3) Specialty history gameLog — best-effort (drives the bracket/print).
     if (ctx.kind === 'specialty') {
@@ -286,7 +372,7 @@
           GFL.lockField(newField, ctx.slots, {
             lockedBy: ctx.kind === 'specialty' ? 'specialty_league' : 'regular_league',
             leagueName: ctx.leagueName, division: ctx.divName,
-            activity: ctx.game.sport || ctx.leagueName
+            activity: (changeSport ? newSport : ctx.game.sport) || ctx.leagueName
           });
         }
       } catch (e) { console.warn('[PEFC] lock swap skipped:', e); }
@@ -294,6 +380,7 @@
 
     // (5) Persist + re-render.
     ctx.game.field = newField; // reflect for any follow-up move in the same session
+    if (changeSport) ctx.game.sport = newSport;
     try {
       if (typeof window.saveCurrentDailyData === 'function') {
         window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments);
@@ -379,6 +466,21 @@
     var freeOnes = cands.filter(function (c) { return c.free; });
     var busyOnes = cands.filter(function (c) { return !c.free; });
 
+    // Sport editor — only for regular-league matchups, whose string carries the
+    // sport ("A vs B @ Field (Sport)"). Specialty ("A vs B — Field") has none.
+    var canEditSport = ctx.game.kind === 'at';
+    var curSport = ctx.selectedSport || ctx.game.sport || '';
+    var sportHtml = '';
+    if (canEditSport) {
+      var opts = allSports();
+      if (curSport && opts.indexOf(curSport) === -1) opts = [curSport].concat(opts);
+      sportHtml = '<div style="margin-bottom:14px;">' +
+        '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Sport</label>' +
+        '<select id="pefc-sport" style="width:100%;padding:9px 11px;border:1.5px solid #6366f1;border-radius:8px;font-size:0.9rem;background:#fff;cursor:pointer;">' +
+        opts.map(function (s) { return '<option value="' + esc(s) + '"' + (norm(s) === norm(curSport) ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') +
+        '</select></div>';
+    }
+
     var freeHtml = freeOnes.length
       ? freeOnes.map(function (c) {
         var isCur = norm(c.name) === norm(ctx.game.field);
@@ -388,17 +490,27 @@
       }).join('')
       : '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No free fields for this game at this time. Free up a field first.</div>';
 
-    var busyHtml = busyOnes.length
+    // Don't list the game's own current field as "in use" (it's just where the
+    // game already is). Everything else busy is genuinely occupied/blocked.
+    var busyReal = busyOnes.filter(function (c) { return !c.current; });
+    var busyHtml = busyReal.length
       ? '<div style="margin-top:12px;font-size:0.78rem;color:#9ca3af;">In use: ' +
-      busyOnes.map(function (c) { return esc(c.name); }).join(', ') + '</div>'
+      busyReal.map(function (c) { return esc(c.name); }).join(', ') + '</div>'
+      : '';
+
+    // When a sport change is pending, offer to apply it WITHOUT moving fields.
+    var sportChanged = canEditSport && norm(curSport) !== norm(ctx.game.sport || '');
+    var keepFieldHtml = sportChanged
+      ? '<button id="pefc-keep-field" style="width:100%;margin-top:12px;padding:9px;border:1.5px solid #6366f1;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.85rem;font-weight:600;cursor:pointer;">Keep ' + esc(ctx.game.field || 'current field') + ' — just change sport to ' + esc(curSport) + '</button>'
       : '';
 
     var box = shell(header('Move to which field?') +
       '<div style="background:#f3f4f6;padding:9px 12px;border-radius:8px;margin-bottom:14px;font-size:0.85rem;">' +
       '<div style="font-weight:600;color:#374151;">' + esc(ctx.game.teams) + '</div>' +
       '<div style="color:#6b7280;margin-top:2px;">' + (ctx.game.sport ? esc(ctx.game.sport) + ' · ' : '') + 'now on <strong>' + esc(ctx.game.field || '—') + '</strong></div></div>' +
-      '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields:</div>' +
-      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + busyHtml +
+      sportHtml +
+      '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields' + (canEditSport ? ' for ' + esc(curSport) : '') + ':</div>' +
+      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + busyHtml + keepFieldHtml +
       '<div style="display:flex;gap:10px;margin-top:18px;">' +
       (ctx.games.length > 1 ? '<button id="pefc-back" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">← Back</button>' : '') +
       '<button id="pefc-cancel" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">Cancel</button></div>');
@@ -407,10 +519,23 @@
     box.querySelector('#pefc-cancel').onclick = closeModal;
     var back = box.querySelector('#pefc-back');
     if (back) back.onclick = function () { showGamePicker(ctx); };
+
+    // Changing the sport re-filters the field list to fields that host it.
+    var sportSel = box.querySelector('#pefc-sport');
+    if (sportSel) sportSel.onchange = function () { ctx.selectedSport = sportSel.value; showFieldPicker(ctx); };
+
+    var keepBtn = box.querySelector('#pefc-keep-field');
+    if (keepBtn) keepBtn.onclick = function () {
+      var res = PEFC.applyFieldChange(ctx, ctx.game.field, curSport);
+      closeModal();
+      toast(res.ok ? ('Changed sport: ' + res.message) : res.message, res.ok ? 'success' : 'warning');
+    };
+
     box.querySelectorAll('.pefc-field').forEach(function (btn) {
       if (btn.disabled) return;
       btn.onclick = function () {
-        var res = PEFC.applyFieldChange(ctx, btn.dataset.f);
+        var pickSport = canEditSport ? curSport : null;
+        var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport);
         closeModal();
         toast(res.ok ? ('Moved: ' + res.message) : res.message, res.ok ? 'success' : 'warning');
       };

@@ -51,6 +51,10 @@
             return 'field disabled today';
         }
 
+        // Config-level shut-off: field toggled UNAVAILABLE in Facilities
+        // (available:false). Defense-in-depth alongside the group-build filter.
+        if (fld && fld.available === false) return 'field unavailable (Facilities toggle off)';
+
         // Daily per-field sport disable (Resources panel → per-date overrides).
         if (activityName) {
             var dailySports = null;
@@ -173,6 +177,11 @@
         var fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
         flds.forEach(function (f) {
             if (!f || !f.name) return;
+            // ★ Config-level shut-off: a field toggled UNAVAILABLE in Facilities
+            //   (available:false) must never be a field-quality relocation target.
+            //   Excluding it from hostsBySport / fgGroups here keeps every phase
+            //   (A pull, B re-pair, C swap) from moving a placement onto it.
+            if (f.available === false) return;
             (f.activities || []).forEach(function (sp) { (hostsBySport[sp] = hostsBySport[sp] || []).push(f.name); });
             capMap[f.name] = parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
                 || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);

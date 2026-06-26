@@ -2746,6 +2746,13 @@
 
             fields.forEach(field => {
                 if (disabled.includes(field.name)) return;
+                // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities
+                //   (available:false). `disabled` above is only the per-date Resource
+                //   disable; without this gate the ledger kept a full entry for a
+                //   permanently-disabled field, and every ledger-driven placement
+                //   path (deficit-window filler, simultaneous solver, bunk-override,
+                //   supply calc) happily put sports on it.
+                if (field.available === false) return;
                 const props = activityProperties[field.name] || {};
                 const timeRules = [];
                 const unavailableRules = [];
@@ -23890,6 +23897,12 @@
             if (window.currentDisabledFields && window.currentDisabledFields.includes(fieldName)) {
                 return 'DA Resources: field disabled today';
             }
+            // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities
+            //   (available:false). Permanent analog of the per-date disable above;
+            //   gates every mutation path that flows through this validator.
+            if (fld && fld.available === false) {
+                return 'Facilities: field unavailable';
+            }
             // ★ DA Resources: per-field daily sport disable (e.g. Baseball turned
             //   off on Baseball Field 1 but allowed on 2/3/4). Reads the same
             //   sources as the generator's STEP 1 dailyDisabledSportsByField.
@@ -25578,9 +25591,25 @@
             };
         })();
 
+        // ★ Config-level shut-off sets (Facilities AVAILABLE/UNAVAILABLE toggle).
+        //   The keep-fixed branch below preserves _fixed/_league/_autoSpecial
+        //   placements across regen WITHOUT re-checking availability — so a
+        //   special or field placed BEFORE being disabled survived every regen.
+        //   Drop any carried-forward placement whose special or host field is now
+        //   toggled off, regardless of its _fixed/_league/_autoSpecial status.
+        const _gsClr = getGlobalSettings();
+        const _offSpecialClr = new Set(((_gsClr.app1?.specialActivities) || []).filter(s => s && s.available === false).map(s => String(s.name).toLowerCase().trim()));
+        const _offFieldClr = new Set(((_gsClr.app1?.fields) || []).filter(f => f && f.available === false).map(f => String(f.name).toLowerCase().trim()));
         // Clear non-fixed assignments before solving (respect LNS locks)
         Object.keys(window.scheduleAssignments).forEach(bk => {
             (window.scheduleAssignments[bk] || []).forEach((s, i) => {
+                if (!s) return;
+                const _actLc = String(s._activity || s.sport || '').toLowerCase().trim();
+                const _fieldLc = String(s.field || s._location || '').toLowerCase().trim();
+                if ((_actLc && _offSpecialClr.has(_actLc)) || (_fieldLc && _offFieldClr.has(_fieldLc))) {
+                    window.scheduleAssignments[bk][i] = null;
+                    return;
+                }
                 if (s && !s._fixed && !s._league && !s._autoSpecial) {
                     if (_lnsLockSet && _lnsLockSet[bk + '|' + i] && s.field !== 'Free') {
                         s._locked = true;
@@ -28692,6 +28721,9 @@
                 const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
                 _flds.forEach(function (f) {
                     if (!f || !f.name) return;
+                    // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities
+                    //   (available:false) must never be a field-quality relocation target.
+                    if (f.available === false) return;
                     (f.activities || []).forEach(function (sp) { (hostsBySport[sp] = hostsBySport[sp] || []).push(f.name); });
                     capMap[f.name] = parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
                         || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);

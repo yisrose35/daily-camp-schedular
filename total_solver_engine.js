@@ -734,6 +734,10 @@
         var options = [], seenKeys = new Set();
         var disabledFields = window.currentDisabledFields || config.disabledFields || [];
         var disabledSet = new Set(disabledFields);
+        // ★ Config-level shut-off set: fields toggled UNAVAILABLE in Facilities.
+        //   The fieldsBySport loop below reads loadAndFilterData(), a separate
+        //   source that must be gated the same way as masterFields.
+        var unavailFieldSet = new Set((config.masterFields || []).filter(function(f){ return f && f.available === false; }).map(function(f){ return f.name; }));
         config.masterFields?.forEach(function(f) {
             if (disabledSet.has(f.name)) return;
             // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities.
@@ -774,6 +778,7 @@
             (fieldsBySport[sportKey] || []).forEach(function(fieldName) {
                 if (isSportName(fieldName)) return;
                 if (disabledSet.has(fieldName)) return;
+                if (unavailFieldSet.has(fieldName)) return;
                 var key = fieldName + '|' + sportKey;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fieldName, sport: sportKey, activityName: sportKey, type: 'sport', _fieldNorm: normName(fieldName), _actNorm: normName(sportKey) }); }
             });

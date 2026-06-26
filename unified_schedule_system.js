@@ -2972,7 +2972,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         }
     }
 
-    function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
+    function _renderTransposedLeagueCell(block, bunk, divName, slotIdx, isEditable) {
         var td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
 
@@ -3022,6 +3022,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
         //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell.
         _usApplyTravel(td, html, _usCellTravel(_tFields), '8px 10px', true);
+        // ★ Make the transposed-view league/specialty cell clickable → field-change
+        //   modal (this renderer previously wired NO onclick, so leagues couldn't be
+        //   post-edited in the transposed unified view at all).
+        _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, bunk, isEditable);
         return td;
     }
 
@@ -3339,7 +3343,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                     };
                     var td;
                     if (isLeagueBlockType(blockObj.event, blockObj.type)) {
-                        td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx);
+                        td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx, isEditable);
                     } else {
                         // When this slot is a full-division merge, this single cell
                         // (drawn on the first bunk's row, rowSpan = bunks.length)
@@ -3738,20 +3742,45 @@ divBlocks.forEach((block, blockIdx) => {
         //   runs top→bottom, so the bands sit ABOVE/BELOW the cell.
         _usApplyTravel(td, html, _usCellTravel(_tFields), '12px 16px', false);
         
-        if (isEditable && bunks.length > 0) { 
-            td.style.cursor = 'pointer'; 
-            td.onclick = () => {
-                const firstBunk = bunks[0];
-                const existingEntry = window.scheduleAssignments?.[firstBunk]?.[slotIdx];
-                if (typeof openIntegratedEditModal === 'function') {
-                    openIntegratedEditModal(firstBunk, slotIdx, existingEntry);
-                } else {
-                    enhancedEditCell(firstBunk, block.startMin, block.endMin, block.event);
-                }
-            };
+        if (isEditable && bunks.length > 0) {
+            _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, bunks[0], isEditable);
         }
-        
+
         return td;
+    }
+
+    // Shared: make a unified-view league/specialty cell open the field-change
+    // modal. Both league renderers (standard table renderLeagueCell + the
+    // transposed _renderTransposedLeagueCell) call this so the cell is clickable
+    // in BOTH unified views. Routes straight to PostEditFieldChange with the
+    // already-resolved matchups (independent of per-bunk entry markers or the
+    // fuzzy slot key getLeagueMatchups uses), so the field of a league /
+    // specialty game can be changed post-edit. Falls back to the normal edit
+    // modal only when the module isn't loaded.
+    function _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, firstBunk, isEditable) {
+        if (!isEditable || !firstBunk) return;
+        td.style.cursor = 'pointer';
+        td.title = "Click to change a game's field";
+        td.onclick = () => {
+            const existingEntry = window.scheduleAssignments?.[firstBunk]?.[slotIdx];
+            const PEFC = window.PostEditFieldChange;
+            if (PEFC?.openFromEntry) {
+                const hint = {
+                    _allMatchups: (leagueInfo && leagueInfo.matchups) || (existingEntry && existingEntry._allMatchups) || [],
+                    sport: (leagueInfo && leagueInfo.sport) || (existingEntry && existingEntry.sport) || '',
+                    _leagueName: (leagueInfo && leagueInfo.leagueName) || (existingEntry && existingEntry._leagueName) || '',
+                    _startMin: block.startMin, _endMin: block.endMin,
+                    _isSpecialtyLeague: !!(existingEntry && existingEntry._isSpecialtyLeague)
+                };
+                PEFC.openFromEntry(firstBunk, slotIdx, hint);
+                return;
+            }
+            if (typeof openIntegratedEditModal === 'function') {
+                openIntegratedEditModal(firstBunk, slotIdx, existingEntry);
+            } else if (typeof enhancedEditCell === 'function') {
+                enhancedEditCell(firstBunk, block.startMin, block.endMin, block.event);
+            }
+        };
     }
 
     function renderFixedBlockCell(block, bunks) {
@@ -7899,6 +7928,10 @@ window.submitMultiBunkEdit = submitMultiBunkEdit;
     window.checkLocationConflict = checkLocationConflict;
     window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
+    // Exposed for PostEditFieldChange: reuse the generator's own field finder
+    // (hosts-the-sport → grade access → league-lock + capacity/time) so the
+    // post-edit field picker offers exactly the fields the solver would allow.
+    window.findFieldsForActivity = findFieldsForActivity;
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
