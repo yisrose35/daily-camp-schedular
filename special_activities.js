@@ -137,6 +137,30 @@ function validateSpecialActivity(activity, activityName) {
             else { var _cp = {}; Object.keys(sharableWith.allowedPairs).forEach(function(k) { if (sharableWith.allowedPairs[k] === true) _cp[k] = true; }); sharableWith.allowedPairs = _cp; }
         } else { delete sharableWith.allowedPairs; }
     }
+
+    // ★ simultaneousBunks: a FLOOR on how many bunks must do this special together
+    //   in the same slot. Distinct from sharableWith.capacity (the CEILING / max).
+    //   When enabled, the auto solver (Phase 2.36) only seats this special as a
+    //   shared group of at least `min` bunks at the exact same time; the manual
+    //   edit gate rejects placements that would leave fewer than `min` together.
+    let simultaneousBunks = activity.simultaneousBunks;
+    if (!simultaneousBunks || typeof simultaneousBunks !== 'object') {
+        simultaneousBunks = { enabled: false, min: 2 };
+    } else {
+        simultaneousBunks = {
+            enabled: simultaneousBunks.enabled === true,
+            min: (function () { const m = parseInt(simultaneousBunks.min, 10); return (!isNaN(m) && m >= 2) ? m : 2; })()
+        };
+    }
+    // A simultaneous group can only form if the special is sharable AND its
+    // capacity admits at least `min` bunks at once. Coerce a never-configured or
+    // too-tight sharing config so the floor is physically satisfiable.
+    if (simultaneousBunks.enabled) {
+        if (sharableWith.type === 'not_sharable') sharableWith.type = 'same_division';
+        const _cap = parseInt(sharableWith.capacity, 10);
+        if (isNaN(_cap) || _cap < simultaneousBunks.min) sharableWith.capacity = simultaneousBunks.min;
+    }
+
     let accessRestrictions = activity.accessRestrictions;
     if (!accessRestrictions || typeof accessRestrictions !== 'object') { accessRestrictions = { enabled: false, divisions: {}, priorityList: [] }; }
     else {
@@ -196,6 +220,8 @@ function validateSpecialActivity(activity, activityName) {
         //   duration = the activity's `duration`; capacity-aware sharing groups
         //   bunks into the same slot when sharableWith.capacity > 1.
         consecutiveBunks: activity.consecutiveBunks === true,
+        // ★ simultaneousBunks: minimum group size that must run together at once.
+        simultaneousBunks,
         // ★ v3.7: Multi-Part Special support (simple N parts)
 
 
@@ -256,7 +282,7 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name, type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, simultaneousBunks: { enabled: false, min: 2 }, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
@@ -705,6 +731,7 @@ function renderDetailPane() {
     // ── HOW ───────────────────────────────────────────────────────────────────
     const howSections = [
         section('Usage & Frequency', summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
+        section('Simultaneous Bunks', summarySimultaneousBunks(item), () => renderSimultaneousBunks(item)),
         section('Prep Duration', summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
         section('Multi-Part Activity', summaryMultiPart(item), () => renderMultiPartSettings(item))
     ];
@@ -1173,6 +1200,12 @@ function summarySchedulingMode(item) {
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
     return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
 }
+function summarySimultaneousBunks(item) {
+    const sb = item.simultaneousBunks;
+    if (!sb || !sb.enabled) return 'Off — no group requirement';
+    const n = parseInt(sb.min, 10) || 2;
+    return 'At least ' + n + ' bunks must do it together';
+}
 function summaryAccess(item) { if (!item.accessRestrictions?.enabled) return "Open to all grades"; const c = Object.keys(item.accessRestrictions.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.accessRestrictions.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
@@ -1372,6 +1405,100 @@ function renderFullGradeSettings(item) {
 // =========================================================================
 // RENDER: Scheduling Mode — v4.1 Full Grade + Per Grade + Sharing
 // =========================================================================
+function renderSimultaneousBunks(item) {
+    const container = document.createElement("div");
+    if (!item.simultaneousBunks || typeof item.simultaneousBunks !== 'object') {
+        item.simultaneousBunks = { enabled: false, min: 2 };
+    }
+    const sb = item.simultaneousBunks;
+
+    const updateSummary = () => {
+        const s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (s) s.textContent = summarySimultaneousBunks(item);
+    };
+
+    const renderContent = () => {
+        container.innerHTML = "";
+
+        const desc = document.createElement('div');
+        desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:12px; line-height:1.5;';
+        desc.innerHTML = 'Require a minimum number of bunks to do this special <strong>at the same time</strong>. ' +
+            'The scheduler will group bunks together and will not hand this special to fewer than the set number in one slot.';
+        container.appendChild(desc);
+
+        // ── Enable toggle ──
+        const toggleRow = document.createElement('div');
+        toggleRow.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px;';
+        const toggleLabel = document.createElement('span');
+        toggleLabel.style.cssText = 'font-size:0.86rem; font-weight:600; color:#1F2937;';
+        toggleLabel.textContent = 'Require simultaneous bunks';
+        const sw = document.createElement('label');
+        sw.className = 'switch';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!sb.enabled;
+        const slider = document.createElement('span');
+        slider.className = 'slider';
+        cb.onchange = () => {
+            sb.enabled = cb.checked;
+            if (sb.enabled && !(parseInt(sb.min, 10) >= 2)) sb.min = 2;
+            saveData(); renderContent(); updateSummary();
+        };
+        sw.appendChild(cb); sw.appendChild(slider);
+        toggleRow.appendChild(toggleLabel); toggleRow.appendChild(sw);
+        container.appendChild(toggleRow);
+
+        if (sb.enabled) {
+            // ── Count input ──
+            const countRow = document.createElement('div');
+            countRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-top:14px;';
+            const cLbl = document.createElement('span');
+            cLbl.style.cssText = 'font-size:0.84rem; color:#374151;';
+            cLbl.textContent = 'Minimum bunks together:';
+            const inp = document.createElement('input');
+            inp.type = 'number';
+            inp.min = '2'; inp.max = '20';
+            inp.value = String(parseInt(sb.min, 10) || 2);
+            inp.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.86rem;';
+            const commit = () => {
+                let v = parseInt(inp.value, 10);
+                if (isNaN(v) || v < 2) v = 2;
+                if (v > 20) v = 20;
+                sb.min = v;
+                inp.value = String(v);
+                // Capacity (the ceiling) must admit at least `min` bunks together,
+                // otherwise the group can never form. Bump it to match.
+                if (!item.sharableWith || typeof item.sharableWith !== 'object') {
+                    item.sharableWith = { type: 'same_division', divisions: [], capacity: v };
+                } else {
+                    if (item.sharableWith.type === 'not_sharable') item.sharableWith.type = 'same_division';
+                    const cap = parseInt(item.sharableWith.capacity, 10);
+                    if (isNaN(cap) || cap < v) item.sharableWith.capacity = v;
+                }
+                saveData(); updateSummary();
+            };
+            inp.onchange = commit;
+            inp.onblur = commit;
+            countRow.appendChild(cLbl); countRow.appendChild(inp);
+            container.appendChild(countRow);
+
+            const infoBox = document.createElement('div');
+            infoBox.style.cssText = 'margin-top:14px; padding:12px; background:linear-gradient(135deg, #f0f9fb, #e6f4f7); border:1px solid #b2dce6; border-radius:8px; line-height:1.55;';
+            infoBox.innerHTML =
+                '<div style="font-weight:600; color:#0A4A56; margin-bottom:4px; font-size:0.86rem;">How it works</div>' +
+                '<div style="color:#0F5F6E; font-size:0.81rem;">' +
+                    'When this special runs, the scheduler seats a group of <strong>' + (parseInt(sb.min, 10) || 2) + '+ bunks</strong> in the same time slot. ' +
+                    'It pushes hard to form full groups so the activity still gets handed out — but it will never place it for fewer than ' + (parseInt(sb.min, 10) || 2) + ' bunks at once. ' +
+                    'Sharing capacity has been set to at least this number so a group can fit.' +
+                '</div>';
+            container.appendChild(infoBox);
+        }
+    };
+
+    renderContent();
+    return container;
+}
+
 function renderSchedulingMode(item) {
     const container = document.createElement("div");
     const updateSummary = () => {

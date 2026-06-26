@@ -608,6 +608,45 @@
             } catch (e) { console.warn('[PostEdit] cooldown check failed:', e); }
         }
 
+        // ★ Simultaneous-bunk floor — soft confirm if this placement would leave
+        //   fewer than the special's required group size doing it at the same time.
+        //   Manual mode is user-driven (we can't auto-group), so this warns rather
+        //   than hard-blocks — otherwise you could never place the first bunk.
+        if (!isClear && !editData._simulChecked) {
+            try {
+                const _peGetSpecialCfg = (name) => {
+                    const gs = window.globalSettings || (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+                    const lists = [].concat((gs.app1 && gs.app1.specialActivities) || [], gs.specialActivities || []);
+                    const low = String(name || '').toLowerCase().trim();
+                    return lists.find(s => s && String(s.name).toLowerCase().trim() === low) || null;
+                };
+                const _sCfg = _peGetSpecialCfg(activity);
+                const _sb = _sCfg && _sCfg.simultaneousBunks;
+                if (_sb && _sb.enabled && (parseInt(_sb.min, 10) || 0) >= 2) {
+                    const _min = parseInt(_sb.min, 10) || 2;
+                    const _actLow = String(activity).toLowerCase().trim();
+                    let _grp = 1; // this bunk, after the edit lands
+                    for (const _ob in (window.scheduleAssignments || {})) {
+                        if (String(_ob) === String(bunk)) continue;
+                        const _arr = window.scheduleAssignments[_ob];
+                        if (!_arr) continue;
+                        const _has = slots.some(idx => {
+                            const c = _arr[idx];
+                            return c && c._activity && String(c._activity).toLowerCase().trim() === _actLow;
+                        });
+                        if (_has) _grp++;
+                    }
+                    if (_grp < _min) {
+                        const proceed = window.confirm('"' + activity + '" is set to require at least ' + _min +
+                            ' bunks doing it at the same time. Only ' + _grp + ' bunk' + (_grp !== 1 ? 's' : '') +
+                            ' (including this one) would have it in this slot.\n\nPlace anyway?');
+                        if (!proceed) return;
+                        editData._simulChecked = true;
+                    }
+                }
+            } catch (e) { console.warn('[PostEdit] simultaneous-bunk check failed:', e); }
+        }
+
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(unifiedTimes.length);
 

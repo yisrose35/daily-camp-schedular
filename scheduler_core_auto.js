@@ -1432,6 +1432,32 @@
                 consecutiveBunkSpecials.map(s => s.name).join(', '));
         }
 
+        // ★ SIMULTANEOUS-BUNK SPECIALS (auto-only feature):
+        //   A special whose `simultaneousBunks` floor requires at least `min`
+        //   bunks to do it TOGETHER at the same time. Reserved by Phase 2.36 as
+        //   shared-group walls (multiple bunks sharing one slot, exactly aligned).
+        //   It's a HARD floor — a group is only committed when >= min bunks can be
+        //   seated simultaneously — but the pass pushes hard (tries every anchor,
+        //   balances group sizes) to actually hand the special out. Removed from
+        //   `todaysSpecials` here so the per-bunk distribution never under-fills
+        //   them. consecutiveBunks (one-at-a-time) is the opposite and takes
+        //   precedence — those are already spliced out above. No-op when none set.
+        function _isSimultaneousSpecial(s) {
+            const _read = (o) => !!(o && o.simultaneousBunks && o.simultaneousBunks.enabled === true
+                && (parseInt(o.simultaneousBunks.min, 10) || 0) >= 2);
+            if (!s) return false;
+            if (_read(s)) return true;
+            try { return _read(getSpecialConfig(s.name, globalSettings)); } catch (_e) { return false; }
+        }
+        const simultaneousBunkSpecials = todaysSpecials.filter(_isSimultaneousSpecial);
+        if (simultaneousBunkSpecials.length > 0) {
+            for (let _si = todaysSpecials.length - 1; _si >= 0; _si--) {
+                if (_isSimultaneousSpecial(todaysSpecials[_si])) todaysSpecials.splice(_si, 1);
+            }
+            log('[STEP 1] Simultaneous-bunk specials (reserved by Phase 2.36, excluded from normal pool): ' +
+                simultaneousBunkSpecials.map(s => s.name).join(', '));
+        }
+
         // ★ FN-39: CONSECUTIVE-BUNK GENERAL ACTIVITIES (auto-only) — the same
         //   whole-grade back-to-back treatment specials get, for a facility's
         //   GENERAL activities. Configured in the facility editor (General
@@ -16192,6 +16218,273 @@
               }
             }
 
+            // ── Phase 2.36: Reserve simultaneous-bunk specials (a group at once) ──
+            // For a special flagged simultaneousBunks, at least `min` bunks must do
+            // it TOGETHER in the same slot. We seat balanced groups (size in
+            // [min, capacity]) at shared anchors and RESERVE each as exact-aligned
+            // walls — the mirror image of Phase 2.35's one-at-a-time walk. HARD
+            // floor: a group is only committed when >= min bunks fit at the same
+            // time; under-sized leftovers fall through to normal fill (so they do
+            // NOT receive this special — never alone). The walk still pushes hard
+            // (every anchor, size-balanced to avoid stranding a sub-min remainder)
+            // so the special is actually handed out. These specials were removed
+            // from the normal pool at STEP 1. No-op when none are configured.
+            if (simultaneousBunkSpecials && simultaneousBunkSpecials.length > 0) {
+              try {
+                var _p236Count = 0;
+                simultaneousBunkSpecials.forEach(function(_spCfg) {
+                    var _sName = _spCfg.name;
+                    var _sDur = getSpecialDuration(_sName, activityProperties, globalSettings)
+                                || parseInt(_spCfg.duration) || parseInt(_spCfg.defaultDuration) || 30;
+                    if (_sDur < 5) return;
+                    var _sCap = getSpecialCapacity(_sName, activityProperties, globalSettings) || 2;
+                    var _sbCfg = (_spCfg.simultaneousBunks && typeof _spCfg.simultaneousBunks === 'object')
+                                 ? _spCfg.simultaneousBunks
+                                 : ((getSpecialConfig(_sName, globalSettings) || {}).simultaneousBunks || {});
+                    var _sMin = parseInt(_sbCfg.min, 10) || 2;
+                    if (_sMin < 2) _sMin = 2;
+                    if (_sCap < _sMin) _sCap = _sMin; // capacity must admit a full group
+                    var _sField = getLocationForSpecial(_sName, activityProperties, globalSettings) || null;
+
+                    var _sFieldObj = null;
+                    if (_sField) {
+                        try {
+                            var _fldsP236 = (globalSettings.app1 && globalSettings.app1.fields) || globalSettings.fields || [];
+                            var _sFieldLow = String(_sField).toLowerCase().trim();
+                            _sFieldObj = _fldsP236.find(function(f) { return f && f.name && String(f.name).toLowerCase().trim() === _sFieldLow; }) || null;
+                        } catch (_eFld) {}
+                    }
+                    function _fieldTimeBlocked(grade, s, e) {
+                        var trs = (_sFieldObj && _sFieldObj.timeRules) || [];
+                        for (var i = 0; i < trs.length; i++) {
+                            var r = trs[i];
+                            if (!r) continue;
+                            var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.startTime);
+                            var re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.endTime);
+                            if (rs == null || re == null) continue;
+                            var divs = Array.isArray(r.divisions) ? r.divisions : [];
+                            var applies = divs.length === 0 || divs.indexOf(grade) >= 0 || divs.indexOf(String(grade)) >= 0;
+                            if (!applies) continue;
+                            var t = String(r.type || 'unavailable').toLowerCase();
+                            if (t === 'available' || t === 'only') { if (!(s >= rs && e <= re)) return true; }
+                            else { if (rs < e && re > s) return true; }
+                        }
+                        return false;
+                    }
+                    // Station busy across OTHER activities at the same field. A group
+                    // of this same special sharing the station is allowed (that's the
+                    // whole point), so ignore blocks already tagged with this special.
+                    function _stationBusy(s, e) {
+                        if (!_sField) return false;
+                        var _fLow = String(_sField).toLowerCase().trim();
+                        for (var _bk in bunkTimelines) {
+                            var _tl = bunkTimelines[_bk] || [];
+                            for (var _i = 0; _i < _tl.length; _i++) {
+                                var _b = _tl[_i];
+                                if (!_b) continue;
+                                if (_b._assignedSpecial === _sName) continue; // same group ⇒ allowed
+                                var _loc = _b._specialLocation || _b.field || null;
+                                if (!_loc || String(_loc).toLowerCase().trim() !== _fLow) continue;
+                                if (_b.startMin < e && _b.endMin > s) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    function _bunkFree(bunk, s, e) {
+                        var _tl = bunkTimelines[bunk] || [];
+                        for (var _i = 0; _i < _tl.length; _i++) {
+                            var _b = _tl[_i];
+                            if (!_b) continue;
+                            if (!(_b._activityLocked || _b._fixed || _b._classification === 'pinned')) continue;
+                            var _bt = (_b.type || '').toLowerCase();
+                            if (_bt === 'pre-change' || _bt === 'post-change') continue;
+                            if (_b.startMin < e && _b.endMin > s) return false;
+                        }
+                        return true;
+                    }
+
+                    allGrades.forEach(function(grade) {
+                        if (allowedSet && !allowedSet.has(String(grade))) return;
+                        if (!isSpecialAvailableForDivision(_sName, grade, globalSettings)) return;
+                        var _gLayers = layersByGrade[grade] || [];
+                        var _hasSpecialSlot = _gLayers.some(function(l) {
+                            var _lt = (l.type || '').toLowerCase();
+                            if (_lt === 'special') return true;
+                            return _lt === 'custom' && (l.event === _sName || l.name === _sName);
+                        });
+                        if (!_hasSpecialSlot) return;
+
+                        var _bunks = getBunksForGrade(grade, divisions).filter(function(b) {
+                            if (!isSpecialAvailableForBunk(_sName, grade, b, globalSettings)) return false;
+                            return !(bunkTimelines[b] || []).some(function(x) {
+                                return x && (x._assignedSpecial === _sName || x.event === _sName);
+                            });
+                        });
+                        // Not enough eligible bunks in this grade to ever form a group.
+                        if (_bunks.length < _sMin) {
+                            if (_bunks.length > 0) log('[Phase2.36] ✗ ' + grade + '/' + _sName + ' — only ' + _bunks.length + ' eligible bunk(s), need ' + _sMin + ' together; skipped');
+                            return;
+                        }
+
+                        var _gObj = divisions[grade] || divisions[String(grade)];
+                        var _gStart = parseTimeToMinutes(_gObj && _gObj.startTime) || 540;
+                        var _gEnd   = parseTimeToMinutes(_gObj && _gObj.endTime)   || 960;
+
+                        // Clamp to the special's availability window, hosting custom
+                        // layer band(s), and the field's open hours (same as 2.35).
+                        var _spCfgWin = null;
+                        try {
+                            _spCfgWin = getSpecialConfig(_sName, globalSettings);
+                            var _availWin = getSpecialTimeWindowForGrade(_spCfgWin, grade);
+                            if (_availWin && _availWin.startMin != null && _availWin.endMin != null) {
+                                _gStart = Math.max(_gStart, _availWin.startMin);
+                                _gEnd   = Math.min(_gEnd,   _availWin.endMin);
+                            }
+                            var _hostLo = Infinity, _hostHi = -Infinity;
+                            _gLayers.forEach(function(l) {
+                                var _lt = (l.type || '').toLowerCase();
+                                if (!(_lt === 'custom' && (l.event === _sName || l.name === _sName))) return;
+                                if (l.startMin != null && l.startMin < _hostLo) _hostLo = l.startMin;
+                                if (l.endMin   != null && l.endMin   > _hostHi) _hostHi = l.endMin;
+                            });
+                            if (_hostLo < Infinity && _hostHi > -Infinity) {
+                                _gStart = Math.max(_gStart, _hostLo);
+                                _gEnd   = Math.min(_gEnd,   _hostHi);
+                            }
+                            var _fldTrs = (_sFieldObj && _sFieldObj.timeRules) || [];
+                            _fldTrs.forEach(function(r) {
+                                if (!r) return;
+                                var t = String(r.type || 'unavailable').toLowerCase();
+                                if (t !== 'available' && t !== 'only') return;
+                                var divs = Array.isArray(r.divisions) ? r.divisions : [];
+                                if (!(divs.length === 0 || divs.indexOf(grade) >= 0 || divs.indexOf(String(grade)) >= 0)) return;
+                                var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.startTime);
+                                var re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.endTime);
+                                if (rs == null || re == null) return;
+                                _gStart = Math.max(_gStart, rs);
+                                _gEnd   = Math.min(_gEnd,   re);
+                            });
+                        } catch (_eWin) {}
+                        if (_gEnd - _gStart < _sDur) {
+                            log('[Phase2.36] ✗ ' + grade + '/' + _sName + ' — configured window (' + minutesToTimeLabel(_gStart) + '–' + minutesToTimeLabel(_gEnd) + ') too small for one ' + _sDur + 'min slot');
+                            return;
+                        }
+
+                        var _band = staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
+                        var _periods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                            : [{ startMin: _gStart, endMin: _gEnd }];
+                        var _anchors = [];
+                        _periods.forEach(function(p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
+                        if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
+                        if (_anchors.length === 0) _anchors.push(_gStart);
+                        if (_band) {
+                            _anchors.sort(function(a, b) {
+                                var _da = a >= _band.start ? a - _band.start : 100000 + (_band.start - a);
+                                var _db = b >= _band.start ? b - _band.start : 100000 + (_band.start - b);
+                                return _da - _db;
+                            });
+                        }
+
+                        var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
+                        if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
+
+                        // One anchor sweep: form balanced simultaneous groups. Each
+                        // group sits at one slot and holds [min, cap] bunks at once.
+                        function _walkOnce() {
+                            var bestAnchor = null, bestPlaced = -1, bestPlan = null;
+                            for (var _ai = 0; _ai < _anchors.length; _ai++) {
+                                var _t0 = _anchors[_ai];
+                                var _plan = [], _placed = 0;
+                                var _pool = _bunks.slice();
+                                var _cursor = _t0;
+                                var _guard = 0;
+                                while (_pool.length >= _sMin && _guard++ < 300) {
+                                    var _per = null, _s = null;
+                                    for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                        var _p3 = _walkPeriods[_wp];
+                                        var _cand = Math.max(_cursor, _p3.startMin);
+                                        if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                    }
+                                    if (!_per) break;
+                                    var _e = _s + _sDur;
+                                    if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)
+                                        || (_spCfgWin && isSpecialUnavailableForGrade(_spCfgWin, grade, _s, _e))
+                                        || _fieldTimeBlocked(grade, _s, _e)) { _cursor = _s + 5; continue; }
+                                    // Balanced target so we don't strand a sub-min remainder.
+                                    var _rem = _pool.length;
+                                    var _want = Math.min(_sCap, _rem);
+                                    if (_rem - _want > 0 && _rem - _want < _sMin) _want = Math.max(_sMin, _rem - _sMin);
+                                    var _take = [];
+                                    for (var _pk = 0; _pk < _pool.length && _take.length < _want; _pk++) {
+                                        if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
+                                    }
+                                    if (_take.length < _sMin) { _cursor = _s + 5; continue; } // HARD floor
+                                    for (var _tk = 0; _tk < _take.length; _tk++) _pool.splice(_pool.indexOf(_take[_tk]), 1);
+                                    _plan.push({ start: _s, end: _e, bunks: _take });
+                                    _placed += _take.length;
+                                    _cursor = _e;
+                                }
+                                var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
+                                var _bestSpan = bestPlan && bestPlan.length > 0 ? (bestPlan[bestPlan.length - 1].end - bestPlan[0].start) : Infinity;
+                                if (_placed > bestPlaced || (_placed === bestPlaced && _span < _bestSpan)) {
+                                    bestPlaced = _placed; bestAnchor = _t0; bestPlan = _plan;
+                                }
+                            }
+                            return { placed: bestPlaced, anchor: bestAnchor, plan: bestPlan };
+                        }
+
+                        var _walkRes = _walkOnce();
+                        var _bestPlan = _walkRes.plan, _bestPlaced = _walkRes.placed, _bestAnchor = _walkRes.anchor;
+                        if (!_bestPlan || _bestPlaced < _sMin) {
+                            log('[Phase2.36] ✗ ' + grade + '/' + _sName + ' — could not seat a group of ' + _sMin + '+ together (eligible=' + _bunks.length + ', dur=' + _sDur + ')');
+                            return;
+                        }
+
+                        _bestPlan.forEach(function(slot) {
+                            if (!slot || !slot.bunks || slot.bunks.length < _sMin) return;
+                            slot.bunks.forEach(function(bunk) {
+                                bunkTimelines[bunk].push({
+                                    startMin: slot.start, endMin: slot.end,
+                                    type: 'custom', event: _sName, layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _gradeWide: false, _activityLocked: true, _noBacktrack: true,
+                                    _assignedSpecial: _sName,
+                                    _specialLocation: _sField,
+                                    _specialDuration: _sDur,
+                                    _isSpecialLocation: !!_sField,
+                                    dMin: _sDur, dMax: _sDur,
+                                    _cbResStart: slot.start, _cbResEnd: slot.end,
+                                    _simultaneousBunk: true, _source: 'phase2.36'
+                                });
+                                _p236Count++;
+                                try { registerSpecialUsage(_sName, grade, slot.start, slot.end); } catch (_e1) {}
+                                try { registerCrossGrade(grade, 'special', slot.start, slot.end, _sName); } catch (_e2) {}
+                                try {
+                                    if (_sField && fieldLedger && fieldLedger[_sField]) {
+                                        fieldLedger[_sField].claims.push({ bunk: bunk, grade: grade, activity: _sName, startMin: slot.start, endMin: slot.end });
+                                    }
+                                } catch (_e3) {}
+                            });
+                        });
+                        if (_bestPlaced < _bunks.length) {
+                            log('[Phase2.36] ⚠ ' + grade + '/' + _sName + ' partial: ' + _bestPlaced + '/' + _bunks.length + ' in groups of ' + _sMin + '–' + _sCap + ' (rest fall through — never placed alone)');
+                        } else {
+                            log('[Phase2.36] ✓ ' + grade + '/' + _sName + ' — all ' + _bunks.length + ' bunks in simultaneous group(s) of ' + _sMin + '–' + _sCap);
+                        }
+                    });
+                });
+                if (_p236Count > 0) {
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                    log('[Phase2.36] ★ RESERVED ' + _p236Count + ' simultaneous-bunk special block(s) as walls');
+                }
+              } catch (_e236) {
+                warn('[Phase2.36] error (skipped, non-fatal): ' + (_e236 && _e236.message));
+              }
+            }
+
             // ★ FN-39: CONSECUTIVE-BUNK GENERAL ACTIVITIES — the same machinery as
             //   the special walk above, field-flavored: station = a hosting field;
             //   batch size = the field's sharing capacity, additionally capped by
@@ -22190,6 +22483,7 @@
         //   one more integrity run rights every wall (Pass-0 snap-back) and
         //   resolves any resulting overlap before the skeleton is formalized.
         if ((typeof consecutiveBunkSpecials !== 'undefined' && consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) ||
+            (typeof simultaneousBunkSpecials !== 'undefined' && simultaneousBunkSpecials && simultaneousBunkSpecials.length > 0) ||
             (typeof consecutiveBunkSports !== 'undefined' && consecutiveBunkSports && consecutiveBunkSports.length > 0)) {
             try {
                 allGrades.forEach(function (grade) {
