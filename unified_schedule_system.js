@@ -1636,16 +1636,20 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
-        
+        // ★ Config-level shut-off (Facilities AVAILABLE/UNAVAILABLE toggle): a
+        //   disabled field can still appear in fieldsBySport (buildFieldsBySport
+        //   doesn't filter), so guard sports here; specials carry their own flag.
+        const _unavailFields = new Set((app1.fields || []).filter(f => f && f.available === false).map(f => f.name));
+
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
             (sportFields || []).forEach(fName => {
-                if (disabledFields.includes(fName) || window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
+                if (_unavailFields.has(fName) || disabledFields.includes(fName) || window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
                 const key = `${fName}|${sport}`;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fName, sport, activityName: sport, type: 'sport' }); }
             });
         }
         for (const special of (app1.specialActivities || [])) {
-            if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
+            if (!special.name || special.available === false || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
             // * DEMO FIX: Filter rainy-day-only specials on normal days
             if (window.__CAMPISTRY_DEMO_MODE__) {
                 const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -5692,6 +5696,11 @@ if (bypassStatus.highlight) {
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
         const disabledFields = window.currentDisabledFields || [];
+        // ★ Config-level shut-off (Facilities AVAILABLE/UNAVAILABLE toggle). Fields
+        //   are already guarded inline (field.available === false) below, but the
+        //   fieldsBySport sport loop and the special loops were not — a disabled
+        //   field can sit in fieldsBySport, and disabled specials were never gated.
+        const _unavailFields = new Set((app1.fields || []).filter(f => f && f.available === false).map(f => f.name));
 
         // Pre-compute league fields and time range for this slot window
         const divSlots = window.divisionTimes?.[divName] || [];
@@ -5831,6 +5840,7 @@ if (bypassStatus.highlight) {
             // Also add specials
             for (const special of (app1.specialActivities || [])) {
                 if (!special.name) continue;
+                if (special.available === false) continue;
                 if (excludeSet.has(special.name) || disabledSet.has(special.name)) continue;
                 if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(special.name, slots, divName)) continue;
                 if (_isFieldBlockedByLeagueOrCombo(special.name)) continue;
@@ -5877,6 +5887,7 @@ if (bypassStatus.highlight) {
 
             (sportFields || []).forEach(fName => {
                 if (excludeSet.has(fName)) return;
+if (_unavailFields.has(fName)) return;
 if (disabledFields.includes(fName)) return;
 if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(fName, slots, divName)) return;
 if (_isFieldBlockedByLeagueOrCombo(fName)) return;
@@ -5906,6 +5917,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
        (app1.specialActivities || []).forEach(special => {
             if (!special.name) return;
+            if (special.available === false) return;
             if (_doneToday.has(special.name.toLowerCase().trim())) return;
             if (excludeSet.has(special.name)) return;
             if (disabledFields.includes(special.name)) return;
