@@ -193,6 +193,12 @@
 
     if (!games.length) return null;
 
+    // Specialty fallback: when the league flag wasn't carried on the hint/entry,
+    // the matchup STRING format reveals it — specialty uses "A vs B — Field"
+    // (dash), regular uses "A vs B @ Field (Sport)" (at). This keeps the gameLog
+    // history update firing for specialty games reached via the unified cell.
+    if (!isSpecialty && games.some(function (g) { return g.kind === 'dash'; })) isSpecialty = true;
+
     return {
       kind: isSpecialty ? 'specialty' : 'regular',
       divName: divName, slotIdx: slotIdx,
