@@ -23897,6 +23897,12 @@
             if (window.currentDisabledFields && window.currentDisabledFields.includes(fieldName)) {
                 return 'DA Resources: field disabled today';
             }
+            // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities
+            //   (available:false). Permanent analog of the per-date disable above;
+            //   gates every mutation path that flows through this validator.
+            if (fld && fld.available === false) {
+                return 'Facilities: field unavailable';
+            }
             // ★ DA Resources: per-field daily sport disable (e.g. Baseball turned
             //   off on Baseball Field 1 but allowed on 2/3/4). Reads the same
             //   sources as the generator's STEP 1 dailyDisabledSportsByField.
@@ -28699,6 +28705,9 @@
                 const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
                 _flds.forEach(function (f) {
                     if (!f || !f.name) return;
+                    // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities
+                    //   (available:false) must never be a field-quality relocation target.
+                    if (f.available === false) return;
                     (f.activities || []).forEach(function (sp) { (hostsBySport[sp] = hostsBySport[sp] || []).push(f.name); });
                     capMap[f.name] = parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
                         || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
