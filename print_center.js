@@ -580,6 +580,9 @@ var _liveWindow = null;
 var _livePageIndex = 0;
 var _numLivePages = 1;
 var _livePageTimer = null;
+var _livePagePaused = (function () { // when true, auto page-rotation is off — pages only advance via the arrows
+    try { return localStorage.getItem('pc3_live_paused') === '1'; } catch (e) { return false; }
+})();
 var _livePrevPageCount = -1; // page count when the rotation timer was last (re)started
 var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
 var _liveRenderToken = 0; // bumped each render; a deferred (rAF) pass aborts if a newer render superseded it
@@ -1900,11 +1903,12 @@ function getStyles() {
         '--lv-banner-border:rgba(251,191,36,.35);--lv-uni-grade-bg:#0e1830;--lv-uni-grade-text:#fcd34d;--lv-uni-bunk-bg:#0b1326;--lv-uni-bunk-text:#cbd5e1;--lv-fit-on-text:#1f2937;' +
         'position:absolute;inset:0;z-index:100;background:var(--lv-bg);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
     '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:var(--lv-header-bg);border-bottom:1px solid var(--lv-header-border);flex-shrink:0;}' +
-    '.pc3-live-headleft{display:flex;align-items:baseline;gap:14px;min-width:0;}' +
+    '.pc3-live-headleft{display:flex;align-items:baseline;gap:14px;min-width:0;flex:0 1 auto;overflow:hidden;}' +
     '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:var(--lv-title);letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-    '.pc3-live-date{font-size:16px;font-weight:600;color:var(--lv-date);white-space:nowrap;}' +
-    '.pc3-live-headright{display:flex;align-items:center;gap:18px;flex-shrink:0;}' +
-    '.pc3-live-clock{font-size:34px;font-weight:300;color:var(--lv-clock);font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
+    '.pc3-live-date{font-size:16px;font-weight:600;color:var(--lv-date);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.pc3-live-headright{display:flex;align-items:center;gap:14px;flex:1 1 auto;flex-wrap:wrap;justify-content:flex-end;row-gap:10px;}' +
+    '.pc3-live-clock{font-size:34px;font-weight:300;color:var(--lv-clock);font-variant-numeric:tabular-nums;letter-spacing:.5px;white-space:nowrap;flex-shrink:0;}' +
+    '.pc3-live-pageind{align-items:center;gap:10px;flex-shrink:0;}' +
     '.pc3-live-close{padding:8px 16px;border:1px solid var(--lv-close-border);border-radius:9px;background:var(--lv-close-bg);color:var(--lv-close-text);font-size:13px;font-weight:600;cursor:pointer;}' +
     '.pc3-live-close:hover{background:var(--lv-close-bg-hover);}' +
     '.pc3-live-divbanner{font-size:26px;font-weight:800;color:var(--lv-accent);letter-spacing:.5px;padding:2px 4px 10px;margin-bottom:4px;border-bottom:2px solid var(--lv-banner-border);}' +
@@ -1934,6 +1938,8 @@ function getStyles() {
     '.pc3-live-page-inner{padding:18px 28px;}' +
     '.pc3-live-nav-btn{background:none;border:none;color:var(--lv-nav);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
     '.pc3-live-nav-btn:hover{color:var(--lv-nav-hover);}' +
+    '.pc3-live-pause{font-size:17px;display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:7px;}' +
+    '.pc3-live-pause.on{color:var(--lv-fit-on-text);background:var(--lv-accent);}' +
     '.pc3-live-section{margin-bottom:22px;}' +
     '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:var(--lv-accent);letter-spacing:.2px;}' +
@@ -4419,8 +4425,8 @@ function runLiveStandalone() {
             '<div class="pc3-live-headleft">' +
                 '<div class="pc3-live-date" id="pc3-live-date"></div>' +
             '</div>' +
-            '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:8px;"></div>' +
             '<div class="pc3-live-headright">' +
+                '<div id="pc3-live-page-ind" class="pc3-live-pageind" style="display:none;">' + '</div>' +
                 '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
                 '<button class="pc3-live-fit' + (_liveOneDivPerPage ? ' on' : '') + '" id="pc3-live-perdiv-btn" title="Show one division per page, rotating through them" onclick="toggleLivePerDiv()">One division per page</button>' +
                 '<button class="pc3-live-fit' + (_liveWholeCamp ? ' on' : '') + '" id="pc3-live-wholecamp-btn" title="Shrink the entire camp onto one screen, no matter how small" onclick="toggleLiveWholeCamp()">Whole camp on one screen</button>' +
@@ -5480,9 +5486,12 @@ function updateLivePageIndicator() {
             dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? 'var(--lv-accent,#fbbf24)' : 'var(--lv-dot-idle,rgba(255,255,255,.3))') + ';transition:background .3s;"></span>';
         }
         ind.innerHTML =
-            '<button class="pc3-live-nav-btn" onclick="livePageNav(-1)">&#8249;</button>' +
+            '<button class="pc3-live-nav-btn" title="Previous page" onclick="livePageNav(-1)">&#8249;</button>' +
             '<div style="display:flex;gap:7px;align-items:center;">' + dots + '</div>' +
-            '<button class="pc3-live-nav-btn" onclick="livePageNav(1)">&#8250;</button>';
+            '<button class="pc3-live-nav-btn" title="Next page" onclick="livePageNav(1)">&#8250;</button>' +
+            '<button class="pc3-live-nav-btn pc3-live-pause' + (_livePagePaused ? ' on' : '') + '" id="pc3-live-pause-btn" title="' +
+                (_livePagePaused ? 'Auto-advance is paused — click to resume' : 'Pause auto-advance (use the arrows to change pages)') + '" onclick="toggleLivePagePause()">' +
+                (_livePagePaused ? '&#9658;' : '&#10073;&#10073;') + '</button>';
     } else {
         ind.style.display = 'none';
     }
@@ -5668,9 +5677,20 @@ function livePageNav(dir) {
 function startLivePageTimer() {
     if (_livePageTimer) clearInterval(_livePageTimer);
     _livePageTimer = null;
-    if (_numLivePages < 2) return;
+    if (_numLivePages < 2 || _livePagePaused) return;   // paused = manual advance only
     _livePageTimer = setInterval(function () { livePageNav(1); }, _LIVE_PAGE_MS);
 }
+
+// Pause / resume the automatic page rotation. While paused, pages change only
+// when the user clicks the ‹ › arrows (the "physical button push"). Persists so
+// a kiosk left paused stays paused across reloads.
+window.toggleLivePagePause = function () {
+    _livePagePaused = !_livePagePaused;
+    try { localStorage.setItem('pc3_live_paused', _livePagePaused ? '1' : '0'); } catch (e) {}
+    if (_livePagePaused) { if (_livePageTimer) { clearInterval(_livePageTimer); _livePageTimer = null; } }
+    else { startLivePageTimer(); }
+    updateLivePageIndicator();
+};
 
 // Flip "One division per page" on/off. Each page then shows a single division
 // (all its grades and bunks, spilling onto extra pages if needed) and the
