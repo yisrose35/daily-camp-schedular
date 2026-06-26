@@ -1968,11 +1968,11 @@ function getStyles() {
 
     /* ── Live theme panel ── in-kiosk color controls. Own neutral palette (white
        card, dark text) so it stays readable on top of any theme being edited. */
-    '.pc3-lvtp{position:absolute;top:74px;right:18px;width:300px;max-height:calc(100% - 96px);z-index:120;background:#ffffff;border:1px solid #d9d2c4;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-lvtp{position:absolute;top:74px;right:18px;width:440px;max-width:calc(100vw - 36px);max-height:calc(100% - 96px);z-index:120;background:#ffffff;border:1px solid #d9d2c4;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
     '.pc3-lvtp-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid #ece6da;font-size:14px;font-weight:700;color:#23252a;}' +
     '.pc3-lvtp-x{border:none;background:none;font-size:18px;line-height:1;color:#8a8377;cursor:pointer;padding:2px 4px;}' +
     '.pc3-lvtp-x:hover{color:#23252a;}' +
-    '.pc3-lvtp-body{padding:12px 16px 16px;overflow-y:auto;}' +
+    '.pc3-lvtp-body{padding:12px 16px 16px;overflow-y:auto;overflow-x:hidden;}' +
     '.pc3-lvtp-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#a79f8e;margin:4px 0 8px;}' +
     '.pc3-lvtp-presets{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
     '.pc3-lvtp-chip{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #e2dccf;border-radius:11px;background:#fff;cursor:pointer;font-family:inherit;text-align:left;transition:all .14s;}' +
