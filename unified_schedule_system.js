@@ -2055,7 +2055,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
                 });
                 specials.forEach(s => {
                     if (s?.name) activityProperties[s.name] = {
-                        type: 'special', available: true,
+                        type: 'special', available: s.available !== false,
                         sharableWith: s.sharableWith || { type: 'not_sharable', capacity: 1 },
                         rainyDayOnly: s.rainyDayOnly === true,
                         rainyDayExclusive: s.rainyDayExclusive === true
