@@ -1109,8 +1109,45 @@ function renderSpecialConfig(container, fac) {
             renderDetailPane();
         };
 
+        // ── Availability toggle ──────────────────────────────────────
+        //   Mirrors the sports field "AVAILABLE/UNAVAILABLE" switch. When a
+        //   special is toggled off (saData.available === false) the solver
+        //   skips it entirely (scheduler_core_auto.js filters todaysSpecials
+        //   on `s.available === false`; rotation_engine scores it Infinity).
+        //   This lets the user disable a special without deleting it.
+        const isAvail = saData.available !== false;
+
+        const saRight = document.createElement("div");
+        saRight.style.cssText = "display:flex; align-items:center; gap:10px;";
+
+        const availToggle = document.createElement("label");
+        availToggle.className = "switch";
+        availToggle.title = isAvail ? "Special is on — click to turn off" : "Special is off — click to turn on";
+        availToggle.onclick = e => e.stopPropagation();
+        const availCb = document.createElement("input");
+        availCb.type = "checkbox";
+        availCb.checked = isAvail;
+        availCb.onchange = () => {
+            saData.available = availCb.checked;
+            saveSpecialData(saData);
+            renderDetailPane();
+        };
+        const availSlider = document.createElement("span");
+        availSlider.className = "slider";
+        availToggle.appendChild(availCb);
+        availToggle.appendChild(availSlider);
+        saRight.appendChild(availToggle);
+        saRight.appendChild(saDelBtn);
+
+        // Dim the card and mute the title when the special is turned off so
+        // the disabled state is obvious at a glance.
+        if (!isAvail) {
+            saCard.style.opacity = "0.6";
+            saTitle.style.color = "#9CA3AF";
+        }
+
         saHeader.appendChild(saTitle);
-        saHeader.appendChild(saDelBtn);
+        saHeader.appendChild(saRight);
         saCard.appendChild(saHeader);
 
         // Special activity config sections
