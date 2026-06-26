@@ -1207,6 +1207,17 @@ function pcLeagueCellText(label, matchups) {
     return lines.join('\n');
 }
 
+// Render a live cell. Multi-line content (league matchups, elective field
+// lists) becomes a little grid: each line in its own bordered row so every
+// matchup is clearly separated. Single-line cells render as plain escaped text.
+function pcCellHtml(text) {
+    text = text == null ? '' : String(text);
+    if (text.indexOf('\n') === -1) return escHtml(text);
+    return text.split('\n').map(function (l, i) {
+        return '<div class="pc3-mu' + (i === 0 ? ' pc3-mu-head' : '') + '">' + escHtml(l) + '</div>';
+    }).join('');
+}
+
 // Pull the raw leagueAssignments slot record for a division/time (sport, field, matchups).
 function pcLeagueSlotRecord(divName, startMin) {
     if (divName == null || startMin == null) return null;
@@ -1682,6 +1693,12 @@ function getStyles() {
     '.pc3-live-tbl .cell-past{opacity:.42;}' +
     '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
     '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
+    /* Matchup / multi-line cell grid: each line its own bordered row. */
+    '.pc3-live-tbl td .pc3-mu{display:block;padding:4px 6px;border-bottom:1px solid rgba(148,163,184,.45);line-height:1.2;}' +
+    '.pc3-live-tbl td .pc3-mu:first-child{padding-top:0;}' +
+    '.pc3-live-tbl td .pc3-mu:last-child{border-bottom:none;padding-bottom:0;}' +
+    '.pc3-live-tbl td .pc3-mu-head{font-weight:800;}' +
+    '.pc3-live-bw .pc3-mu{border-bottom:1px solid #000 !important;}' +
     /* Black-and-white override — applied only while capturing the live view for
        Print / Download so the output looks like an Excel printout (white cells,
        black borders, black text). The on-screen kiosk stays dark. */
@@ -4416,7 +4433,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                             var sCls = (seg.isLeague ? 'cell-league' : 'cell-' + seg.type) + ' cell-merged';
                             if (sCur) sCls += ' cell-current';
                             if (sPast) sCls += ' cell-past';
-                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + escHtml(seg.text) + '</td>';
+                            html += '<td colspan="' + seg.colSpan + '" rowspan="' + bunks.length + '" class="' + sCls + '" style="text-align:center;vertical-align:middle;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + pcCellHtml(seg.text) + '</td>';
                         }
                         ci += seg.colSpan;
                     } else {
@@ -4455,7 +4472,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
                     if (isCur) cls += ' cell-current';
                     if (isPast) cls += ' cell-past';
-                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + escHtml(txt) + '</td>';
+                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + pcCellHtml(txt) + '</td>';
                     ci = nextCi;
                 } else {
                     var emptyLeague = pcLeagueInfoAt(divName, cStart);
@@ -4473,7 +4490,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                         }
                         var lTxt = pcLeagueCellText(emptyLeague.label, _currentTemplate.hideLeagueMatchups ? [] : emptyLeague.matchups);
                         var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
-                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + pcCellHtml(lTxt) + '</td>';
                         ci = lnext;
                     } else {
                         html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">—</td>';
@@ -4502,7 +4519,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                 var lcls = 'cell-league';
                 if (isCurrent) lcls += ' cell-current';
                 if (isPast) lcls += ' cell-past';
-                html += '<td colspan="' + bunks.length + '" class="' + lcls + '" style="text-align:center;white-space:pre-line;word-break:break-word;"><strong>' + escHtml(leagueText) + '</strong></td>';
+                html += '<td colspan="' + bunks.length + '" class="' + lcls + '" style="text-align:center;white-space:pre-line;word-break:break-word;">' + pcCellHtml(leagueText) + '</td>';
                 html += '</tr>';
                 return;
             }
@@ -4523,7 +4540,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                 var mCls = 'cell-' + perBunk[0].type + ' cell-merged';
                 if (isCurrent) mCls += ' cell-current';
                 if (isPast) mCls += ' cell-past';
-                html += '<td colspan="' + bunks.length + '" class="' + mCls + '" style="text-align:center;white-space:pre-line;word-break:break-word;">' + escHtml(perBunk[0].text) + '</td>';
+                html += '<td colspan="' + bunks.length + '" class="' + mCls + '" style="text-align:center;white-space:pre-line;word-break:break-word;">' + pcCellHtml(perBunk[0].text) + '</td>';
             } else {
                 perBunk.forEach(function (p, bi) {
                     var bunk = bunks[bi];
@@ -4701,7 +4718,7 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
             var isPast = nowMin >= cell.e;
             var cls = cell.cls + (isCur ? ' cell-current' : '') + (isPast ? ' cell-past' : '');
             html += '<td' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
-                ' class="' + cls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + escHtml(cell.text) + '</td>';
+                ' class="' + cls + '" style="text-align:center;font-size:1em;line-height:1.15;padding:6px 6px;white-space:pre-line;word-break:break-word;">' + pcCellHtml(cell.text) + '</td>';
         }
         html += '</tr>';
     });
