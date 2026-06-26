@@ -388,7 +388,11 @@
                         matchups:  matchups,
                         gameLabel: gameLabel,
                         leagueName: leagueName,
-                        sport:     sport
+                        sport:     sport,
+                        // ★ For the post-edit field-change modal: where this game
+                        //   lives (leagueAssignments key) + whether it's a specialty.
+                        slotIdx:   idx,
+                        isSpecialty: !!(a._isSpecialtyLeague || (entry && (entry.isSpecialtyLeague || entry._isSpecialtyLeague)))
                     });
                 }
             });
@@ -432,6 +436,25 @@
         var parts = text.split(' — ');
         if (parts.length >= 2) return { teams: parts[0].trim(), sport: parts[1].trim(), field: parts[2] ? parts[2].trim() : '' };
         return { teams: text, sport: fallbackSport || '', field: '' };
+    }
+
+    // Make a league/specialty matchup card clickable → opens the post-edit
+    // field-change modal for THAT game. No-op when the grid is read-only, the
+    // matchup has no field (bye/chinuch), or the module isn't loaded.
+    function attachFieldChange(card, ls, raw, divName, isEditable) {
+        var PEFC = window.PostEditFieldChange;
+        if (!isEditable || !PEFC || ls.slotIdx == null) return;
+        var seed = PEFC.normalizeGame(raw, ls.sport, ls.isSpecialty);
+        if (!PEFC.isEditableMatchup(seed)) return; // skip bye / chinuch / unknown
+        card.style.cursor = 'pointer';
+        card.title = 'Click to change this game\'s field';
+        card.addEventListener('click', function (e) {
+            e.stopPropagation();
+            PEFC.openGame(divName, ls.slotIdx, seed, {
+                _startMin: ls.startMin, _endMin: ls.endMin, _allMatchups: ls.matchups,
+                sport: ls.sport, _leagueName: ls.leagueName, _isSpecialtyLeague: ls.isSpecialty
+            });
+        });
     }
 
     // ─────────────────────────────────────────────
@@ -1045,6 +1068,7 @@
                     card.className = 'asg-tx-matchup-card';
                     card.innerHTML = '<div class="asg-tx-matchup-teams">' + esc(mu.teams) + '</div>'
                         + (mu.sport ? '<div class="asg-tx-matchup-sub">' + esc(mu.sport) + (mu.field ? ' • ' + esc(mu.field) : '') + '</div>' : (mu.field ? '<div class="asg-tx-matchup-sub">' + esc(mu.field) + '</div>' : ''));
+                    attachFieldChange(card, ls, raw, divName, isEditable);
                     muList.appendChild(card);
                 });
             }
@@ -1623,6 +1647,7 @@
                     }
 
                     card.appendChild(body);
+                    attachFieldChange(card, ls, raw, divName, isEditable);
                     muGrid.appendChild(card);
                 });
             }
