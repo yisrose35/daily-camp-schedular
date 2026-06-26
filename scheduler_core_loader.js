@@ -413,6 +413,13 @@
         // Map field.activities
         fields.forEach(f => {
             if (!f?.activities) return;
+            // ★ Config-level shut-off: a field toggled UNAVAILABLE in Facilities
+            //   (available:false) must not appear in fieldsBySport. This map feeds
+            //   loadAndFilterData(), which the total solver's second candidate loop
+            //   (total_solver_engine buildAllCandidateOptions) and the fillers read —
+            //   so an unfiltered entry re-introduced disabled fields as sport
+            //   candidates even after the masterFields filter.
+            if (f.available === false) return;
             f.activities.forEach(sport => {
                 if (!map[sport]) map[sport] = [];
                 map[sport].push(f.name);

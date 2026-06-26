@@ -2746,6 +2746,13 @@
 
             fields.forEach(field => {
                 if (disabled.includes(field.name)) return;
+                // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities
+                //   (available:false). `disabled` above is only the per-date Resource
+                //   disable; without this gate the ledger kept a full entry for a
+                //   permanently-disabled field, and every ledger-driven placement
+                //   path (deficit-window filler, simultaneous solver, bunk-override,
+                //   supply calc) happily put sports on it.
+                if (field.available === false) return;
                 const props = activityProperties[field.name] || {};
                 const timeRules = [];
                 const unavailableRules = [];
