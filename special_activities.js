@@ -2982,9 +2982,17 @@ window.getAllSpecialActivities = function() {
         // array. That made every special temporarily disappear (and let
         // saveGlobalSpecialActivities clobber the populated copy on the
         // next save). Pick the first source that actually has entries.
-        const _topArr=Array.isArray(settings.specialActivities)?settings.specialActivities:null;
-        const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:null;
-        const allActivities=(_topArr&&_topArr.length>0)?_topArr:((_app1Arr&&_app1Arr.length>0)?_app1Arr:[]);
+        const _topArr=Array.isArray(settings.specialActivities)?settings.specialActivities:[];
+        const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:[];
+        // ★ UNION both stores (matching loadData), then collapse case-variant
+        //   duplicates. The old code picked ONE store; when the two drifted in
+        //   casing, facilities.js (which reads this) couldn't match by exact name
+        //   and reconstructed a phantom "Sushi"/"sushi" — the source of the
+        //   duplicate-special access leak. Prefer the restricted/real row.
+        const _unioned=[..._app1Arr,..._topArr];
+        const allActivities=window.dedupeSpecialsByName
+            ?window.dedupeSpecialsByName(_unioned)
+            :(()=>{const m=new Map();_unioned.forEach(a=>{if(a&&a.name){const k=String(a.name).trim().toLowerCase();if(!m.has(k))m.set(k,a);}});return[...m.values()];})();
         if(allActivities.length>0){
             // ★ Same tombstone filter as loadData — a deleted special must not
             //   resurrect through this fallback loader either.

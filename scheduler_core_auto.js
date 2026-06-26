@@ -127,9 +127,21 @@
         const fromApp1   = (gs && gs.app1 && gs.app1.specialActivities) || [];
         const fromGlobal = window.getGlobalSpecialActivities ? window.getGlobalSpecialActivities() : [];
         const fromGetAll = window.getAllSpecialActivities   ? window.getAllSpecialActivities()   : [];
+        // ★ Key case-INSENSITIVELY so a casing-drift duplicate ("Sushi"/"sushi")
+        //   collapses to one entry — otherwise the scheduler treats the two as
+        //   separate placeable specials and the unrestricted phantom copy could
+        //   be scheduled past the user's access restriction. Last-write-wins
+        //   preserves the app1 priority, EXCEPT an unrestricted copy never
+        //   overwrites one that carries an enabled access restriction.
         const merged = new Map();
         [...fromGetAll, ...fromGlobal, ...fromApp1].forEach(function(s) {
-            if (s && s.name) merged.set(s.name, s);
+            if (!s || !s.name) return;
+            const k = String(s.name).toLowerCase().trim();
+            const ex = merged.get(k);
+            if (!ex) { merged.set(k, s); return; }
+            const exR = !!(ex.accessRestrictions && ex.accessRestrictions.enabled);
+            const sR  = !!(s.accessRestrictions  && s.accessRestrictions.enabled);
+            if (sR || !exR) merged.set(k, s);
         });
         // ★ Day 19: 'not_sharable' means exactly 1 bunk at a time (matches the UI's
         // "1 bunk at a time" display). Existing configs carry a stale capacity:2
