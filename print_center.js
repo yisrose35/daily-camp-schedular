@@ -5483,7 +5483,12 @@ function updateLivePageIndicator() {
         ind.style.display = 'flex';
         var dots = '';
         for (var i = 0; i < _numLivePages; i++) {
-            dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? 'var(--lv-accent,#fbbf24)' : 'var(--lv-dot-idle,rgba(255,255,255,.3))') + ';transition:background .3s;"></span>';
+            var on = i === _livePageIndex;
+            // Idle dots use the header text color (always visible on the header in
+            // every theme); the active dot pops in the accent color. --lv-dot-idle
+            // was black-on-black in High Contrast, so it's no longer used here.
+            dots += '<span style="width:' + (on ? 13 : 11) + 'px;height:' + (on ? 13 : 11) + 'px;border-radius:50%;display:inline-block;background:' +
+                (on ? 'var(--lv-accent,#fbbf24)' : 'var(--lv-clock,#e2e8f0)') + ';opacity:' + (on ? '1' : '.45') + ';transition:all .3s;"></span>';
         }
         ind.innerHTML =
             '<button class="pc3-live-nav-btn" title="Previous page" onclick="livePageNav(-1)">&#8249;</button>' +
