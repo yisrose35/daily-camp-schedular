@@ -5001,7 +5001,7 @@ function buildLiveUnifiedSectionHTML(parentLabel, grades, nowMin) {
         var rowCur = nowMin >= r.startMin && nowMin < r.endMin;
         var rowPast = nowMin >= r.endMin;
         html += '<tr>';
-        html += '<th class="row-head' + (rowCur ? ' cell-current' : '') + (rowPast ? ' cell-past' : '') + '">' + minutesToTimeLabel(r.startMin) + '</th>';
+        html += '<th class="row-head' + (rowCur ? ' cell-current' : '') + (rowPast ? ' cell-past' : '') + '">' + escHtml(minutesToTimeLabel(r.startMin) + ' – ' + minutesToTimeLabel(r.endMin)) + '</th>';
         for (var ci = 0; ci < nC; ci++) {
             if (done[kk(ri, ci)]) continue;
             var cell = grid[ri][ci];
