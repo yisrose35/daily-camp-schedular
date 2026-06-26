@@ -197,6 +197,19 @@
             ? allDaily[dateKey].divisionTimes
             : (window.divisionTimes || {});
         const items = [];
+        // Dedupe reserved-field usages: a pinned tile fills every bunk in the division
+        // with the SAME field reservation, so without this we'd push N identical bars.
+        const _reservedSeen = new Set();
+        // Set of REAL configured field names. Used to tell a normal sport/special
+        // (entry.field IS a real field → trust it) apart from an event-name placeholder
+        // tile (entry.field is the tile's NAME, e.g. "Signup leagues"/"AVL" → the real
+        // fields live on _reservedFields). We only expand reserved fields for the latter,
+        // so a normal sport that happens to carry a stray candidate field isn't given a
+        // phantom second booking.
+        const _realFieldSet = new Set(
+            ((window.loadGlobalSettings?.() || {}).app1?.fields || [])
+                .map(f => (f && f.name ? String(f.name).trim().toLowerCase() : '')).filter(Boolean)
+        );
 
         Object.entries(assignments).forEach(([bunk, schedule]) => {
             if (!Array.isArray(schedule)) return;
@@ -247,6 +260,35 @@
                 const hasField = fName && fName !== 'Free' && fName !== 'No Field';
 
                 items.push({ bunk, division: divName, field: hasField ? fName : null, activity, startMin, endMin, isSpecial: isSpecialByName(activity) });
+
+                // ★ Custom pinned tiles (and Swim+Elective blocks) RESERVE real fields,
+                //   but store them on _reservedFields/_location while entry.field holds
+                //   the tile's event NAME. The push above therefore credits usage to the
+                //   event name (which isn't a real field), leaving the actual reserved
+                //   field looking FREE in the availability report. Surface every reserved
+                //   field as its own "taken" usage so the report marks it occupied.
+                //   Gate: only when entry.field is NOT itself a real configured field —
+                //   a normal sport/special already credits its real field above, and may
+                //   carry stray candidate fields we must NOT mark as booked.
+                const _fieldIsReal = hasField && _realFieldSet.size > 0 && _realFieldSet.has(fName.trim().toLowerCase());
+                if (!_fieldIsReal) {
+                    const _resvSrc = [];
+                    const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
+                    if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
+                    if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
+                    if (typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
+                    _resvSrc.forEach(raw => {
+                        let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
+                        if (n.includes(' – ')) n = n.split(' – ')[0].trim();
+                        else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
+                        if (!n || n === 'Free' || n === 'No Field') return;
+                        if (fName && n.toLowerCase() === fName.toLowerCase()) return; // already credited above
+                        const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
+                        if (_reservedSeen.has(k)) return;
+                        _reservedSeen.add(k);
+                        items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
+                    });
+                }
             });
         });
 
