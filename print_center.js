@@ -512,8 +512,13 @@ var LIVE_CUSTOM_FIELDS = [
     { key: 'accent',   label: 'Accent (titles, date, dots)', vars: ['--lv-accent', '--lv-date', '--lv-banner-border'] },
     { key: 'gradehdr', label: 'Column headers',    vars: ['--lv-th-bg', '--lv-uni-grade-bg', '--lv-uni-bunk-bg'] },
     { key: 'gradetxt', label: 'Header label text', vars: ['--lv-th-text', '--lv-rowhead-text', '--lv-uni-grade-text', '--lv-uni-bunk-text'] },
-    { key: 'cellbg',   label: 'Activity cells',    vars: ['--lv-cell-bg', '--lv-cell-bg-alt'] },
-    { key: 'celltext', label: 'Activity text',     vars: ['--lv-cell-text'] },
+    { key: 'cellbg',   label: 'Sport / activity cells', vars: ['--lv-cell-bg', '--lv-cell-bg-alt'] },
+    { key: 'celltext', label: 'Sport / activity text',  vars: ['--lv-cell-text'] },
+    { key: 'leaguebg', label: 'League cells',       vars: ['--lv-league-bg'] },
+    { key: 'leaguetxt',label: 'League text',        vars: ['--lv-league-text'] },
+    { key: 'pinnedbg', label: 'Special cells',      vars: ['--lv-pinned-bg'] },
+    { key: 'pinnedtxt',label: 'Special text',       vars: ['--lv-pinned-text'] },
+    { key: 'freebg',   label: 'Free / empty cells', vars: ['--lv-free-bg'] },
     { key: 'now',      label: 'Happening-now',     vars: ['--lv-current-bg', '--lv-curcol-bg'] }
 ];
 
@@ -1947,11 +1952,11 @@ function getStyles() {
     '.pc3-live-tbl .cell-pinned{background:var(--lv-pinned-bg) !important;color:var(--lv-pinned-text) !important;font-weight:700;}' +
     '.pc3-live-tbl .cell-league{background:var(--lv-league-bg) !important;color:var(--lv-league-text) !important;font-weight:700;}' +
     /* Matchup / multi-line cell grid: each line its own bordered row. */
-    '.pc3-live-tbl td .pc3-mu{display:block;padding:4px 6px;border-bottom:1px solid var(--lv-cell-border);line-height:1.2;}' +
+    '.pc3-live-tbl td .pc3-mu{display:block;padding:4px 6px;border-bottom:2px solid currentColor;line-height:1.2;}' +
     '.pc3-live-tbl td .pc3-mu:first-child{padding-top:0;}' +
     '.pc3-live-tbl td .pc3-mu:last-child{border-bottom:none;padding-bottom:0;}' +
     '.pc3-live-tbl td .pc3-mu-head{font-weight:800;}' +
-    '.pc3-live-bw .pc3-mu{border-bottom:1px solid #000 !important;}' +
+    '.pc3-live-bw .pc3-mu{border-bottom:2px solid #000 !important;}' +
     /* Black-and-white override — applied only while capturing the live view for
        Print / Download so the output looks like an Excel printout (white cells,
        black borders, black text). The on-screen kiosk stays dark. */
