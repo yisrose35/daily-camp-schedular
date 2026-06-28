@@ -736,11 +736,34 @@
     }
 
     // =========================================================================
+    // FIELD QUALITY — prefer the better-ranked field in a group
+    // =========================================================================
+    // Builds a {fieldName: qualityRank} map (lower rank = better field). Used to
+    // bias league field selection toward the best field in each quality group, so
+    // a league claims rank-1 before rank-2, etc. The bonus is kept BELOW the
+    // sport-variety swing (±500) so it orders fields without flipping which SPORT a
+    // matchup gets. Ungrouped fields get no bonus.
+    function _buildFieldQualityRankMap() {
+        const m = {};
+        try {
+            const flds = ((window.loadGlobalSettings && window.loadGlobalSettings().app1) || {}).fields || [];
+            flds.forEach(f => { if (f && f.name && f.fieldGroup && f.qualityRank) m[f.name] = parseInt(f.qualityRank) || 999; });
+        } catch (_e) {}
+        return m;
+    }
+    function _fieldQualityBonus(rankMap, fieldName) {
+        const r = rankMap[fieldName];
+        if (r == null) return 0;                 // ungrouped → neutral
+        return Math.max(0, 200 - r * 12);        // rank 1 ≈ +188 … rank 15 ≈ +20
+    }
+
+    // =========================================================================
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
     function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
+        const _fqRank = _buildFieldQualityRankMap();
         const usedFields = new Set();
         const usedSportsThisSlot = {};
 
@@ -812,6 +835,9 @@
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
+                // ★ FIELD QUALITY: prefer the better-ranked field in its group
+                score += _fieldQualityBonus(_fqRank, option.field);
+
                 score += Math.random() * 10;
 
                 if (score > bestScore) {
@@ -848,6 +874,7 @@
     function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
         const usedFields = new Set();
+        const _fqRank = _buildFieldQualityRankMap();
 
         // Sort matchups by how many times they've played (least played first)
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
@@ -904,6 +931,9 @@
 
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
+
+                // ★ FIELD QUALITY: prefer the better-ranked field in its group
+                score += _fieldQualityBonus(_fqRank, option.field);
 
                 // Random factor for variety
                 score += Math.random() * 20;
@@ -1584,7 +1614,28 @@
                 return true;
             });
 
-            console.log(`   Applicable leagues: [${applicableLeagues.map(l => l.name).join(', ')}]`);
+            // ★ FIELD QUALITY: process leagues in DIVISION-SENIORITY order (most
+            //   senior first). Each league assigns + globally LOCKS its fields before
+            //   the next runs, so the senior division's league claims the best-ranked
+            //   fields in each sport group first — and because leagues lock before the
+            //   solver/smart-tiles, it beats junior regular activities too. Seniority
+            //   per league = the most senior division it serves (index 0 = oldest in
+            //   getDivisionAgeOrder). No-op if the helper is unavailable.
+            try {
+                const _ageOrder = (typeof window.getDivisionAgeOrder === 'function')
+                    ? window.getDivisionAgeOrder(Object.keys(window.divisions || {})) : [];
+                if (_ageOrder.length) {
+                    const _senIdx = {}; _ageOrder.forEach((n, i) => { _senIdx[n] = i; });
+                    const _leagueSen = l => {
+                        let best = Infinity;
+                        (l.divisions || []).forEach(d => { const v = _senIdx[d]; if (v != null && v < best) best = v; });
+                        return best;
+                    };
+                    applicableLeagues.sort((a, b) => _leagueSen(a) - _leagueSen(b));
+                }
+            } catch (_eSen) {}
+
+            console.log(`   Applicable leagues (senior→junior): [${applicableLeagues.map(l => l.name).join(', ')}]`);
             if (specifiedLeagueNames.size > 0) {
                 console.log(`   ★ Filtered by block leagueName: [${[...specifiedLeagueNames].join(', ')}]`);
             }
