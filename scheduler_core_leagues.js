@@ -381,6 +381,28 @@
         history.teamSports[key].push(sport);
     }
 
+    // ★ Date-ordered sport history from the date-keyed gameLog, restricted to
+    // dates strictly BEFORE `beforeDate`. The flat teamSports array is appended
+    // in GENERATION order, so when an older/middle date is regenerated while later
+    // dates already exist, its tail is a FUTURE date — which corrupts the
+    // "most-recent sport" and "stuck streak" signals (observed live: regenerating
+    // a middle date made the engine read future dates as "recent"). gameLog is
+    // keyed by calendar date, so this returns the true through-yesterday history
+    // regardless of generation order. Falls back to the flat array only when the
+    // league has no gameLog at all (legacy data).
+    function getTeamSportHistoryByDate(leagueName, team, history, beforeDate) {
+        const gl = history.gameLog && history.gameLog[leagueName];
+        if (!gl) return getTeamSportHistory(leagueName, team, history);
+        const out = [];
+        Object.keys(gl).sort().forEach(function (d) {
+            if (beforeDate && d >= beforeDate) return;
+            (gl[d] || []).forEach(function (e) {
+                if (e && e.sport && (e.t1 === team || e.t2 === team)) out.push(e.sport);
+            });
+        });
+        return out;
+    }
+
     // =========================================================================
     // MATCHUP HISTORY TRACKING (for matchup_variety mode)
     // =========================================================================
@@ -527,7 +549,7 @@
         return out;
     }
 
-    function choosePairingsForSportVariety(activeTeams, availablePool, leagueName, history, fallbackMatchups) {
+    function choosePairingsForSportVariety(activeTeams, availablePool, leagueName, history, fallbackMatchups, dayId) {
         try {
             if (!Array.isArray(activeTeams) || activeTeams.length < 2 || activeTeams.length > 12) return fallbackMatchups;
             if (!Array.isArray(availablePool) || availablePool.length === 0) return fallbackMatchups;
@@ -535,7 +557,7 @@
             if (matchings.length <= 1) return fallbackMatchups;
 
             const histSets = {};
-            activeTeams.forEach(function (t) { histSets[t] = new Set(getTeamSportHistory(leagueName, t, history)); });
+            activeTeams.forEach(function (t) { histSets[t] = new Set(getTeamSportHistoryByDate(leagueName, t, history, dayId)); });
 
             // Score each matching: fresh = how many team-slots can receive a
             // sport that team hasn't played (per pair, the best single option:
@@ -791,14 +813,16 @@
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps) {
+    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId) {
         const assignments = [];
         const _fqRank = _buildFieldQualityRankMap();
         const usedFields = new Set();
         const usedSportsThisSlot = {};
+        // ★ Date-correct history (robust to regeneration order) — see getTeamSportHistoryByDate.
+        const _teamHist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
 
         function getTeamSportNeed(team, sport) {
-            const teamHistory = getTeamSportHistory(leagueName, team, history);
+            const teamHistory = _teamHist(team);
             const sportCount = teamHistory.filter(s => s === sport).length;
 
             if (sportCount === 0) return 1000;
@@ -811,8 +835,8 @@
         const _indoorReq = leagueRules && leagueRules.indoorRequirement;
         const _indoorCounts = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
-            const h1 = getTeamSportHistory(leagueName, t1, history);
-            const h2 = getTeamSportHistory(leagueName, t2, history);
+            const h1 = _teamHist(t1);
+            const h2 = _teamHist(t2);
             const uniqueSports1 = new Set(h1).size;
             const uniqueSports2 = new Set(h2).size;
             const ic1 = _indoorCounts[t1] || 0;
@@ -877,8 +901,8 @@
                 // need flattens (80/60/40…) and the field-quality bonus (up to
                 // +188) could otherwise pin a team to the best field's sport.
                 // Explicitly forbid repeating a team's most-recent sport.
-                const _svH1 = getTeamSportHistory(leagueName, t1, history);
-                const _svH2 = getTeamSportHistory(leagueName, t2, history);
+                const _svH1 = _teamHist(t1);
+                const _svH2 = _teamHist(t2);
                 const _svR1 = _svH1.length && _svH1[_svH1.length - 1] === option.sport ? 1 : 0;
                 const _svR2 = _svH2.length && _svH2[_svH2.length - 1] === option.sport ? 1 : 0;
                 score -= (_svR1 + _svR2) * 1500;
@@ -930,18 +954,20 @@
     // SMART ASSIGNMENT ALGORITHM - MATCHUP VARIETY MODE
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps) {
+    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId) {
         const assignments = [];
         const usedFields = new Set();
         const usedSportsThisSlot = {};
         const _fqRank = _buildFieldQualityRankMap();
+        // ★ Date-correct history (robust to regeneration order) — see getTeamSportHistoryByDate.
+        const _teamHist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
 
         // Sort matchups by how many times they've played (least played first)
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
         const _indoorCountsMV = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
-            const h1 = getTeamSportHistory(leagueName, t1, history);
-            const h2 = getTeamSportHistory(leagueName, t2, history);
+            const h1 = _teamHist(t1);
+            const h2 = _teamHist(t2);
             const matchupCount = getMatchupCount(leagueName, t1, t2, history);
             const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
             return {
@@ -1009,8 +1035,8 @@
                 // whatever sport sat on the best-ranked field (observed live:
                 // hockey 3 days in a row). Use the same magnitudes as
                 // sport_variety so per-team rotation actually wins.
-                const h1 = getTeamSportHistory(leagueName, t1, history);
-                const h2 = getTeamSportHistory(leagueName, t2, history);
+                const h1 = _teamHist(t1);
+                const h2 = _teamHist(t2);
                 const sportCount1 = h1.filter(s => s === option.sport).length;
                 const sportCount2 = h2.filter(s => s === option.sport).length;
 
@@ -1068,15 +1094,15 @@
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules, sportCaps) {
+    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules, sportCaps, dayId) {
         const mode = schedulingPriority || 'sport_variety';
 
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
         if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps);
+            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
         } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps);
+            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
         }
     }
 
@@ -2037,7 +2063,7 @@
                     // sports this matches round-robin behavior).
                     const _prioMode = league.schedulingPriority || 'sport_variety';
                     if (_prioMode === 'sport_variety') {
-                        matchups = choosePairingsForSportVariety(activeTeams, availablePool, league.name, history, _rrMatchups);
+                        matchups = choosePairingsForSportVariety(activeTeams, availablePool, league.name, history, _rrMatchups, dayId);
                     } else {
                         matchups = _rrMatchups;
                     }
@@ -2189,7 +2215,8 @@
                             indoorRequirement: league.indoorRequirement,
                             indoorCounts: indoorCountsByLeague[league.name]
                         },
-                        _sportCapsByLeague[league.name] || null
+                        _sportCapsByLeague[league.name] || null,
+                        dayId
                     );
                 }
 
