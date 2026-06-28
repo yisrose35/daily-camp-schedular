@@ -778,7 +778,7 @@
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
+    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps) {
         const assignments = [];
         const _fqRank = _buildFieldQualityRankMap();
         const usedFields = new Set();
@@ -831,6 +831,18 @@
                 const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
                 if (_freshPool.length > 0) _pool = _freshPool;
                 else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
+            }
+
+            // ★ FAIR-SHARE CAP: prefer sports this league hasn't used up its per-slot
+            // share of, so it leaves scarce fields for the other grades playing at the
+            // same time. Falls back to the full pool when every remaining option is at
+            // cap (a matchup is never dropped for fairness).
+            if (sportCaps) {
+                const _underCap = _pool.filter(function (o) {
+                    const c = sportCaps[o.sport];
+                    return c == null || (usedSportsThisSlot[o.sport] || 0) < c;
+                });
+                if (_underCap.length > 0) _pool = _underCap;
             }
 
             for (const option of _pool) {
@@ -898,9 +910,10 @@
     // SMART ASSIGNMENT ALGORITHM - MATCHUP VARIETY MODE
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
+    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps) {
         const assignments = [];
         const usedFields = new Set();
+        const usedSportsThisSlot = {};
         const _fqRank = _buildFieldQualityRankMap();
 
         // Sort matchups by how many times they've played (least played first)
@@ -941,6 +954,17 @@
                 const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
                 if (_freshPool.length > 0) _pool = _freshPool;
                 else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
+            }
+
+            // ★ FAIR-SHARE CAP: same as SportVariety — don't let this league claim
+            // more than its share of a scarce sport's fields, leaving the rest for the
+            // other grades. Soft: falls back to the full pool if all options are capped.
+            if (sportCaps) {
+                const _underCap = _pool.filter(function (o) {
+                    const c = sportCaps[o.sport];
+                    return c == null || (usedSportsThisSlot[o.sport] || 0) < c;
+                });
+                if (_underCap.length > 0) _pool = _underCap;
             }
 
             for (const option of _pool) {
@@ -1000,6 +1024,7 @@
                 });
 
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
+                usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
                 console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
@@ -1014,15 +1039,15 @@
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules) {
+    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules, sportCaps) {
         const mode = schedulingPriority || 'sport_variety';
 
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
         if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
+            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps);
         } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
+            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps);
         }
     }
 
@@ -1686,6 +1711,66 @@
                 console.log(`   ★ Filtered by block leagueName: [${[...specifiedLeagueNames].join(', ')}]`);
             }
 
+            // ★★★ FAIR-SHARE SPORT CAPS — stop a senior league from hogging the scarce
+            // fields from the other grades playing leagues at this same time. Leagues are
+            // processed in seniority order and each LOCKS its fields before the next runs,
+            // so without this the most-senior league grabs every baseball/hockey/football
+            // field and the juniors inherit only the plentiful sport (e.g. basketball).
+            // We bound each league's claim on a sport to its share of that sport's fields,
+            // weighted by its game count: abundant sports get a high (non-binding) cap,
+            // scarce sports get a low one. The assigner treats the cap as a soft
+            // preference with a fallback, so a matchup is never left unscheduled. No-op
+            // when only one league plays this slot (no contention to be fair about).
+            const _sportCapsByLeague = (function () {
+                try {
+                    const _here = applicableLeagues.filter(l => !(offCampusScheduled[l.name] && offCampusScheduled[l.name].handled));
+                    if (_here.length <= 1) return {};   // no contention → nothing to share
+                    const _allSports = new Set();
+                    _here.forEach(l => (l.sports || ['General Sport']).forEach(s => _allSports.add(s)));
+                    // Field inventory per sport for this slot (before any league locks).
+                    const _pool = buildAvailableFieldSportPool([..._allSports], context, divisionsAtTime, timeKey, slots, sampleBlock && sampleBlock.endTime);
+                    const _fieldsBySport = {}, _seen = {};
+                    _pool.forEach(p => {
+                        _seen[p.sport] = _seen[p.sport] || new Set();
+                        if (!_seen[p.sport].has(p.field)) { _seen[p.sport].add(p.field); _fieldsBySport[p.sport] = (_fieldsBySport[p.sport] || 0) + 1; }
+                    });
+                    const _games = {};
+                    _here.forEach(l => { _games[l.name] = Math.max(1, Math.floor((l.teams || []).length / 2)); });
+                    // Date seed → rotates who wins a tie for the "extra" scarce field, so no
+                    // league is permanently the one that loses out on an odd leftover field.
+                    let _seed = 0; const _ds = String(dayId || '');
+                    for (let i = 0; i < _ds.length; i++) _seed = (_seed * 31 + _ds.charCodeAt(i)) & 0x7fffffff;
+
+                    const _caps = {}; _here.forEach(l => { _caps[l.name] = {}; });
+                    _allSports.forEach(sport => {
+                        const fc = _fieldsBySport[sport] || 0;
+                        if (fc <= 0) return;
+                        const parts = _here.filter(l => (l.sports || []).includes(sport));
+                        const totalW = parts.reduce((s, l) => s + _games[l.name], 0) || 1;
+                        // Largest-remainder apportionment of this sport's fc fields across the
+                        // leagues that play it, weighted by game count. floor() gives the base
+                        // share; the leftover field(s) go to the largest fractional shares —
+                        // this is what guarantees a junior league its slice of a 2-field sport
+                        // instead of the senior taking both.
+                        const rows = parts.map((l, idx) => {
+                            const exact = fc * _games[l.name] / totalW;
+                            const base = Math.floor(exact);
+                            return { name: l.name, base, frac: exact - base, idx };
+                        });
+                        let rem = fc - rows.reduce((s, r) => s + r.base, 0);
+                        rows.sort((a, b) => (b.frac - a.frac)
+                            || (((a.idx + _seed) % rows.length) - ((b.idx + _seed) % rows.length)));
+                        for (let i = 0; i < rows.length; i++) rows[i].base += (i < rem ? 1 : 0);
+                        rows.forEach(r => { _caps[r.name][sport] = r.base; });
+                    });
+                    console.log('   ⚖️ Fair-share sport caps: ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
+                    return _caps;
+                } catch (_e) {
+                    console.warn('[RegularLeagues] fair-share cap computation failed (continuing uncapped):', _e);
+                    return {};
+                }
+            })();
+
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
                 processedLeagues.add(league.name);
@@ -2074,7 +2159,8 @@
                         {
                             indoorRequirement: league.indoorRequirement,
                             indoorCounts: indoorCountsByLeague[league.name]
-                        }
+                        },
+                        _sportCapsByLeague[league.name] || null
                     );
                 }
 
