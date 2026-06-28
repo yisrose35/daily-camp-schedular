@@ -422,7 +422,7 @@ var LIVE_THEMES = [
             '--lv-close-border': 'rgba(255,255,255,.22)', '--lv-close-bg': 'rgba(255,255,255,.10)',
             '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.2)',
             '--lv-loading': '#94a3b8', '--lv-nav': 'rgba(255,255,255,.6)', '--lv-nav-hover': '#fbbf24',
-            '--lv-accent': '#fbbf24', '--lv-divrange': '#8aa0bd', '--lv-cell-border': '#56708f',
+            '--lv-accent': '#fbbf24', '--lv-divrange': '#8aa0bd', '--lv-cell-border': '#7d97bb',
             '--lv-th-bg': '#16233e', '--lv-th-text': '#f8fafc', '--lv-rowhead-text': '#aab8cc',
             '--lv-cell-bg': '#1c2a46', '--lv-cell-bg-alt': '#16223a', '--lv-cell-text': '#f1f5f9',
             '--lv-free-bg': '#131f33', '--lv-free-text': '#42536c',
@@ -447,7 +447,7 @@ var LIVE_THEMES = [
             '--lv-close-border': 'rgba(15,23,42,.18)', '--lv-close-bg': 'rgba(15,23,42,.05)',
             '--lv-close-text': '#0f172a', '--lv-close-bg-hover': 'rgba(15,23,42,.12)',
             '--lv-loading': '#64748b', '--lv-nav': 'rgba(15,23,42,.45)', '--lv-nav-hover': '#0e7490',
-            '--lv-accent': '#0f6e80', '--lv-divrange': '#64748b', '--lv-cell-border': '#64748b',
+            '--lv-accent': '#0f6e80', '--lv-divrange': '#64748b', '--lv-cell-border': '#0f172a',
             '--lv-th-bg': '#e2e8f0', '--lv-th-text': '#0f172a', '--lv-rowhead-text': '#475569',
             '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f8fafc', '--lv-cell-text': '#1e293b',
             '--lv-free-bg': '#f1f5f9', '--lv-free-text': '#94a3b8',
@@ -472,7 +472,7 @@ var LIVE_THEMES = [
             '--lv-close-border': 'rgba(255,255,255,.3)', '--lv-close-bg': 'rgba(255,255,255,.14)',
             '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.26)',
             '--lv-loading': '#0f6e80', '--lv-nav': 'rgba(15,95,110,.5)', '--lv-nav-hover': '#0F5F6E',
-            '--lv-accent': '#0F5F6E', '--lv-divrange': '#5b8a93', '--lv-cell-border': '#0f6e80',
+            '--lv-accent': '#0F5F6E', '--lv-divrange': '#5b8a93', '--lv-cell-border': '#0a2c33',
             '--lv-th-bg': '#cdeef3', '--lv-th-text': '#0F5F6E', '--lv-rowhead-text': '#0f6e80',
             '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f3fcfd', '--lv-cell-text': '#134e57',
             '--lv-free-bg': '#ecfeff', '--lv-free-text': '#93b8bf',
@@ -1824,13 +1824,13 @@ function getStyles() {
 
     /* ── Schedule Table — Excel look ── */
     '.pc3-tbl{border-collapse:collapse;border-spacing:0;width:100%;table-layout:auto;user-select:none;font-family:Calibri,"Segoe UI",Arial,sans-serif;}' +
-    '.pc3-tbl th,.pc3-tbl td{border:2px solid #1a1a1a;padding:5px 9px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;line-height:1.25;}' +
+    '.pc3-tbl th,.pc3-tbl td{border:4px solid #000;padding:5px 9px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;line-height:1.25;}' +
     /* Column headers (period / bunk names) — Excel gray header bar */
-    '.pc3-tbl th{background:#f2f2f2;color:#1f1f1f;font-weight:600;position:sticky;z-index:2;font-size:12px;text-transform:none;letter-spacing:0;border-color:#1a1a1a;}' +
+    '.pc3-tbl th{background:#f2f2f2;color:#1f1f1f;font-weight:600;position:sticky;z-index:2;font-size:12px;text-transform:none;letter-spacing:0;border-color:#000;}' +
     '.pc3-tbl thead th{top:0;}' +
     '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#e6e6e6;}' +
     /* Row header column (time / bunk) — Excel gray, like the row-number gutter */
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f2f2f2;color:#1f1f1f;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;border-color:#1a1a1a;}' +
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f2f2f2;color:#1f1f1f;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;border-color:#000;}' +
     /* Data cells — plain white, black text */
     '.pc3-tbl td{font-weight:400;color:#000;background:#fff;}' +
     /* Empty slots */
@@ -1845,7 +1845,7 @@ function getStyles() {
     '.pc3-bw, .pc3-bw .pc3-sheet, .pc3-bw .pc3-sheet-head{background:#fff !important;}' +
     '.pc3-bw .pc3-sheet-head{border-bottom:1px solid #000 !important;}' +
     '.pc3-bw .pc3-sheet-title, .pc3-bw .pc3-sheet-subtitle, .pc3-bw .pc3-sheet-badge{color:#000 !important;background:#fff !important;}' +
-    '.pc3-bw .pc3-tbl th, .pc3-bw .pc3-tbl td{background:#fff !important;color:#000 !important;border:2px solid #000 !important;box-shadow:none !important;}' +
+    '.pc3-bw .pc3-tbl th, .pc3-bw .pc3-tbl td{background:#fff !important;color:#000 !important;border:4px solid #000 !important;box-shadow:none !important;}' +
     '.pc3-bw .pc3-tbl .cell-free{color:#000 !important;}' +
 
     /* ── Excel-style coordinate headers (A B C / 1 2 3) ── */
@@ -1909,7 +1909,7 @@ function getStyles() {
         '--lv-title:#ffffff;--lv-date:#fcd34d;--lv-clock:#e2e8f0;' +
         '--lv-close-border:rgba(255,255,255,.22);--lv-close-bg:rgba(255,255,255,.10);--lv-close-text:#ffffff;--lv-close-bg-hover:rgba(255,255,255,.2);' +
         '--lv-loading:#94a3b8;--lv-nav:rgba(255,255,255,.6);--lv-nav-hover:#fbbf24;' +
-        '--lv-accent:#fbbf24;--lv-divrange:#8aa0bd;--lv-cell-border:#56708f;' +
+        '--lv-accent:#fbbf24;--lv-divrange:#8aa0bd;--lv-cell-border:#7d97bb;' +
         '--lv-th-bg:#16233e;--lv-th-text:#f8fafc;--lv-rowhead-text:#aab8cc;' +
         '--lv-cell-bg:#1c2a46;--lv-cell-bg-alt:#16223a;--lv-cell-text:#f1f5f9;' +
         '--lv-free-bg:#131f33;--lv-free-text:#42536c;' +
@@ -1961,7 +1961,7 @@ function getStyles() {
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:var(--lv-accent);letter-spacing:.2px;}' +
     '.pc3-live-divrange{font-size:14px;font-weight:600;color:var(--lv-divrange);font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;font-size:20px;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:2px solid var(--lv-cell-border);padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:4px solid var(--lv-cell-border);padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
     '.pc3-live-tbl th{background:var(--lv-th-bg);color:var(--lv-th-text);font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
     '.pc3-live-tbl th.row-head{color:var(--lv-rowhead-text);font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:pre-line;word-break:break-word;overflow:hidden;background:var(--lv-th-bg);font-variant-numeric:tabular-nums;}' +
@@ -1984,7 +1984,7 @@ function getStyles() {
        black borders, black text). The on-screen kiosk stays dark. */
     '.pc3-live-bw, .pc3-live-bw .pc3-live-page, .pc3-live-bw .pc3-live-page-inner, .pc3-live-bw .pc3-live-section{background:#fff !important;}' +
     '.pc3-live-bw .pc3-live-divname, .pc3-live-bw .pc3-live-divrange{color:#000 !important;}' +
-    '.pc3-live-bw .pc3-live-tbl th, .pc3-live-bw .pc3-live-tbl td{background:#fff !important;color:#000 !important;border:2px solid #000 !important;font-weight:600 !important;box-shadow:none !important;opacity:1 !important;}' +
+    '.pc3-live-bw .pc3-live-tbl th, .pc3-live-bw .pc3-live-tbl td{background:#fff !important;color:#000 !important;border:4px solid #000 !important;font-weight:600 !important;box-shadow:none !important;opacity:1 !important;}' +
     '.pc3-live-bw .pc3-live-tbl tr:nth-child(even) td{background:#fff !important;}' +
     '.pc3-live-bw .pc3-live-unified th.pc3-uni-grade, .pc3-live-bw .pc3-live-unified th.pc3-uni-bunk{background:#fff !important;color:#000 !important;border:1px solid #000 !important;}' +
 
