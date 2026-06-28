@@ -1068,16 +1068,9 @@ function renderSpecialConfig(container, fac) {
             if (sa) sa.name = newName;
             window.saveGlobalSpecialActivities?.(allSpecials);
 
-            // 3. Update references in schedules
-            const schedules = window.scheduleAssignments || {};
-            for (const bunk of Object.keys(schedules)) {
-                (schedules[bunk] || []).forEach(entry => {
-                    if (!entry) return;
-                    if (entry._activity === oldName) entry._activity = newName;
-                    if (entry.field === oldName) entry.field = newName;
-                    if (entry.sport === oldName) entry.sport = newName;
-                });
-            }
+            // 3. Update references across SAVED per-date schedules AND the live
+            //    grid — so the old name stops surfacing in the Rotation report.
+            renameActivityInSchedules(oldName, newName);
 
             // 4. Update references in zones
             const settings = window.loadGlobalSettings?.() || {};
@@ -1090,6 +1083,11 @@ function renderSpecialConfig(container, fac) {
             if (Object.keys(zones).length > 0) {
                 window.saveLocationZones?.(zones);
             }
+
+            // 5. Carry rotation counts/offsets/history to the new name (local +
+            //    cloud) so the renamed special keeps its history and the old
+            //    name disappears from the Rotation report.
+            migrateRotationCountsForRename(oldName, newName);
 
             saveData();
             renderDetailPane();
@@ -1338,6 +1336,12 @@ function renderGeneralConfig(container, fac) {
                     window.savePinnedTileDefaults?.(pinned);
                 }
                 ga.name = newName;
+                // Carry rotation counts/offsets/history to the new name (local +
+                // cloud), and rewrite saved/live schedule entries, so the renamed
+                // activity keeps its history and the old name disappears from the
+                // Rotation report.
+                migrateRotationCountsForRename(oldName, newName);
+                renameActivityInSchedules(oldName, newName);
                 saveData();
                 renderDetailPane();
             });
@@ -5070,6 +5074,136 @@ window.cleanupDeletedGeneral = cleanupDeletedGeneral;
 window.cleanupRotationTracking = cleanupRotationTracking;
 window.sweepOrphanedReferences = sweepOrphanedReferences;
 
+// Move ALL rotation bookkeeping for a renamed activity from oldName → newName
+// across every store the Rotation report reads: local historicalCounts,
+// manualUsageOffsets, rotationHistory, and the cloud rotation_counts table.
+// Counts MERGE into any existing newName entry; the old name is removed so it
+// drops out of the rotation report entirely. Best-effort + idempotent (safe to
+// re-run, and a no-op when the old name has no rotation data).
+//
+// The facility/field rename path (propagateFieldRename) already inlines the
+// local-store moves inside its snapshot/rollback transaction, so it does NOT
+// call this — it just needs RotationCloud.renameActivity (now defined). This
+// helper exists for the special-activity and general-activity rename handlers,
+// which previously migrated nothing and left counts orphaned under the old name.
+function migrateRotationCountsForRename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // 1) historicalCounts[bunk][name] — local cumulative counts.
+        const hc = settings.historicalCounts || window.historicalCounts;
+        if (hc && typeof hc === 'object') {
+            let changed = false;
+            Object.keys(hc).forEach(bunk => {
+                const m = hc[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+                changed = true;
+            });
+            if (changed) {
+                window.historicalCounts = hc;
+                window.saveGlobalSettings?.('historicalCounts', hc);
+            }
+        }
+
+        // 2) manualUsageOffsets[bunk][name] — user's hand-typed "Adjust" values.
+        const mo = settings.manualUsageOffsets || window.manualUsageOffsets;
+        if (mo && typeof mo === 'object') {
+            let changed = false;
+            Object.keys(mo).forEach(bunk => {
+                const m = mo[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+                changed = true;
+            });
+            if (changed) {
+                window.manualUsageOffsets = mo;
+                window.saveGlobalSettings?.('manualUsageOffsets', mo);
+            }
+        }
+
+        // 3) rotationHistory.bunks[bunk][name] — last-done timestamps. Fill the
+        //    new name only if absent so we never clobber a real newer timestamp.
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {} };
+            let changed = false;
+            Object.keys(rh.bunks || {}).forEach(bunk => {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldName in m)) return;
+                if (!(newName in m)) m[newName] = m[oldName];
+                delete m[oldName];
+                changed = true;
+            });
+            if (changed && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 4) Cloud rotation_counts — merge old rows into new across all dates.
+        if (window.RotationCloud && typeof window.RotationCloud.renameActivity === 'function') {
+            try { window.RotationCloud.renameActivity(oldName, newName); } catch (_) {}
+        }
+
+        console.log('[ROTATION] Migrated rotation counts on rename: "' + oldName + '" → "' + newName + '"');
+    } catch (e) {
+        console.error('[ROTATION] Rotation-count rename migration failed:', e);
+    }
+}
+
+// Rewrite a renamed activity's name inside SAVED per-date schedules and the live
+// in-memory grid, across all the slot fields a name can live in (_activity,
+// sport, field, location, _location). Without this the Rotation report keeps
+// surfacing the OLD name as a "0-count / other" row, because it rebuilds its
+// activity list by scanning saved schedules (loadAllDailyData) — whose entries
+// still literally carry the old _activity string. Persisting via
+// saveGlobalSettings('daily_schedules', ...) fans the change out to the cloud
+// daily_schedules table through the same bridge the calendar save uses.
+function renameActivityInSchedules(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    let changed = false;
+    const rewriteSlot = (slot) => {
+        if (!slot || typeof slot !== 'object') return;
+        if (slot._activity === oldName) { slot._activity = newName; changed = true; }
+        if (slot.sport === oldName) { slot.sport = newName; changed = true; }
+        if (slot.field === oldName) { slot.field = newName; changed = true; }
+        if (slot.location === oldName) { slot.location = newName; changed = true; }
+        if (slot._location === oldName) { slot._location = newName; changed = true; }
+    };
+    const walk = (slots) => {
+        if (!Array.isArray(slots)) return;
+        slots.forEach(s => Array.isArray(s) ? s.forEach(rewriteSlot) : rewriteSlot(s));
+    };
+    try {
+        // Saved per-date schedules (local blob → cloud daily_schedules via bridge).
+        const all = window.loadAllDailyData?.() || {};
+        Object.keys(all).forEach(dateKey => {
+            const sa = all[dateKey] && all[dateKey].scheduleAssignments;
+            if (sa && typeof sa === 'object') Object.keys(sa).forEach(bunk => walk(sa[bunk]));
+        });
+        if (changed) {
+            window.saveGlobalSettings?.('daily_schedules', all);
+            window.invalidateDailyDataCache?.();
+        }
+        // Live in-memory grid (today's schedule).
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bunk => walk(window.scheduleAssignments[bunk]));
+        }
+        // Cloud daily_schedules rows directly — the save bridge above only
+        // pushes the CURRENT date, so past-date cloud rows keep the old name
+        // and re-hydrate it into the local blob on the next reload. Rewrite
+        // them in place (best-effort, async; RLS-blocked rows are skipped).
+        if (window.ScheduleDB?.renameActivityInCloud) {
+            try { window.ScheduleDB.renameActivityInCloud(oldName, newName); } catch (_) {}
+        }
+        if (changed) console.log('[ROTATION] Rewrote saved schedule entries: "' + oldName + '" → "' + newName + '"');
+    } catch (e) {
+        console.error('[ROTATION] Schedule rename rewrite failed:', e);
+    }
+}
+
 // Slice 4 audit fix — full propagation, transactional best-effort.
 // Earlier this only updated `daily_schedules` (localStorage), `app1.disabledFields`,
 // and `locationZones`. Missed:
@@ -5105,6 +5239,11 @@ function propagateFieldRename(oldName, newName) {
                         if (slot.location === oldName) slot.location = newName;
                         if (slot.field === oldName) slot.field = newName;
                         if (slot._location === oldName) slot._location = newName;
+                        // Self-hosted facility (field name == activity name): the
+                        // activity string must follow the rename too, else it lingers
+                        // in the Rotation report's schedule scan under the old name.
+                        if (slot._activity === oldName) slot._activity = newName;
+                        if (slot.sport === oldName) slot.sport = newName;
                     });
                 });
             }
@@ -5226,6 +5365,14 @@ function propagateFieldRename(oldName, newName) {
                 // the renamed entries with fresh counts.
                 try { window.RotationCloud.deleteActivity(oldName); } catch (_) {}
             }
+        }
+
+        // 10b) Cloud daily_schedules rows directly. The daily_schedules save
+        //      above fans out only the CURRENT date via the bridge, so past-date
+        //      cloud rows keep the old name and re-hydrate it on reload. Rewrite
+        //      them in place (best-effort, async; RLS-blocked rows skipped).
+        if (window.ScheduleDB && typeof window.ScheduleDB.renameActivityInCloud === 'function') {
+            try { window.ScheduleDB.renameActivityInCloud(oldName, newName); } catch (_) {}
         }
 
         // 11) Save the app1 mutation last (smallest blast radius if it throws).

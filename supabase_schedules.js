@@ -1565,21 +1565,80 @@
     }
 
     // =========================================================================
+    // RENAME ACTIVITY ACROSS CLOUD SCHEDULES
+    // Rewrite every occurrence of an activity's old name → new name inside the
+    // cloud daily_schedules rows (schedule_data JSONB), across all dates and
+    // all scheduler rows the caller is allowed to write. Used by the facilities
+    // rename handlers so a renamed activity stops resurrecting under its old
+    // name when the local blob re-hydrates from cloud on reload — the save
+    // bridge only pushes the CURRENT date, leaving past-date rows stale.
+    // Best-effort: rows blocked by RLS (another scheduler's row) are skipped.
+    // =========================================================================
+    async function renameActivityInCloud(oldName, newName) {
+        const client = getClient();
+        const campId = getCampId();
+        if (!client || !campId || !oldName || !newName || oldName === newName) return false;
+
+        const { data: rows, error } = await client
+            .from('daily_schedules')
+            .select('id,date_key,schedule_data')
+            .eq('camp_id', campId);
+        if (error) { log('renameActivityInCloud read error: ' + error.message); return false; }
+
+        const fixSlot = (slot) => {
+            if (!slot || typeof slot !== 'object') return false;
+            let changed = false;
+            Object.keys(slot).forEach(k => { if (slot[k] === oldName) { slot[k] = newName; changed = true; } });
+            return changed;
+        };
+        const walk = (sa) => {
+            let changed = false;
+            if (!sa || typeof sa !== 'object') return changed;
+            Object.keys(sa).forEach(b => {
+                const slots = sa[b];
+                if (!Array.isArray(slots)) return;
+                slots.forEach(s => {
+                    if (Array.isArray(s)) s.forEach(e => { if (fixSlot(e)) changed = true; });
+                    else if (fixSlot(s)) changed = true;
+                });
+            });
+            return changed;
+        };
+
+        let rowsChanged = 0;
+        for (const row of rows || []) {
+            let sd = row.schedule_data;
+            if (typeof sd === 'string') { try { sd = JSON.parse(sd); } catch (_) { continue; } }
+            if (!sd || typeof sd !== 'object') continue;
+            const c1 = walk(sd.scheduleAssignments);
+            const c2 = walk(sd.scheduleSegments);
+            if (c1 || c2) {
+                const upd = await client.from('daily_schedules').update({ schedule_data: sd }).eq('id', row.id);
+                if (upd.error) log('renameActivityInCloud update error for ' + row.date_key + ': ' + upd.error.message);
+                else rowsChanged++;
+            }
+        }
+        if (rowsChanged) log('renameActivityInCloud rewrote ' + rowsChanged + ' cloud row(s): "' + oldName + '" -> "' + newName + '"');
+        return true;
+    }
+
+    // =========================================================================
     // EXPORT
     // =========================================================================
     window.ScheduleDB = {
         initialize,
-        
+
         // Read
         loadSchedule,
         loadAllSchedulersForDate,
         listScheduleDates, // ★ CB-70: distinct cloud schedule dates for the calendar overview
         loadDateRange,
-        
+
         // Write
         saveSchedule,
         deleteSchedule,
         deleteMyScheduleOnly,
+        renameActivityInCloud,
         
         // Merge
         mergeSchedules,
