@@ -149,35 +149,34 @@
                 : all;
         };
 
-        // Parent-division order.
-        // ★ FN-53: PREFER the user's explicit Me-page ordering
-        //   (app1.manualColumnOrder — the drag/move order on the structure list,
-        //   stored as an ARRAY so it IS order-stable in JSONB, unlike campStructure
-        //   key order). This is the order the user actually SEES, and it's the order
-        //   the "Grade age order" toggle (divisionAgeDirection) is defined against —
-        //   so seniority for Field Quality Groups must derive from it. Without this,
-        //   parents fell back to the numeric first-grade heuristic below, which
-        //   (a) ignores any manual reorder (e.g. oldest dragged to the top) and
-        //   (b) collapses to ALPHABETICAL for named grades (Soloists/Trios/Majors)
-        //   with no numeric basis. Either case made the youngest grades read as the
-        //   most senior under the oldToYoung toggle → they grabbed the best fields.
-        //   Numeric/alpha heuristic kept as the fallback for parents the user never
-        //   positioned (and when no manual order exists at all).
-        var firstGradeNum = function (divName) {
-            var m = String(gradesInOrder(divName)[0] || '').match(/(\d+)/);
-            return m ? parseInt(m[1], 10) : 999;
-        };
+        // Parent-division order — MIRRORS the Camp Structure (Me) page exactly
+        // (campistry_me.js _sortedDivisions), so Flow / print / analytics column order
+        // COPIES what the user sees and arranges in Campistry Me. Me is the single
+        // source of truth for order:
+        //   • explicit PARENT-level manualColumnOrder positions lead (the Me up/down
+        //     arrange order), then
+        //   • when ANY manual order list exists, the rest is alphabetical by parent
+        //     NAME; only when NO manual order exists at all do we fall back to a numeric
+        //     parent-NAME sort — byte-for-byte the same rule as _sortedDivisions.
+        // (The OLD `firstGradeNum` heuristic ordered parents by the number inside their
+        //  first grade — which DIVERGED from the Me page's alphabetical order for named
+        //  divisions like Camp Agudah / Day Camp. That Me↔Flow mismatch is the bug this
+        //  removes. To set a non-alphabetical parent order, arrange divisions in Me; both
+        //  Me and Flow then follow it.)
         var manualOrd = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : [];
-        var manualPos = {};
-        manualOrd.forEach(function (k, i) { manualPos[k] = i; });
+        var hasManualOrd = manualOrd.length > 0;
+        var parentManualPos = {};
+        manualOrd.forEach(function (k, i) { if (cs[k] != null && parentManualPos[k] == null) parentManualPos[k] = i; });
         var parents = Object.keys(cs).slice().sort(function (a, b) {
-            var ma = manualPos[a], mb = manualPos[b];
-            if (ma != null && mb != null && ma !== mb) return ma - mb;
-            if (ma != null && mb == null) return -1;   // user-positioned parents lead
-            if (ma == null && mb != null) return 1;
-            var na = firstGradeNum(a), nb = firstGradeNum(b);
-            if (na !== nb) return na - nb;
-            return a.localeCompare(b);
+            var pa = parentManualPos[a], pb = parentManualPos[b];
+            if (pa != null && pb != null && pa !== pb) return pa - pb;
+            if (pa != null && pb == null) return -1;   // user-positioned parents lead
+            if (pa == null && pb != null) return 1;
+            if (!hasManualOrd) {                        // mirror _sortedDivisions' else-branch
+                var na = parseInt(a, 10), nb = parseInt(b, 10);
+                if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            }
+            return String(a).localeCompare(String(b));
         });
 
         // Flat, QUALIFIED canonical column order → position map.
@@ -229,74 +228,19 @@
         return keys.filter(function (k) { return window.isDivisionPresentOnDate(k, dateStr); });
     };
 
-    // ★ FN-51: canonical AGE order — division/grade names OLDEST FIRST, from
-    //   the Camp Structure order (Campistry Me drag order) + the Me page's
-    //   "Grade age order" direction (app1.divisionAgeDirection). This is the
-    //   seniority source for Field Quality Groups: index 0 = most senior =
-    //   gets the rank-1 field. Both solvers previously guessed (the auto FQ
-    //   pass read the stale manualColumnOrder; the manual solver extracted a
-    //   number from the grade name and fell back to ALPHABETICAL — pure
-    //   nonsense for named grades like Minors/Soloists/Majors).
+    // ★ FN-51: canonical AGE order for Field Quality seniority — index 0 = most
+    //   senior = gets the rank-1 field. It is EXACTLY the Camp Structure (Me) order
+    //   that getUserDivisionOrder produces for column display (so Flow display and
+    //   field priority always agree), just flipped for the "Grade age order" toggle
+    //   (app1.divisionAgeDirection). Single source of truth: whatever the user
+    //   arranges in Campistry Me drives both the column order AND the field-quality
+    //   priority — no separate list to maintain, and no number heuristic that buried
+    //   no-number divisions (לב/מתמדים) at the extreme and made them read as senior.
     window.getDivisionAgeOrder = function (names) {
         var keys = Array.isArray(names) && names.length ? names.slice() : Object.keys(window.divisions || {});
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
-        var cs = gs.campStructure || {};
-        // ★ Field-quality seniority must mirror the Camp Structure (Me) page order the
-        //   user actually SEES and arranges — derived live from campStructure, NOT a
-        //   stored list and NOT the firstGradeNum heuristic in getUserDivisionOrder
-        //   (that sorts parents by the number in their first grade, so no-number
-        //   divisions like "Bunk לב"/"Masmidim" land at the 999 extreme and the
-        //   youngToOld flip makes them read as MOST senior — they grabbed the rank-1
-        //   fields ahead of older numbered grades). We rebuild the SAME flat order the
-        //   Me list renders: parents in the Me order (explicit manualColumnOrder
-        //   parent-level positions first, then alphabetical — exactly _sortedDivisions),
-        //   grades within each parent by gradeOrder (exactly _sortedGrades). The
-        //   youngToOld/oldToYoung toggle then picks the direction. Whatever the user
-        //   arranges in Camp Structure IS the priority — no order to hand-maintain.
-        //   Scoped to this seniority helper: column DISPLAY still flows through
-        //   getUserDivisionOrder, untouched (FN-50: a stale order must never drive display).
-        var ordered;
-        if (cs && Object.keys(cs).length) {
-            // grade-name counts → qualified column keys (mirror gradeBasedDivisions)
-            var counts = {};
-            Object.keys(cs).forEach(function (p) {
-                var d = cs[p]; if (!d || typeof d !== 'object') return;
-                Object.keys(d.grades || {}).forEach(function (g) { counts[g] = (counts[g] || 0) + 1; });
-            });
-            var gradesInOrder = function (p) {
-                var d = cs[p] || {}, grades = d.grades || {}, all = Object.keys(grades), ord = d.gradeOrder;
-                return (Array.isArray(ord) && ord.length)
-                    ? ord.filter(function (g) { return g in grades; })
-                         .concat(all.filter(function (g) { return ord.indexOf(g) < 0; }))
-                    : all;
-            };
-            // Parent order = the Me page's _sortedDivisions: explicit parent-level
-            // manualColumnOrder entries lead, the rest alphabetical.
-            var mco = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : [];
-            var ppos = {}; mco.forEach(function (k, i) { if (cs[k] != null && ppos[k] == null) ppos[k] = i; });
-            var parents = Object.keys(cs).slice().sort(function (a, b) {
-                var pa = ppos[a], pb = ppos[b];
-                if (pa != null && pb != null && pa !== pb) return pa - pb;
-                if (pa != null && pb == null) return -1;
-                if (pa == null && pb != null) return 1;
-                return String(a).localeCompare(String(b));
-            });
-            var pos = {}, idx = 0;
-            parents.forEach(function (p) {
-                gradesInOrder(p).forEach(function (g) {
-                    var key = counts[g] > 1 ? (p + ' > ' + g) : g;
-                    if (pos[key] == null) pos[key] = idx++;
-                });
-            });
-            ordered = keys.slice().sort(function (a, b) {
-                var ai = pos[a] == null ? 1e9 : pos[a], bi = pos[b] == null ? 1e9 : pos[b];
-                if (ai !== bi) return ai - bi;
-                return String(a).localeCompare(String(b));
-            });
-        } else {
-            // No campStructure available (node tests / legacy) → prior behavior.
-            ordered = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(keys) : keys.slice();
-        }
+        var ordered = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(keys) : keys.slice();
         var dir = (gs.app1 && gs.app1.divisionAgeDirection) || 'youngToOld';
         // youngToOld = the Me list runs top(young) → bottom(old), so oldest-first = reversed
         return dir === 'oldToYoung' ? ordered.slice() : ordered.slice().reverse();
