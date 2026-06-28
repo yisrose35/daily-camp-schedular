@@ -607,11 +607,28 @@
         })();
 
         const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
-        let _poolStartMin = (slots && slots.length > 0) ? _poolDivSlots[slots[0]]?.startMin : undefined;
-        let _poolEndMin = (slots && slots.length > 0) ? _poolDivSlots[slots[slots.length - 1]]?.endMin : undefined;
-        // Fallback: timeKey IS the startMin (always available); blockEndMin is passed explicitly.
-        if (_poolStartMin == null && timeKey != null) _poolStartMin = Number(timeKey) || undefined;
-        if (_poolEndMin == null && blockEndMin != null) _poolEndMin = Number(blockEndMin) || undefined;
+        // ★ CROSS-LEAGUE DOUBLE-BOOK FIX: anchor the period window on the
+        //   authoritative WALL-CLOCK time, not on indexing the shared `slots`
+        //   array into THIS division's grid. `slots` is taken from one division's
+        //   block (allBlocks[0]); in manual mode divisions have different
+        //   skeletons, so the same slot INDEX maps to a different clock time in
+        //   another division's grid. That made a second league's lock check query
+        //   the wrong window, miss the first league's live field lock, and hand
+        //   out the same field twice. timeKey IS the shared startMin for every
+        //   division at this period (blocksByTime groups by it); blockEndMin is
+        //   the period end. The per-division grid is only a fallback.
+        const _parsePoolMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        const _toPoolMin = (v) => {
+            if (v == null) return null;
+            if (typeof v === 'number') return isNaN(v) ? null : v;
+            const n = _parsePoolMin ? _parsePoolMin(v) : Number(v);
+            return (n == null || isNaN(Number(n))) ? null : Number(n);
+        };
+        let _poolStartMin = _toPoolMin(timeKey);
+        let _poolEndMin = _toPoolMin(blockEndMin);
+        if (_poolStartMin == null && slots && slots.length > 0) _poolStartMin = _poolDivSlots[slots[0]]?.startMin;
+        if (_poolEndMin == null && slots && slots.length > 0) _poolEndMin = _poolDivSlots[slots[slots.length - 1]]?.endMin;
+        if (_poolStartMin != null && (_poolEndMin == null || _poolEndMin <= _poolStartMin)) _poolEndMin = _poolStartMin + 40;
 
         for (const field of allFields) {
             if (!field || !field.name) continue;
@@ -2091,11 +2108,21 @@
 
                if (window.GlobalFieldLocks && slots.length > 0) {
 var _leagueDivSlots = window.divisionTimes?.[leagueDivisions[0]] || [];
-var _lockStartMin = null, _lockEndMin = null;
+// ★ CROSS-LEAGUE DOUBLE-BOOK FIX: lock START is the authoritative period start
+//   (timeKey), NOT a foreign slot index into this league's grid — see the note
+//   in buildAvailableFieldSportPool. Any two windows that share this start
+//   overlap, so a second league's time-based pool check now reliably sees this
+//   lock. End stays best-effort from this league's own grid, guarded so an
+//   inverted (empty) window can't slip a field through.
+var _lkParse = window.SchedulerCoreUtils?.parseTimeToMinutes;
+var _lockStartMin = (timeKey != null && !isNaN(Number(timeKey))) ? Number(timeKey)
+    : (_lkParse ? (_lkParse(timeKey) ?? null) : null);
+var _lockEndMin = null;
 if (slots.length > 0 && _leagueDivSlots[slots[0]]) {
-    _lockStartMin = _leagueDivSlots[slots[0]].startMin;
-    _lockEndMin = _leagueDivSlots[slots[slots.length - 1]]?.endMin || (_lockStartMin + 40);
+    if (_lockStartMin == null) _lockStartMin = _leagueDivSlots[slots[0]].startMin;
+    _lockEndMin = _leagueDivSlots[slots[slots.length - 1]]?.endMin;
 }
+if (_lockStartMin != null && (_lockEndMin == null || _lockEndMin <= _lockStartMin)) _lockEndMin = _lockStartMin + 40;
 window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
     lockedBy: playoffRoundNum ? 'playoff' : 'regular_league',
     leagueName: league.name,
