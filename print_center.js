@@ -42,7 +42,8 @@ var ICO = {
     monitor:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
     download: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
     check:    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
-    chevD:    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>'
+    chevD:    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
+    star:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
 };
 
 // =========================================================================
@@ -88,6 +89,10 @@ var DEFAULT_TEMPLATE = {
 var _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE);
 var _savedTemplates = [];
 var _activeView = 'division';
+// When true, the Facilities (location) view lists ONLY facilities/rooms where a
+// specialty activity is actually scheduled — used by the "Specialties Only" pack
+// so a head counselor can hand specialists a single sheet of just their areas.
+var _specialtiesOnly = false;
 var _zoomLevel = 100;
 var _isFullscreen = false;
 var _advancedOpen = false;
@@ -278,6 +283,17 @@ var USER_PACKS = [
         preset: 'classic',
         view: 'location',
         layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+    },
+    {
+        id: 'specialties-only',
+        name: 'Specialties Only',
+        tagline: 'Just the specialty areas, packed onto one sheet — for your specialists.',
+        icon: 'star',
+        scope: 'all',
+        specialtiesOnly: true,
+        preset: 'classic',
+        view: 'location',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: true, orientation: 'portrait', pageBreakPerBunk: false, showPageBreaks: false }
     }
 ];
 
@@ -2437,15 +2453,20 @@ function populateSidebar() {
             groups.push(grp);
         });
     } else if (_activeView === 'location') {
-        if (titleEl) titleEl.textContent = 'Facilities';
-        if (searchEl) searchEl.placeholder = 'Search facilities…';
+        if (titleEl) titleEl.textContent = _specialtiesOnly ? 'Specialties' : 'Facilities';
+        if (searchEl) searchEl.placeholder = _specialtiesOnly ? 'Search specialties…' : 'Search facilities…';
         var allLocs = {};
+        var nameSet = _specialtiesOnly ? pcSpecialtyNameSet() : null;
         var aa = getAssignments();
         Object.keys(aa).forEach(function (bk) {
             (aa[bk] || []).forEach(function (entry) {
                 if (!entry || entry.continuation) return;
                 var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
-                if (fn && fn !== 'Free' && fn !== 'Transition') allLocs[fn] = true;
+                if (!fn || fn === 'Free' || fn === 'Transition') return;
+                // In specialties-only mode, only surface facilities/rooms that
+                // actually host a specialty activity on this day.
+                if (_specialtiesOnly && !pcEntryIsSpecialty(entry, nameSet)) return;
+                allLocs[fn] = true;
             });
         });
         Object.keys(allLocs).sort(naturalSort).forEach(function (loc) {
@@ -3626,6 +3647,37 @@ function matchesLocation(entry, loc) {
     if (resolved && resolved === lc) return true;
     // Compound check: field contains the location name (e.g. "Basketball – Court 1" matches "Court 1")
     if (fnLc && fnLc.indexOf(lc) >= 0) return true;
+    return false;
+}
+
+/**
+ * Build a case-insensitive lookup of every configured specialty (special
+ * activity) name. getSpecialActivityByName is case-SENSITIVE, and the schedule
+ * stores activity/field names in mixed casing, so we normalize here.
+ */
+function pcSpecialtyNameSet() {
+    var set = {};
+    try {
+        var specials = (typeof window.getAllSpecialActivities === 'function') ? (window.getAllSpecialActivities() || []) : [];
+        specials.forEach(function (s) {
+            if (s && s.name) set[String(s.name).toLowerCase().trim()] = true;
+        });
+    } catch (e) {}
+    return set;
+}
+
+/**
+ * Is the activity placed in this schedule entry a specialty? Checks the
+ * activity name first (specials placed in a facility room) and the field name
+ * (name-only specials store the special's name as the field).
+ */
+function pcEntryIsSpecialty(entry, nameSet) {
+    if (!entry) return false;
+    var ns = nameSet || pcSpecialtyNameSet();
+    var act = entry._activity;
+    if (act && ns[String(act).toLowerCase().trim()]) return true;
+    var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    if (fn && ns[String(fn).toLowerCase().trim()]) return true;
     return false;
 }
 
@@ -6737,6 +6789,9 @@ function bindAll() {
     document.querySelectorAll('[data-view]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             _activeView = this.getAttribute('data-view');
+            // Manually choosing the Facilities tab shows all facilities — the
+            // specialties-only filter only lives on its dedicated pack.
+            _specialtiesOnly = false;
             document.querySelectorAll('[data-view]').forEach(function (b) { b.classList.remove('active'); });
             this.classList.add('active');
             // Week view needs 7 days of cloud data — kick off async fetch
@@ -7310,6 +7365,10 @@ window._pc3ApplyPack = function (packId) {
     var pack = PRINT_PACKS.filter(function (p) { return p.id === packId; })[0];
     if (!pack) return;
     _activePack = pack.id;
+    // The specialties-only filter is exclusive to its USER_PACK — any built-in
+    // print pack (e.g. Facility Rosters) shows the full facility list.
+    var _wasSpecialtiesOnly = _specialtiesOnly;
+    _specialtiesOnly = false;
     // 1. Apply preset (color scheme)
     if (pack.preset) window._pc3ApplyPreset(pack.preset);
     // 2. Apply layout flags
@@ -7324,13 +7383,16 @@ window._pc3ApplyPack = function (packId) {
             var pbCb = el('pc3-page-break-bunk'); if (pbCb) pbCb.checked = _pageBreakPerBunk;
         }
     }
-    // 3. Switch view
+    // 3. Switch view (also repopulate if the specialties filter was just cleared
+    //    while staying on the same view, so the full facility list comes back).
     if (pack.view && pack.view !== _activeView) {
         _activeView = pack.view;
         document.querySelectorAll('[data-view]').forEach(function (b) {
             b.classList.toggle('active', b.getAttribute('data-view') === pack.view);
         });
         if (_activeView === 'week') ensureWeekDataLoaded(false);
+        populateSidebar();
+    } else if (_wasSpecialtiesOnly) {
         populateSidebar();
     }
     // 4. Apply selection
@@ -7362,6 +7424,9 @@ window._pc3ApplyPack = function (packId) {
 window._pc3ApplyUserPack = function (packId, divisionName) {
     var pack = USER_PACKS.filter(function (p) { return p.id === packId; })[0];
     if (!pack) return;
+    // 0. Specialties-only filter is a per-pack opt-in for the location view — reset
+    //    first so it never leaks into another pack, then turn on for this one.
+    _specialtiesOnly = !!pack.specialtiesOnly;
     // 1. Preset (color scheme)
     if (pack.preset) window._pc3ApplyPreset(pack.preset);
     // 2. Layout flags. Clear opt-in flags first so they never leak between
@@ -7496,7 +7561,10 @@ window._pc3Quickpick = function (kind) {
     var targetView = kind === 'all-bunks' ? 'bunk' :
                      kind === 'all-locations' ? 'location' :
                      'division';
-    if (_activeView !== targetView) {
+    // Quickpicks always show the full set for the view (e.g. all facilities).
+    var wasFiltered = _specialtiesOnly;
+    _specialtiesOnly = false;
+    if (_activeView !== targetView || wasFiltered) {
         _activeView = targetView;
         // Re-render the tab "active" state
         document.querySelectorAll('[data-view]').forEach(function (b) {
