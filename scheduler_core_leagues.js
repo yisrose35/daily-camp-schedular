@@ -774,6 +774,19 @@
         return Math.max(0, 200 - r * 12);        // rank 1 ≈ +188 … rank 15 ≈ +20
     }
 
+    // ★ "Stuck" measure: how many of a team's most-recent games were the SAME
+    // sport in a row. A team on a long single-sport streak (e.g. basketball 4
+    // days running) is the most urgent to hand something new — so the assigners
+    // process the most-stuck matchups FIRST, giving them first pick of the
+    // league's limited diverse fields before those fields are taken by others.
+    function _trailingSportStreak(hist) {
+        if (!hist || !hist.length) return 0;
+        const last = hist[hist.length - 1];
+        let n = 0;
+        for (let i = hist.length - 1; i >= 0 && hist[i] === last; i--) n++;
+        return n;
+    }
+
     // =========================================================================
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
@@ -804,14 +817,21 @@
             const uniqueSports2 = new Set(h2).size;
             const ic1 = _indoorCounts[t1] || 0;
             const ic2 = _indoorCounts[t2] || 0;
-            return { t1, t2, varietyScore: uniqueSports1 + uniqueSports2, indoorMin: Math.min(ic1, ic2) };
+            return {
+                t1, t2,
+                varietyScore: uniqueSports1 + uniqueSports2,
+                stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
+                indoorMin: Math.min(ic1, ic2)
+            };
         });
 
+        // Most sport-STUCK matchups first (a team on a long single-sport streak is
+        // the most urgent to give something new), then fewest distinct sports. When
+        // an indoor requirement is active, indoor need stays primary.
         if (_indoorReq && _indoorReq.enabled) {
-            // Neediest pair (lowest min indoor count) first; tie-break on variety
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         } else {
-            matchupsWithPriority.sort((a, b) => a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         }
 
         for (const { t1, t2 } of matchupsWithPriority) {
@@ -920,18 +940,27 @@
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
         const _indoorCountsMV = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
+            const h1 = getTeamSportHistory(leagueName, t1, history);
+            const h2 = getTeamSportHistory(leagueName, t2, history);
             const matchupCount = getMatchupCount(leagueName, t1, t2, history);
             const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
-            return { t1, t2, matchupCount, indoorMin };
+            return {
+                t1, t2, matchupCount, indoorMin,
+                stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
+                variety: new Set(h1).size + new Set(h2).size
+            };
         });
 
-        // Process matchups with fewest prior meetings first. When an indoor
-        // requirement is active, the neediest indoor pair goes first so it
-        // claims a scarce indoor field before others.
+        // Field-pick order ONLY — this does not change who plays whom (the pairing is
+        // fixed by the round-robin upstream, which is matchup variety's guarantee).
+        // Process the most sport-STUCK matchups first so a team on a basketball streak
+        // grabs one of the league's scarce diverse fields before it's taken; then
+        // fewest distinct sports; then fewest prior meetings (the original order) as
+        // the final tie-break. Indoor need stays primary when required.
         if (_indoorReqMV && _indoorReqMV.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         } else {
-            matchupsWithPriority.sort((a, b) => a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         }
 
         console.log(`   📊 [MatchupVariety] Matchup priorities:`);
