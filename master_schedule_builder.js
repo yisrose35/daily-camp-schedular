@@ -4093,10 +4093,11 @@ function softenColor(hexColor) {
 }
 
 // --- Column Order ---
-// ★ FN-50: the Camp Structure order (Campistry Me drag order) is the single
-//   source of truth for grade columns. The old code preferred a saved
-//   app1.manualColumnOrder — a stale alphabetical list from an earlier
-//   session kept overriding the user's Me order.
+// ★ Column order = the DISPLAY order: getUserDivisionOrder = the Me priority order
+//   with the UI-only app1.viewColumnOrder reorder applied on top. Dragging a grade
+//   column here (saveColumnOrder) changes only how the schedule LOOKS; the solver and
+//   field-quality seniority ignore viewColumnOrder and keep using the Me order, so the
+//   look can be 3-2-1 while priority stays 1-2-3.
 function getColumnOrder() {
   const all = window.availableDivisions || [];
   return (typeof window.getUserDivisionOrder === 'function')
@@ -4107,7 +4108,10 @@ function getColumnOrder() {
 function saveColumnOrder(order) {
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
-  g.app1.manualColumnOrder = [...order];
+  // DISPLAY-ONLY key — dragging a grade column changes only how the schedule LOOKS.
+  // The solver/field-quality priority ignores app1.viewColumnOrder (it uses the Me
+  // order via _getMeDivisionOrder), so the look can be 3-2-1 while priority stays 1-2-3.
+  g.app1.viewColumnOrder = [...order];
   window.saveGlobalSettings?.('app1', g.app1);
   window.forceSyncToCloud?.();
 }

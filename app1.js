@@ -119,7 +119,13 @@
     //   below). We rebuild those same qualified keys here so the lookup matches;
     //   otherwise every duplicated-name grade silently dropped out of the user's
     //   order and clumped at the back by number.
-    window.getUserDivisionOrder = function (keys) {
+    // ★ PRIORITY / logic order — the pure Camp-Structure (Me) order. This is the
+    //   single source of truth for the SOLVER (field-quality seniority via
+    //   getDivisionAgeOrder + the division processing order in state.availableDivisions).
+    //   It deliberately does NOT honor the UI-only column reorder (app1.viewColumnOrder);
+    //   that reorder is display-only, applied on top by getUserDivisionOrder below. So a
+    //   user can make the schedule LOOK like 3-2-1 while priority stays 1-2-3.
+    window._getMeDivisionOrder = function (keys) {
         if (!Array.isArray(keys) || keys.length === 0) return keys || [];
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
         var cs = gs.campStructure || {};
@@ -212,6 +218,39 @@
         });
     };
 
+    // ★ UI-ONLY column reorder (app1.viewColumnOrder). The user can drag grade
+    //   columns in Daily Adjustments / the Manual (Master Schedule) Builder to set
+    //   how the schedule LOOKS, independent of the Me priority order. Given a list
+    //   already in Me order, re-sequence it to follow the saved view order; columns
+    //   absent from the view order keep their Me-relative position at the end (so a
+    //   newly-added grade still shows up). Empty/absent view order → returns the Me
+    //   order unchanged, so a camp that never touches this is byte-identical to before.
+    window._applyViewColumnOrder = function (meOrdered) {
+        if (!Array.isArray(meOrdered) || meOrdered.length === 0) return meOrdered || [];
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var vco = (gs.app1 && Array.isArray(gs.app1.viewColumnOrder)) ? gs.app1.viewColumnOrder : [];
+        if (!vco.length) return meOrdered;
+        var posV = {};
+        vco.forEach(function (k, i) { if (posV[k] == null) posV[k] = i; });
+        return meOrdered.map(function (k, i) { return { k: k, i: i }; }).sort(function (a, b) {
+            var pa = posV[a.k], pb = posV[b.k];
+            if (pa != null && pb != null) return pa !== pb ? pa - pb : a.i - b.i;
+            if (pa != null) return -1;   // columns the user explicitly ordered lead
+            if (pb != null) return 1;
+            return a.i - b.i;            // both absent → keep Me order
+        }).map(function (o) { return o.k; });
+    };
+
+    // ★ DISPLAY column order = Me order + the UI-only view reorder on top. Single
+    //   source of truth for how grade columns are SEQUENCED in every view that shows
+    //   the schedule (Daily Adjustments, Manual Builder grid, print, calendar,
+    //   analytics). The PRIORITY order (field quality + solver) does NOT pass through
+    //   here — it calls _getMeDivisionOrder directly — so the look can differ from the
+    //   priority. When no viewColumnOrder is set this is identical to the Me order.
+    window.getUserDivisionOrder = function (keys) {
+        return window._applyViewColumnOrder(window._getMeDivisionOrder(keys));
+    };
+
     // ★ Per-day division/grade presence. A grade can be marked present only on
     //   certain weekdays (Campistry Me grade editor → daysPresent). On a date
     //   when it's absent, its column is dropped from the date-specific schedule
@@ -236,18 +275,18 @@
     };
 
     // ★ FN-51: canonical AGE order for Field Quality seniority — index 0 = most
-    //   senior = gets the rank-1 field. It is EXACTLY the Camp Structure (Me) order
-    //   that getUserDivisionOrder produces for column display (so Flow display and
-    //   field priority always agree), just flipped for the "Grade age order" toggle
-    //   (app1.divisionAgeDirection). Single source of truth: whatever the user
-    //   arranges in Campistry Me drives both the column order AND the field-quality
-    //   priority — no separate list to maintain, and no number heuristic that buried
-    //   no-number divisions (לב/מתמדים) at the extreme and made them read as senior.
+    //   senior = gets the rank-1 field. It is EXACTLY the Camp Structure (Me) PRIORITY
+    //   order (_getMeDivisionOrder), just flipped for the "Grade age order" toggle
+    //   (app1.divisionAgeDirection). It uses _getMeDivisionOrder — NOT the display
+    //   getUserDivisionOrder — so the UI-only column reorder (app1.viewColumnOrder)
+    //   can never shift field-quality seniority: the schedule may LOOK 3-2-1 while the
+    //   solver still prioritizes by the Me order 1-2-3. Single source of truth for
+    //   priority: whatever the user arranges in Campistry Me.
     window.getDivisionAgeOrder = function (names) {
         var keys = Array.isArray(names) && names.length ? names.slice() : Object.keys(window.divisions || {});
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
-        var ordered = (typeof window.getUserDivisionOrder === 'function')
-            ? window.getUserDivisionOrder(keys) : keys.slice();
+        var ordered = (typeof window._getMeDivisionOrder === 'function')
+            ? window._getMeDivisionOrder(keys) : keys.slice();
         var dir = (gs.app1 && gs.app1.divisionAgeDirection) || 'youngToOld';
         // youngToOld = the Me list runs top(young) → bottom(old), so oldest-first = reversed
         return dir === 'oldToYoung' ? ordered.slice() : ordered.slice().reverse();
@@ -1133,12 +1172,15 @@
             }
             
             // Order the grade-keyed scheduling units by the user's Campistry Me
-            // order. getUserDivisionOrder is the single source of truth for
-            // column order site-wide — it is parent-order-stable against JSONB
-            // key normalization and rebuilds qualified "Parent > Grade" keys —
-            // so we delegate to it instead of re-implementing the sort here.
-            const sortedDivKeys = (typeof window.getUserDivisionOrder === 'function')
-                ? window.getUserDivisionOrder(Object.keys(state.divisions))
+            // PRIORITY order — this is the canonical base state.availableDivisions
+            // that drives the solver's division processing order, so it must stay on
+            // _getMeDivisionOrder (NOT the display getUserDivisionOrder). The UI-only
+            // column reorder (app1.viewColumnOrder) is applied per-view at render time
+            // by getUserDivisionOrder, so it never shifts the solver's processing
+            // order. _getMeDivisionOrder is parent-order-stable against JSONB key
+            // normalization and rebuilds qualified "Parent > Grade" keys.
+            const sortedDivKeys = (typeof window._getMeDivisionOrder === 'function')
+                ? window._getMeDivisionOrder(Object.keys(state.divisions))
                 : Object.keys(state.divisions);
             const sortedDivisions = {};
             sortedDivKeys.forEach(k => { sortedDivisions[k] = state.divisions[k]; });
