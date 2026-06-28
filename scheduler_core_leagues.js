@@ -2522,6 +2522,103 @@ window._debugLeagueTimeData = timeData;
         }
     };
 
+    // =========================================================================
+    // POST-EDIT ROTATION SYNC — single-game matchup edit
+    // =========================================================================
+    // When a league game is changed AFTER generation (post-edit: teams/sport/
+    // field), the three rotation stores must follow what was ACTUALLY played or
+    // the variety logic is poisoned (a sport/opponent that never happened keeps
+    // getting avoided; one that did happen keeps getting picked). This is the
+    // edit-time mirror of the generation-time logGameRecord/recordMatchup/
+    // recordTeamSport calls, made reversible via the date-keyed gameLog.
+    //
+    //   oldGame / newGame: { teamA|team1, teamB|team2, sport }  (field ignored)
+    //     • oldGame matches a logged entry → its contribution is subtracted and
+    //       the entry rewritten to newGame.
+    //     • no match (game wasn't logged / fresh manual matchup) → newGame is
+    //       inserted.
+    //     • newGame = null → only remove oldGame.
+    Leagues.editGameRecord = function (leagueName, date, oldGame, newGame, gameLabel) {
+        if (!leagueName || !date) return { ok: false, reason: 'missing league/date' };
+        try {
+            const history = loadLeagueHistory();
+            history.gameLog = history.gameLog || {};
+            history.gameLog[leagueName] = history.gameLog[leagueName] || {};
+            history.gameLog[leagueName][date] = history.gameLog[leagueName][date] || [];
+            history.teamSports = history.teamSports || {};
+            history.matchupHistory = history.matchupHistory || {};
+
+            const pick = function (o, a, b) { return o ? (o[a] != null ? o[a] : o[b]) : null; };
+            const oA = pick(oldGame, 'teamA', 'team1');
+            const oB = pick(oldGame, 'teamB', 'team2');
+            const oS = oldGame ? (oldGame.sport || null) : null;
+
+            // (1) subtract the old game from its matching logged entry
+            let removed = false, removedLabel = null;
+            if (oA && oB) {
+                const log = history.gameLog[leagueName][date];
+                const oKey = getMatchupKey(oA, oB);
+                for (let i = 0; i < log.length; i++) {
+                    const e = log[i];
+                    if (!e) continue;
+                    if (getMatchupKey(e.t1, e.t2) === oKey && (oS == null || (e.sport || null) === oS)) {
+                        if (e.sport) {
+                            [e.t1, e.t2].forEach(function (t) {
+                                const arr = history.teamSports[`${leagueName}|${t}`];
+                                if (arr) { const idx = arr.lastIndexOf(e.sport); if (idx !== -1) arr.splice(idx, 1); }
+                            });
+                        }
+                        const mk = `${leagueName}:${oKey}`;
+                        if (history.matchupHistory[mk] > 1) history.matchupHistory[mk]--;
+                        else delete history.matchupHistory[mk];
+                        removedLabel = e.g || null;
+                        log.splice(i, 1);
+                        removed = true;
+                        break;
+                    }
+                }
+            }
+
+            // (2) insert the new game (carry the removed entry's label if none given)
+            if (newGame) {
+                const nA = pick(newGame, 'teamA', 'team1');
+                const nB = pick(newGame, 'teamB', 'team2');
+                const nS = newGame.sport || null;
+                if (nA && nB) {
+                    if (nS) { recordTeamSport(leagueName, nA, nS, history); recordTeamSport(leagueName, nB, nS, history); }
+                    recordMatchup(leagueName, nA, nB, history);
+                    logGameRecord(leagueName, date, nA, nB, nS, history, gameLabel || removedLabel || null);
+                }
+            }
+
+            saveLeagueHistory(history);
+
+            // (3) keep the Leagues-page results store in sync (preserves scores
+            //     for matchups that still exist; mirrors FN-58 auto-save).
+            try {
+                if (window.LeaguesAPI && typeof window.LeaguesAPI.syncGamesFromGeneration === 'function') {
+                    const byLabel = {};
+                    (history.gameLog[leagueName][date] || []).forEach(function (e) {
+                        const lbl = e.g || 'Game';
+                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null });
+                    });
+                    const entries = Object.keys(byLabel).map(function (lbl) {
+                        const m = String(lbl).match(/Game\s*(\d+)/i);
+                        return { gameLabel: lbl, gameNumber: m ? parseInt(m[1], 10) : null, matches: byLabel[lbl] };
+                    });
+                    window.LeaguesAPI.syncGamesFromGeneration(leagueName, date, entries);
+                }
+            } catch (e) { console.warn('[RegularLeagues] editGameRecord results-sync skipped:', e); }
+
+            console.log(`[RegularLeagues] ✏️ editGameRecord "${leagueName}" ${date}: removed=${removed}` +
+                (newGame ? ` added=${pick(newGame, 'teamA', 'team1')} vs ${pick(newGame, 'teamB', 'team2')} (${newGame.sport || '—'})` : ''));
+            return { ok: true, removed: removed, league: leagueName, date: date };
+        } catch (e) {
+            console.error('[RegularLeagues] editGameRecord error:', e);
+            return { ok: false, reason: String(e && e.message || e) };
+        }
+    };
+
     window.SchedulerCoreLeagues = Leagues;
     console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v7');
 })();

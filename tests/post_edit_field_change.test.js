@@ -261,3 +261,60 @@ test('connected grades: a change from one division auto-updates the other divisi
   assert.strictEqual(window.scheduleAssignments.Y1[0]._allMatchups[0], 'Lions vs Tigers @ Field B (Soccer)');
   assert.strictEqual(window.scheduleAssignments.S1[0]._allMatchups[0], 'Lions vs Tigers @ Field B (Soccer)');
 });
+
+test('applyFieldChange — changes the matchup TEAMS + syncs regular-league rotation', () => {
+  const edits = [];
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['L.A vs Dallas @ Clubhouse (Baseball)', 'Miami vs Cleveland @ Powerplay (Hockey)'] }],
+  };
+  global.window.leagueAssignments = {
+    State: { 1: { leagueName: 'State League', _allMatchups: ['L.A vs Dallas @ Clubhouse (Baseball)', 'Miami vs Cleveland @ Powerplay (Hockey)'] } },
+  };
+  global.window.divisionTimes = { State: [null, { startMin: 600, endMin: 645 }] };
+  global.window.fieldLabel = (f) => f;
+  global.window.getAllLocations = () => [{ name: 'ABBL Arena', type: 'field', activities: ['Basketball'], capacity: 1 }];
+  global.window.GlobalFieldLocks = { isFieldLockedByTime: () => null, unlockField: () => {}, lockField: () => true };
+  delete global.window.findFieldsForActivity;
+  global.window.leaguesByName = { 'State League': { teams: ['N.Y', 'Toronto', 'L.A', 'Dallas', 'Miami', 'Cleveland'], sports: ['Basketball', 'Baseball', 'Hockey'] } };
+  global.window.currentScheduleDate = '2026-06-28';
+  global.window.SchedulerCoreLeagues = { editGameRecord: (...a) => { edits.push(a); return { ok: true }; } };
+
+  const ctx = {
+    kind: 'regular', divName: 'State', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'State League', slots: [1],
+    game: { teamA: 'L.A', teamB: 'Dallas', teams: 'L.A vs Dallas', field: 'Clubhouse', sport: 'Baseball' },
+  };
+  // Change L.A vs Dallas → N.Y vs Toronto, Basketball, ABBL Arena.
+  const res = PEFC.applyFieldChange(ctx, 'ABBL Arena', 'Basketball', { teamA: 'N.Y', teamB: 'Toronto' });
+
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups[0], 'N.Y vs Toronto @ ABBL Arena (Basketball)');
+  assert.strictEqual(window.leagueAssignments.State[1]._allMatchups[0], 'N.Y vs Toronto @ ABBL Arena (Basketball)');
+  // Other game untouched.
+  assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups[1], 'Miami vs Cleveland @ Powerplay (Hockey)');
+  // Rotation sync fired with old + new game.
+  assert.strictEqual(edits.length, 1);
+  assert.deepStrictEqual(edits[0][2], { teamA: 'L.A', teamB: 'Dallas', sport: 'Baseball' });
+  assert.deepStrictEqual(edits[0][3], { teamA: 'N.Y', teamB: 'Toronto', sport: 'Basketball' });
+});
+
+test('applyFieldChange — pure field move does NOT call rotation sync', () => {
+  const edits = [];
+  global.window.scheduleAssignments = { BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] }] };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] } } };
+  global.window.divisionTimes = { Majors: [null, { startMin: 600, endMin: 645 }] };
+  global.window.fieldLabel = (f) => f;
+  global.window.getAllLocations = () => [{ name: 'Field B', type: 'field', activities: ['Soccer'], capacity: 1 }];
+  global.window.GlobalFieldLocks = { isFieldLockedByTime: () => null, unlockField: () => {}, lockField: () => true };
+  delete global.window.findFieldsForActivity;
+  global.window.SchedulerCoreLeagues = { editGameRecord: (...a) => { edits.push(a); return { ok: true }; } };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'L', slots: [1],
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  const res = PEFC.applyFieldChange(ctx, 'Field B');
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(edits.length, 0); // teams + sport unchanged → no rotation churn
+});
