@@ -672,6 +672,31 @@
                 }
             }
 
+            // ★★★ CHECK DAILY-ADJUSTMENTS FIELD RESERVATIONS (division-aware) ★★★
+            // A reservation tile (a skeleton tile carrying reservedFields — e.g. a pinned
+            // "Masmidim" tile reserving "Home Run Stadium" for division מתמדים) is extracted
+            // into window.fieldReservations (Utils.getFieldReservationsFromSkeleton) and
+            // already blocks SPORT placement via canBlockFit. But leagues only consulted
+            // GlobalFieldLocks — never window.fieldReservations — so a reserved field that
+            // wasn't ALSO registered as a GlobalFieldLock looked free to a league and got
+            // double-booked (CONFIRMED live: מתמדים's Home Run Stadium reservation @3:30-4:30
+            // handed to the 6th-grade league).
+            // DIVISION-AWARE: only block when the reservation belongs to a DIFFERENT division
+            // than the one(s) this league serves. A division reserves its OWN signup-league
+            // field pool (e.g. div 8/9 "Signup leagues"), and that division's own league MUST
+            // still be able to use it — so a same-division reservation never blocks.
+            if (window.fieldReservations && _poolStartMin != null && _poolEndMin != null) {
+                const _resvList = window.fieldReservations[field.name] || [];
+                const _curDivs = (divisionNames || []).map(d => String(d).toLowerCase().trim());
+                const _foreign = _resvList.find(r =>
+                    r && r.startMin < _poolEndMin && r.endMin > _poolStartMin &&
+                    r.division && !_curDivs.includes(String(r.division).toLowerCase().trim()));
+                if (_foreign) {
+                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" reserved by ${_foreign.division} ("${_foreign.event}") ${_foreign.startMin}-${_foreign.endMin} — not available to this league`);
+                    continue;
+                }
+            }
+
             // ★★★ CHECK FIELD TIME RULES (available/unavailable windows) ★★★
             // ★ Per-grade scoping: a rule with `divisions: ['1']` only applies
             //   when the current league touches grade 1. Rules with empty/missing
