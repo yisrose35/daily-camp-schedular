@@ -3621,7 +3621,27 @@ divBlocks.forEach((block, blockIdx) => {
     }
 
     if (block.type === 'elective' || block.type === 'swim_elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
-        tr.appendChild(renderFixedBlockCell(block, bunks));
+        // ★ Whole-division fixed/pinned blocks (electives, swim+elective, custom
+        //   pinned reservations like a league holding several fields) used to render
+        //   one full-width cell PER slot-row and return before the rowspan-merge runs
+        //   — so a reservation that spans multiple slots repeated "ABBL – Field x, y, z"
+        //   once per slot. Reuse the continuation span/skip maps already computed for
+        //   the bunk cells (the block is identical across bunks, so sample bunks[0]) to
+        //   merge those slot-rows into ONE cell. No-op when the block sits in a single
+        //   slot (span 1 / not skipped) → identical output for every existing schedule.
+        const _repB = bunks[0];
+        if (_repB && skipMap[_repB] && skipMap[_repB].has(blockIdx)) {
+            // Covered by the rowSpan of this block's first slot — emit the time row only.
+            tbody.appendChild(tr);
+            return;
+        }
+        const fixedCell = renderFixedBlockCell(block, bunks);
+        const _fixedSpan = (_repB && rowspanMap[_repB]) ? (rowspanMap[_repB][blockIdx] || 1) : 1;
+        if (_fixedSpan > 1) {
+            fixedCell.rowSpan = _fixedSpan;
+            fixedCell.style.verticalAlign = 'middle';
+        }
+        tr.appendChild(fixedCell);
         tbody.appendChild(tr);
         return;
     }

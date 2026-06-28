@@ -3017,8 +3017,17 @@ function renderSharedTimelineTable(grades) {
         for (var gc = 0; gc < nC; gc++) {
             var seg = cols[gc].rowSeg[gr];
             var info = cellInfo(cols[gc], seg, rows[gr]);
-            var s = seg ? seg.startMin : rows[gr].startMin;
-            var e = seg ? seg.endMin : rows[gr].endMin;
+            // ★ Merge key uses the entry's LOGICAL block range (_startMin/_endMin,
+            //   which fillBlock stamps IDENTICALLY onto every slot of one tile) rather
+            //   than the per-slot seg time. A single activity that occupies several
+            //   slots (e.g. a league / pinned tile reserving multiple fields) therefore
+            //   shares one key across those slots and collapses into ONE spanning cell
+            //   instead of repeating "ABBL – Field x, y, z" once per slot. Falls back to
+            //   the seg time when the entry carries no logical range (free/empty cells),
+            //   so genuinely distinct adjacent activities still never merge.
+            var _en = seg && seg.entry;
+            var s = (_en && typeof _en._startMin === 'number') ? _en._startMin : (seg ? seg.startMin : rows[gr].startMin);
+            var e = (_en && typeof _en._endMin === 'number') ? _en._endMin : (seg ? seg.endMin : rows[gr].endMin);
             grid[gr][gc] = { text: info.txt, cls: info.cls, key: info.txt + '|' + info.cls + '|' + s + '|' + e };
         }
     }
