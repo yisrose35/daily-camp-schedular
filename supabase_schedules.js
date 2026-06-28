@@ -951,6 +951,60 @@
             return { success: true, target: 'wipe-blocked-' + wipeShape, bunkCount: originalBunkCount };
         }
 
+        // ★★★ ANTI-DOWNGRADE GUARD: never persist "stripped" entries over real data.
+        // BUG (previous schedules lose their courts/fields/league-matchups on revisit):
+        // entries were reaching the cloud reduced to bare {_activity:"Basketball"} — no
+        // field, sport, _startMin or continuation. JSON.stringify drops those undefined
+        // keys, so once a date's in-memory/local copy is stripped, every save (especially
+        // the secondary-date fanout in integration_hooks STEP 5, which re-uploads each
+        // local date) writes the name-only stub to the cloud and the real court/field/time
+        // data is permanently lost. A genuine generated OR edited entry ALWAYS carries
+        // _startMin (and sports carry field/sport); a bare {_activity} with none of those
+        // is never something the generator/editor produces — it is purely a corruption
+        // artifact from a render/reshape path that kept only the activity NAME. So if the
+        // WHOLE payload is name-only stubs (zero entries carry any geometry), refuse the
+        // write — same shape as the wipe guards above. Callers that truly mean it pass
+        // allowEmpty/allowStripped. Inert for any real schedule (those have _startMin).
+        if (originalBunkCount > 0 && !options.allowEmpty && !options.allowStripped) {
+            let strippedEntries = 0, richEntries = 0;
+            for (const bk of Object.keys(sa)) {
+                const arr = sa[bk];
+                if (!Array.isArray(arr)) continue;
+                for (const slot of arr) {
+                    if (!slot || typeof slot !== 'object') continue;
+                    const act = slot._activity || slot.activity;
+                    if (!act || act === 'Free' || act === '+ Add') continue;
+                    const hasGeometry = slot._startMin != null || slot.field != null ||
+                        slot.sport != null || slot.continuation === true ||
+                        slot._isTransition || slot._h2h || slot._swimElective ||
+                        slot._pinned || slot._isTrip;
+                    if (hasGeometry) richEntries++; else strippedEntries++;
+                }
+            }
+            if (strippedEntries > 0 && richEntries === 0) {
+                const trace = {
+                    ts: new Date().toISOString(),
+                    dateKey,
+                    originalBunkCount,
+                    strippedEntries,
+                    wipeShape: 'stripped-downgrade',
+                    allowCrossDate: !!options.allowCrossDate,
+                    stack: (new Error('stripped-downgrade-blocked')).stack || ''
+                };
+                try {
+                    const key = '__campistry_empty_save_blocks';
+                    const existing = JSON.parse(localStorage.getItem(key) || '[]');
+                    existing.push(trace);
+                    while (existing.length > 25) existing.shift();
+                    localStorage.setItem(key, JSON.stringify(existing));
+                } catch (_) {}
+                console.warn('[ScheduleDB.saveSchedule] BLOCKED stripped-downgrade write for', dateKey,
+                    '(' + strippedEntries + ' name-only entries, 0 with field/time) — preserving cloud data.',
+                    'See localStorage["__campistry_empty_save_blocks"].');
+                return { success: true, target: 'stripped-downgrade-blocked', bunkCount: originalBunkCount };
+            }
+        }
+
         // ★ Save trace: log EVERY save attempt (allowed + blocked) so the
         // full save timeline is reconstructable after a reload. Capped at
         // 50 entries to bound localStorage size. Also count activities
