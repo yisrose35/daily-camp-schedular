@@ -173,7 +173,7 @@ function validateSpecialActivity(activity, activityName) {
     const _instructorRaw = (typeof activity.instructor === 'string') ? activity.instructor.trim() : '';
 
     return {
-        name: activity.name || activityName || 'Unknown', type: 'Special', available: activity.available !== false,
+        name: _saNormalizeName(activity.name || activityName) || 'Unknown', type: 'Special', available: activity.available !== false,
         subcategory: _subcategoryRaw,
         instructor: _instructorRaw,
         sharableWith, accessRestrictions, timeRules,
@@ -256,7 +256,7 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name: _saNormalizeName(name) || 'Unknown', type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
@@ -375,6 +375,11 @@ function initSpecialActivitiesTab() {
 // union-on-read) so the marker survives whichever copy syncs. The
 // union-on-load keeps its anti-wipe behavior but drops tombstoned names;
 // re-creating a special with the same name clears its tombstone (saveData).
+// ★ Name normalization: collapse runs of whitespace and trim. Intentionally does
+//   NOT change case (so "VR", "Arts & Crafts" keep their casing — case-folding here
+//   would corrupt legitimate names). Stops trailing-space / double-space variants
+//   from creating distinct specials.
+function _saNormalizeName(n) { return String(n || '').replace(/\s+/g, ' ').trim(); }
 function _saTombKey(n) { return String(n || '').trim().toLowerCase(); }
 function _saReadTombstones(settings) {
     const out = {};
@@ -428,6 +433,19 @@ function loadData() {
         //   duplicate exists, PREFER the row that carries a subcategory tag so a
         //   blank copy can never shadow a tagged one (the tag-wipe bug).
         const _hasSub = (s) => (s && typeof s.subcategory === 'string' && s.subcategory.trim() !== '');
+        // ★ Duplicate quality score — when a case-insensitive collision happens, keep
+        //   the BETTER row so a junk copy (lowercase name / blank location) can never
+        //   shadow the real one. Subcategory tag stays the dominant signal (preserves
+        //   the tag-wipe fix); a real location and a proper-cased name break ties.
+        const _quality = (s) => {
+            if (!s) return -1;
+            let q = 0;
+            if (_hasSub(s)) q += 4;
+            if (s.location && String(s.location).trim()) q += 2;
+            const nm = String(s.name || '');
+            if (nm && nm !== nm.toLowerCase()) q += 1;
+            return q;
+        };
         // Keyed case-insensitively so "Canteen"/"canteen" can't both survive.
         const _seenNames = new Map();
         for (const s of allActivities) {
@@ -435,8 +453,8 @@ function loadData() {
             const _key = _saTombKey(s.name);
             const ex = _seenNames.get(_key);
             if (!ex) { _seenNames.set(_key, s); continue; }
-            // Upgrade the kept row to a tagged duplicate if the kept one is blank.
-            if (!_hasSub(ex) && _hasSub(s)) _seenNames.set(_key, s);
+            // Keep the higher-quality duplicate (first-seen wins on a tie).
+            if (_quality(s) > _quality(ex)) _seenNames.set(_key, s);
         }
         let dedupedActivities = [..._seenNames.values()];
         // ★ Tombstone filter: a deleted special stays deleted even when a stale
