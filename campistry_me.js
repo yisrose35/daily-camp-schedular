@@ -876,6 +876,13 @@ function syncAllAddressesToGo(){
 function _getDivisionOrder(){
     try{
         var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        // ★ Prefer the DEDICATED parent-division order (app1.divisionOrder). It holds
+        //   PARENT names only and is written exclusively by Me division reorders, so it
+        //   can't be clobbered by Flow's schedule-column order (which shares the older
+        //   app1.manualColumnOrder key but stores grade-level keys). Fall back to
+        //   manualColumnOrder for legacy camps that never saved a division order.
+        var div=(gs.app1&&gs.app1.divisionOrder);
+        if(Array.isArray(div)&&div.length)return div;
         var ord=(gs.app1&&gs.app1.manualColumnOrder)||[];
         return Array.isArray(ord)?ord:[];
     }catch(_){return []}
@@ -884,6 +891,9 @@ function _saveDivisionOrder(order){
     try{
         var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
         if(!gs.app1)gs.app1={};
+        // Authoritative parent-division order → its OWN key so Flow column drags can't
+        // wipe it. Keep writing manualColumnOrder too for any legacy reader.
+        gs.app1.divisionOrder=order;
         gs.app1.manualColumnOrder=order;
         if(window.saveGlobalSettings)window.saveGlobalSettings('app1',gs.app1);
     }catch(e){console.warn('[CampistryMe] save order failed',e)}

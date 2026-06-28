@@ -163,16 +163,23 @@
         //  divisions like Camp Agudah / Day Camp. That Me↔Flow mismatch is the bug this
         //  removes. To set a non-alphabetical parent order, arrange divisions in Me; both
         //  Me and Flow then follow it.)
+        // The Me page's division order lives in the DEDICATED app1.divisionOrder key
+        // (parent names only — written exclusively by Me reorders, so Flow's
+        // schedule-column order can't clobber it). Legacy parent-level entries in
+        // app1.manualColumnOrder are honored next; otherwise alphabetical. This is the
+        // exact same source campistry_me _getDivisionOrder reads, so Me and Flow agree.
+        var divOrd = (gs.app1 && Array.isArray(gs.app1.divisionOrder)) ? gs.app1.divisionOrder : [];
         var manualOrd = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : [];
-        var hasManualOrd = manualOrd.length > 0;
         var parentManualPos = {};
-        manualOrd.forEach(function (k, i) { if (cs[k] != null && parentManualPos[k] == null) parentManualPos[k] = i; });
+        divOrd.forEach(function (k) { if (cs[k] != null && parentManualPos[k] == null) parentManualPos[k] = Object.keys(parentManualPos).length; });
+        manualOrd.forEach(function (k) { if (cs[k] != null && parentManualPos[k] == null) parentManualPos[k] = Object.keys(parentManualPos).length; });
+        var hasAnyOrderList = divOrd.length > 0 || manualOrd.length > 0;
         var parents = Object.keys(cs).slice().sort(function (a, b) {
             var pa = parentManualPos[a], pb = parentManualPos[b];
             if (pa != null && pb != null && pa !== pb) return pa - pb;
             if (pa != null && pb == null) return -1;   // user-positioned parents lead
             if (pa == null && pb != null) return 1;
-            if (!hasManualOrd) {                        // mirror _sortedDivisions' else-branch
+            if (!hasAnyOrderList) {                     // mirror _sortedDivisions' else-branch
                 var na = parseInt(a, 10), nb = parseInt(b, 10);
                 if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
             }
