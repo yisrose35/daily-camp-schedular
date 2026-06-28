@@ -824,6 +824,16 @@
                 const need2 = getTeamSportNeed(t2, option.sport);
                 score += need1 + need2;
 
+                // ★ Once every sport has been played at least once the per-sport
+                // need flattens (80/60/40…) and the field-quality bonus (up to
+                // +188) could otherwise pin a team to the best field's sport.
+                // Explicitly forbid repeating a team's most-recent sport.
+                const _svH1 = getTeamSportHistory(leagueName, t1, history);
+                const _svH2 = getTeamSportHistory(leagueName, t2, history);
+                const _svR1 = _svH1.length && _svH1[_svH1.length - 1] === option.sport ? 1 : 0;
+                const _svR2 = _svH2.length && _svH2[_svH2.length - 1] === option.sport ? 1 : 0;
+                score -= (_svR1 + _svR2) * 1500;
+
                 // Prefer sports not yet used this slot
                 const sportUsageThisSlot = usedSportsThisSlot[option.sport] || 0;
                 if (sportUsageThisSlot === 0) {
@@ -919,15 +929,34 @@
             for (const option of _pool) {
                 let score = 0;
 
-                // In matchup variety mode, sport variety is secondary
-                // Just add a small preference for sports not played as much
+                // In matchup variety mode the OPPONENT pairing (strict round-
+                // robin) is what carries the "matchup variety" guarantee — it is
+                // decided before we get here. This scorer only chooses WHICH
+                // sport a fixed matchup plays, so it should still rotate sports
+                // per team. The old "Math.max(0, 50 - count*5)" signal was far
+                // too weak: it maxed at 50 and was swamped by _fieldQualityBonus
+                // (up to +188) and Math.random()*20, so a team got pinned to
+                // whatever sport sat on the best-ranked field (observed live:
+                // hockey 3 days in a row). Use the same magnitudes as
+                // sport_variety so per-team rotation actually wins.
                 const h1 = getTeamSportHistory(leagueName, t1, history);
                 const h2 = getTeamSportHistory(leagueName, t2, history);
                 const sportCount1 = h1.filter(s => s === option.sport).length;
                 const sportCount2 = h2.filter(s => s === option.sport).length;
-                
-                // Small bonus for less-played sports (not the main factor)
-                score += Math.max(0, 50 - (sportCount1 + sportCount2) * 5);
+
+                // Strong per-team need: an unplayed sport hugely outweighs a
+                // repeat; field quality / randomness now act only as tie-breakers
+                // among sports of equal freshness.
+                const need1 = sportCount1 === 0 ? 1000 : Math.max(0, 100 - sportCount1 * 20);
+                const need2 = sportCount2 === 0 ? 1000 : Math.max(0, 100 - sportCount2 * 20);
+                score += need1 + need2;
+
+                // ★ Hard guard against repeating a team's MOST-RECENT sport —
+                // directly kills the "same sport N days in a row" case. Big
+                // enough to dominate the field-quality bonus.
+                const recent1 = h1.length && h1[h1.length - 1] === option.sport ? 1 : 0;
+                const recent2 = h2.length && h2[h2.length - 1] === option.sport ? 1 : 0;
+                score -= (recent1 + recent2) * 1500;
 
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
