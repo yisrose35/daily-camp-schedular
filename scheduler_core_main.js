@@ -1510,6 +1510,48 @@
                 //   (→ all options across the group); _usedOpts blocks any repeat.
                 const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
                 console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
+                // ★ LEAST-RECENT ALLOCATION for SCARCE field-less labels (e.g. Pickleball = 2 nets).
+                //   A capped direct-fill label (_directFillCap < ∞) has fewer slots than the bunks
+                //   whose TURN it is on a given day. Handing the slots to the lowest-index bunks
+                //   (the old behaviour) starves the tail of the division every day. Instead REUSE the
+                //   rotation engine's stored cross-day counts — the SAME data the field-based solver
+                //   ranks on — and give the slots to the LEAST-RECENT bunks. Winners are pre-chosen
+                //   here over the bunks whose PRIMARY pick (_o===0) is that label, so the day-offset
+                //   still rotates WHICH bunks are eligible, and least-recent breaks the over-subscription
+                //   fairly. The placement loop below only lets a chosen winner take the capped label;
+                //   any other bunk (a fall-through, or a non-winner) skips to its next option.
+                //   STRICT NO-OP for uncapped labels (Swim, ∞ cap) — they never enter _cappedWinners.
+                const _cappedWinners = {}; // labelNorm -> Set(bunk) allowed to take that capped label
+                (function _allocCappedLabels() {
+                    const _rotEng = window.RotationEngine;
+                    const _lrCount = (bunk, label) => {
+                        try { return (_rotEng && _rotEng.getActivityCount) ? (_rotEng.getActivityCount(bunk, label) || 0) : 0; }
+                        catch (_) { return 0; }
+                    };
+                    const _byLabel = {}; // labelNorm -> [{bunk,_bIdx,c}] (turn-bunks for that capped label)
+                    bunkList.forEach((bunk, _bIdx) => {
+                        const _ex = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
+                        if (_ex && _ex._bunkOverride) return;                 // overridden bunks untouchable
+                        const _primary = _rotOpts[(_dayNum + _bIdx + _grpOff) % _rotOpts.length];
+                        if (_directFillCap(_primary) === Infinity) return;     // only scarce capped labels
+                        const _pn = String(_primary || '').toLowerCase().trim();
+                        (_byLabel[_pn] = _byLabel[_pn] || []).push({ bunk, _bIdx, c: _lrCount(bunk, _primary) });
+                    });
+                    Object.keys(_byLabel).forEach(_pn => {
+                        const cap = _directFillCap(_pn);
+                        const arr = _byLabel[_pn];
+                        arr.sort((a, b) => (a.c - b.c) || (a._bIdx - b._bIdx)); // least-recent first; index tie-break = deterministic
+                        _cappedWinners[_pn] = new Set(arr.slice(0, cap).map(x => x.bunk));
+                        if (arr.length > cap) {
+                            console.log(`[SmartTile] LEAST-RECENT "${_pn}" (cap ${cap}/window): winners [${[...(_cappedWinners[_pn])].join(', ')}] of turn-bunks [${arr.map(x => x.bunk + ':' + x.c).join(', ')}]`);
+                        }
+                    });
+                })();
+                // May this bunk take field-less label `opt` right now? Capped labels go to the
+                // pre-chosen least-recent winners only; uncapped labels (Swim) place for whoever
+                // reaches them (unchanged).
+                const _mayTakeCapped = (opt, optNorm, bunk) =>
+                    (_directFillCap(opt) === Infinity) || !!(_cappedWinners[optNorm] && _cappedWinners[optNorm].has(bunk));
                 bunkList.forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
@@ -1602,21 +1644,27 @@
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                                 _placed = true;
-                            } else if (_o === 0 && _canClaimDirectFill(opt, _rStart, _rEnd)) {
-                                // No open field → place the named sport as its OWN field-less label,
-                                // but ONLY for the bunk whose PRIMARY rotation slot this is (_o===0),
-                                // and honor its hardcoded real-world cap (e.g. Pickleball = 2 nets,
-                                // _directFillCap). A bunk that merely FELL THROUGH here (its real pick
-                                // was unplaceable, _o>0) skips to its NEXT option instead — otherwise
-                                // the same low-index bunks grab the field-less label every day (their
-                                // turn or not), starving rotation. So the scarce label goes to the
-                                // bunks whose turn it actually is, and rotates as the daily offset moves.
+                            } else if (_canClaimDirectFill(opt, _rStart, _rEnd)
+                                       && ((_directFillCap(opt) !== Infinity) ? _mayTakeCapped(opt, optNorm, bunk) : _o === 0)) {
+                                // No open field → place the named sport as its OWN field-less label.
+                                //   • CAPPED label (e.g. Pickleball = 2 nets, _directFillCap < ∞): only a
+                                //     pre-chosen LEAST-RECENT winner takes it (_mayTakeCapped) — the scarce
+                                //     nets go to whoever's gone longest without, and rotate as the daily
+                                //     offset moves the turn-set.
+                                //   • UNCAPPED sport label: ONLY the bunk whose PRIMARY slot this is (_o===0),
+                                //     so a fall-through doesn't grab it (unchanged).
+                                //   Either way a bunk that doesn't qualify skips to its NEXT option, instead
+                                //   of the same low-index bunks grabbing the label every day and starving
+                                //   rotation.
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                 _placed = true;
                             } else {
-                                const _why = (_o !== 0) ? 'fell through here (not its turn)' : `at cap (${_directFillCap(opt)}/window)`;
+                                const _capped = _directFillCap(opt) !== Infinity;
+                                const _why = (_capped && !_mayTakeCapped(opt, optNorm, bunk)) ? `not a least-recent winner this window (cap ${_directFillCap(opt)})`
+                                    : (_o !== 0) ? 'fell through here (not its turn)'
+                                    : `at cap (${_directFillCap(opt)}/window)`;
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" ${_why}, no open field → next option`);
                             }
                         } else {
@@ -1629,7 +1677,15 @@
                             //   (e.g. 2 pickleball nets, _directFillCap): when that window is full,
                             //   leave _placed false so the bunk falls through to its NEXT rotation
                             //   option (Swim) — exactly like a scarce special does.
-                            if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
+                            //   ★ A CAPPED label (Pickleball — common when the camp has NO court for it,
+                            //   so it never reaches the named-sport branch above) goes to the pre-chosen
+                            //   LEAST-RECENT winners only (_mayTakeCapped). A bunk that merely fell through
+                            //   here, or a non-winner, skips to its next option (Swim) — without this guard
+                            //   the same starved bunks grabbed the 2 nets every day (the rotation bug).
+                            //   Uncapped labels (Swim, ∞ cap) are exempt and place for anyone, unchanged.
+                            if (!_mayTakeCapped(opt, optNorm, bunk)) {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION "${opt}" (cap ${_directFillCap(opt)}/window) not a least-recent winner this window → next option`);
+                            } else if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
