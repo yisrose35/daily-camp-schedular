@@ -73,19 +73,54 @@
         if (!fieldName || typeof fieldName !== 'string' || !slots || slots.length === 0) return false;
 
         const normalizedField = fieldName.toLowerCase().trim();
-        
+        const _newS = (lockInfo && lockInfo.startMin != null) ? lockInfo.startMin : null;
+        const _newE = (lockInfo && lockInfo.endMin != null) ? lockInfo.endMin : null;
+
         for (const slotIdx of slots) {
             if (!this._locks[slotIdx]) {
                 this._locks[slotIdx] = {};
             }
-            
+
             // Check if already locked
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
-                // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy} (${existing.leagueName || existing.activity || existing.reason})`);
-                return false;
+                // ★ TIME-AWARE COLLISION: slot indices are PER-DIVISION, so the
+                //   SAME index is a different clock time in each grade's grid. A
+                //   pinned event at 2:50pm (div A, index 1) and a league game at
+                //   1:25pm (div B, index 1) collide on the same (index, field) key
+                //   even though they never overlap in time. The old code refused
+                //   the second lock outright, so the field was left UNPROTECTED at
+                //   its real time and the solver double-booked it (observed: a
+                //   league game and a bunk activity on the same court). Only refuse
+                //   when the two windows ACTUALLY overlap; for disjoint times keep
+                //   BOTH by storing the new lock under a deterministic time-
+                //   qualified key. isFieldLockedByTime scans every key, so the
+                //   preserved lock is still found by the solver's time-based check.
+                const _exS = existing.startMin, _exE = existing.endMin;
+                const _timesKnown = (_newS != null && _newE != null && _exS != null && _exE != null);
+                const _overlap = _timesKnown ? (_newS < _exE && _exS < _newE) : true;
+                if (_overlap) {
+                    // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy}`);
+                    return false;
+                }
+                // Disjoint times sharing a per-division index → preserve both.
+                const _altKey = slotIdx + '#' + _newS;
+                if (!this._locks[_altKey]) this._locks[_altKey] = {};
+                const _alt = this._locks[_altKey][normalizedField];
+                if (_alt) {
+                    const _aS = _alt.startMin, _aE = _alt.endMin;
+                    const _aOverlap = (_aS == null || _aE == null) ? true : (_newS < _aE && _aS < _newE);
+                    if (_aOverlap) return false; // genuine same-time conflict at the alt key
+                }
+                this._locks[_altKey][normalizedField] = {
+                    ...lockInfo,
+                    lockType: 'global',
+                    fieldName: fieldName,
+                    timestamp: Date.now()
+                };
+                continue;
             }
-            
+
             this._locks[slotIdx][normalizedField] = {
     ...lockInfo,
     lockType: 'global',
