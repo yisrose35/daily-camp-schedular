@@ -673,12 +673,24 @@
         
         const fragment = document.createDocumentFragment();
         
-       const groupOrder = Object.keys(state.divisionGroups).sort((a, b) => {
-            const gradesA = state.divisionGroups[a]?.grades || [];
-            const gradesB = state.divisionGroups[b]?.grades || [];
-            const numA = parseInt(String(gradesA[0] || '').match(/(\d+)/)?.[1]) || 999;
-            const numB = parseInt(String(gradesB[0] || '').match(/(\d+)/)?.[1]) || 999;
-            return numA - numB;
+       // Parent-group order = the Me page order. Derive it from getUserDivisionOrder
+       // (the single source of truth for column order) so this "Scheduling Grades"
+       // view matches Camp Structure exactly instead of re-sorting parents by the
+       // number inside their first grade (which diverged from Me for named divisions
+       // like Camp Agudah / Day Camp). state.divisions is already keyed in
+       // getUserDivisionOrder order; dedupe its parents to get the group order.
+        const _orderedGradeKeys = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(Object.keys(state.divisions))
+            : Object.keys(state.divisions);
+        const _seenParents = new Set();
+        const groupOrder = [];
+        _orderedGradeKeys.forEach(gradeKey => {
+            const parent = (state.divisions[gradeKey] && state.divisions[gradeKey].parentDivision) || 'All';
+            if (!_seenParents.has(parent)) { _seenParents.add(parent); groupOrder.push(parent); }
+        });
+        // Defensive: include any groups that have no grades in state.divisions.
+        Object.keys(state.divisionGroups).forEach(p => {
+            if (!_seenParents.has(p)) { _seenParents.add(p); groupOrder.push(p); }
         });
         
         groupOrder.forEach(parentDivName => {
