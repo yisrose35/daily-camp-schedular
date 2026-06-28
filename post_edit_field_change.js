@@ -394,8 +394,16 @@
       // when teams/sport actually changed (a pure field move doesn't affect them).
       try {
         if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.editGameRecord === 'function') {
+          // ★ Use the date of the schedule actually loaded/edited (the unified
+          //   loader stamps window._scheduleAssignmentsDate when it loads a date
+          //   into window.scheduleAssignments — the very data applyFieldChange
+          //   mutates). window.currentScheduleDate is the global PICKER, which can
+          //   point at a different day than the grid being edited (e.g. viewing a
+          //   past date while the picker sits on another) — that mismatch sent the
+          //   rotation-history edit to the wrong day, so the change was never
+          //   reflected in the gameLog. Fall back to the picker if the stamp is unset.
           window.SchedulerCoreLeagues.editGameRecord(
-            ctx.leagueName, window.currentScheduleDate,
+            ctx.leagueName, (window._scheduleAssignmentsDate || window.currentScheduleDate),
             { teamA: oldA, teamB: oldB, sport: oldSport },
             { teamA: newA, teamB: newB, sport: changeSport ? newSport : oldSport }
           );
@@ -445,7 +453,9 @@
     var leagues = gs.specialtyLeagues || [];
     var league = leagues.filter(function (l) { return norm(l.name) === norm(ctx.leagueName); })[0];
     var id = league ? league.id : null;
-    var date = window.currentScheduleDate;
+    // ★ Date of the schedule actually being edited (see note in applyFieldChange) —
+    //   not the global picker, which can point at a different day than the grid.
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
     if (!id || !date || !history.gameLog[id] || !history.gameLog[id][date]) return;
     var entries = history.gameLog[id][date];
     var hit = false;

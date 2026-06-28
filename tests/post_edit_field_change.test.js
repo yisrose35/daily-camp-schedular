@@ -298,6 +298,39 @@ test('applyFieldChange — changes the matchup TEAMS + syncs regular-league rota
   assert.deepStrictEqual(edits[0][3], { teamA: 'N.Y', teamB: 'Toronto', sport: 'Basketball' });
 });
 
+test('applyFieldChange — rotation sync targets the EDITED schedule date, not the global picker', () => {
+  // Regression: editing a game on a date that is loaded into scheduleAssignments
+  // while the picker (currentScheduleDate) sits on another day must sync the
+  // rotation history to the LOADED date (window._scheduleAssignmentsDate).
+  const edits = [];
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['L.A vs Dallas @ Clubhouse (Baseball)'] }],
+  };
+  global.window.leagueAssignments = {
+    State: { 1: { leagueName: 'State League', _allMatchups: ['L.A vs Dallas @ Clubhouse (Baseball)'] } },
+  };
+  global.window.divisionTimes = { State: [null, { startMin: 600, endMin: 645 }] };
+  global.window.fieldLabel = (f) => f;
+  global.window.getAllLocations = () => [{ name: 'ABBL Arena', type: 'field', activities: ['Basketball'], capacity: 1 }];
+  global.window.GlobalFieldLocks = { isFieldLockedByTime: () => null, unlockField: () => {}, lockField: () => true };
+  delete global.window.findFieldsForActivity;
+  global.window.leaguesByName = { 'State League': { teams: ['L.A', 'Dallas'], sports: ['Basketball', 'Baseball'] } };
+  global.window.currentScheduleDate = '2026-07-03';        // picker is on a DIFFERENT day
+  global.window._scheduleAssignmentsDate = '2026-06-25';   // the loaded/edited schedule
+  global.window.SchedulerCoreLeagues = { editGameRecord: (...a) => { edits.push(a); return { ok: true }; } };
+
+  const ctx = {
+    kind: 'regular', divName: 'State', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'State League', slots: [1],
+    game: { teamA: 'L.A', teamB: 'Dallas', teams: 'L.A vs Dallas', field: 'Clubhouse', sport: 'Baseball' },
+  };
+  const res = PEFC.applyFieldChange(ctx, 'ABBL Arena', 'Basketball');
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(edits.length, 1);
+  assert.strictEqual(edits[0][1], '2026-06-25', 'sync must use the edited schedule date, not the picker');
+  delete global.window._scheduleAssignmentsDate;
+});
+
 test('applyFieldChange — pure field move does NOT call rotation sync', () => {
   const edits = [];
   global.window.scheduleAssignments = { BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] }] };
