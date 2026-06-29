@@ -1839,6 +1839,12 @@ function getStyles() {
     /* Standard Excel fill colors for categories */
     '.pc3-tbl .cell-pinned{background:#fff2cc;color:#000;}' +
     '.pc3-tbl .cell-league{background:#ddebf7;color:#000;}' +
+    /* League cells with multiple matchups: one matchup per line, a thin rule
+       between each so games are clearly separated (see pcCellHtml). */
+    '.pc3-tbl td .pc3-mu{display:block;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.35);line-height:1.25;}' +
+    '.pc3-tbl td .pc3-mu:first-child{padding-top:0;}' +
+    '.pc3-tbl td .pc3-mu:last-child{border-bottom:none;padding-bottom:0;}' +
+    '.pc3-tbl td .pc3-mu-head{font-weight:700;}' +
     '.pc3-tbl .cell-transition{background:#f2f2f2;color:#000;font-size:11px;font-weight:400;font-style:italic;}' +
     /* Black-and-white override for the print sheets — applied only while
        rasterizing the preview to a JPEG / image-print (white cells, black
@@ -3004,11 +3010,10 @@ function renderSharedTimelineTable(grades) {
         var txt, cls;
         if (!seg) {
             var lg0 = pcLeagueInfoAt(c.grade, r.startMin);
-            if (lg0) { txt = lg0.label + (lg0.matchups.length && !t.hideLeagueMatchups ? ' │ ' + lg0.matchups.join(', ') : ''); cls = 'cell-league'; }
+            if (lg0) { txt = pcLeagueCellText(lg0.label, t.hideLeagueMatchups ? [] : lg0.matchups); cls = 'cell-league'; }
             else { txt = '—'; cls = 'cell-free'; }
         } else if (!auto && seg.isLeague) {
-            txt = seg.event || 'League Game';
-            if (!t.hideLeagueMatchups) { var mm = buildLeagueMatchups(seg, c.grade); if (mm.length) txt += ' │ ' + mm.join(', '); }
+            txt = pcLeagueCellText(seg.event || 'League Game', t.hideLeagueMatchups ? [] : buildLeagueMatchups(seg, c.grade));
             cls = 'cell-league';
         } else {
             var isLeagueAct = !!(seg.entry && (seg.entry._h2h || seg.entry._league || seg.entry._isSpecialtyLeague || seg.entry._allMatchups));
@@ -3016,7 +3021,7 @@ function renderSharedTimelineTable(grades) {
             if (isLeagueAct || leagueInfo) {
                 var lbl = (seg.entry && (seg.entry._gameLabel || seg.entry._leagueName)) || (leagueInfo && leagueInfo.label) || 'League Game';
                 var ms = (leagueInfo && leagueInfo.matchups) || [];
-                txt = lbl + (ms.length && !t.hideLeagueMatchups ? ' │ ' + ms.join(', ') : '');
+                txt = pcLeagueCellText(lbl, t.hideLeagueMatchups ? [] : ms);
                 cls = 'cell-league';
             } else {
                 txt = seg.entry ? formatEntry(seg.entry) : '—';
@@ -3109,7 +3114,7 @@ function renderSharedTimelineTable(grades) {
                 }
                 for (var rr = ri; rr < ri + rowspan; rr++) for (var c2 = ci; c2 < ci + colspan; c2++) done[kk(rr, c2)] = 1;
                 html += '<td class="' + cell.cls + '"' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
-                    ' data-cell-text="' + escHtml(cell.text) + '" style="text-align:center;">' + escHtml(cell.text) + '</td>';
+                    ' data-cell-text="' + escHtml(cell.text.replace(/\n/g, ' │ ')) + '" style="text-align:center;white-space:pre-line;">' + pcCellHtml(cell.text) + '</td>';
             }
             html += '</tr>';
         });
@@ -3144,7 +3149,7 @@ function renderSharedTimelineTable(grades) {
                 }
                 for (var rr2 = bi; rr2 < bi + rowspanT; rr2++) for (var c3 = ti; c3 < ti + colspanT; c3++) done[kk(rr2, c3)] = 1;
                 html += '<td class="' + cellT.cls + '"' + (colspanT > 1 ? ' colspan="' + colspanT + '"' : '') + (rowspanT > 1 ? ' rowspan="' + rowspanT + '"' : '') +
-                    ' data-cell-text="' + escHtml(cellT.text) + '" style="text-align:center;">' + escHtml(cellT.text) + '</td>';
+                    ' data-cell-text="' + escHtml(cellT.text.replace(/\n/g, ' │ ')) + '" style="text-align:center;white-space:pre-line;">' + pcCellHtml(cellT.text) + '</td>';
             }
             html += '</tr>';
         });
@@ -3198,15 +3203,12 @@ function renderManualBunksTop(divName, bunks, blocks) {
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
         if (eb.isLeague) {
-            // ★ #V2-17: escape the league event + matchup names (user-controlled) before
-            //   injecting; keep the intentional <br>. The sibling paths (renderManualTimeTop
-            //   L2320, live views L3654/3618/3598) already escape — this was the lone raw render.
-            var leagueText = escHtml(eb.event);
-            if (!_currentTemplate.hideLeagueMatchups) {
-                var matchups = buildLeagueMatchups(eb, divName);
-                if (matchups.length) leagueText += '<br>' + escHtml(matchups.join(', '));
-            }
-            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + leagueText + '</strong></td>';
+            // Each matchup on its own line, with a thin rule between games
+            // (pcCellHtml + .pc3-mu styling). pcCellHtml escapes the user-controlled
+            // event + matchup names. The game label renders as the bold head line.
+            var _lgMatchups = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, divName);
+            var _lgText = pcLeagueCellText(eb.event, _lgMatchups);
+            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_lgText.replace(/\n/g, ' │ ')) + '" colspan="' + bunks.length + '" style="text-align:center;white-space:pre-line;">' + pcCellHtml(_lgText) + '</td>';
         } else {
             bunks.forEach(function (b, bi) {
                 var si = findFirstSlotForTime(eb.startMin, divName);
@@ -3274,12 +3276,10 @@ function renderManualTimeTop(divName, bunks, blocks) {
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) {
                 type = 'league';
-                text = eb.event || 'League Game';
-                if (!_currentTemplate.hideLeagueMatchups) {
-                    var matchups = buildLeagueMatchups(eb, divName, b);
-                    if (matchups.length) text = matchups.join(', ');
-                }
-                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+                var _mtMatchups = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, divName, b);
+                // Per-bunk cell: just this bunk's game(s), one matchup per line.
+                text = _mtMatchups.length ? pcLeagueCellText('', _mtMatchups) : (eb.event || 'League Game');
+                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text.replace(/\n/g, ' │ ')) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '" style="white-space:pre-line;">' + pcCellHtml(text) + '</td>';
             } else {
                 var inner = pcCellInnerHtml(text, type, {
                     preChange: entry ? (entry._splitPreChange || 0) : 0,
