@@ -1046,6 +1046,25 @@
             _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
         }
 
+        // ★ BUNK-LEVEL ROTATION GATE — single source of truth (rotation_engine.js).
+        //   Every OTHER manual special-placement path scores candidates through
+        //   RotationEngine.calculateLimitScore; the Smart Tile budget pre-pass,
+        //   guarantee pre-pass (_seatSpecials) and the per-bunk rotation loop did
+        //   NOT, so smart-placed specials ignored: frequencyDays cooldown,
+        //   availableDays weekday, multiPart daysBetween/totalParts, rotationCohort,
+        //   and even the maxUsage / exactFrequency ceilings. calculateLimitScore
+        //   returns Infinity exactly when the special must NOT be placed for this
+        //   bunk — re-use it so the swap engine matches the rest of the builder.
+        //   Fail-open (only block on an explicit Infinity) so nothing is silently
+        //   dropped if the engine isn't loaded; blocked specials simply route the
+        //   bunk to its fallback/open activity, so slots are never left empty.
+        const _specialGateBlocks = (bunk, divName, specialName) => {
+            const RE = window.RotationEngine;
+            if (!RE || typeof RE.calculateLimitScore !== 'function' || !specialName) return false;
+            try { return RE.calculateLimitScore(bunk, specialName, activityProperties, divName) === Infinity; }
+            catch (_eGate) { return false; }
+        };
+
         // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
         //   A rotation/tile option that is NOT a configured field, special, or hosted
         //   sport is placed as its own label — exactly like Swim (the "direct fill"
@@ -1119,6 +1138,7 @@
                 const hist = historicalCounts[bunk] || {};
                 const cands = [...avail].sort((a, b) => (hist[a.name] || 0) - (hist[b.name] || 0));
                 for (const s of cands) {
+                    if (_specialGateBlocks(bunk, divName, s.name)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                     if (!_canClaim(s.name, startMin, endMin, s.capacity || 1, divName)) continue;
                     _registerClaim(s.name, startMin, endMin, divName);
                     out[bunk] = s.name;
@@ -1411,6 +1431,7 @@
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
                let _assigned = false;
                for (const [candidateName] of candidates) {
+                    if (_specialGateBlocks(entry.bunk, entry.divName, candidateName)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                     const _maxCap = _uniqueSpecials.get(candidateName) || 1;
                     if (!_canClaim(candidateName, startMin, endMin, _maxCap, entry.divName)) continue;
                     _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
@@ -1738,6 +1759,7 @@
                                         if (_had && _had.has(_rn.toLowerCase())) continue;       // already had today
                                         if (typeof window.isSpecialAvailableForBunk === 'function'
                                             && !window.isSpecialAvailableForBunk(_rn, divName, bunk, window.loadGlobalSettings?.())) continue;
+                                        if (_specialGateBlocks(bunk, divName, _rn)) continue;    // cooldown/availableDays/multiPart/cohort/ceiling
                                         _resvList.splice(_ri, 1);                                 // consume (already claimed)
                                         _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
                                         (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_rn.toLowerCase());
@@ -1754,6 +1776,7 @@
                                     //   bunk that has no access (e.g. "Sushi" gated to certain bunks).
                                     if (typeof window.isSpecialAvailableForBunk === 'function'
                                         && !window.isSpecialAvailableForBunk(sp.name, divName, bunk, window.loadGlobalSettings?.())) continue;
+                                    if (_specialGateBlocks(bunk, divName, sp.name)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
                                     _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
@@ -1784,7 +1807,7 @@
                             }
                         } else if (knownSpecialNames.has(optNorm)) {
                             const _had2 = _bunkSpecialsToday[bunk];
-                            if (!(_had2 && _had2.has(optNorm))) { // skip if already had this special today
+                            if (!(_had2 && _had2.has(optNorm)) && !_specialGateBlocks(bunk, divName, opt)) { // skip if already had today OR rotation-gated (cooldown/availableDays/multiPart/cohort/ceiling)
                                 const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
                                 if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
                                     _registerClaim(opt, _rStart, _rEnd, divName);
