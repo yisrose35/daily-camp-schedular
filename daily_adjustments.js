@@ -7654,7 +7654,6 @@ function renderResourceOverridesUI() {
         </div>
       </div>
     </div>
-    <div id="da-bunk-restrictions-panel" style="margin-top:20px;"></div>
   `;
   
   // Local alias delegates to the module-scope unified saver so toggling
@@ -7737,196 +7736,137 @@ function renderResourceOverridesUI() {
   });
   
   renderOverrideDetailPane();
-  renderBunkRestrictionsPanel();
 }
 
 // =================================================================
-// BUNK-ONLY ACTIVITY RESTRICTIONS (Resources panel)
-// "This activity/sport/facility is only available for these bunk(s) today."
-// Restriction-only: listed bunks may receive it; all others are blocked.
-// Persists via the same dailyActivityBunkRestrictions resource-override key
-// (saveOverridesUnified → cloud + campResourceOverrides_<date>).
+// BUNK-ONLY ACCESS — per-facility, inside the facility detail pane.
+// "On THIS facility, this activity is only available for these bunk(s) today."
+// FACILITY-SCOPED, restriction-only: listed bunks may receive it; all other
+// bunks are blocked from that (facility, activity) placement.
+// Entry shape: { id, facility, activity, bunks } where activity '*' = whole
+// facility. Persists via the dailyActivityBunkRestrictions resource-override
+// key (saveOverridesUnified → cloud + campResourceOverrides_<date>).
 // =================================================================
 
-// Draft state for the add/edit form (module scope so re-renders don't lose it).
-let _brDraftType = 'special';
-let _brEditId = null;
+// Which (facility||activity) row is currently expanded for editing, or null.
+let _brEditKey = null;
 
 function _brGenId() {
   return 'r_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }
 
-// Targets for the currently-selected type, reusing the bulk-override enumerator.
-function _brTargetsForType(type) {
-  let groups = {};
-  try { groups = _boGetActivityGroups() || {}; } catch (_e) { groups = {}; }
-  if (type === 'special') return (groups.specials || []).map(o => o.name);
-  if (type === 'sport') return (groups.sports || []).map(o => o.name);
-  // facility: fields + named facilities (dedup by name)
-  const names = []
-    .concat((groups.fields || []).map(o => o.name))
-    .concat((groups.facilities || []).map(o => o.name));
-  return [...new Set(names.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+function _brFindEntry(facility, activity) {
+  const fLc = String(facility).toLowerCase();
+  return (currentOverrides.dailyActivityBunkRestrictions || []).find(r =>
+    r && String(r.facility).toLowerCase() === fLc && String(r.activity) === String(activity));
 }
 
-function renderBunkRestrictionsPanel() {
-  const panel = document.getElementById('da-bunk-restrictions-panel');
-  if (!panel) return;
-
-  const list = currentOverrides.dailyActivityBunkRestrictions || [];
-  const targets = _brTargetsForType(_brDraftType);
-  const typeOpt = (v, label) => `<option value="${v}" ${_brDraftType === v ? 'selected' : ''}>${label}</option>`;
-
-  // Existing restriction entry being edited (to prefill chips/target)
-  const editing = _brEditId ? list.find(r => r.id === _brEditId) : null;
-  const editTarget = editing ? editing.target : '';
-
-  let html = `
-    <div class="da-section">
-      <h3 class="da-section-title">Bunk-Only Restrictions (today)</h3>
-      <p class="da-section-desc">Reserve an activity, sport, or facility so that <strong>only the selected bunk(s)</strong> may be scheduled for it today. Every other bunk is blocked from it. (It does not force the chosen bunk to get it.)</p>
-
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
-        <select id="br-type" class="da-select da-select-sm">
-          ${typeOpt('special', 'Special')}${typeOpt('sport', 'Sport')}${typeOpt('facility', 'Facility/Field')}
-        </select>
-        <select id="br-target" class="da-select da-select-sm" style="min-width:180px;">
-          <option value="">— choose —</option>
-          ${targets.map(t => `<option value="${_escHtml(t)}" ${t === editTarget ? 'selected' : ''}>${_escHtml(t)}</option>`).join('')}
-        </select>
-      </div>
-
-      <div style="margin-top:10px;">
-        <div style="font-size:12px;color:#64748b;margin-bottom:6px;">Allowed bunk(s):</div>
-        <div id="br-bunk-chips"></div>
-      </div>
-
-      <div style="margin-top:10px;display:flex;gap:8px;">
-        <button id="br-add-btn" class="da-btn da-btn-primary da-btn-sm">${editing ? 'Save Restriction' : 'Add Restriction'}</button>
-        ${editing ? '<button id="br-cancel-btn" class="da-btn da-btn-sm">Cancel</button>' : ''}
-      </div>
-  `;
-
-  if (list.length > 0) {
-    html += `<div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;">
-      <span style="font-size:13px;color:#374151;"><strong>${list.length}</strong> restriction(s) today</span>
-      <button id="br-clear-all" class="da-btn da-btn-danger da-btn-sm">Clear All</button>
-    </div>`;
-    html += '<div id="br-list" style="margin-top:8px;"></div>';
+// Save (create/update) or clear a facility-scoped restriction for (facility, activity).
+// An empty bunk list removes the entry (= "all bunks", no restriction).
+function _brSetEntry(facility, activity, bunks) {
+  let arr = (currentOverrides.dailyActivityBunkRestrictions || []).filter(r =>
+    !(String(r.facility).toLowerCase() === String(facility).toLowerCase() && String(r.activity) === String(activity)));
+  if (Array.isArray(bunks) && bunks.length > 0) {
+    arr = arr.concat([{ id: _brGenId(), facility, activity, bunks }]);
   }
-  html += '</div>';
-  panel.innerHTML = html;
+  currentOverrides.dailyActivityBunkRestrictions = arr;
+  saveOverridesUnified();
+}
 
-  // ── Bunk chip picker (division-ordered, reusing renderBunkOverridesUI's model) ──
-  const chipsEl = document.getElementById('br-bunk-chips');
+// Render the "Bunk-Only Access" section for ONE facility into containerEl.
+// rows = [{ activity, label, badge }] (activity '*' for the whole facility).
+function renderFacilityBunkAccess(containerEl, facilityName, rows) {
+  if (!containerEl) return;
+  containerEl.innerHTML = '';
+
   const divisions = masterSettings.app1?.divisions || {};
   const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
   const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
     ? window.getUserDivisionOrder(_rawAvail.slice())
     : _rawAvail.slice();
-  const preselect = new Set(editing ? (editing.bunks || []).map(String) : []);
-  if (chipsEl) {
-    if (availableDivisions.length === 0) {
-      chipsEl.innerHTML = '<span style="color:#94a3b8;font-size:12px;">No divisions found.</span>';
-    } else {
-      availableDivisions.forEach(divName => {
-        const color = divisions[divName]?.color || '#64748b';
-        const bunks = divisions[divName]?.bunks || [];
-        if (!bunks.length) return;
-        const wrap = document.createElement('div');
-        wrap.style.cssText = 'margin-bottom:8px;';
-        wrap.innerHTML = `<div style="font-size:11px;font-weight:600;color:${color};margin-bottom:4px;">${_escHtml(divName)}</div>`;
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
-        bunks.forEach(b => {
-          const chip = createChip(b, color);
-          if (preselect.has(String(b))) {
-            chip.classList.add('selected');
-            chip.style.backgroundColor = color;
-            chip.style.color = 'white';
-          }
-          row.appendChild(chip);
+
+  rows.forEach(({ activity, label, badge }) => {
+    const key = facilityName + '||' + activity;
+    const entry = _brFindEntry(facilityName, activity);
+    const isEditing = _brEditKey === key;
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'da-resource-item';
+    rowEl.style.cssText = 'flex-direction:column;align-items:stretch;gap:8px;';
+
+    // ── Summary line ──
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;';
+    const summary = entry
+      ? `<span style="color:#0A4A56;font-weight:600;">Only: ${_escHtml((entry.bunks || []).join(', '))}</span>`
+      : `<span style="color:#94a3b8;">All bunks</span>`;
+    head.innerHTML = `
+      <span class="da-resource-name">${badge || ''}<strong>${_escHtml(label)}</strong></span>
+      <span style="display:flex;align-items:center;gap:8px;">${summary}
+        <button class="da-btn da-btn-sm br-edit">${isEditing ? 'Close' : (entry ? 'Edit' : 'Restrict…')}</button>
+        ${entry ? '<button class="da-btn da-btn-danger da-btn-sm br-clear">✕</button>' : ''}
+      </span>`;
+    rowEl.appendChild(head);
+
+    head.querySelector('.br-edit').onclick = () => {
+      _brEditKey = isEditing ? null : key;
+      renderOverrideDetailPane();
+    };
+    const clearBtn = head.querySelector('.br-clear');
+    if (clearBtn) clearBtn.onclick = () => { _brSetEntry(facilityName, activity, []); _brEditKey = null; renderOverrideDetailPane(); };
+
+    // ── Inline chip picker (only for the expanded row) ──
+    if (isEditing) {
+      const preselect = new Set(entry ? (entry.bunks || []).map(String) : []);
+      const picker = document.createElement('div');
+      picker.style.cssText = 'border-top:1px dashed var(--da-border);padding-top:8px;';
+      const chipsWrap = document.createElement('div');
+      if (availableDivisions.length === 0) {
+        chipsWrap.innerHTML = '<span style="color:#94a3b8;font-size:12px;">No divisions found.</span>';
+      } else {
+        availableDivisions.forEach(divName => {
+          const color = divisions[divName]?.color || '#64748b';
+          const bunks = divisions[divName]?.bunks || [];
+          if (!bunks.length) return;
+          const grp = document.createElement('div');
+          grp.style.cssText = 'margin-bottom:8px;';
+          grp.innerHTML = `<div style="font-size:11px;font-weight:600;color:${color};margin-bottom:4px;">${_escHtml(divName)}</div>`;
+          const chipRow = document.createElement('div');
+          chipRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+          bunks.forEach(b => {
+            const chip = createChip(b, color);
+            if (preselect.has(String(b))) {
+              chip.classList.add('selected');
+              chip.style.backgroundColor = color;
+              chip.style.color = 'white';
+            }
+            chipRow.appendChild(chip);
+          });
+          grp.appendChild(chipRow);
+          chipsWrap.appendChild(grp);
         });
-        wrap.appendChild(row);
-        chipsEl.appendChild(wrap);
-      });
-    }
-  }
+      }
+      picker.appendChild(chipsWrap);
 
-  // ── Handlers ──
-  const typeSel = document.getElementById('br-type');
-  if (typeSel) typeSel.onchange = () => { _brDraftType = typeSel.value; renderBunkRestrictionsPanel(); };
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:8px;margin-top:6px;';
+      actions.innerHTML = `
+        <button class="da-btn da-btn-primary da-btn-sm br-save">Save</button>
+        <button class="da-btn da-btn-sm br-cancel">Cancel</button>`;
+      picker.appendChild(actions);
+      rowEl.appendChild(picker);
 
-  const addBtn = document.getElementById('br-add-btn');
-  if (addBtn) addBtn.onclick = () => {
-    const target = (document.getElementById('br-target')?.value || '').trim();
-    if (!target) { daShowAlert('Please choose an activity, sport, or facility.'); return; }
-    const selectedBunks = Array.from(panel.querySelectorAll('#br-bunk-chips .da-chip.selected')).map(c => c.dataset.value);
-    if (selectedBunks.length === 0) { daShowAlert('Please select at least one bunk that is allowed.'); return; }
-    let arr = currentOverrides.dailyActivityBunkRestrictions || [];
-    if (_brEditId) {
-      arr = arr.map(r => r.id === _brEditId ? { ...r, targetType: _brDraftType, target, bunks: selectedBunks } : r);
-      _brEditId = null;
-    } else {
-      arr = arr.concat([{ id: _brGenId(), targetType: _brDraftType, target, bunks: selectedBunks }]);
-    }
-    currentOverrides.dailyActivityBunkRestrictions = arr;
-    saveOverridesUnified();
-    renderBunkRestrictionsPanel();
-  };
-
-  const cancelBtn = document.getElementById('br-cancel-btn');
-  if (cancelBtn) cancelBtn.onclick = () => { _brEditId = null; renderBunkRestrictionsPanel(); };
-
-  const clearBtn = document.getElementById('br-clear-all');
-  if (clearBtn) clearBtn.onclick = () => {
-    daShowConfirm('Clear ALL bunk-only restrictions for today?', { danger: true, confirmText: 'Clear All' }).then(ok => {
-      if (!ok) return;
-      currentOverrides.dailyActivityBunkRestrictions = [];
-      _brEditId = null;
-      saveOverridesUnified();
-      renderBunkRestrictionsPanel();
-    });
-  };
-
-  // ── Existing restriction rows ──
-  const listEl = document.getElementById('br-list');
-  if (listEl) {
-    const typeLabel = { special: 'Special', sport: 'Sport', facility: 'Facility' };
-    listEl.innerHTML = '';
-    list.forEach(r => {
-      const row = document.createElement('div');
-      row.className = 'da-resource-item';
-      row.innerHTML = `
-        <span class="da-resource-name">
-          <span class="da-badge" style="background:#eef2ff;color:#3730a3;">${typeLabel[r.targetType] || r.targetType}</span>
-          <strong>${_escHtml(r.target)}</strong>
-          <span style="color:#64748b;">→ ${_escHtml((r.bunks || []).join(', '))}</span>
-        </span>
-        <span style="display:flex;gap:6px;">
-          <button class="da-btn da-btn-sm br-edit" data-id="${r.id}">Edit</button>
-          <button class="da-btn da-btn-danger da-btn-sm br-remove" data-id="${r.id}">✕</button>
-        </span>`;
-      listEl.appendChild(row);
-    });
-    listEl.querySelectorAll('.br-remove').forEach(btn => {
-      btn.onclick = () => {
-        currentOverrides.dailyActivityBunkRestrictions = (currentOverrides.dailyActivityBunkRestrictions || []).filter(r => r.id !== btn.dataset.id);
-        if (_brEditId === btn.dataset.id) _brEditId = null;
-        saveOverridesUnified();
-        renderBunkRestrictionsPanel();
+      actions.querySelector('.br-save').onclick = () => {
+        const selected = Array.from(chipsWrap.querySelectorAll('.da-chip.selected')).map(c => c.dataset.value);
+        _brSetEntry(facilityName, activity, selected);
+        _brEditKey = null;
+        renderOverrideDetailPane();
       };
-    });
-    listEl.querySelectorAll('.br-edit').forEach(btn => {
-      btn.onclick = () => {
-        const entry = (currentOverrides.dailyActivityBunkRestrictions || []).find(r => r.id === btn.dataset.id);
-        if (!entry) return;
-        _brEditId = entry.id;
-        _brDraftType = entry.targetType;
-        renderBunkRestrictionsPanel();
-      };
-    });
-  }
+      actions.querySelector('.br-cancel').onclick = () => { _brEditKey = null; renderOverrideDetailPane(); };
+    }
+
+    containerEl.appendChild(rowEl);
+  });
 }
 
 function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false, hasTimeRules = false) {
@@ -8040,6 +7980,12 @@ function renderOverrideDetailPane() {
         <div id="da-sports-checkboxes"></div>
       </div>
       ` : ''}
+
+      <div class="da-detail-section">
+        <h5>🔒 Bunk-Only Access</h5>
+        <p class="da-section-desc">Reserve this facility (or one of its activities) for specific bunk(s) today — every other bunk is blocked from it here. Leave as "All bunks" for no restriction.</p>
+        <div id="da-bunk-access-list"></div>
+      </div>
     `;
     
     // Render global rules
@@ -8136,6 +8082,30 @@ function renderOverrideDetailPane() {
           };
           checkboxesEl.appendChild(label);
         });
+      }
+    }
+
+    // ── Bunk-Only Access rows: whole facility + each hosted activity ──
+    {
+      const accessEl = document.getElementById('da-bunk-access-list');
+      if (accessEl) {
+        const sportBadge = '<span class="da-badge" style="background:#ecfdf5;color:#065f46;">Sport</span>';
+        const specialBadge = '<span class="da-badge" style="background:#eef2ff;color:#3730a3;">Special</span>';
+        const rows = [{ activity: '*', label: 'Entire facility', badge: '<span class="da-badge" style="background:#f1f5f9;color:#334155;">Facility</span>' }];
+        // Sports hosted here (field-like facilities expose them as item.activities)
+        (isFieldLike ? (item.activities || []) : []).forEach(sp => {
+          rows.push({ activity: sp, label: sp, badge: sportBadge });
+        });
+        // Special activities whose configured location is this facility
+        const nameLc = String(name).toLowerCase();
+        (masterSettings.app1?.specialActivities || []).forEach(s => {
+          if (s && s.location && String(s.location).toLowerCase() === nameLc) {
+            if (!rows.some(r => String(r.activity).toLowerCase() === String(s.name).toLowerCase())) {
+              rows.push({ activity: s.name, label: s.name, badge: specialBadge });
+            }
+          }
+        });
+        renderFacilityBunkAccess(accessEl, name, rows);
       }
     }
   } else {

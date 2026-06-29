@@ -639,20 +639,28 @@
      * =========================================================================
      * PER-DATE BUNK-ONLY ACTIVITY RESTRICTION (Daily Adjustments → Resources)
      * =========================================================================
-     * "This activity/sport/facility is only available for these bunk(s) today."
-     * Restriction-only (allow-list): if a matching restriction exists and this
-     * bunk is NOT in its allow-list, the bunk is BLOCKED from that target.
-     * Targets:
-     *   - targetType 'special'/'sport' → matches the activity NAME (actName)
-     *   - targetType 'facility'        → matches the FIELD/facility name
-     * Data lives in the per-date Resources overrides
-     * (dailyActivityBunkRestrictions), mirrored to the campResourceOverrides_<date>
-     * localStorage blob — read with the same fallback as the sport-disable /
-     * dailyFieldAvailability paths so it works post-gen and on fresh devices.
-     * Fail-open: any read error or empty list → not restricted.
-     * Shared by BOTH engines (manual/total via canBlockFit, auto via
-     * calculateLimitScore / isSpecialAvailableForBunk / isFieldAvailable, and the
-     * fill pass via auto_fill_slot.buildCandidates).
+     * "On THIS facility, this activity is only available for these bunk(s) today."
+     * FACILITY-SCOPED, restriction-only (allow-list): if a matching restriction
+     * exists and this bunk is NOT in its allow-list, the bunk is BLOCKED from that
+     * (facility, activity) placement. Other facilities hosting the same activity
+     * are unaffected.
+     *
+     * Entry shape: { id, facility, activity, bunks:[...] } where:
+     *   - facility = the field/facility name the restriction is scoped to
+     *   - activity = a specific sport/special name, OR '*' = the ENTIRE facility
+     *                (every activity on it restricted to the listed bunks)
+     *
+     * Field resolution: callers at field-level gates (canBlockFit, isFieldAvailable,
+     * the fill pass) pass the concrete fieldName. Field-agnostic gates
+     * (calculateLimitScore, isSpecialAvailableForBunk) pass fieldName=null; we then
+     * resolve the activity's host facility via getLocationForActivity — which
+     * returns a special's fixed host (and null for sports, so multi-field sports
+     * are left to the field-level gates and never over-blocked here).
+     *
+     * Data lives in the per-date Resources overrides (dailyActivityBunkRestrictions),
+     * mirrored to the campResourceOverrides_<date> localStorage blob — read with the
+     * same fallback as the sport-disable / dailyFieldAvailability paths so it works
+     * post-gen and on fresh devices. Fail-open on any read error / empty list.
      */
     Utils.isBunkRestrictedFromTarget = function (bunkName, activityName, fieldName, divName) {
         if (!bunkName) return false;
@@ -671,17 +679,27 @@
             } catch (_e) { /* ignore */ }
         }
         if (!Array.isArray(list) || list.length === 0) return false;
+
+        // Resolve the facility this placement is on. Field-level gates pass it
+        // directly; field-agnostic gates pass null → resolve the activity's host
+        // (specials only; sports resolve to null and are enforced at field gates).
+        let fld = fieldName;
+        if (!fld && activityName && typeof window.getLocationForActivity === 'function') {
+            try { fld = window.getLocationForActivity(activityName); } catch (_e) { fld = null; }
+        }
+        if (!fld) return false; // can't evaluate a facility-scoped rule without a facility
+
+        const fldLc = String(fld).toLowerCase().trim();
         const actLc = activityName ? String(activityName).toLowerCase().trim() : null;
-        const fldLc = fieldName ? String(fieldName).toLowerCase().trim() : null;
         const bunkStr = String(bunkName);
         for (const r of list) {
-            if (!r || !r.target || !Array.isArray(r.bunks)) continue;
-            const tLc = String(r.target).toLowerCase().trim();
-            const isActTarget = (r.targetType === 'special' || r.targetType === 'sport') && actLc && tLc === actLc;
-            const isFacTarget = (r.targetType === 'facility') && fldLc && tLc === fldLc;
-            if (!isActTarget && !isFacTarget) continue;
+            if (!r || !r.facility || !Array.isArray(r.bunks)) continue;
+            if (String(r.facility).toLowerCase().trim() !== fldLc) continue;
+            const isWhole = r.activity === '*' || r.activity == null;
+            const isThisAct = actLc && String(r.activity).toLowerCase().trim() === actLc;
+            if (!isWhole && !isThisAct) continue;
             const allowed = r.bunks.some(b => String(b) === bunkStr);
-            if (!allowed) return true; // matched a restriction, bunk not allowed → blocked
+            if (!allowed) return true; // matched a facility-scoped rule, bunk not allowed → blocked
         }
         return false;
     };

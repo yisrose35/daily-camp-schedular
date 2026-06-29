@@ -1,11 +1,14 @@
 /**
- * Tests for Utils.isBunkRestrictedFromTarget — the per-date "only available for
- * these bunk(s) today" gate (Daily Adjustments → Resources → Bunk-Only
- * Restrictions). Restriction-only allow-list: a matching restriction blocks
- * every bunk NOT in its list.
+ * Tests for Utils.isBunkRestrictedFromTarget — the per-date, FACILITY-SCOPED
+ * "only available for these bunk(s) today" gate (Daily Adjustments → Resources,
+ * inside each facility's detail pane). Restriction-only allow-list: a matching
+ * (facility, activity) restriction blocks every bunk NOT in its list.
  *
- *   - special/sport target → matches by activity name
- *   - facility target      → matches by field/facility name
+ *   - entry = { id, facility, activity, bunks } ; activity '*' = whole facility
+ *   - field-level callers pass the concrete fieldName
+ *   - field-agnostic callers pass fieldName=null → host resolved via
+ *     window.getLocationForActivity (specials only; sports resolve to null and
+ *     are left to the field-level gates)
  *   - reads window.loadCurrentDailyData().dailyActivityBunkRestrictions, with a
  *     localStorage campResourceOverrides_<date> fallback
  *
@@ -42,15 +45,18 @@ function bootUtils() {
     sandbox.AccessControl = null;
     sandbox.currentScheduleDate = '2026-07-15';
     sandbox.loadCurrentDailyData = () => ({});
+    // Host resolver: specials resolve to their location; everything else → null.
+    sandbox._specialHosts = {};
+    sandbox.getLocationForActivity = (n) => sandbox._specialHosts[String(n).toLowerCase()] || null;
 
     const code = fs.readFileSync(path.join(__dirname, '..', 'scheduler_core_utils.js'), 'utf8');
     vm.runInNewContext(code, sandbox, { filename: 'scheduler_core_utils.js' });
     return sandbox;
 }
 
-describe('isBunkRestrictedFromTarget', () => {
+describe('isBunkRestrictedFromTarget (facility-scoped)', () => {
     let win, U;
-    beforeEach(() => { win = bootUtils(); U = win.SchedulerCoreUtils; win.loadCurrentDailyData = () => ({}); });
+    beforeEach(() => { win = bootUtils(); U = win.SchedulerCoreUtils; win.loadCurrentDailyData = () => ({}); win._specialHosts = {}; });
 
     it('is exposed on SchedulerCoreUtils', () => {
         assert.strictEqual(typeof U.isBunkRestrictedFromTarget, 'function');
@@ -63,67 +69,74 @@ describe('isBunkRestrictedFromTarget', () => {
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field A', 'Div'), false);
     });
 
-    it('sport target blocks non-listed bunk, allows listed bunk', () => {
+    it('facility+sport: blocks non-listed bunk only on THAT facility/activity', () => {
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r1', targetType: 'sport', target: 'Soccer', bunks: ['Bunk 1'] }
+            { id: 'r1', facility: 'Field A', activity: 'Soccer', bunks: ['Bunk 1'] }
+        ] });
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field A', 'Div'), true);   // blocked here
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 1', 'Soccer', 'Field A', 'Div'), false);  // allowed
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field B', 'Div'), false);  // other facility unaffected
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Kickball', 'Field A', 'Div'), false); // other activity unaffected
+    });
+
+    it('entire-facility (activity "*") blocks every activity on that facility', () => {
+        win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
+            { id: 'r2', facility: 'Field A', activity: '*', bunks: ['Bunk 1'] }
         ] });
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field A', 'Div'), true);
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Kickball', 'Field A', 'Div'), true);
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 1', 'Soccer', 'Field A', 'Div'), false);
-        // unrelated activity on the same field is not restricted
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Kickball', 'Field A', 'Div'), false);
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field B', 'Div'), false);
     });
 
-    it('special target matches by activity name (not field)', () => {
+    it('field-agnostic call resolves a special host via getLocationForActivity', () => {
+        win._specialHosts = { 'pottery': 'Art Room' };
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r2', targetType: 'special', target: 'Pottery', bunks: ['Bunk 3', 'Bunk 4'] }
+            { id: 'r3', facility: 'Art Room', activity: 'Pottery', bunks: ['Bunk 3'] }
         ] });
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 9', 'Pottery', 'Art Room', 'Div'), true);
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 3', 'Pottery', 'Art Room', 'Div'), false);
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 4', 'Pottery', 'Art Room', 'Div'), false);
+        // fieldName null → host resolves to Art Room → enforced
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 9', 'Pottery', null, 'Div'), true);
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 3', 'Pottery', null, 'Div'), false);
     });
 
-    it('facility target matches by field name, ignores activity', () => {
+    it('field-agnostic call for a multi-field sport (no host) does NOT block', () => {
+        // No host for 'Soccer' → can't evaluate facility scope → leave to field gates.
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r3', targetType: 'facility', target: 'Baseball Field 1', bunks: ['Bunk 2'] }
+            { id: 'r4', facility: 'Field A', activity: 'Soccer', bunks: ['Bunk 1'] }
         ] });
-        // any activity on that facility is blocked for non-listed bunks
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 5', 'Baseball', 'Baseball Field 1', 'Div'), true);
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Baseball', 'Baseball Field 1', 'Div'), false);
-        // a sport-named match must NOT trigger a facility entry
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 5', 'Baseball Field 1', 'Other Field', 'Div'), false);
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', null, 'Div'), false);
     });
 
-    it('matching is case-insensitive on the target', () => {
+    it('case-insensitive on facility and activity', () => {
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r4', targetType: 'sport', target: 'soccer', bunks: ['Bunk 1'] }
+            { id: 'r5', facility: 'field a', activity: 'soccer', bunks: ['Bunk 1'] }
         ] });
-        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'SOCCER', 'Field A', 'Div'), true);
+        assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'SOCCER', 'FIELD A', 'Div'), true);
     });
 
     it('bunk membership tolerates string/number coercion', () => {
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r5', targetType: 'sport', target: 'Soccer', bunks: [1, 2] }
+            { id: 'r6', facility: 'Field A', activity: 'Soccer', bunks: [1, 2] }
         ] });
         assert.strictEqual(U.isBunkRestrictedFromTarget('1', 'Soccer', 'Field A', 'Div'), false);
         assert.strictEqual(U.isBunkRestrictedFromTarget('3', 'Soccer', 'Field A', 'Div'), true);
     });
 
-    it('multiple entries: blocked if ANY matching entry excludes the bunk', () => {
+    it('blocked if ANY matching entry excludes the bunk (whole-facility + per-activity)', () => {
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'a', targetType: 'sport', target: 'Soccer', bunks: ['Bunk 1', 'Bunk 2'] },
-            { id: 'b', targetType: 'facility', target: 'Field A', bunks: ['Bunk 1'] }
+            { id: 'a', facility: 'Field A', activity: 'Soccer', bunks: ['Bunk 1', 'Bunk 2'] },
+            { id: 'b', facility: 'Field A', activity: '*', bunks: ['Bunk 1'] }
         ] });
-        // Bunk 2 allowed by the sport entry but blocked by the facility entry
+        // Bunk 2 allowed by the Soccer entry but blocked by the whole-facility entry
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field A', 'Div'), true);
-        // Bunk 1 allowed by both
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 1', 'Soccer', 'Field A', 'Div'), false);
     });
 
-    it('falls back to localStorage campResourceOverrides_<date> when daily data is empty', () => {
+    it('falls back to localStorage campResourceOverrides_<date>', () => {
         win.loadCurrentDailyData = () => ({});
         win.currentScheduleDate = '2026-07-15';
         win.localStorage.setItem('campResourceOverrides_2026-07-15', JSON.stringify({
-            dailyActivityBunkRestrictions: [{ id: 'r6', targetType: 'sport', target: 'Soccer', bunks: ['Bunk 1'] }]
+            dailyActivityBunkRestrictions: [{ id: 'r7', facility: 'Field A', activity: 'Soccer', bunks: ['Bunk 1'] }]
         }));
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 2', 'Soccer', 'Field A', 'Div'), true);
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 1', 'Soccer', 'Field A', 'Div'), false);
@@ -131,20 +144,19 @@ describe('isBunkRestrictedFromTarget', () => {
 
     it('missing bunk name → not blocked (fail-open)', () => {
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r7', targetType: 'sport', target: 'Soccer', bunks: ['Bunk 1'] }
+            { id: 'r8', facility: 'Field A', activity: 'Soccer', bunks: ['Bunk 1'] }
         ] });
         assert.strictEqual(U.isBunkRestrictedFromTarget(null, 'Soccer', 'Field A', 'Div'), false);
     });
 });
 
-describe('canBlockFit honors bunk restriction', () => {
-    it('rejects a restricted bunk, allows a listed bunk', () => {
+describe('canBlockFit honors facility-scoped bunk restriction', () => {
+    it('rejects a restricted bunk on the matching facility, leaves listed bunk unrestricted', () => {
         const win = bootUtils();
         const U = win.SchedulerCoreUtils;
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
-            { id: 'r1', targetType: 'sport', target: 'Soccer', bunks: ['Bunk 1'] }
+            { id: 'r1', facility: 'Field A', activity: 'Soccer', bunks: ['Bunk 1'] }
         ] });
-        // minimal field props so the only gate that differs is the restriction
         const activityProperties = { 'Field A': {
             available: true, sharable: true,
             sharableWith: { capacity: 99, type: 'all', divisions: [] },
@@ -153,8 +165,6 @@ describe('canBlockFit honors bunk restriction', () => {
         win.fieldUsageBySlot = {};
         const mk = (bunk) => ({ bunk, divName: 'Div', startTime: 600, endTime: 660, slots: [600] });
         assert.strictEqual(U.canBlockFit(mk('Bunk 2'), 'Field A', activityProperties, {}, 'Soccer'), false);
-        // Bunk 1 is allowed by the restriction (other gates are open) → not rejected by it.
-        // We only assert the restriction itself doesn't reject Bunk 1:
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 1', 'Soccer', 'Field A', 'Div'), false);
     });
 });
