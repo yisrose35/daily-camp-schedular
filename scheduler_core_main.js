@@ -1624,10 +1624,33 @@
                 //   STRICT NO-OP for uncapped labels (Swim, ∞ cap) — they never enter _cappedWinners.
                 const _cappedWinners = {}; // labelNorm -> Set(bunk) allowed to take that capped label
                 (function _allocCappedLabels() {
-                    const _rotEng = window.RotationEngine;
-                    const _lrCount = (bunk, label) => {
-                        try { return (_rotEng && _rotEng.getActivityCount) ? (_rotEng.getActivityCount(bunk, label) || 0) : 0; }
-                        catch (_) { return 0; }
+                    // Count a label's PRIOR placements per bunk DIRECTLY from the saved daily
+                    //   schedules. We can NOT use RotationEngine.getActivityCount here: it (and the
+                    //   cloud rotation_counts + local rebuildHistoricalCounts) only counts VALID
+                    //   activities — a field's activities, specials, configured sports — and gates
+                    //   out everything else (rotation_cloud.js / scheduler_core_utils.js
+                    //   getValidActivityNames). A court-less field-less label (e.g. Pickleball with
+                    //   no court modeled) is therefore NEVER counted → getActivityCount returns 0 for
+                    //   every bunk → the ranking ties and collapses to bunk-INDEX order, which is the
+                    //   exact "same bunks get it / repeats before others get a first" bug. Scanning
+                    //   scheduleAssignments by _activity sees the label no matter how it was modeled,
+                    //   and matches what the user's own audit counts.
+                    const _allDaily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
+                    const _todayKey = window.currentScheduleDate || '';
+                    const _pastDates = Object.keys(_allDaily)
+                        .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey));
+                    const _lrCount = (bunk, labelNorm) => {
+                        let n = 0;
+                        for (let di = 0; di < _pastDates.length; di++) {
+                            const sched = (_allDaily[_pastDates[di]] && _allDaily[_pastDates[di]].scheduleAssignments
+                                && _allDaily[_pastDates[di]].scheduleAssignments[bunk]) || [];
+                            for (let i = 0; i < sched.length; i++) {
+                                const e = sched[i];
+                                if (!e || e.continuation || e._isTransition) continue;
+                                if (String(e._activity || '').toLowerCase().trim() === labelNorm) { n++; break; } // ≤1/day
+                            }
+                        }
+                        return n;
                     };
                     const _byLabel = {}; // labelNorm -> [{bunk,_bIdx,c}] (turn-bunks for that capped label)
                     bunkList.forEach((bunk, _bIdx) => {
@@ -1636,7 +1659,7 @@
                         const _primary = _rotOpts[(_dayNum + _bIdx + _grpOff) % _rotOpts.length];
                         if (_directFillCap(_primary) === Infinity) return;     // only scarce capped labels
                         const _pn = String(_primary || '').toLowerCase().trim();
-                        (_byLabel[_pn] = _byLabel[_pn] || []).push({ bunk, _bIdx, c: _lrCount(bunk, _primary) });
+                        (_byLabel[_pn] = _byLabel[_pn] || []).push({ bunk, _bIdx, c: _lrCount(bunk, _pn) });
                     });
                     Object.keys(_byLabel).forEach(_pn => {
                         const cap = _directFillCap(_pn);
