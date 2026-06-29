@@ -583,12 +583,34 @@
             }
         }
         
+        // ★ frequencyDays cooldown hard-gate — "Min days between visits" (Facilities tab,
+        //   facilities.js). Smart tiles previously IGNORED this entirely: the rotation
+        //   engine (calculateLimitScore), total solver, and unified manual gate all
+        //   hard-block a special the bunk did within the cooldown window, but the smart-tile
+        //   path (canBunkUseSpecial) never checked it — so a bunk could be handed the same
+        //   special on consecutive days even with frequencyDays=3. Mirror the canonical gate:
+        //   block if days since the last visit is in (0, frequencyDays). Skip same-day
+        //   (daysSince=0; intra-day variety handled by pickBestSpecialForBunk) and never-done
+        //   (null/undefined). Inert unless a cooldown is configured (>0). Read frequencyDays
+        //   from the resolved props, falling back to the value getAvailableSpecialsForTimeBlock
+        //   already stamped onto the special (handles the cap/lowercase duplicate copies this
+        //   camp creates, where the cooldown may live on only one copy).
+        let _freqDays = parseInt(props2.frequencyDays || props2.frequencyWeeks || 0, 10) || 0;
+        if (!_freqDays && special.frequencyDays) _freqDays = parseInt(special.frequencyDays, 10) || 0;
+        if (_freqDays > 0 && window.RotationEngine?.getDaysSinceActivity) {
+            const _daysSince = window.RotationEngine.getDaysSinceActivity(bunk, special.name);
+            if (typeof _daysSince === 'number' && _daysSince > 0 && _daysSince < _freqDays) {
+                log(`      ${bunk}: ${special.name} on cooldown (${_daysSince}d since last < ${_freqDays}d required)`);
+                return false;
+            }
+        }
+
         // ★ v3.5: Multi-Part check — Part 2 requires Part 1 completion
         if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, special.name)) {
             log(`      ${bunk}: blocked from ${special.name} (hasn't completed Part 1)`);
             return false;
         }
-        
+
         return true;
     }
 
