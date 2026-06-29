@@ -3527,7 +3527,7 @@ function renderSpecialSchedulingMode(saData) {
             + (isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
 
         btnNo.onclick = () => {
-            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {};
+            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {}; rules.minBunks = 0;
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
         btnYes.onclick = () => {
@@ -3563,11 +3563,43 @@ function renderSpecialSchedulingMode(saData) {
         capIn.onchange = () => {
             rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
             capIn.value = rules.capacity;
-            saData.sharableWith = rules; saveSpecialData(saData); updateSummary();
+            if (rules.minBunks && rules.minBunks > rules.capacity) rules.minBunks = rules.capacity;
+            saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
         capWrap.appendChild(capLbl);
         capWrap.appendChild(capIn);
         container.appendChild(capWrap);
+
+        // ── Step 3b: Minimum bunks together (the floor) ───────────
+        // 0 / blank = no minimum (default). When set to 2+, the activity only
+        // runs when at least that many bunks attend together — the scheduler
+        // pulls in a partner bunk, and drops the activity for that slot if none
+        // can be found (e.g. the lake always needs 2 bunks). Manual builder only.
+        const minWrap = document.createElement('div');
+        minWrap.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px;';
+        const minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.84rem; color:#374151;';
+        minLbl.textContent = 'Min bunks together:';
+        const minIn = document.createElement('input');
+        minIn.type = 'number'; minIn.min = '0'; minIn.max = String(rules.capacity || 2);
+        minIn.value = (rules.minBunks && rules.minBunks >= 2) ? rules.minBunks : '';
+        minIn.placeholder = 'none';
+        minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.9rem; font-weight:600;';
+        minIn.onchange = () => {
+            const v = parseInt(minIn.value, 10);
+            if (!v || v < 2) { rules.minBunks = 0; minIn.value = ''; }
+            else { rules.minBunks = Math.min(rules.capacity || 2, v); minIn.value = rules.minBunks; }
+            saData.sharableWith = rules; saveSpecialData(saData); updateSummary();
+        };
+        minWrap.appendChild(minLbl);
+        minWrap.appendChild(minIn);
+        container.appendChild(minWrap);
+        const minNote = document.createElement('div');
+        minNote.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-bottom:16px; line-height:1.5;';
+        minNote.textContent = (rules.minBunks && rules.minBunks >= 2)
+            ? 'Only runs when at least ' + rules.minBunks + ' bunks go together; the scheduler pulls in a partner bunk, or drops it for that slot if none is available.'
+            : 'Leave blank to allow a single bunk. Set to 2+ to require bunks to go together (e.g. the lake always needs 2).';
+        container.appendChild(minNote);
 
         // ── Step 4: Grade pairing ─────────────────────────────────
         const allDivs = _getOrderedGrades();
