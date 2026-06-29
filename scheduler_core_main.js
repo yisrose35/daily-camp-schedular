@@ -5653,7 +5653,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             (_grp63[key] = _grp63[key] || { actLC: actLC, spec: spec, s: t.s, e: t.e, members: [] }).members.push({ bunk: b, idx: idx, grade: g });
                         });
                     });
-                    let _recruited63 = 0, _droppedBunks63 = 0, _fixed63 = 0, _dropSess63 = 0;
+                    let _recruited63 = 0, _swapped63 = 0, _droppedBunks63 = 0, _fixed63 = 0, _dropSess63 = 0;
                     Object.keys(_grp63).forEach(key => {
                         const grp = _grp63[key], spec = grp.spec, s = grp.s, en = grp.e, actLC = grp.actLC;
                         if (grp.members.length >= spec.minBunks) return; // floor already met
@@ -5663,33 +5663,54 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (spec.type === 'cross_division') return gradesNow.every(eg => spec.pairs[[eg, cg].sort().join('|')] === true);
                             return gradesNow.every(eg => eg === cg);
                         };
-                        // (1) RECRUIT eligible Free bunks at the SAME window.
+                        // (1) RECRUIT a partner at the SAME window. Prefer a Free bunk;
+                        //     if the schedule is packed (no Free), SWAP a same-grade /
+                        //     paired bunk off a regular sport so the activity still RUNS
+                        //     (the user's directive: push to use it, don't just drop).
+                        //     Tier 0 = Free slot (ideal). Tier 1 = displace a plain sport
+                        //     on a general slot. Locked / league / special / swim-snack-
+                        //     lunch tiles are never disturbed.
                         const tmpl = _sa76[grp.members[0].bunk] && _sa76[grp.members[0].bunk][grp.members[0].idx];
                         const fld = (tmpl && tmpl.field) || spec.name;
+                        const _cands63 = [];
                         Object.keys(_sa76).forEach(b => {
-                            if (grp.members.length >= spec.minBunks || grp.members.length >= spec.cap) return;
                             if (_allowed76 && !_allowed76.has(String(b))) return;
                             if (grp.members.some(m => String(m.bunk) === String(b))) return;
                             const g = _b2g76[String(b)] || '?';
                             if (!_gradeOk(g)) return;
                             if (_done76[b] && _done76[b][actLC]) return;
+                            if (typeof window.isSpecialAvailableForBunk === 'function'
+                                && !window.isSpecialAvailableForBunk(spec.name, g, b, window.globalSettings || null)) return;
                             const arr = _sa76[b] || [];
+                            let best = null;
                             for (let idx = 0; idx < arr.length; idx++) {
                                 const e = arr[idx];
-                                if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree63(e)) continue;
+                                if (!e || e.continuation || e._isTransition || e._league || e._h2h || e._postEdit || e._pinned || e._bunkOverride) continue;
                                 const t = _winOf63(b, g, idx, e); if (!t || t.s !== s || t.e !== en) continue;
                                 const ck = _kindByCell76[String(b) + '|' + idx];
                                 const kind = (ck && ck !== 'any') ? ck : slotKindOf(_slotEvent76(b, g, idx, e));
                                 if (kind === 'sport') continue; // a sport-only tile can't take a special
-                                if (typeof window.isSpecialAvailableForBunk === 'function'
-                                    && !window.isSpecialAvailableForBunk(spec.name, g, b, window.globalSettings || null)) continue;
-                                _sa76[b][idx] = { field: fld, sport: null, _activity: spec.name, _assignedSpecial: spec.name, _specialLocation: fld, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minBunkFilled: true, continuation: false };
-                                (_done76[b] = _done76[b] || {})[actLC] = 1;
-                                grp.members.push({ bunk: b, idx: idx, grade: g });
-                                _recruited63++;
-                                break;
+                                if (_isFree63(e)) { best = { bunk: b, idx: idx, grade: g, tier: 0 }; break; } // Free is ideal
+                                // Swap tier: a plain sport on a general slot may be displaced
+                                // (skip specials, swim/snack/lunch & other non-sport entries).
+                                if (e.sport && !e._assignedSpecial && !_minSpecs63[String(e._activity || '').toLowerCase().trim()]
+                                    && !_skip76[String(e.field || '').toLowerCase().trim()] && !best) {
+                                    best = { bunk: b, idx: idx, grade: g, tier: 1 };
+                                }
                             }
+                            if (best) _cands63.push(best);
                         });
+                        _cands63.sort((a, b) => a.tier - b.tier); // Free first, then swaps
+                        for (let ci = 0; ci < _cands63.length && grp.members.length < spec.minBunks && grp.members.length < spec.cap; ci++) {
+                            const c = _cands63[ci];
+                            const sl = _sa76[c.bunk];
+                            _sa76[c.bunk][c.idx] = { field: fld, sport: null, _activity: spec.name, _assignedSpecial: spec.name, _specialLocation: fld, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minBunkFilled: true, _minBunkSwapped: (c.tier === 1) || undefined, continuation: false };
+                            // Release any continuation slots of the displaced activity.
+                            for (let k = c.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, continuation: false }; } else break; }
+                            (_done76[c.bunk] = _done76[c.bunk] || {})[actLC] = 1;
+                            grp.members.push({ bunk: c.bunk, idx: c.idx, grade: c.grade });
+                            _recruited63++; if (c.tier === 1) _swapped63++;
+                        }
                         if (grp.members.length >= spec.minBunks) { _fixed63++; return; }
                         // (2) DROP — couldn't reach the floor; demote non-locked members to Free.
                         let droppedAny = false;
@@ -5705,7 +5726,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         });
                         if (droppedAny) _dropSess63++;
                     });
-                    if (_recruited63 + _droppedBunks63 > 0) console.log('[STEP 7.63] special min-bunks: recruited ' + _recruited63 + ' bunk(s) into ' + _fixed63 + ' session(s); dropped ' + _droppedBunks63 + ' under-min bunk(s) across ' + _dropSess63 + ' session(s)');
+                    if (_recruited63 + _droppedBunks63 > 0) console.log('[STEP 7.63] special min-bunks: recruited ' + _recruited63 + ' bunk(s) (' + _swapped63 + ' by swapping a sport) into ' + _fixed63 + ' session(s); dropped ' + _droppedBunks63 + ' under-min bunk(s) across ' + _dropSess63 + ' session(s)');
                     else console.log('[STEP 7.63] special min-bunks: ✅ all min-bunks specials already satisfied');
                 }
             } catch (_e63) { console.warn('[STEP 7.63] special min-bunks pairing failed:', _e63); }

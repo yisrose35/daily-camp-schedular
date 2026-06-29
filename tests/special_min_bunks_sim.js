@@ -52,7 +52,7 @@ function enforceMinBunks(sa, b2g, specials, kindByCell, isAvail) {
         if (mb < 2) return;
         minSpecs[String(s.name).toLowerCase().trim()] = { name: s.name, minBunks: mb, cap: cap, type: sw.type, pairs: sw.allowedPairs || {} };
     });
-    const stats = { recruited: 0, droppedBunks: 0, fixed: 0, dropSess: 0, inert: Object.keys(minSpecs).length === 0 };
+    const stats = { recruited: 0, swapped: 0, droppedBunks: 0, fixed: 0, dropSess: 0, inert: Object.keys(minSpecs).length === 0 };
     if (stats.inert) return stats;
 
     const isFree = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
@@ -83,29 +83,40 @@ function enforceMinBunks(sa, b2g, specials, kindByCell, isAvail) {
         };
         const tmpl = sa[G.members[0].bunk][G.members[0].idx];
         const fld = (tmpl && tmpl.field) || spec.name;
-        // (1) RECRUIT
+        // (1) RECRUIT — tier 0 = Free bunk, tier 1 = swap a plain sport.
+        const SKIP = { 'pool': 1, 'swim': 1, 'lunch': 1, 'snack': 1, 'snacks': 1, 'dismissal': 1 };
+        const cands = [];
         Object.keys(sa).forEach(b => {
-            if (G.members.length >= spec.minBunks || G.members.length >= spec.cap) return;
             if (G.members.some(m => String(m.bunk) === String(b))) return;
             const g = b2g[b] || '?';
             if (!gradeOk(g)) return;
             if (done[b] && done[b][actLC]) return;
+            if (!isAvail(spec.name, g, b)) return;
             const arr = sa[b] || [];
+            let best = null;
             for (let idx = 0; idx < arr.length; idx++) {
                 const e = arr[idx];
-                if (!e || e.continuation || e._isTransition || e._league || e._h2h || !isFree(e)) continue;
+                if (!e || e.continuation || e._isTransition || e._league || e._h2h || e._postEdit || e._pinned || e._bunkOverride) continue;
                 const t = winOf(e); if (!t || t.s !== s || t.e !== en) continue;
                 const ck = kindByCell[b + '|' + idx];
                 const kind = (ck && ck !== 'any') ? ck : 'any';
                 if (kind === 'sport') continue;
-                if (!isAvail(spec.name, g, b)) continue;
-                sa[b][idx] = { field: fld, sport: null, _activity: spec.name, _assignedSpecial: spec.name, _specialLocation: fld, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minBunkFilled: true, continuation: false };
-                (done[b] = done[b] || {})[actLC] = 1;
-                G.members.push({ bunk: b, idx, grade: g });
-                stats.recruited++;
-                break;
+                if (isFree(e)) { best = { bunk: b, idx, grade: g, tier: 0 }; break; }
+                if (e.sport && !e._assignedSpecial && !minSpecs[String(e._activity || '').toLowerCase().trim()]
+                    && !SKIP[String(e.field || '').toLowerCase().trim()] && !best) {
+                    best = { bunk: b, idx, grade: g, tier: 1 };
+                }
             }
+            if (best) cands.push(best);
         });
+        cands.sort((a, b) => a.tier - b.tier);
+        for (let ci = 0; ci < cands.length && G.members.length < spec.minBunks && G.members.length < spec.cap; ci++) {
+            const c = cands[ci];
+            sa[c.bunk][c.idx] = { field: fld, sport: null, _activity: spec.name, _assignedSpecial: spec.name, _specialLocation: fld, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minBunkFilled: true, _minBunkSwapped: (c.tier === 1) || undefined, continuation: false };
+            (done[c.bunk] = done[c.bunk] || {})[actLC] = 1;
+            G.members.push({ bunk: c.bunk, idx: c.idx, grade: c.grade });
+            stats.recruited++; if (c.tier === 1) stats.swapped++;
+        }
         if (G.members.length >= spec.minBunks) { stats.fixed++; return; }
         // (2) DROP
         let droppedAny = false;
@@ -143,16 +154,41 @@ function ok(name, cond) { assert.ok(cond, 'FAIL: ' + name); console.log('  ✓ '
 
 // =============================================================================
 // TEST 2 — DROP: no eligible partner → lonely Lake demoted to Free
-// (A2 is busy on a sport, A3 is at a different time window)
+// (A2's slot is a sport-ONLY tile so Lake can't go there; A3 is at another window)
 // =============================================================================
 {
     const sa = { A1: [lakeEnt()], A2: [sportEnt()], A3: [freeEnt(700, 740)] };
-    const st = enforceMinBunks(sa, { A1: 'A', A2: 'A', A3: 'A' }, [LAKE()]);
+    const st = enforceMinBunks(sa, { A1: 'A', A2: 'A', A3: 'A' }, [LAKE()], { 'A2|0': 'sport' });
     ok('T2 nothing recruited', st.recruited === 0);
     ok('T2 one bunk dropped, one session', st.droppedBunks === 1 && st.dropSess === 1);
     ok('T2 A1 demoted to Free w/ reason', sa.A1[0]._activity === 'Free' && sa.A1[0]._demotedReason === 'special_min_bunks');
     ok('T2 A1 window preserved for refill', sa.A1[0]._startMin === 600 && sa.A1[0]._endMin === 640);
     ok('T2 A2 sport untouched', sa.A2[0]._activity === 'Kickball');
+}
+
+// =============================================================================
+// TEST 2b — SWAP: packed schedule, no Free bunk → displace a same-grade sport
+// so Lake still RUNS (the user's "push to use it, don't just drop").
+// =============================================================================
+{
+    const sa = { A1: [lakeEnt()], A2: [sportEnt()] }; // A2 sport on a general slot
+    const st = enforceMinBunks(sa, { A1: 'A', A2: 'A' }, [LAKE()]);
+    ok('T2b recruited by swapping a sport', st.recruited === 1 && st.swapped === 1 && st.droppedBunks === 0);
+    ok('T2b A2 moved onto Lake', sa.A2[0]._activity === 'Lake' && sa.A2[0]._minBunkSwapped === true);
+    ok('T2b A1 kept its Lake', sa.A1[0]._activity === 'Lake');
+}
+
+// =============================================================================
+// TEST 2c — SWAP never disturbs a swim/lunch/pinned slot
+// =============================================================================
+{
+    const swim = { field: 'Pool', sport: 'Swimming', _activity: 'Swimming', _startMin: 600, _endMin: 640, continuation: false };
+    const pinned = { field: 'Court 1', sport: 'Kickball', _activity: 'Kickball', _pinned: true, _startMin: 600, _endMin: 640, continuation: false };
+    const sa = { A1: [lakeEnt()], A2: [swim], A3: [pinned] };
+    const st = enforceMinBunks(sa, { A1: 'A', A2: 'A', A3: 'A' }, [LAKE()]);
+    ok('T2c swim + pinned both protected → Lake dropped', st.recruited === 0 && st.droppedBunks === 1);
+    ok('T2c swim untouched', sa.A2[0]._activity === 'Swimming');
+    ok('T2c pinned untouched', sa.A3[0]._activity === 'Kickball' && sa.A3[0]._pinned === true);
 }
 
 // =============================================================================
@@ -224,7 +260,7 @@ function ok(name, cond) { assert.ok(cond, 'FAIL: ' + name); console.log('  ✓ '
 {
     const locked = Object.assign(lakeEnt(), { _pinned: true });
     const sa = { A1: [locked], A2: [sportEnt()] };
-    const st = enforceMinBunks(sa, { A1: 'A', A2: 'A' }, [LAKE()]);
+    const st = enforceMinBunks(sa, { A1: 'A', A2: 'A' }, [LAKE()], { 'A2|0': 'sport' });
     ok('T9 locked Lake survives (no recruit, no drop)', st.recruited === 0 && st.droppedBunks === 0 && sa.A1[0]._activity === 'Lake');
 }
 
