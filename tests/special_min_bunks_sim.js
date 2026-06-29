@@ -228,4 +228,23 @@ function ok(name, cond) { assert.ok(cond, 'FAIL: ' + name); console.log('  ✓ '
     ok('T9 locked Lake survives (no recruit, no drop)', st.recruited === 0 && st.droppedBunks === 0 && sa.A1[0]._activity === 'Lake');
 }
 
+// =============================================================================
+// TEST 10 — proactive co-attendance nudge (total_solver_engine calculatePenaltyCost)
+//   Ports the nudge predicate: a JOIN bonus applies only for a min-bunks special
+//   when a co-attendee is already there (coUsage>0) and there is room to grow
+//   (coUsage<capacity). It never seeds a lonely session and never exceeds cap.
+// =============================================================================
+{
+    const BONUS = 60000;
+    const nudge = (minBunks, capacity, coUsage) => {
+        const floor = (minBunks >= 2) ? minBunks : 0;
+        if (floor < 2) return 0;
+        return (coUsage > 0 && coUsage < capacity) ? -BONUS : 0;
+    };
+    ok('T10 no bonus to seed a lonely session (coUsage 0)', nudge(2, 4, 0) === 0);
+    ok('T10 bonus to JOIN an under-cap session (coUsage 1)', nudge(2, 4, 1) === -BONUS);
+    ok('T10 no bonus once at capacity (coUsage = cap)', nudge(2, 4, 4) === 0);
+    ok('T10 inert for a non-min special (minBunks 0)', nudge(0, 4, 1) === 0);
+}
+
 console.log('\n[special_min_bunks_sim] ' + pass + '/' + pass + ' assertions passed ✅');

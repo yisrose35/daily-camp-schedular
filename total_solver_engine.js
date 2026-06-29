@@ -333,7 +333,13 @@
                 else if (specSW.type === 'cross_division') { specCap = parseInt(specSW.capacity) || 999; specST = 'cross_division'; specPairs = specSW.allowedPairs || {}; }
                 else if (specSW.type === 'custom') { specCap = parseInt(specSW.capacity) || 2; specST = 'custom'; }
                 else if (specSW.type === 'all') { specCap = parseInt(specSW.capacity) || 999; specST = 'all'; }
-                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, allowedPairs: specPairs, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true });
+                // ★ minBunks floor (sharableWith.minBunks) — the co-attendance MIN
+                //   used by the scorer's co-attendance nudge (calculatePenaltyCost) and
+                //   STEP 7.63. 0 for not_sharable / unset; clamped to [2, capacity].
+                var specMin = parseInt(specSW.minBunks) || 0;
+                if (specST === 'not_sharable') specMin = 0;
+                else if (specMin > 0) { if (specMin < 2) specMin = 0; else if (specMin > specCap) specMin = specCap; }
+                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, allowedPairs: specPairs, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true, _minBunks: specMin });
                 specialsAdded++;
             }
             if (specialsAdded > 0) v12Log('Added ' + specialsAdded + ' specials to _fieldPropertyMap');
@@ -1096,6 +1102,25 @@
                     for (var _ci = 0; _ci < _cohortBunks.length; _ci++) { var _c = getActivityCount(_cohortBunks[_ci], act); if (_c < _cmin) _cmin = _c; }
                     if (_myCC > _cmin) return 999999;
                 }
+            }
+            // ★ minBunks co-attendance nudge (proactive "push" for the floor).
+            //   When a special declares sharableWith.minBunks>=2 (e.g. the lake
+            //   needs 2 bunks together), reward JOINING an existing under-floor
+            //   session of it at THIS window so the pair FORMS during the main
+            //   solve — STEP 7.63 then only has to mop up the rare leftover.
+            //   Bonus applies only when a co-attendee is already there and there
+            //   is still room to grow (co-usage < capacity); it never seeds a
+            //   lonely session (co-usage 0 → no bonus), and capacity caps the
+            //   pile-on. Sits below the min-frequency band (≤500k) and the 999999
+            //   hard gate, so every hard constraint still wins. Inert otherwise.
+            var _mbProps = _fieldPropertyMap.get(act);
+            var _mbFloor = _mbProps ? (parseInt(_mbProps._minBunks) || 0) : 0;
+            if (_mbFloor >= 2 && fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
+                var _mbCap = parseInt(_mbProps.capacity) || 2;
+                var _mbCo = (_mbProps.sharingType === 'cross_division')
+                    ? getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk)
+                    : countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk);
+                if (_mbCo > 0 && _mbCo < _mbCap) penalty -= 60000;
             }
         }
 
