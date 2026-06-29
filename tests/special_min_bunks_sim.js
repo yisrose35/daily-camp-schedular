@@ -283,4 +283,115 @@ function ok(name, cond) { assert.ok(cond, 'FAIL: ' + name); console.log('  ✓ '
     ok('T10 inert for a non-min special (minBunks 0)', nudge(0, 4, 1) === 0);
 }
 
+// =============================================================================
+// TEST 11 — UPSTREAM planner co-attendance pre-pass (activityFirstPlanner)
+//   Ports the new minBunks pre-pass: process windows in order, allocate a
+//   min-bunks special as ONE co-attended group within a SINGLE window (up to
+//   capacity, only if the floor is reachable), mark its bunks planned-today so
+//   later windows don't re-seed them, and let the per-bunk allocator skip
+//   min-bunks specials entirely. This is the fix for the live failure where the
+//   2 sixth-grade bunks (Shimon, Levi) each got a lonely Lake in DIFFERENT
+//   windows → both dropped → 0 Lake. After the fix they co-attend ONE window.
+// -----------------------------------------------------------------------------
+//   windows : ordered [{ id, wishLists: { bunk: [{activity, need}] } }]
+//   props   : { activity: { minBunks, capacity } }
+//   returns : { planned: { 'window|bunk': activity }, sports: [bunk...] }
+function planMinBunks(windows, props) {
+    const plannedToday = new Set();        // bunk|activity already seated in a window
+    const planned = {};                    // 'winId|bunk' -> activity (the co-attended floor special)
+    const fellThrough = new Set();         // bunk that reached the per-bunk allocator on a minBunks wish
+    windows.forEach(win => {
+        const allocated = {};
+        // ---- co-attendance pre-pass ----
+        const wanted = {};
+        Object.keys(win.wishLists).forEach(bunk => {
+            (win.wishLists[bunk] || []).forEach(w => {
+                const fp = props[w.activity];
+                const floor = fp ? (parseInt(fp.minBunks, 10) || 0) : 0;
+                if (floor < 2) return;
+                if (plannedToday.has(bunk + '|' + w.activity)) return;
+                (wanted[w.activity] = wanted[w.activity] || []).push({ bunk, need: w.need });
+            });
+        });
+        Object.keys(wanted).forEach(act => {
+            const fp = props[act];
+            const floor = parseInt(fp.minBunks, 10) || 0;
+            const cap = parseInt(fp.capacity, 10) || 2;
+            const pool = wanted[act].filter(c => !allocated[c.bunk]).sort((a, b) => a.need - b.need);
+            const take = Math.min(pool.length, cap);
+            if (take < floor) return;                       // can't reach floor → don't seed
+            for (let i = 0; i < take; i++) {
+                allocated[pool[i].bunk] = act;
+                plannedToday.add(pool[i].bunk + '|' + act);
+                planned[win.id + '|' + pool[i].bunk] = act;
+            }
+        });
+        // ---- per-bunk allocator: skips minBunks wishes, takes first non-floor wish ----
+        Object.keys(win.wishLists).forEach(bunk => {
+            if (allocated[bunk]) return;
+            const ws = win.wishLists[bunk] || [];
+            for (const w of ws) {
+                const fp = props[w.activity];
+                if (fp && (parseInt(fp.minBunks, 10) || 0) >= 2) { fellThrough.add(bunk); continue; }
+                allocated[bunk] = w.activity; break;
+            }
+        });
+    });
+    return { planned, fellThrough };
+}
+
+{
+    const props = { Lake: { minBunks: 2, capacity: 2 }, Soccer: {}, Volleyball: {} };
+    // The live failure: both 6th-grade bunks want Lake, each strongest in a
+    // different window. Pre-fix the planner split them; post-fix they co-attend W1.
+    const windows = [
+        { id: 'W1', wishLists: {
+            Shimon: [{ activity: 'Lake', need: 0 }, { activity: 'Soccer', need: 5 }],
+            Levi:   [{ activity: 'Soccer', need: 1 }, { activity: 'Lake', need: 2 }],
+        } },
+        { id: 'W2', wishLists: {
+            Shimon: [{ activity: 'Volleyball', need: 1 }, { activity: 'Lake', need: 3 }],
+            Levi:   [{ activity: 'Lake', need: 0 }, { activity: 'Volleyball', need: 4 }],
+        } },
+    ];
+    const r = planMinBunks(windows, props);
+    ok('T11 Lake co-attended by BOTH bunks in ONE window (W1)',
+        r.planned['W1|Shimon'] === 'Lake' && r.planned['W1|Levi'] === 'Lake');
+    ok('T11 Lake NOT re-seeded in W2 (no same-day repeat)',
+        r.planned['W2|Shimon'] === undefined && r.planned['W2|Levi'] === undefined);
+    ok('T11 floor satisfied with exactly capacity (2) — never lonely',
+        Object.values(r.planned).filter(a => a === 'Lake').length === 2);
+}
+
+// TEST 12 — floor unreachable (only one eligible bunk) → never seeded, takes a sport
+{
+    const props = { Lake: { minBunks: 2, capacity: 2 }, Soccer: {} };
+    const windows = [
+        { id: 'W1', wishLists: {
+            Shimon: [{ activity: 'Lake', need: 0 }, { activity: 'Soccer', need: 9 }],
+            // Levi cannot do Lake (not in wishlist — e.g. no access / already done)
+            Levi:   [{ activity: 'Soccer', need: 1 }],
+        } },
+    ];
+    const r = planMinBunks(windows, props);
+    ok('T12 lonely-only Lake never seeded', Object.values(r.planned).length === 0);
+    ok('T12 the would-be lonely bunk fell through to a sport', r.fellThrough.has('Shimon'));
+}
+
+// TEST 13 — capacity caps the co-attended group (3 want it, cap 2 → exactly 2)
+{
+    const props = { Lake: { minBunks: 2, capacity: 2 } };
+    const windows = [
+        { id: 'W1', wishLists: {
+            A: [{ activity: 'Lake', need: 0 }],
+            B: [{ activity: 'Lake', need: 1 }],
+            C: [{ activity: 'Lake', need: 2 }],
+        } },
+    ];
+    const r = planMinBunks(windows, props);
+    const seated = Object.values(r.planned).filter(a => a === 'Lake').length;
+    ok('T13 capacity caps the session at 2 (not 3)', seated === 2);
+    ok('T13 the strongest-pull pair (A,B) is seated', r.planned['W1|A'] === 'Lake' && r.planned['W1|B'] === 'Lake');
+}
+
 console.log('\n[special_min_bunks_sim] ' + pass + '/' + pass + ' assertions passed ✅');

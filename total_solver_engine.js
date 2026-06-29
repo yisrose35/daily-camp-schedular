@@ -1538,6 +1538,10 @@
     // ========================================================================
     function activityFirstPlanner(activityBlocks) {
         _activityPlan.clear(); _scarcityMap.clear();
+        // ★ minBunks floor: tracks which (bunk|special) have been planned a min-bunks
+        //   special in THIS planner run, so a co-attended session formed in one window
+        //   isn't re-seeded for the same bunk in another window (same-day repeat).
+        var _mbPlannedToday = new Set();
         var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         var divTimeGroups = {};
         for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; if (!blk.divName) blk.divName = getBunkDivision(blk.bunk) || ''; var key = (blk._autoMode ? (blk.bunk + '|') : '') + blk.divName + '|' + (blk.startTime || '?') + '-' + (blk.endTime || '?'); if (!divTimeGroups[key]) divTimeGroups[key] = []; divTimeGroups[key].push(bi); }
@@ -1599,12 +1603,61 @@
                 if (bestPartner) pairedBunks.set(sBunk, bestPartner);
             }
             var allocated = {}, activityUsed = {};
+            // ★★★ minBunks CO-ATTENDANCE PRE-PASS ★★★
+            // A special with sharableWith.minBunks>=2 (e.g. the Lake needs 2 bunks
+            // together) must be planned as ONE co-attended group within a SINGLE
+            // window, never as two lonely sessions in different windows. The normal
+            // allocator below treats supply as field-count (1 Lake field → 1 seat),
+            // so it can only hand the special to one bunk per window and ends up
+            // splitting the floor pair across windows → both fail the floor and get
+            // dropped. Here we seat up to `capacity` bunks (one field hosts capacity
+            // bunks) on the same field at this window, but ONLY if we can reach the
+            // floor; otherwise we don't seed it at all (those bunks fall through to a
+            // sport below — better than a lonely session that gets dropped to Free).
+            // Gated on _minBunks>=2 → completely inert for every other activity.
+            (function planMinBunksFloorSpecials() {
+                var mbWanted = {}; // activity -> [{bunk, need}]
+                for (var _mbk in wishLists) {
+                    var _mws = wishLists[_mbk] || [];
+                    for (var _mwi = 0; _mwi < _mws.length; _mwi++) {
+                        var _mw = _mws[_mwi];
+                        var _mfp = _fieldPropertyMap.get(_mw.activity);
+                        var _mfloor = _mfp ? (parseInt(_mfp._minBunks) || 0) : 0;
+                        if (_mfloor < 2) continue;
+                        if (_mbPlannedToday.has(_mbk + '|' + _mw.activity)) continue; // already seated in another window today
+                        if (!mbWanted[_mw.activity]) mbWanted[_mw.activity] = [];
+                        mbWanted[_mw.activity].push({ bunk: _mbk, need: _mw.need });
+                    }
+                }
+                Object.keys(mbWanted).forEach(function(_mact) {
+                    var _mfp2 = _fieldPropertyMap.get(_mact);
+                    var _mfloor2 = parseInt(_mfp2._minBunks) || 0;
+                    var _mcap = parseInt(_mfp2.capacity) || 2;
+                    var _mpool = mbWanted[_mact].filter(function(c) { return !allocated[c.bunk]; });
+                    _mpool.sort(function(a, b) { return a.need - b.need; }); // strongest pull first
+                    // One co-attended session on a single field: seat between floor and capacity.
+                    var _mtake = Math.min(_mpool.length, _mcap);
+                    if (_mtake < _mfloor2) return; // can't reach the floor — don't seed a doomed session
+                    for (var _mti = 0; _mti < _mtake; _mti++) {
+                        var _mcb = _mpool[_mti].bunk;
+                        allocated[_mcb] = _mact;
+                        activityUsed[_mact] = (activityUsed[_mact] || 0) + 1;
+                        _mbPlannedToday.add(_mcb + '|' + _mact);
+                    }
+                });
+            })();
             var sortedBunks = bunkList.slice().sort(function(a, b) { return (wishLists[a]?.length || 0) - (wishLists[b]?.length || 0); });
             for (var abi = 0; abi < sortedBunks.length; abi++) {
                 var aBunk = sortedBunks[abi]; if (allocated[aBunk]) continue;
                 var wishes2 = wishLists[aBunk] || [];
                 for (var wi = 0; wi < wishes2.length; wi++) {
                     var wish = wishes2[wi];
+                    // ★ minBunks floor specials are handled exclusively by the co-attendance
+                    //   pre-pass above (as a co-attended group). Never let the per-bunk
+                    //   allocator seed one alone here — that produces a lonely session that
+                    //   fails the floor and gets dropped to Free.
+                    var _wmbFp = _fieldPropertyMap.get(wish.activity);
+                    if (_wmbFp && (parseInt(_wmbFp._minBunks) || 0) >= 2) continue;
                     if ((activityUsed[wish.activity] || 0) >= (activitySupply[wish.activity] || 0)) continue;
                     if (wish.needsSharing && pairedBunks.has(aBunk)) { var partner = pairedBunks.get(aBunk); var combinedSize = (bunkSizes[aBunk] || 0) + (bunkSizes[partner] || 0); var combinedCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(wish.activity, combinedSize, false); if (combinedCheck && !combinedCheck.valid && combinedCheck.severity === 'hard') continue; }
                     var projectedPlayers = bunkSizes[aBunk] || 0;
