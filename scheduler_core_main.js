@@ -5197,6 +5197,33 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 for (var k = u.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false }; } else break; }
                 _rdemoted++; return true;
             }
+            // ★ PER-DATE BUNK-ONLY RESTRICTION sweep (Daily Adjustments → Resources →
+            //   Bunk-Only Access). Demote any special/sport a bunk received that is
+            //   reserved for OTHER bunk(s) on this facility today. This is the safety
+            //   net for the SmartTile budget/rotation pool, which assigns specials to
+            //   bunks WITHOUT consulting canBlockFit (so the field/auto gates miss it).
+            //   Freed slots flow into the STEP 7.6/7.65 refill below (which honor the
+            //   same restriction), so the bunk gets an allowed activity instead.
+            //   Protected slots (league/pinned/override) are never demoted.
+            (function _brRestrictionSweep() {
+                var _brFn = window.SchedulerCoreUtils && window.SchedulerCoreUtils.isBunkRestrictedFromTarget;
+                if (typeof _brFn !== 'function') return;
+                var _brN = 0;
+                Object.keys(_rbyLoc).forEach(function (fl) {
+                    _rbyLoc[fl].forEach(function (u) {
+                        if (!_rlive(u) || u.prot) return;
+                        var _ent = _rsa[u.bunk] && _rsa[u.bunk][u.idx];
+                        var _act = u.act || (_ent && (_ent._activity || _ent._assignedSpecial || _ent.field)) || '';
+                        var _restricted = false;
+                        try { _restricted = _brFn(u.bunk, _act, fl, u.grade); } catch (_e) {}
+                        if (_restricted && _rdemote(u)) {
+                            _brN++;
+                            console.log('[STEP 7.55] 🔒 Bunk-only restriction: demoted ' + u.bunk + ' off "' + _act + '" @ ' + fl + ' (reserved for other bunk(s) today)');
+                        }
+                    });
+                });
+                if (_brN) console.log('[STEP 7.55] 🔒 Bunk-only restriction: removed ' + _brN + ' placement(s) reserved for other bunk(s)');
+            })();
             Object.keys(_rbyLoc).forEach(function (fl) {
                 // Unknown room → not_sharable cap-1, exactly as auto_validator defaults it.
                 var cfg = _rcfg[fl] || { type: 'not_sharable', cap: 1, pairs: {}, divs: [] };
