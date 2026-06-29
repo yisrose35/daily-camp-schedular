@@ -724,6 +724,95 @@
     }
 
     // =========================================================================
+    // ★★★ MATCHUP-MODE SPORT-AWARE PAIRING (option 3) ★★★
+    // =========================================================================
+    // matchup_variety's defining guarantee is PERFECT opponent rotation, which
+    // the round-robin walk provides. But for any given day there are MANY pairings
+    // that share the round-robin's opponent freshness — the round-robin fixes who
+    // each team meets across the season, not which specific pairing lands on which
+    // day. We exploit that freedom: starting FROM the round-robin matchups, run
+    // 2-opt swaps that NEVER increase the number of rematches (so opponent rotation
+    // is never worse than plain round-robin — and rematches that creep in from
+    // earlier days' swaps are actively REDUCED when an alternative exists) AND that
+    // concentrate shared sport needs — pairing two teams that both still need the
+    // same sport, so one scarce field serves two needy teams instead of one needy
+    // and one repeat.
+    //
+    //   rem(a,b) = 1 if a & b have already met (this pairing would be a rematch), else 0
+    //   val(a,b) = sport-need concentration: 3 if some available sport is fresh for
+    //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
+    //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
+    //
+    // Acceptance uses a single scalar  score = -BIG*Σrem + Σval  (BIG ≫ max val), so
+    // reducing a rematch ALWAYS dominates any sport gain, sport only breaks rem ties,
+    // and a swap can never raise total rematches. Monotonic (both axes bounded ints) →
+    // terminates. Falls back to the round-robin on any error or kill switch
+    // (window.__leagueDailyOptimizer === false).
+    function optimizeMatchupPairingForSport(rrMatchups, activeTeams, availablePool, leagueName, history, dayId) {
+        try {
+            if (typeof window !== 'undefined' && window.__leagueDailyOptimizer === false) return rrMatchups;
+            if (!Array.isArray(rrMatchups) || rrMatchups.length < 2) return rrMatchups;
+            if (!Array.isArray(availablePool) || availablePool.length === 0) return rrMatchups;
+
+            const BIG = 1e6;
+            const availSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
+            const played = {};
+            function playedSet(t) {
+                if (!played[t]) played[t] = new Set(getTeamSportHistoryByDate(leagueName, t, history, dayId));
+                return played[t];
+            }
+            (activeTeams || []).forEach(function (t) { playedSet(t); });
+
+            function rem(a, b) { return getMatchupCount(leagueName, a, b, history) > 0 ? 1 : 0; }
+            function val(a, b) {
+                const pa = playedSet(a), pb = playedSet(b);
+                let freshBoth = 0;
+                for (let k = 0; k < availSports.length; k++) {
+                    const s = availSports[k];
+                    const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1);
+                    if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; }
+                }
+                return freshBoth === 2 ? 3 : freshBoth;
+            }
+            function pairScore(a, b) { return (-BIG) * rem(a, b) + val(a, b); }
+
+            // Byes stay put; only real pairings enter the swap set.
+            const byes = [], m = [];
+            rrMatchups.forEach(function (p) {
+                if (!Array.isArray(p) || p[0] === '__BYE__' || p[1] === '__BYE__' || p[1] == null) { byes.push(p); return; }
+                m.push([p[0], p[1]]);
+            });
+            if (m.length < 2) return rrMatchups;
+
+            let improved = true, guard = 0;
+            while (improved && guard < 300) {
+                improved = false; guard++;
+                for (let i = 0; i < m.length && !improved; i++) {
+                    for (let j = i + 1; j < m.length; j++) {
+                        const a = m[i][0], b = m[i][1], c = m[j][0], d = m[j][1];
+                        const base = pairScore(a, b) + pairScore(c, d);
+                        const s1 = pairScore(a, c) + pairScore(b, d);   // [a,c] [b,d]
+                        const s2 = pairScore(a, d) + pairScore(b, c);   // [a,d] [b,c]
+                        if (s1 > base && s1 >= s2) { m[i] = [a, c]; m[j] = [b, d]; improved = true; break; }
+                        if (s2 > base) { m[i] = [a, d]; m[j] = [b, c]; improved = true; break; }
+                    }
+                }
+            }
+
+            const result = m.concat(byes);
+            const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
+            if (_key(result) !== _key(rrMatchups)) {
+                console.log('   ★ [MatchupSportOpt] round-robin re-paired for sport coverage (opponents not worsened): '
+                    + m.map(function (p) { return p[0] + ' vs ' + p[1]; }).join(', '));
+            }
+            return result;
+        } catch (e) {
+            console.warn('[RegularLeagues] matchup sport-opt failed — using round-robin:', e);
+            return rrMatchups;
+        }
+    }
+
+    // =========================================================================
     // ★★★ FIELD AVAILABILITY - WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
 
@@ -2211,15 +2300,17 @@
                     const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     const _rrMatchups = fullSchedule[roundIndex] || [];
-                    // ★ PAIRING by mode:
-                    //   • matchup_variety → ROUND-ROBIN. Its defining guarantee is perfect
-                    //     opponent rotation (everyone plays everyone once before any rematch),
-                    //     which round-robin guarantees mathematically. The greedy daily
-                    //     optimizer can paint itself into a corner and force a rematch
-                    //     (observed live: a team played two opponents twice and missed two
-                    //     others), so it is the WRONG tool when opponents must stay perfect.
-                    //     Sport rotation in this mode comes from the field-pick scoring
-                    //     (coverage-gap + stuck + fair-share), not from re-pairing.
+                    // ★ PAIRING by mode (both modes pursue BOTH rotations; mode is the
+                    //   tie-breaker when they conflict — opponents win in matchup_variety,
+                    //   sports win in sport_variety):
+                    //   • matchup_variety → ROUND-ROBIN, then SPORT-AWARE 2-OPT
+                    //     (optimizeMatchupPairingForSport). The round-robin keeps opponent
+                    //     rotation perfect; the 2-opt re-pairs ONLY among arrangements that
+                    //     never add a rematch, choosing the one that concentrates shared
+                    //     sport needs so a scarce field serves two needy teams. Opponents
+                    //     are never worse than plain round-robin; sports get the extra help
+                    //     the field-pick scoring (coverage-gap + stuck + fair-share) alone
+                    //     can't give when pairings are fixed.
                     //   • sport_variety → DAILY OPTIMIZER. Here trading an opponent repeat for
                     //     a fresh sport is the whole point, so the history-driven greedy
                     //     matching (scales past 12 teams) is exactly right.
@@ -2227,7 +2318,7 @@
                     if (_prioMode === 'sport_variety') {
                         matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
                     } else {
-                        matchups = _rrMatchups;
+                        matchups = optimizeMatchupPairingForSport(_rrMatchups, activeTeams, availablePool, league.name, history, dayId);
                     }
                 }
 
