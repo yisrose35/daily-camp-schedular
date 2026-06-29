@@ -71,6 +71,28 @@ function getAllLocations() {
             locations.push({ name: ga.facility, type: 'general', capacity: cap, activities: [ga.name] });
         });
     } catch (e) { /* general activities optional */ }
+    // Fixed pinned items (Swim, Lunch, …) + custom pinned tiles from skeleton.
+    try {
+        const _seen = new Set(locations.flatMap(l => (l.activities || []).map(a => String(a).toLowerCase())));
+        const _pushPinned = (name, loc, kind) => {
+            if (!name) return;
+            const k = String(name).toLowerCase();
+            if (_seen.has(k)) return;
+            _seen.add(k);
+            locations.push({ name: loc || name, type: kind, capacity: 1, activities: [name] });
+        };
+        const _ptd = (typeof window.getPinnedTileDefaults === 'function')
+            ? window.getPinnedTileDefaults() : (settings.pinnedTileDefaults || {});
+        Object.entries(_ptd || {}).forEach(([act, loc]) => _pushPinned(act, loc, 'fixed'));
+        ['Swim', 'Lunch', 'Snacks', 'Dinner', 'Dismissal'].forEach(a => _pushPinned(a, null, 'fixed'));
+        let _skel = [];
+        try { _skel = (typeof getSkeleton === 'function') ? (getSkeleton() || []) : []; } catch (e) { _skel = []; }
+        (_skel || []).forEach(t => {
+            if (!t) return;
+            const nm = t.customActivity || ((t.type === 'custom' || t.type === 'pinned') ? t.event : null);
+            if (nm) _pushPinned(nm, t.customField || t.location || null, 'custom');
+        });
+    } catch (e) { /* fixed / custom pinned optional */ }
     return locations;
 }
 
@@ -79,12 +101,22 @@ function activityOptions() {
     return [...new Set(getAllLocations().flatMap(l => l.activities || []))].sort();
 }
 
+// The standard fixed pinned items the dropdown always offers.
+const FIXED = ['Swim', 'Lunch', 'Snacks', 'Dinner', 'Dismissal'];
+// Helper: drop the always-on fixed items so legacy assertions can focus on
+// the field/special/general activities under test.
+function nonFixed(opts) {
+    return opts.filter(a => !FIXED.includes(a));
+}
+
 afterEach(() => {
     delete window.loadGlobalSettings;
     delete window.getAllSpecialActivities;
     delete window.specialActivities;
     delete window.getGeneralActivityPaletteItems;
     delete window.getCustomActivitySharingInfo;
+    delete window.getPinnedTileDefaults;
+    delete window.getSkeleton;
 });
 
 describe('edit-modal activity dropdown population', () => {
@@ -96,7 +128,8 @@ describe('edit-modal activity dropdown population', () => {
             }
         });
         const opts = activityOptions();
-        assert.deepEqual(opts, ['Baking', 'Basketball', 'Gymnastics', 'Hockey']);
+        assert.deepEqual(nonFixed(opts), ['Baking', 'Basketball', 'Gymnastics', 'Hockey']);
+        FIXED.forEach(a => assert.ok(opts.includes(a), `fixed item ${a} present`));
     });
 
     it('FIX: falls back to the live list when app1.specialActivities is empty', () => {
@@ -114,12 +147,13 @@ describe('edit-modal activity dropdown population', () => {
         window.loadGlobalSettings = () => ({ app1: { fields: [], specialActivities: [] } });
         window.specialActivities = [{ name: 'Popcorn' }, { name: 'Art Shoppes' }];
         const opts = activityOptions();
-        assert.deepEqual(opts, ['Art Shoppes', 'Popcorn']);
+        assert.deepEqual(nonFixed(opts), ['Art Shoppes', 'Popcorn']);
     });
 
-    it('never throws and returns [] when no config is loaded', () => {
+    it('never throws; returns the fixed items when no other config is loaded', () => {
         window.loadGlobalSettings = () => ({});
-        assert.deepEqual(activityOptions(), []);
+        assert.deepEqual(nonFixed(activityOptions()), []);
+        FIXED.forEach(a => assert.ok(activityOptions().includes(a), `fixed item ${a} present`));
     });
 
     it('FIX: general activities (facilities editor) appear in the dropdown', () => {
@@ -149,6 +183,41 @@ describe('edit-modal activity dropdown population', () => {
         assert.ok(loc, 'a location hosts the general activity');
         assert.equal(loc.name, 'Auditorium', 'location is keyed to the host facility');
         assert.equal(loc.type, 'general');
+    });
+
+    it('FIX: fixed pinned items (Swim/Lunch/Snacks/Dinner/Dismissal) always appear', () => {
+        window.loadGlobalSettings = () => ({ app1: { fields: [{ name: 'Court 1', activities: ['Basketball'] }] } });
+        const opts = activityOptions();
+        FIXED.forEach(a => assert.ok(opts.includes(a), `${a} in dropdown`));
+        assert.ok(opts.includes('Basketball'), 'field sports still appear');
+    });
+
+    it('FIX: a fixed item resolves to its Pinned Tile Default location', () => {
+        window.loadGlobalSettings = () => ({ app1: { fields: [] } });
+        window.getPinnedTileDefaults = () => ({ Swim: 'Pool', Lunch: 'Lunchroom' });
+        const swim = getAllLocations().find(l => (l.activities || []).includes('Swim'));
+        assert.ok(swim, 'Swim is present');
+        assert.equal(swim.name, 'Pool', 'Swim keyed to its default location (Pool)');
+        assert.equal(swim.type, 'fixed');
+        // A fixed item with no configured default keeps its own name (no court).
+        const dismissal = getAllLocations().find(l => (l.activities || []).includes('Dismissal'));
+        assert.equal(dismissal.name, 'Dismissal');
+    });
+
+    it('FIX: custom pinned tiles from the skeleton appear in the dropdown', () => {
+        window.loadGlobalSettings = () => ({ app1: { fields: [] } });
+        window.getSkeleton = () => ([
+            { type: 'custom', customActivity: 'Regroup', customField: 'Flagpole' },
+            { type: 'pinned', event: 'Home Run Derby' },
+            { type: 'slot', event: 'Sports Slot' }      // not a pin → ignored
+        ]);
+        const opts = activityOptions();
+        assert.ok(opts.includes('Regroup'), 'custom pinned activity appears');
+        assert.ok(opts.includes('Home Run Derby'), 'pinned-event activity appears');
+        assert.ok(!opts.includes('Sports Slot'), 'generic slot tiles are not added');
+        const regroup = getAllLocations().find(l => (l.activities || []).includes('Regroup'));
+        assert.equal(regroup.name, 'Flagpole', 'custom pin keyed to its customField');
+        assert.equal(regroup.type, 'custom');
     });
 
     it('the dropdown is non-empty whenever specials exist somewhere', () => {
