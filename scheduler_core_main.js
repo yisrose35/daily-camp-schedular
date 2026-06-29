@@ -1651,13 +1651,16 @@
                         }
                         return { count: n, ago: lastAgo };
                     };
-                    // Court-less capped labels in this tile's options (a capped sport WITH a court
-                    //   stays on the named-sport solver path — don't queue it field-less).
+                    // Every SCARCE capped label in this tile's options enters the queue — whether or
+                    //   not it has a court. (Pickleball usually DOES have a "Pickleball court" field,
+                    //   so it's court-backed and goes through the solver; the queue still decides WHO
+                    //   gets the cap-many slots. The up-front placement below routes a winner to the
+                    //   real court when one fits, else to a field-less label.)
                     const _labels = [];
                     const _seen = new Set();
                     _rotOpts.forEach(o => {
                         const n = String(o || '').toLowerCase().trim();
-                        if (_directFillCap(o) === Infinity || knownSportNames.has(n) || _seen.has(n)) return;
+                        if (_directFillCap(o) === Infinity || _seen.has(n)) return; // uncapped (Swim) skip
                         _seen.add(n); _labels.push({ raw: o, norm: n });
                     });
                     if (!_labels.length) return;
@@ -1690,15 +1693,28 @@
                     const _usedOpts = _grp ? ((_groupOptsUsed[_grp] = _groupOptsUsed[_grp] || {})[bunk] = _groupOptsUsed[_grp][bunk] || new Set()) : null;
                     let _placed = false, _placedOpt = null;
                     // ★ DIVISION-WIDE QUEUE: if this bunk is one of the least-recent winners for a
-                    //   scarce court-less label (e.g. Pickleball), give it that label UP FRONT —
-                    //   overriding its day-rotation primary — so the cap-many nets always go to the
-                    //   longest-waiting bunks across the whole division, not just this day's turn-group.
+                    //   scarce capped label (e.g. Pickleball), give it that label UP FRONT — overriding
+                    //   its day-rotation primary — so the cap-many slots always go to the longest-
+                    //   waiting bunks across the whole division, not just this day's offset turn-group.
+                    //   If the label is a sport WITH a hosting field that fits (e.g. "Pickleball
+                    //   court"), hand it to the SOLVER to book the real court (so the court isn't
+                    //   double-booked); otherwise place it as a field-less label.
                     const _wonRaw = _winnerLabel[bunk];
-                    if (_wonRaw && _canClaimDirectFill(_wonRaw, _rStart, _rEnd)) {
-                        _registerDirectFillClaim(_wonRaw, _rStart, _rEnd);
-                        console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent): ${_wonRaw}`);
-                        window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _wonRaw, sport: null, _fixed: true, _activity: _wonRaw, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        _placed = true; _placedOpt = String(_wonRaw).toLowerCase().trim();
+                    if (_wonRaw) {
+                        const _wn = String(_wonRaw).toLowerCase().trim();
+                        const _wonFields = _sportFieldMap[_wn];
+                        const _wonFits = knownSportNames.has(_wn) && _wonFields && _wonFields.length && typeof Utils.canBlockFit === 'function'
+                            && _wonFields.some(_ff => Utils.canBlockFit({ divName, division: divName, bunk, startTime: _rStart, endTime: _rEnd, startMin: _rStart, endMin: _rEnd, slots: _rotSlots }, _ff, activityProperties, fieldUsageBySlot, _wonRaw));
+                        if (_wonFits) {
+                            console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent): ${_wonRaw} (solver-restricted, real court)`);
+                            schedulableSlotBlocks.push({ divName, bunk, event: _wonRaw, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [_wonRaw] });
+                            _placed = true; _placedOpt = _wn;
+                        } else if (_canClaimDirectFill(_wonRaw, _rStart, _rEnd)) {
+                            _registerDirectFillClaim(_wonRaw, _rStart, _rEnd);
+                            console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent): ${_wonRaw} (field-less label)`);
+                            window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _wonRaw, sport: null, _fixed: true, _activity: _wonRaw, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            _placed = true; _placedOpt = _wn;
+                        }
                     }
                     for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
                         const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
@@ -1802,24 +1818,30 @@
                             const _spFields = _sportFieldMap[optNorm];
                             const _spFits = !(_spFields && _spFields.length) || typeof Utils.canBlockFit !== 'function'
                                 || _spFields.some(_ff => Utils.canBlockFit({ divName, division: divName, bunk, startTime: _rStart, endTime: _rEnd, startMin: _rStart, endMin: _rEnd, slots: _rotSlots }, _ff, activityProperties, fieldUsageBySlot, opt));
-                            if (_spFits) {
+                            // ★ A scarce CAPPED sport (e.g. Pickleball) is owned by the division-wide
+                            //   QUEUE above: only its pre-chosen least-recent winners may take it, and
+                            //   they were already placed UP FRONT — so a bunk reaching this branch for a
+                            //   capped sport is a non-winner and must skip to its next option (otherwise
+                            //   every bunk whose rotation touches Pickleball floods the solver with
+                            //   court requests and the same 2 get booked every day). Uncapped sports are
+                            //   unaffected (_mayTakeCapped → true).
+                            if (_spFits && _mayTakeCapped(opt, optNorm, bunk)) {
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                                 _placed = true;
-                            } else if (_o === 0 && _canClaimDirectFill(opt, _rStart, _rEnd)) {
-                                // No open field → place the named sport as its OWN field-less label,
-                                // but ONLY for the bunk whose PRIMARY slot this is (_o===0). (A
-                                // court-LESS capped label like Pickleball never reaches this branch —
-                                // it isn't in knownSportNames, so it goes to the final direct-fill
-                                // branch + the division-wide least-recent QUEUE above. This branch is
-                                // the court-backed path: a sport that has a court but it's full now.)
+                            } else if (_directFillCap(opt) === Infinity && _o === 0 && _canClaimDirectFill(opt, _rStart, _rEnd)) {
+                                // UNCAPPED sport with no open field → place as its OWN field-less label,
+                                // but ONLY for the bunk whose PRIMARY slot this is (_o===0). (A capped
+                                // sport like Pickleball never lands here — it's handled by the queue.)
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                 _placed = true;
                             } else {
-                                const _why = (_o !== 0) ? 'fell through here (not its turn)' : `at cap (${_directFillCap(opt)}/window)`;
-                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" ${_why}, no open field → next option`);
+                                const _why = (_directFillCap(opt) !== Infinity && !_mayTakeCapped(opt, optNorm, bunk)) ? 'not a least-recent queue winner this window'
+                                    : (_o !== 0) ? 'fell through here (not its turn)'
+                                    : 'no open field';
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" ${_why} → next option`);
                             }
                         } else {
                             // ★ Direct-fill label (Swim, Pickleball, …): placed as its OWN label
