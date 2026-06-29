@@ -110,7 +110,7 @@ function validateSpecialActivity(activity, activityName) {
     } catch (e) { validDivisions = null; }
 
    let sharableWith = activity.sharableWith;
-    if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 }; }
+    if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2, minBunks: 0 }; }
     else {
         if (!['not_sharable','same_division','cross_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
         if (!Array.isArray(sharableWith.divisions)) sharableWith.divisions = [];
@@ -131,6 +131,17 @@ function validateSpecialActivity(activity, activityName) {
         // (contradicting the displayed "1 bunk"). Force capacity=1 so every
         // downstream reader (type-first or capacity-first) agrees on 1.
         if (sharableWith.type === 'not_sharable') sharableWith.capacity = 1;
+        // ★ minBunks: the MINIMUM number of bunks that must attend together
+        //   whenever this special runs (the floor, opposite of capacity's ceiling).
+        //   0 = no minimum (default — behaves exactly as before). Only meaningful
+        //   for sharable types; clamped to [2, capacity]. not_sharable can never
+        //   host 2 bunks, so its floor is forced off.
+        sharableWith.minBunks = parseInt(sharableWith.minBunks, 10) || 0;
+        if (sharableWith.type === 'not_sharable') sharableWith.minBunks = 0;
+        else if (sharableWith.minBunks > 0) {
+            if (sharableWith.minBunks < 2) sharableWith.minBunks = 2;
+            if (sharableWith.minBunks > sharableWith.capacity) sharableWith.minBunks = sharableWith.capacity;
+        }
         // Normalize allowedPairs for cross_division
         if (sharableWith.type === 'cross_division') {
             if (!sharableWith.allowedPairs || typeof sharableWith.allowedPairs !== 'object') { sharableWith.allowedPairs = {}; }
@@ -256,7 +267,7 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name: _saNormalizeName(name) || 'Unknown', type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name: _saNormalizeName(name) || 'Unknown', type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2, minBunks: 0 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
@@ -1169,10 +1180,12 @@ function summarySharing(item) {
     var sw = item.sharableWith;
     if (!sw || sw.type === 'not_sharable') return '1 bunk at a time';
     var cap = parseInt(sw.capacity, 10) || 2;
-    if (sw.type === 'same_division') return 'Up to ' + cap + ' bunks (same grade)';
+    var mb = (parseInt(sw.minBunks, 10) || 0);
+    var minStr = (mb >= 2) ? ', min ' + mb : '';
+    if (sw.type === 'same_division') return 'Up to ' + cap + ' bunks (same grade)' + minStr;
     if (sw.type === 'cross_division') {
         var pc = Object.keys(sw.allowedPairs || {}).filter(function(k) { return sw.allowedPairs[k]; }).length;
-        return 'Grade pairs — ' + (pc > 0 ? pc + ' pair' + (pc !== 1 ? 's' : '') : 'no pairs set') + ', max ' + cap;
+        return 'Grade pairs — ' + (pc > 0 ? pc + ' pair' + (pc !== 1 ? 's' : '') : 'no pairs set') + ', max ' + cap + minStr;
     }
     return 'Up to ' + cap + ' bunks at once';
 }
@@ -2063,6 +2076,31 @@ function renderSharing(item) {
         };
         capRow.appendChild(capLbl); capRow.appendChild(capIn);
         det.appendChild(capRow);
+
+        // Minimum-bunks row (the floor). 0 / blank = no minimum.
+        var minRow = document.createElement('div');
+        minRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px;';
+        var minLbl = document.createElement('span'); minLbl.style.cssText = 'font-size:0.85rem; color:#374151;';
+        minLbl.textContent = 'Min bunks together:';
+        var minIn = document.createElement('input');
+        minIn.type = 'number'; minIn.min = '0'; minIn.max = String(rules.capacity || 2);
+        minIn.value = (rules.minBunks && rules.minBunks >= 2) ? rules.minBunks : '';
+        minIn.placeholder = 'none';
+        minIn.style.cssText = 'width:60px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+        minIn.onchange = function() {
+            var v = parseInt(minIn.value, 10);
+            if (!v || v < 2) { rules.minBunks = 0; minIn.value = ''; }
+            else { rules.minBunks = Math.min(rules.capacity || 2, v); minIn.value = rules.minBunks; }
+            item.sharableWith = rules; saveData(); updateSummary();
+        };
+        minRow.appendChild(minLbl); minRow.appendChild(minIn);
+        det.appendChild(minRow);
+        var minNote = document.createElement('div');
+        minNote.style.cssText = 'color:#6B7280; font-size:0.78rem; padding:0 0 12px 0; line-height:1.4;';
+        minNote.innerHTML = (rules.minBunks && rules.minBunks >= 2)
+            ? 'This activity will only run when at least <strong>' + rules.minBunks + '</strong> bunks attend together — the scheduler pulls in a partner bunk, and drops it if none can be found.'
+            : 'Leave blank to allow a single bunk. Set to 2+ to require bunks to go together (e.g. the lake always needs 2 bunks).';
+        det.appendChild(minNote);
 
         if (rules.type === 'same_division') {
             var sdNote = document.createElement('div');

@@ -5603,6 +5603,114 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             } catch (_e62) { console.warn('[STEP 7.62] min-share pairing failed:', _e62); }
 
             // ─────────────────────────────────────────────────────────────
+            // STEP 7.63: Special min-bunks co-attendance (the floor). A special
+            // can declare sharableWith.minBunks (e.g. the lake always needs 2
+            // bunks together). capacity is the ceiling; minBunks is the floor.
+            // The solver places specials per-bunk, so a special can land on a
+            // single bunk (a "lonely" session). This pass enforces the floor in
+            // two stages, mirroring the user's intent (push to use it, drop only
+            // as a last resort):
+            //   (1) RECRUIT — pull eligible still-Free bunks (same window, grade
+            //       compatible per the sharing type, has access, not already done
+            //       today, on a non-sport tile) INTO the lonely session up to
+            //       minBunks (and never past capacity). This both fills a Free
+            //       bunk and satisfies the floor.
+            //   (2) DROP — if a session still can't reach minBunks, demote every
+            //       (non-user-locked) member to Free so STEP 7.65 below refills
+            //       them with a normal activity. Members are marked done so 7.65
+            //       can't re-create the same lonely session.
+            // Fully inert unless a special opts in (minBunks>=2) → zero change to
+            // every existing camp/special.
+            // ─────────────────────────────────────────────────────────────
+            try {
+                const _minSpecs63 = {};
+                ((_gs76.app1 && _gs76.app1.specialActivities) || _gs76.specialActivities || []).forEach(s => {
+                    if (!s || !s.name) return;
+                    const sw = s.sharableWith || {};
+                    if ((sw.type || 'not_sharable') === 'not_sharable') return;
+                    let mb = parseInt(sw.minBunks, 10) || 0;
+                    if (mb < 2) return;
+                    const cap = parseInt(sw.capacity, 10) || 2;
+                    mb = Math.min(mb, cap);
+                    if (mb < 2) return;
+                    _minSpecs63[String(s.name).toLowerCase().trim()] = { name: s.name, minBunks: mb, cap: cap, type: sw.type, pairs: sw.allowedPairs || {} };
+                });
+                if (Object.keys(_minSpecs63).length) {
+                    const _isFree63 = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
+                    const _winOf63 = (b, g, idx, e) => (e && e._startMin != null && e._endMin != null) ? { s: e._startMin, e: e._endMin } : _stime76(b, g, idx, e);
+                    // Collect each special-session (specialLC|start|end) and its member bunks.
+                    const _grp63 = {};
+                    Object.keys(_sa76).forEach(b => {
+                        if (_allowed76 && !_allowed76.has(String(b))) return;
+                        const g = _b2g76[String(b)] || '?';
+                        (_sa76[b] || []).forEach((e, idx) => {
+                            if (!e || e.continuation) return;
+                            const actLC = String(e._activity || e._assignedSpecial || '').toLowerCase().trim();
+                            const spec = _minSpecs63[actLC];
+                            if (!spec) return;
+                            const t = _winOf63(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                            const key = actLC + '|' + t.s + '|' + t.e;
+                            (_grp63[key] = _grp63[key] || { actLC: actLC, spec: spec, s: t.s, e: t.e, members: [] }).members.push({ bunk: b, idx: idx, grade: g });
+                        });
+                    });
+                    let _recruited63 = 0, _droppedBunks63 = 0, _fixed63 = 0, _dropSess63 = 0;
+                    Object.keys(_grp63).forEach(key => {
+                        const grp = _grp63[key], spec = grp.spec, s = grp.s, en = grp.e, actLC = grp.actLC;
+                        if (grp.members.length >= spec.minBunks) return; // floor already met
+                        const _gradeOk = (cg) => {
+                            const gradesNow = grp.members.map(m => m.grade);
+                            if (spec.type === 'same_division') return gradesNow.every(eg => eg === cg);
+                            if (spec.type === 'cross_division') return gradesNow.every(eg => spec.pairs[[eg, cg].sort().join('|')] === true);
+                            return gradesNow.every(eg => eg === cg);
+                        };
+                        // (1) RECRUIT eligible Free bunks at the SAME window.
+                        const tmpl = _sa76[grp.members[0].bunk] && _sa76[grp.members[0].bunk][grp.members[0].idx];
+                        const fld = (tmpl && tmpl.field) || spec.name;
+                        Object.keys(_sa76).forEach(b => {
+                            if (grp.members.length >= spec.minBunks || grp.members.length >= spec.cap) return;
+                            if (_allowed76 && !_allowed76.has(String(b))) return;
+                            if (grp.members.some(m => String(m.bunk) === String(b))) return;
+                            const g = _b2g76[String(b)] || '?';
+                            if (!_gradeOk(g)) return;
+                            if (_done76[b] && _done76[b][actLC]) return;
+                            const arr = _sa76[b] || [];
+                            for (let idx = 0; idx < arr.length; idx++) {
+                                const e = arr[idx];
+                                if (!e || e.continuation || e._isTransition || e._league || e._h2h || !_isFree63(e)) continue;
+                                const t = _winOf63(b, g, idx, e); if (!t || t.s !== s || t.e !== en) continue;
+                                const ck = _kindByCell76[String(b) + '|' + idx];
+                                const kind = (ck && ck !== 'any') ? ck : slotKindOf(_slotEvent76(b, g, idx, e));
+                                if (kind === 'sport') continue; // a sport-only tile can't take a special
+                                if (typeof window.isSpecialAvailableForBunk === 'function'
+                                    && !window.isSpecialAvailableForBunk(spec.name, g, b, window.globalSettings || null)) continue;
+                                _sa76[b][idx] = { field: fld, sport: null, _activity: spec.name, _assignedSpecial: spec.name, _specialLocation: fld, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minBunkFilled: true, continuation: false };
+                                (_done76[b] = _done76[b] || {})[actLC] = 1;
+                                grp.members.push({ bunk: b, idx: idx, grade: g });
+                                _recruited63++;
+                                break;
+                            }
+                        });
+                        if (grp.members.length >= spec.minBunks) { _fixed63++; return; }
+                        // (2) DROP — couldn't reach the floor; demote non-locked members to Free.
+                        let droppedAny = false;
+                        grp.members.forEach(m => {
+                            const e = _sa76[m.bunk] && _sa76[m.bunk][m.idx];
+                            if (!e || e._league || e._postEdit || e._pinned || e._bunkOverride) return; // keep user-locked
+                            const t = _winOf63(m.bunk, m.grade, m.idx, e) || { s: s, e: en };
+                            _sa76[m.bunk][m.idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: t.s, _endMin: t.e, _fixed: true, _constraintDemoted: true, _demotedReason: 'special_min_bunks', continuation: false };
+                            const sl = _sa76[m.bunk];
+                            for (let k = m.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false }; } else break; }
+                            (_done76[m.bunk] = _done76[m.bunk] || {})[actLC] = 1; // block 7.65 from re-creating the lonely session
+                            _droppedBunks63++; droppedAny = true;
+                        });
+                        if (droppedAny) _dropSess63++;
+                    });
+                    if (_recruited63 + _droppedBunks63 > 0) console.log('[STEP 7.63] special min-bunks: recruited ' + _recruited63 + ' bunk(s) into ' + _fixed63 + ' session(s); dropped ' + _droppedBunks63 + ' under-min bunk(s) across ' + _dropSess63 + ' session(s)');
+                    else console.log('[STEP 7.63] special min-bunks: ✅ all min-bunks specials already satisfied');
+                }
+            } catch (_e63) { console.warn('[STEP 7.63] special min-bunks pairing failed:', _e63); }
+
+            // ─────────────────────────────────────────────────────────────
             // STEP 7.65: No-repeat fill. The empty-field pass only seats a Free
             // bunk on a COMPLETELY EMPTY sport field, so a bunk whose only
             // remaining fresh option was sharing a grade-mate's half-full room —
