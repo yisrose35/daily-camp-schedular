@@ -41,6 +41,7 @@ var ICO = {
     zoomOut:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
     monitor:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
     download: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    message:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
     check:    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
     chevD:    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
     star:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
@@ -2211,6 +2212,8 @@ function buildMainUI() {
                 '<div class="pcx-menu" id="pc3-output-menu">' +
                     '<div class="pcx-menu-label">Download</div>' +
                     '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
+                    '<div class="pcx-menu-label">Share</div>' +
+                    '<button onclick="window._pc3SpecialtyText();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.message + 'Specialty schedule text</button>' +
                     '<div class="pcx-menu-label">Print</div>' +
                     '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
@@ -3679,6 +3682,165 @@ function pcEntryIsSpecialty(entry, nameSet) {
     var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
     if (fn && ns[String(fn).toLowerCase().trim()]) return true;
     return false;
+}
+
+/**
+ * Resolve the specialty name to GROUP an entry under for the text roster.
+ * Checks the activity name first (specials placed in a facility room), then the
+ * field name (name-only specials store the special's name as the field). The
+ * activity name is canonicalized for display; lookups stay against the raw name
+ * so a canonical alias that differs from the configured name still matches.
+ */
+function pcEntrySpecialtyName(entry, nameSet) {
+    if (!entry) return '';
+    var ns = nameSet || pcSpecialtyNameSet();
+    var actRaw = entry._activity || '';
+    if (actRaw && ns[String(actRaw).toLowerCase().trim()]) return pcCanonicalActivityName(actRaw) || actRaw;
+    var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    if (fn && ns[String(fn).toLowerCase().trim()]) return fn;
+    return '';
+}
+
+// =========================================================================
+// SPECIALTY SCHEDULE TEXT
+// Build a copy-pasteable, group-text-friendly roster of the day's specialty
+// activities, grouped activity → time/s → bunk/s. Whole camp, both builder
+// modes. Mirrors the auto/manual iteration of scanLocationAcrossBunks.
+// =========================================================================
+function buildSpecialtyActivityText() {
+    var divs = getDivisions();
+    var nameSet = pcSpecialtyNameSet();
+    // byActivity[name] = { name, byTime: { timeLabel: { label, startMin, bunks[] } } }
+    var byActivity = {};
+
+    function record(name, timeLabel, startMin, bunk) {
+        if (!name) return;
+        if (!byActivity[name]) byActivity[name] = { name: name, byTime: {} };
+        var bt = byActivity[name].byTime;
+        if (!bt[timeLabel]) bt[timeLabel] = { label: timeLabel, startMin: startMin, bunks: [] };
+        if (bt[timeLabel].bunks.indexOf(bunk) === -1) bt[timeLabel].bunks.push(bunk);
+    }
+
+    var _orderedDivKeys = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(Object.keys(divs))
+        : Object.keys(divs).sort(naturalSort);
+
+    if (isAutoMode()) {
+        // AUTO MODE: each bunk carries its own slot indices.
+        _orderedDivKeys.forEach(function (dn) {
+            var bunks = (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice();
+            bunks.forEach(function (bk) {
+                var bunkSlots = getPerBunkSchedule(bk, dn);
+                bunkSlots.forEach(function (slot, si) {
+                    var entry = getEntry(bk, si);
+                    if (!entry || entry.continuation) return;
+                    if (!pcEntryIsSpecialty(entry, nameSet)) return;
+                    record(pcEntrySpecialtyName(entry, nameSet),
+                        minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(slot.endMin),
+                        slot.startMin, bk);
+                });
+            });
+        });
+    } else {
+        // MANUAL MODE: all bunks share division-level slot indices.
+        _orderedDivKeys.forEach(function (dn) {
+            var divSlots = window.divisionTimes && window.divisionTimes[dn] ? window.divisionTimes[dn] : [];
+            var bunks = (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice();
+            divSlots.forEach(function (slot, si) {
+                bunks.forEach(function (bk) {
+                    var entry = getEntry(bk, si);
+                    if (!entry || entry.continuation) return;
+                    if (!pcEntryIsSpecialty(entry, nameSet)) return;
+                    record(pcEntrySpecialtyName(entry, nameSet),
+                        minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(slot.endMin),
+                        slot.startMin, bk);
+                });
+            });
+        });
+    }
+
+    var lines = [];
+    var dateStr = '';
+    try {
+        if (window.currentScheduleDate) {
+            var d = new Date(window.currentScheduleDate + 'T12:00:00');
+            dateStr = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        }
+    } catch (e) { dateStr = ''; }
+    lines.push('Hey everyone! Here is the specialty activity schedule for today'
+        + (dateStr ? ', ' + dateStr : '')
+        + '. Please review your times and the bunks assigned to you:');
+    lines.push('');
+
+    var names = Object.keys(byActivity).sort(naturalSort);
+    if (!names.length) {
+        lines.push('(No specialty activities are scheduled for this day.)');
+        return lines.join('\n');
+    }
+
+    names.forEach(function (nm) {
+        lines.push(nm);
+        var times = Object.values(byActivity[nm].byTime).sort(function (a, b) { return a.startMin - b.startMin; });
+        times.forEach(function (t) {
+            // Bunks within a time follow the division/bunk iteration order above.
+            lines.push('• ' + t.label + ': ' + t.bunks.join(', '));
+        });
+        lines.push('');
+    });
+
+    return lines.join('\n').replace(/\n+$/, '');
+}
+
+// Preview modal: shows the built message in an editable textarea with a
+// one-click copy-to-clipboard, so the user can tweak before sending.
+function pcOpenSpecialtyTextModal() {
+    var text = buildSpecialtyActivityText();
+    var existing = document.getElementById('pc3-spectext-overlay');
+    if (existing) existing.parentNode.removeChild(existing);
+
+    var overlay = document.createElement('div');
+    overlay.id = 'pc3-spectext-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.35);width:min(560px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;font-family:inherit;';
+    card.innerHTML =
+        '<div style="padding:16px 20px;border-bottom:1px solid #eef2f7;display:flex;align-items:center;justify-content:space-between;">' +
+            '<div style="font-weight:700;font-size:15px;color:#0f172a;">Specialty schedule text</div>' +
+            '<button id="pc3-spectext-x" style="border:none;background:#f1f5f9;border-radius:8px;width:28px;height:28px;cursor:pointer;font-size:16px;color:#475569;line-height:1;">×</button>' +
+        '</div>' +
+        '<div style="padding:14px 20px 4px;font-size:12px;color:#64748b;">Review or tweak the message below, then copy it to send to your staff.</div>' +
+        '<div style="padding:8px 20px;flex:1;overflow:auto;">' +
+            '<textarea id="pc3-spectext-area" spellcheck="false" style="width:100%;height:46vh;resize:vertical;border:1px solid #e2e8f0;border-radius:10px;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;color:#0f172a;box-sizing:border-box;"></textarea>' +
+        '</div>' +
+        '<div style="padding:14px 20px;border-top:1px solid #eef2f7;display:flex;gap:10px;justify-content:flex-end;">' +
+            '<button id="pc3-spectext-close" style="padding:9px 16px;border:1px solid #e2e8f0;background:#fff;border-radius:9px;cursor:pointer;font-size:13px;color:#475569;">Close</button>' +
+            '<button id="pc3-spectext-copy" style="padding:9px 18px;border:none;background:#147D91;color:#fff;border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;">Copy to clipboard</button>' +
+        '</div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    var area = card.querySelector('#pc3-spectext-area');
+    area.value = text;
+
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    card.querySelector('#pc3-spectext-x').addEventListener('click', close);
+    card.querySelector('#pc3-spectext-close').addEventListener('click', close);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+
+    card.querySelector('#pc3-spectext-copy').addEventListener('click', function () {
+        var btn = this;
+        var val = area.value;
+        function ok() {
+            btn.textContent = 'Copied ✓';
+            if (window.showToast) window.showToast('Specialty schedule copied', 'success');
+            setTimeout(function () { btn.textContent = 'Copy to clipboard'; }, 1800);
+        }
+        function fallback() { area.focus(); area.select(); try { document.execCommand('copy'); ok(); } catch (e) {} }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(val).then(ok).catch(fallback);
+        } else { fallback(); }
+    });
 }
 
 // =========================================================================
@@ -7630,6 +7792,7 @@ function doWeekStackPrint(keys) {
     runPrint(combinedHtml, t);
 }
 window._pc3ExportExcel = exportExcel;
+window._pc3SpecialtyText = pcOpenSpecialtyTextModal;
 window._pc3OpenLive = openLiveWindow;
 window._pc3RunLiveStandalone = runLiveStandalone;
 // The live-view pagination arrows use inline onclick="livePageNav(±1)", which
