@@ -1227,6 +1227,114 @@
             }
         });
 
+        // =====================================================================
+        // ★ FAIR-SHARE SPECIAL ROOMS ACROSS OVERLAPPING ROTATION TILES (per-facility)
+        //   + SENIORITY RESERVATION (runs BEFORE the per-window budget below).
+        //   Two ROTATION smart tiles whose TIME windows overlap (e.g. div 7 @930-1010
+        //   and div 8/9 @970-1020) compete for the same shared special ROOMS. Each tile
+        //   gets a per-window quota = the SUM, over each special ROOM it can access, of
+        //   that room's capacity split (by special-demand) among the overlapping tiles
+        //   that can ALSO access it. Properties:
+        //     • A room only ONE tile can access → that tile gets its full capacity (no cap)
+        //       → uncontended windows are a STRICT NO-OP (quota = full accessible pool).
+        //     • Heavily contended rooms → each tile gets a fair slice.
+        //   ★ WHY THIS MOVED ABOVE THE BUDGET: the per-window budget pre-pass (below)
+        //   claims special rooms for BUDGET-mode tiles (e.g. div 7's "Special / Swim"
+        //   swap) and runs BEFORE the rotation placement loop where 8th/9th-grade
+        //   rotation tiles claim. So a JUNIOR budget division in an overlapping window
+        //   used to lock the shared rooms first, starving the SENIOR rotation divisions
+        //   (observed live: 8th/9th "Special" @970-1020 found every room already held by
+        //   div 7 @930-1010, a phantom claim div 7 never even placed). Fix: build the
+        //   quota here and let the senior rotation divisions RESERVE their fair share of
+        //   rooms up-front (filteredJobs is seniority-sorted oldest→youngest), so the
+        //   budget can only hand junior divisions what's left.
+        //   "Demand" ≈ bunks / option-count; quota is an UPPER bound (real claiming still
+        //   respects room availability, so an unused quota never wastes a room).
+        // =====================================================================
+        const _rotSpecialQuota = {};   // `${div}|${start}|${end}` -> max specials claimable
+        const _rotSpecialClaimed = {}; // same key -> running count
+        // ★ Per-division special PRIORITY weight: a division gets this many times its
+        //   normal demand in the fair-share split, so it claims a BIGGER slice of the
+        //   contended special rooms. Default is SENIORITY-DERIVED — the oldest division
+        //   (rank 0) gets the largest weight, the youngest the smallest, so under
+        //   contention the oldest claim more of the shared rooms while the quota's
+        //   Math.max(1,…) floor still reserves a minimum slice for younger divisions.
+        //   (Replaces the old hardcoded { '9': 8 } band-aid.) A runtime override via
+        //   window.__smartTileSpecialWeight still wins per-division.
+        const _specialWeightMap = window.__smartTileSpecialWeight || null;
+        const _specialWeight = (d) => {
+            if (_specialWeightMap && _specialWeightMap[d]) return _specialWeightMap[d];
+            const r = _seniorityRank[String(d)];
+            return (r === undefined) ? 1 : (_numSeniorityDivs - r);
+        };
+        (function _buildRotationSpecialQuotas() {
+            const rj = [];
+            filteredJobs.forEach(job => {
+                const opts = _rotationOptions(job);
+                if (!opts || !job.blockA) return;
+                if (!opts.some(o => normalizeCategoryLabel(o) === 'special'
+                    || knownSpecialNames.has(String(o).toLowerCase().trim()))) return;
+                const b = job.blockA;
+                const bunks = (divisions[job.division]?.bunks || []).length || 1;
+                const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    b.startMin, b.endMin, job.division, activityProperties, dailyFieldAvailability) || [];
+                const facs = new Map(); // facilityKey -> capacity (max seen)
+                avail.forEach(s => {
+                    const k = _claimKey(s.name);
+                    const c = (s.capacity && s.capacity > 0) ? s.capacity : 1;
+                    facs.set(k, Math.max(facs.get(k) || 0, c));
+                });
+                if (!facs.size) return;
+                rj.push({ div: job.division, s: b.startMin, e: b.endMin, demand: (bunks / Math.max(1, opts.length)) * _specialWeight(job.division), facs, key: `${job.division}|${b.startMin}|${b.endMin}` });
+            });
+            rj.forEach(j => {
+                let q = 0, contended = false;
+                j.facs.forEach((cap, f) => {
+                    let denom = 0, sharers = 0;
+                    rj.forEach(k => { if (k.s < j.e && k.e > j.s && k.facs.has(f)) { denom += k.demand; sharers++; } });
+                    if (denom > 0) q += cap * j.demand / denom;
+                    if (sharers > 1) contended = true;
+                });
+                // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
+                // byte-for-byte no-op for the common case.
+                _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
+                if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
+            });
+        })();
+
+        // ★ SENIORITY RESERVATION: senior rotation divisions lock their fair-share
+        //   special rooms NOW, before the budget pre-pass can hand them to a junior
+        //   budget division in an overlapping window. Only CONTENDED windows (finite
+        //   quota) reserve — uncontended is a strict no-op. The rotation placement loop
+        //   later CONSUMES these reservations (they are already claimed for the division).
+        const _rotReserved = {}; // `${div}|${start}|${end}` -> [specialName,...] pre-claimed rooms
+        (function _reserveRotationSpecials() {
+            filteredJobs.forEach(job => {
+                const opts = _rotationOptions(job);
+                if (!opts || !job.blockA) return;
+                if (!opts.some(o => normalizeCategoryLabel(o) === 'special'
+                    || knownSpecialNames.has(String(o).toLowerCase().trim()))) return;
+                const divName = job.division;
+                const b = job.blockA;
+                const wQ = `${divName}|${b.startMin}|${b.endMin}`;
+                const quota = _rotSpecialQuota[wQ];
+                if (quota === undefined || quota === Infinity) return; // only contended windows
+                let toReserve = Math.min(quota, (divisions[divName]?.bunks || []).length);
+                if (toReserve <= 0) return;
+                const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || [];
+                for (const sp of avail) {
+                    if (toReserve <= 0) break;
+                    if (!_canClaim(sp.name, b.startMin, b.endMin, sp.capacity || 1, divName)) continue;
+                    _registerClaim(sp.name, b.startMin, b.endMin, divName);
+                    (_rotReserved[wQ] = _rotReserved[wQ] || []).push(sp.name);
+                    toReserve--;
+                }
+                if (_rotReserved[wQ] && _rotReserved[wQ].length)
+                    console.log(`[SmartTile SENIORITY-RESERVE] ${divName} @${b.startMin}-${b.endMin}: reserved ${_rotReserved[wQ].length} room(s) [${_rotReserved[wQ].join(', ')}]`);
+            });
+        })();
+
         Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
             const [startMin, endMin] = wk.split('|').map(Number);
 
@@ -1433,71 +1541,8 @@
 
         const sharedCapacityTracker = {}; // kept for legacy compat
 
-        // ★ FAIR-SHARE SPECIAL ROOMS ACROSS OVERLAPPING ROTATION TILES (per-facility).
-        //   Two ROTATION smart tiles whose TIME windows overlap (e.g. div 7 @930-1010 and
-        //   div 8/9 @970-1020) compete for the same shared special ROOMS. Processed in job
-        //   order, the earlier division greedily claims ALL rooms, starving the later one.
-        //   So give each tile a per-window quota = the SUM, over each special ROOM it can
-        //   access, of that room's capacity split (by special-demand) among the overlapping
-        //   tiles that can ALSO access it. Key properties:
-        //     • A room only ONE tile can access → that tile gets its full capacity (no cap).
-        //       → uncontended windows are a STRICT NO-OP (quota = full accessible pool).
-        //     • Heavily contended rooms → each competing tile gets a fair slice, so the
-        //       earlier division can't monopolise; rooms are left for the later one.
-        //   "Demand" ≈ bunks / option-count (a [Special,Swim] tile sends ~half its bunks to a
-        //   special each block; [Special,Sport,Swim] ~a third) — avoids over-counting bunks
-        //   that won't seek a special in this window. Quota is an UPPER bound; real claiming
-        //   still respects room availability, so an unused quota never wastes a room.
-        const _rotSpecialQuota = {};   // `${div}|${start}|${end}` -> max specials claimable
-        const _rotSpecialClaimed = {}; // same key -> running count
-        // ★ Per-division special PRIORITY weight: a division gets this many times its
-        //   normal demand in the fair-share split, so it claims a BIGGER slice of the
-        //   contended special rooms (and the others reserve more for it). Default is now
-        //   SENIORITY-DERIVED — the oldest division (rank 0) gets the largest weight and
-        //   the youngest the smallest, so under contention the oldest claim more of the
-        //   shared rooms while the quota's Math.max(1,…) floor still reserves a minimum
-        //   slice for younger divisions. (Replaces the old hardcoded { '9': 8 } band-aid.)
-        //   A runtime override via window.__smartTileSpecialWeight still wins per-division.
-        const _specialWeightMap = window.__smartTileSpecialWeight || null;
-        const _specialWeight = (d) => {
-            if (_specialWeightMap && _specialWeightMap[d]) return _specialWeightMap[d];
-            const r = _seniorityRank[String(d)];
-            return (r === undefined) ? 1 : (_numSeniorityDivs - r);
-        };
-        (function _buildRotationSpecialQuotas() {
-            const rj = [];
-            filteredJobs.forEach(job => {
-                const opts = _rotationOptions(job);
-                if (!opts || !job.blockA) return;
-                if (!opts.some(o => normalizeCategoryLabel(o) === 'special'
-                    || knownSpecialNames.has(String(o).toLowerCase().trim()))) return;
-                const b = job.blockA;
-                const bunks = (divisions[job.division]?.bunks || []).length || 1;
-                const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
-                    b.startMin, b.endMin, job.division, activityProperties, dailyFieldAvailability) || [];
-                const facs = new Map(); // facilityKey -> capacity (max seen)
-                avail.forEach(s => {
-                    const k = _claimKey(s.name);
-                    const c = (s.capacity && s.capacity > 0) ? s.capacity : 1;
-                    facs.set(k, Math.max(facs.get(k) || 0, c));
-                });
-                if (!facs.size) return;
-                rj.push({ div: job.division, s: b.startMin, e: b.endMin, demand: (bunks / Math.max(1, opts.length)) * _specialWeight(job.division), facs, key: `${job.division}|${b.startMin}|${b.endMin}` });
-            });
-            rj.forEach(j => {
-                let q = 0, contended = false;
-                j.facs.forEach((cap, f) => {
-                    let denom = 0, sharers = 0;
-                    rj.forEach(k => { if (k.s < j.e && k.e > j.s && k.facs.has(f)) { denom += k.demand; sharers++; } });
-                    if (denom > 0) q += cap * j.demand / denom;
-                    if (sharers > 1) contended = true;
-                });
-                // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
-                // byte-for-byte no-op for the common case.
-                _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
-                if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
-            });
-        })();
+        // (Rotation special-quota build + seniority reservation moved ABOVE the budget
+        //  pre-pass — see "FAIR-SHARE SPECIAL ROOMS … + SENIORITY RESERVATION" block.)
 
         filteredJobs.forEach((job, jobIdx) => {
 
@@ -1634,7 +1679,26 @@
                                 const _atQuota = (_rotSpecialQuota[_wQ] !== undefined)
                                     && ((_rotSpecialClaimed[_wQ] || 0) >= _rotSpecialQuota[_wQ]);
                                 if (_atQuota) console.log(`[SmartTile] ${bunk} -> ROTATION "Special" at fair-share cap (${_rotSpecialQuota[_wQ]}/window, shared rooms) → next option`);
-                                for (const sp of (_atQuota ? [] : _avail)) {
+                                // ★ Consume a seniority-RESERVED room first — already claimed
+                                //   up-front for this senior division before the budget pre-pass
+                                //   ran, so a junior budget division in an overlapping window
+                                //   couldn't steal it. Skip _canClaim: the room is already ours.
+                                const _resvList = _rotReserved[_wQ];
+                                if (!_atQuota && _resvList && _resvList.length) {
+                                    for (let _ri = 0; _ri < _resvList.length; _ri++) {
+                                        const _rn = _resvList[_ri];
+                                        if (_had && _had.has(_rn.toLowerCase())) continue;       // already had today
+                                        if (typeof window.isSpecialAvailableForBunk === 'function'
+                                            && !window.isSpecialAvailableForBunk(_rn, divName, bunk, window.loadGlobalSettings?.())) continue;
+                                        _resvList.splice(_ri, 1);                                 // consume (already claimed)
+                                        _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
+                                        (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_rn.toLowerCase());
+                                        console.log(`[SmartTile] ${bunk} -> ROTATION special (reserved): ${_rn}`);
+                                        window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _rn, sport: null, _fixed: true, _activity: _rn }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                        _placed = true; break;
+                                    }
+                                }
+                                for (const sp of ((_atQuota || _placed) ? [] : _avail)) {
                                     if (_had && _had.has(sp.name.toLowerCase())) continue; // already had this special today
                                     // ★ Bunk-level access — getAvailableSpecialsForTimeBlock filters the
                                     //   pool at DIVISION level only, so a special restricted to specific
