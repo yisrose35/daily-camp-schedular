@@ -2213,7 +2213,7 @@ function buildMainUI() {
                     '<div class="pcx-menu-label">Download</div>' +
                     '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
                     '<div class="pcx-menu-label">Share</div>' +
-                    '<button onclick="window._pc3SpecialtyText();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.message + 'Specialty schedule text</button>' +
+                    '<button onclick="window._pc3SpecialtyText();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.message + 'Activity schedule text</button>' +
                     '<div class="pcx-menu-label">Print</div>' +
                     '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
@@ -3702,23 +3702,51 @@ function pcEntrySpecialtyName(entry, nameSet) {
 }
 
 // =========================================================================
-// SPECIALTY SCHEDULE TEXT
-// Build a copy-pasteable, group-text-friendly roster of the day's specialty
-// activities, grouped activity → time/s → bunk/s. Whole camp, both builder
-// modes. Mirrors the auto/manual iteration of scanLocationAcrossBunks.
+// ACTIVITY SCHEDULE TEXT
+// Build a copy-pasteable, group-text-friendly roster of the day's activities,
+// grouped activity → time/s → bunk/s. Whole camp, both builder modes. The user
+// picks exactly which activities to include — specialties (e.g. VR, Archery)
+// are offered checked by default, sports / other activities unchecked so they
+// can opt them in. Mirrors the auto/manual iteration of scanLocationAcrossBunks.
 // =========================================================================
-function buildSpecialtyActivityText() {
+
+// Resolve the name to GROUP an entry under for the roster: specialty name first,
+// then the sport / general activity name (canonicalized for display).
+function pcEntryActivityName(entry, nameSet) {
+    if (!entry) return '';
+    var spec = pcEntrySpecialtyName(entry, nameSet);
+    if (spec) return spec;
+    var s = entry.sport || entry._activity || '';
+    if (!s) return '';
+    return pcCanonicalActivityName(s) || s;
+}
+
+// Scan the whole camp for the current day and bucket every schedulable activity
+// by name. Returns { name: { name, isSpecialty, byTime: { label: {label,startMin,bunks[]} } } }.
+function pcScanActivitiesForText() {
     var divs = getDivisions();
     var nameSet = pcSpecialtyNameSet();
-    // byActivity[name] = { name, byTime: { timeLabel: { label, startMin, bunks[] } } }
-    var byActivity = {};
+    var activities = {};
 
-    function record(name, timeLabel, startMin, bunk) {
+    function record(name, isSpecialty, timeLabel, startMin, bunk) {
         if (!name) return;
-        if (!byActivity[name]) byActivity[name] = { name: name, byTime: {} };
-        var bt = byActivity[name].byTime;
+        if (!activities[name]) activities[name] = { name: name, isSpecialty: !!isSpecialty, byTime: {} };
+        if (isSpecialty) activities[name].isSpecialty = true;
+        var bt = activities[name].byTime;
         if (!bt[timeLabel]) bt[timeLabel] = { label: timeLabel, startMin: startMin, bunks: [] };
         if (bt[timeLabel].bunks.indexOf(bunk) === -1) bt[timeLabel].bunks.push(bunk);
+    }
+
+    function consider(entry, slot, bunk) {
+        if (!entry || entry.continuation) return;
+        // Skip structural / non-activity slots and league games (head-to-head
+        // matchups don't fit the activity → time → bunks roster shape).
+        if (entry._isTransition || entry._isDismissal || entry._isSnack || entry._league || entry._h2h) return;
+        var name = pcEntryActivityName(entry, nameSet);
+        if (!name || name === 'Free') return;
+        record(name, pcEntryIsSpecialty(entry, nameSet),
+            minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(slot.endMin),
+            slot.startMin, bunk);
     }
 
     var _orderedDivKeys = (typeof window.getUserDivisionOrder === 'function')
@@ -3728,17 +3756,8 @@ function buildSpecialtyActivityText() {
     if (isAutoMode()) {
         // AUTO MODE: each bunk carries its own slot indices.
         _orderedDivKeys.forEach(function (dn) {
-            var bunks = (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice();
-            bunks.forEach(function (bk) {
-                var bunkSlots = getPerBunkSchedule(bk, dn);
-                bunkSlots.forEach(function (slot, si) {
-                    var entry = getEntry(bk, si);
-                    if (!entry || entry.continuation) return;
-                    if (!pcEntryIsSpecialty(entry, nameSet)) return;
-                    record(pcEntrySpecialtyName(entry, nameSet),
-                        minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(slot.endMin),
-                        slot.startMin, bk);
-                });
+            (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice().forEach(function (bk) {
+                getPerBunkSchedule(bk, dn).forEach(function (slot, si) { consider(getEntry(bk, si), slot, bk); });
             });
         });
     } else {
@@ -3747,18 +3766,16 @@ function buildSpecialtyActivityText() {
             var divSlots = window.divisionTimes && window.divisionTimes[dn] ? window.divisionTimes[dn] : [];
             var bunks = (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice();
             divSlots.forEach(function (slot, si) {
-                bunks.forEach(function (bk) {
-                    var entry = getEntry(bk, si);
-                    if (!entry || entry.continuation) return;
-                    if (!pcEntryIsSpecialty(entry, nameSet)) return;
-                    record(pcEntrySpecialtyName(entry, nameSet),
-                        minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(slot.endMin),
-                        slot.startMin, bk);
-                });
+                bunks.forEach(function (bk) { consider(getEntry(bk, si), slot, bk); });
             });
         });
     }
+    return activities;
+}
 
+// Render the message text from a scanned activity map, including only the names
+// flagged true in `selected`.
+function buildActivityScheduleText(activities, selected) {
     var lines = [];
     var dateStr = '';
     try {
@@ -3767,20 +3784,20 @@ function buildSpecialtyActivityText() {
             dateStr = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
         }
     } catch (e) { dateStr = ''; }
-    lines.push('Hey everyone! Here is the specialty activity schedule for today'
+    lines.push('Hey everyone! Here is the activity schedule for today'
         + (dateStr ? ', ' + dateStr : '')
         + '. Please review your times and the bunks assigned to you:');
     lines.push('');
 
-    var names = Object.keys(byActivity).sort(naturalSort);
+    var names = Object.keys(activities).filter(function (n) { return selected[n]; }).sort(naturalSort);
     if (!names.length) {
-        lines.push('(No specialty activities are scheduled for this day.)');
+        lines.push('(No activities selected.)');
         return lines.join('\n');
     }
 
     names.forEach(function (nm) {
         lines.push(nm);
-        var times = Object.values(byActivity[nm].byTime).sort(function (a, b) { return a.startMin - b.startMin; });
+        var times = Object.values(activities[nm].byTime).sort(function (a, b) { return a.startMin - b.startMin; });
         times.forEach(function (t) {
             // Bunks within a time follow the division/bunk iteration order above.
             lines.push('• ' + t.label + ': ' + t.bunks.join(', '));
@@ -3791,27 +3808,58 @@ function buildSpecialtyActivityText() {
     return lines.join('\n').replace(/\n+$/, '');
 }
 
-// Preview modal: shows the built message in an editable textarea with a
-// one-click copy-to-clipboard, so the user can tweak before sending.
+// Preview modal: an activity checklist on top (specialties checked by default,
+// sports / other opt-in) feeding a live, editable message textarea with a
+// one-click copy-to-clipboard.
 function pcOpenSpecialtyTextModal() {
-    var text = buildSpecialtyActivityText();
+    var activities = pcScanActivitiesForText();
+    var allNames = Object.keys(activities).sort(naturalSort);
+    var specialtyNames = allNames.filter(function (n) { return activities[n].isSpecialty; });
+    var otherNames = allNames.filter(function (n) { return !activities[n].isSpecialty; });
+    var selected = {};
+    specialtyNames.forEach(function (n) { selected[n] = true; });
+
     var existing = document.getElementById('pc3-spectext-overlay');
     if (existing) existing.parentNode.removeChild(existing);
+
+    function rowHtml(n) {
+        var i = allNames.indexOf(n);
+        return '<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:7px;cursor:pointer;font-size:13px;color:#0f172a;">'
+            + '<input type="checkbox" data-i="' + i + '"' + (selected[n] ? ' checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:#147D91;">'
+            + '<span>' + escHtml(n) + '</span></label>';
+    }
+    function sectionHtml(title, list) {
+        if (!list.length) return '';
+        return '<div style="margin-bottom:8px;">'
+            + '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 6px 4px;">'
+                + '<div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;">' + escHtml(title) + '</div>'
+                + '<div style="font-size:11px;color:#147D91;">'
+                    + '<a href="#" data-bulk="all" data-sec="' + escHtml(title) + '" style="text-decoration:none;color:#147D91;">All</a>'
+                    + ' · <a href="#" data-bulk="none" data-sec="' + escHtml(title) + '" style="text-decoration:none;color:#94a3b8;">None</a>'
+                + '</div>'
+            + '</div>' + list.map(rowHtml).join('') + '</div>';
+    }
+
+    var checklistHtml = allNames.length
+        ? (sectionHtml('Specialties', specialtyNames) + sectionHtml('Sports & other', otherNames))
+        : '<div style="color:#94a3b8;font-size:13px;padding:8px;">No activities are scheduled for this day.</div>';
 
     var overlay = document.createElement('div');
     overlay.id = 'pc3-spectext-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;';
 
     var card = document.createElement('div');
-    card.style.cssText = 'background:#fff;border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.35);width:min(560px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;font-family:inherit;';
+    card.style.cssText = 'background:#fff;border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.35);width:min(560px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;font-family:inherit;';
     card.innerHTML =
         '<div style="padding:16px 20px;border-bottom:1px solid #eef2f7;display:flex;align-items:center;justify-content:space-between;">' +
-            '<div style="font-weight:700;font-size:15px;color:#0f172a;">Specialty schedule text</div>' +
+            '<div style="font-weight:700;font-size:15px;color:#0f172a;">Activity schedule text</div>' +
             '<button id="pc3-spectext-x" style="border:none;background:#f1f5f9;border-radius:8px;width:28px;height:28px;cursor:pointer;font-size:16px;color:#475569;line-height:1;">×</button>' +
         '</div>' +
-        '<div style="padding:14px 20px 4px;font-size:12px;color:#64748b;">Review or tweak the message below, then copy it to send to your staff.</div>' +
-        '<div style="padding:8px 20px;flex:1;overflow:auto;">' +
-            '<textarea id="pc3-spectext-area" spellcheck="false" style="width:100%;height:46vh;resize:vertical;border:1px solid #e2e8f0;border-radius:10px;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;color:#0f172a;box-sizing:border-box;"></textarea>' +
+        '<div style="padding:14px 20px 6px;font-size:12px;color:#64748b;">Pick which activities to include, then copy the message to send to your staff.</div>' +
+        '<div id="pc3-spectext-list" style="margin:0 20px;padding:8px;border:1px solid #e2e8f0;border-radius:10px;max-height:26vh;overflow:auto;">' + checklistHtml + '</div>' +
+        '<div style="padding:10px 20px 6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;">Message</div>' +
+        '<div style="padding:0 20px 8px;flex:1;overflow:auto;">' +
+            '<textarea id="pc3-spectext-area" spellcheck="false" style="width:100%;height:34vh;resize:vertical;border:1px solid #e2e8f0;border-radius:10px;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;color:#0f172a;box-sizing:border-box;"></textarea>' +
         '</div>' +
         '<div style="padding:14px 20px;border-top:1px solid #eef2f7;display:flex;gap:10px;justify-content:flex-end;">' +
             '<button id="pc3-spectext-close" style="padding:9px 16px;border:1px solid #e2e8f0;background:#fff;border-radius:9px;cursor:pointer;font-size:13px;color:#475569;">Close</button>' +
@@ -3821,7 +3869,32 @@ function pcOpenSpecialtyTextModal() {
     document.body.appendChild(overlay);
 
     var area = card.querySelector('#pc3-spectext-area');
-    area.value = text;
+    function renderText() { area.value = buildActivityScheduleText(activities, selected); }
+    renderText();
+
+    // Checkbox toggles + section All/None links rebuild the message live.
+    card.querySelector('#pc3-spectext-list').addEventListener('change', function (e) {
+        var cb = e.target;
+        if (cb && cb.type === 'checkbox') {
+            var n = allNames[parseInt(cb.getAttribute('data-i'), 10)];
+            if (n) { selected[n] = cb.checked; renderText(); }
+        }
+    });
+    card.querySelector('#pc3-spectext-list').addEventListener('click', function (e) {
+        var a = e.target;
+        if (a && a.tagName === 'A' && a.getAttribute('data-bulk')) {
+            e.preventDefault();
+            var on = a.getAttribute('data-bulk') === 'all';
+            var sec = a.getAttribute('data-sec');
+            var list = (sec === 'Specialties') ? specialtyNames : otherNames;
+            list.forEach(function (n) { selected[n] = on; });
+            card.querySelectorAll('#pc3-spectext-list input[type="checkbox"]').forEach(function (cb) {
+                var n = allNames[parseInt(cb.getAttribute('data-i'), 10)];
+                if (list.indexOf(n) !== -1) cb.checked = on;
+            });
+            renderText();
+        }
+    });
 
     function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
     card.querySelector('#pc3-spectext-x').addEventListener('click', close);
@@ -3833,7 +3906,7 @@ function pcOpenSpecialtyTextModal() {
         var val = area.value;
         function ok() {
             btn.textContent = 'Copied ✓';
-            if (window.showToast) window.showToast('Specialty schedule copied', 'success');
+            if (window.showToast) window.showToast('Schedule copied', 'success');
             setTimeout(function () { btn.textContent = 'Copy to clipboard'; }, 1800);
         }
         function fallback() { area.focus(); area.select(); try { document.execCommand('copy'); ok(); } catch (e) {} }
