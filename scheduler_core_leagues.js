@@ -2211,14 +2211,24 @@
                     const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     const _rrMatchups = fullSchedule[roundIndex] || [];
-                    // ★ DAILY PAIRING OPTIMIZER: choose today's matchups ANEW from history
-                    // (opponents met + sports played) rather than a predestined round-robin,
-                    // so big leagues (>12 teams) also get history-aware pairings that let a
-                    // scarce sport reach the teams that need it. BOTH rotations are kept; the
-                    // mode only decides the tiebreak when they conflict. Round-robin is the
-                    // safe fallback (and the kill switch). See chooseDailyMatchups.
+                    // ★ PAIRING by mode:
+                    //   • matchup_variety → ROUND-ROBIN. Its defining guarantee is perfect
+                    //     opponent rotation (everyone plays everyone once before any rematch),
+                    //     which round-robin guarantees mathematically. The greedy daily
+                    //     optimizer can paint itself into a corner and force a rematch
+                    //     (observed live: a team played two opponents twice and missed two
+                    //     others), so it is the WRONG tool when opponents must stay perfect.
+                    //     Sport rotation in this mode comes from the field-pick scoring
+                    //     (coverage-gap + stuck + fair-share), not from re-pairing.
+                    //   • sport_variety → DAILY OPTIMIZER. Here trading an opponent repeat for
+                    //     a fresh sport is the whole point, so the history-driven greedy
+                    //     matching (scales past 12 teams) is exactly right.
                     const _prioMode = league.schedulingPriority || 'sport_variety';
-                    matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
+                    if (_prioMode === 'sport_variety') {
+                        matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
+                    } else {
+                        matchups = _rrMatchups;
+                    }
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
