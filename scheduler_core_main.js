@@ -841,6 +841,50 @@
      console.log(`[SmartTile] Processing ${filteredJobs.length} smart tile jobs (filtered from ${smartJobs.length})`);
 
         // =====================================================================
+        // ★ SENIORITY-FIRST PLACEMENT (oldest → youngest).
+        //   Policy: once placement reaches smart tiles, the OLDEST bunks are
+        //   scheduled first and the system works its way down oldest → youngest,
+        //   so the oldest divisions get FIRST pick of the limited specials.
+        //   (Previously they were processed last and only got leftovers — the
+        //   8th/9th-grade starvation bug.) Single source of truth:
+        //   window.getDivisionAgeOrder (index 0 = most senior = oldest) — the
+        //   SAME age order leagues + field-quality seniority use, so column order,
+        //   field priority and special priority all agree. Younger divisions still
+        //   keep a minimum share via the fair-share special quota further below:
+        //   seniority only decides WHO goes first; the quota's Math.max(1,…) floor
+        //   reserves a slice for everyone.
+        // =====================================================================
+        const _seniorityRank = (() => {
+            const map = {};
+            try {
+                const order = (typeof window.getDivisionAgeOrder === 'function')
+                    ? window.getDivisionAgeOrder(Object.keys(divisions || {}))
+                    : Object.keys(divisions || {});
+                order.forEach((d, i) => { map[String(d)] = i; });
+            } catch (_) {}
+            return map;
+        })();
+        const _senOf = (d) => {
+            const r = _seniorityRank[String(d)];
+            return (r === undefined) ? 1e9 : r;
+        };
+        const _numSeniorityDivs = Object.keys(_seniorityRank).length || 1;
+
+        // Process the smart-tile jobs oldest-division-first (stable WITHIN a
+        // division so connected-tile / block sequencing is unchanged). Every
+        // downstream pass (window pooling, guarantee pre-pass, rotation quota,
+        // and the per-bunk claim loop) iterates this array, so the oldest claim
+        // scarce specials before younger divisions do.
+        (function _sortJobsBySeniority() {
+            const _origIdx = new Map();
+            filteredJobs.forEach((j, i) => _origIdx.set(j, i));
+            filteredJobs.sort((a, b) =>
+                (_senOf(a.division) - _senOf(b.division)) ||
+                (_origIdx.get(a) - _origIdx.get(b)));
+        })();
+        console.log(`[SmartTile SENIORITY] oldest→youngest: ${[...new Set(filteredJobs.map(j => j.division))].map(d => `${d}(#${_senOf(d)})`).join(' > ')}`);
+
+        // =====================================================================
         // ★ V44.3: CAMP-WIDE SPECIAL BUDGET PRE-CALCULATION
         // For each time window, total up available special slots (division-aware),
         // rank ALL bunks across ALL divisions by fairness, and mark the top N
@@ -1111,9 +1155,14 @@
         const _guaranteeUnits = [];
         filteredJobs.forEach(job => { if (_isGuaranteedSwapPair(job)) _guaranteeUnits.push({ kind: 'pair', div: job.division, job }); });
         Object.values(_mgGroups).forEach(grp => { _guaranteeUnits.push({ kind: 'multi', div: grp.div, grp }); });
-        // Most-deprived division first; stable tiebreak by name (deprivation itself —
-        // which changes day to day — is what drives the rotation, so ties need not be random).
-        _guaranteeUnits.sort((a, b) => (_divDeprivation(a.div) - _divDeprivation(b.div)) || String(a.div).localeCompare(String(b.div)));
+        // Oldest division first (seniority policy), then most-deprived, then name.
+        // Seniority decides WHO reserves the scarce special rooms first; deprivation
+        // only breaks ties between equally-senior units (rare — seniority is unique
+        // per division) so the day-to-day rotation stays a stable fallback.
+        _guaranteeUnits.sort((a, b) =>
+            (_senOf(a.div) - _senOf(b.div)) ||
+            (_divDeprivation(a.div) - _divDeprivation(b.div)) ||
+            String(a.div).localeCompare(String(b.div)));
         if (_guaranteeUnits.length) console.log(`[SmartTile FAIR-ORDER] ${_guaranteeUnits.map(u => `${u.div}(${_divDeprivation(u.div).toFixed(1)})`).join(' < ')}`);
 
         _guaranteeUnits.forEach(unit => {
@@ -1231,12 +1280,13 @@
             const _specialPool = new Map();
             _uniqueSpecials.forEach((cap, name) => _specialPool.set(name, cap));
 
-            // Sort most deserving first, assign specific specials top-down.
-            // ★ Fairness FIRST (fewest specials today, then fewest cumulatively);
-            //   the configured priority list + per-division priority only BREAK TIES,
-            //   so two equally-deserving bunks send the special to the higher-priority
-            //   one without starving lower-priority grades over the week.
+            // Sort by SENIORITY first (oldest division → youngest), then fairness
+            // WITHIN a division (fewest specials today, then fewest cumulatively),
+            // then the configured priority list as a final tiebreak. Seniority
+            // decides the cross-division order; fairness still rotates specials
+            // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
+                (_senOf(a.divName) - _senOf(b.divName)) ||
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
@@ -1354,12 +1404,12 @@
                 });
             });
 
-            // B3: Sort most deserving first
-            // ★ Fairness FIRST (fewest specials cumulatively); the configured priority
-            //   list + per-division priority only BREAK TIES — the special goes to the
-            //   higher-priority bunk when two are equally deserving, without starving
-            //   lower-priority grades over the week.
+            // B3: Sort by SENIORITY first (oldest division → youngest), then fairness
+            // WITHIN a division (fewest specials cumulatively), then the configured
+            // priority list as a final tiebreak. Seniority decides the cross-division
+            // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
+                (_senOf(a.divName) - _senOf(b.divName)) ||
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
                 (a.prioRank - b.prioRank) ||
@@ -1400,14 +1450,20 @@
         //   still respects room availability, so an unused quota never wastes a room.
         const _rotSpecialQuota = {};   // `${div}|${start}|${end}` -> max specials claimable
         const _rotSpecialClaimed = {}; // same key -> running count
-        // ★ Per-division special PRIORITY weight: a division listed here gets that many
-        //   times its normal demand in the fair-share split, so it claims a BIGGER slice of
-        //   the contended special rooms (and the others reserve more for it). Used to make a
-        //   flexible division (e.g. 9th grade, whose specials can be slotted earlier) more
-        //   aggressive. Tunable at runtime via window.__smartTileSpecialWeight; default boosts
-        //   div "9". Weight 1 (the default for everyone else) = no change.
-        const _specialWeightMap = window.__smartTileSpecialWeight || { '9': 8 };
-        const _specialWeight = (d) => _specialWeightMap[d] || 1;
+        // ★ Per-division special PRIORITY weight: a division gets this many times its
+        //   normal demand in the fair-share split, so it claims a BIGGER slice of the
+        //   contended special rooms (and the others reserve more for it). Default is now
+        //   SENIORITY-DERIVED — the oldest division (rank 0) gets the largest weight and
+        //   the youngest the smallest, so under contention the oldest claim more of the
+        //   shared rooms while the quota's Math.max(1,…) floor still reserves a minimum
+        //   slice for younger divisions. (Replaces the old hardcoded { '9': 8 } band-aid.)
+        //   A runtime override via window.__smartTileSpecialWeight still wins per-division.
+        const _specialWeightMap = window.__smartTileSpecialWeight || null;
+        const _specialWeight = (d) => {
+            if (_specialWeightMap && _specialWeightMap[d]) return _specialWeightMap[d];
+            const r = _seniorityRank[String(d)];
+            return (r === undefined) ? 1 : (_numSeniorityDivs - r);
+        };
         (function _buildRotationSpecialQuotas() {
             const rj = [];
             filteredJobs.forEach(job => {
