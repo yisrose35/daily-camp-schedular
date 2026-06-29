@@ -869,18 +869,22 @@
             return {
                 t1, t2,
                 varietyScore: uniqueSports1 + uniqueSports2,
+                coverMin: Math.min(uniqueSports1, uniqueSports2),
                 stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
                 indoorMin: Math.min(ic1, ic2)
             };
         });
 
-        // Most sport-STUCK matchups first (a team on a long single-sport streak is
-        // the most urgent to give something new), then fewest distinct sports. When
-        // an indoor requirement is active, indoor need stays primary.
+        // Field-pick order. PRIMARY: the most sport-STARVED matchup first — the one
+        // whose neediest team has played the FEWEST distinct sports (coverMin). A team
+        // that has never played a sport must get first claim on that scarce sport's
+        // field before a team that already played it, so each sport spreads across all
+        // teams before any repeats. SECONDARY: break active same-sport STREAKS. Then
+        // total coverage. Indoor need stays primary when an indoor requirement is set.
         if (_indoorReq && _indoorReq.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         } else {
-            matchupsWithPriority.sort((a, b) => b.stuck - a.stuck || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         }
 
         for (const { t1, t2 } of matchupsWithPriority) {
@@ -997,21 +1001,24 @@
             const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
             return {
                 t1, t2, matchupCount, indoorMin,
+                coverMin: Math.min(new Set(h1).size, new Set(h2).size),
                 stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
                 variety: new Set(h1).size + new Set(h2).size
             };
         });
 
-        // Field-pick order ONLY — this does not change who plays whom (the pairing is
+        // Field-pick order ONLY — this does NOT change who plays whom (the pairing is
         // fixed by the round-robin upstream, which is matchup variety's guarantee).
-        // Process the most sport-STUCK matchups first so a team on a basketball streak
-        // grabs one of the league's scarce diverse fields before it's taken; then
-        // fewest distinct sports; then fewest prior meetings (the original order) as
-        // the final tie-break. Indoor need stays primary when required.
+        // PRIMARY: the most sport-STARVED matchup first — whose neediest team has
+        // played the FEWEST distinct sports (coverMin) — so a team that's never played
+        // a sport gets first claim on that scarce field before a team that already has,
+        // spreading each sport across all teams. SECONDARY: break active same-sport
+        // STREAKS; then total coverage; then fewest prior meetings (the original
+        // order). Indoor need stays primary when required.
         if (_indoorReqMV && _indoorReqMV.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         } else {
-            matchupsWithPriority.sort((a, b) => b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         }
 
         console.log(`   📊 [MatchupVariety] Matchup priorities:`);
