@@ -680,21 +680,25 @@
         }
         if (!Array.isArray(list) || list.length === 0) return false;
 
-        // Resolve the facility this placement is on. Field-level gates pass it
-        // directly; field-agnostic gates pass null → resolve the activity's host
-        // (specials only; sports resolve to null and are enforced at field gates).
-        let fld = fieldName;
-        if (!fld && activityName && typeof window.getLocationForActivity === 'function') {
-            try { fld = window.getLocationForActivity(activityName); } catch (_e) { fld = null; }
+        // Candidate facilities this placement touches. Match a restriction against
+        // EITHER the passed field OR the activity's resolved host, because a special
+        // is frequently filed under field = <special name> (NOT its host facility) —
+        // so a rule scoped to the host ("Arts & Crafts Shack") must still match a
+        // slot stored as field "Arts & Crafts". Sports resolve to no host
+        // (getLocationForActivity → null), so only their real field is considered and
+        // multi-field sports are never over-blocked.
+        const cands = new Set();
+        if (fieldName) cands.add(String(fieldName).toLowerCase().trim());
+        if (activityName && typeof window.getLocationForActivity === 'function') {
+            try { const h = window.getLocationForActivity(activityName); if (h) cands.add(String(h).toLowerCase().trim()); } catch (_e) { /* ignore */ }
         }
-        if (!fld) return false; // can't evaluate a facility-scoped rule without a facility
+        if (cands.size === 0) return false; // no facility to scope the rule against
 
-        const fldLc = String(fld).toLowerCase().trim();
         const actLc = activityName ? String(activityName).toLowerCase().trim() : null;
         const bunkStr = String(bunkName);
         for (const r of list) {
             if (!r || !r.facility || !Array.isArray(r.bunks)) continue;
-            if (String(r.facility).toLowerCase().trim() !== fldLc) continue;
+            if (!cands.has(String(r.facility).toLowerCase().trim())) continue;
             const isWhole = r.activity === '*' || r.activity == null;
             const isThisAct = actLc && String(r.activity).toLowerCase().trim() === actLc;
             if (!isWhole && !isThisAct) continue;

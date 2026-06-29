@@ -99,6 +99,23 @@ describe('isBunkRestrictedFromTarget (facility-scoped)', () => {
         assert.strictEqual(U.isBunkRestrictedFromTarget('Bunk 3', 'Pottery', null, 'Div'), false);
     });
 
+    it('special filed under its OWN NAME (not host) is still caught via host resolution', () => {
+        // Real-world: schedule slot stores field = "Arts & Crafts" (the special name),
+        // while the restriction is the whole "Arts & Crafts Shack" facility.
+        win._specialHosts = { 'arts & crafts': 'Arts & Crafts Shack' };
+        win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
+            { id: 'r', facility: 'Arts & Crafts Shack', activity: '*', bunks: ['א'] }
+        ] });
+        // fieldName is the special name, NOT the host — must still block via resolved host
+        assert.strictEqual(U.isBunkRestrictedFromTarget('כ', 'Arts & Crafts', 'Arts & Crafts', 'Div'), true);
+        assert.strictEqual(U.isBunkRestrictedFromTarget('א', 'Arts & Crafts', 'Arts & Crafts', 'Div'), false);
+        // per-activity rule on the host also matches a name-filed slot
+        win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
+            { id: 'r2', facility: 'Arts & Crafts Shack', activity: 'Arts & Crafts', bunks: ['א'] }
+        ] });
+        assert.strictEqual(U.isBunkRestrictedFromTarget('כ', 'Arts & Crafts', 'Arts & Crafts', 'Div'), true);
+    });
+
     it('field-agnostic call for a multi-field sport (no host) does NOT block', () => {
         // No host for 'Soccer' → can't evaluate facility scope → leave to field gates.
         win.loadCurrentDailyData = () => ({ dailyActivityBunkRestrictions: [
