@@ -27,8 +27,9 @@ const assert = require('assert');
 //   specials  : [{ name, sharableWith:{ type, capacity, minBunks, allowedPairs } }]
 //   kindByCell: { 'bunk|idx': 'sport'|'special'|'any' }  (optional)
 //   isAvail   : (specialName, grade, bunk) => bool        (access gate)
-function enforceMinBunks(sa, b2g, specials, kindByCell, isAvail) {
+function enforceMinBunks(sa, b2g, specials, kindByCell, isAvail, daysSince) {
     kindByCell = kindByCell || {};
+    daysSince = daysSince || (() => null); // (specialName, bunk) => days since last, or null=never
     isAvail = isAvail || (() => true);
     const done = {};
     Object.keys(sa).forEach(b => {
@@ -107,9 +108,13 @@ function enforceMinBunks(sa, b2g, specials, kindByCell, isAvail) {
                     best = { bunk: b, idx, grade: g, tier: 1 };
                 }
             }
-            if (best) cands.push(best);
+            if (best) {
+                const d = daysSince(spec.name, best.bunk);
+                best.days = (typeof d === 'number') ? d : 9999; // null=never → freshest
+                cands.push(best);
+            }
         });
-        cands.sort((a, b) => a.tier - b.tier);
+        cands.sort((a, b) => (a.tier - b.tier) || (b.days - a.days));
         for (let ci = 0; ci < cands.length && G.members.length < spec.minBunks && G.members.length < spec.cap; ci++) {
             const c = cands[ci];
             sa[c.bunk][c.idx] = { field: fld, sport: null, _activity: spec.name, _assignedSpecial: spec.name, _specialLocation: fld, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, _minBunkFilled: true, _minBunkSwapped: (c.tier === 1) || undefined, continuation: false };
@@ -392,6 +397,43 @@ function planMinBunks(windows, props) {
     const seated = Object.values(r.planned).filter(a => a === 'Lake').length;
     ok('T13 capacity caps the session at 2 (not 3)', seated === 2);
     ok('T13 the strongest-pull pair (A,B) is seated', r.planned['W1|A'] === 'Lake' && r.planned['W1|B'] === 'Lake');
+}
+
+// =============================================================================
+// TEST 14 — recruiter is RECENCY-AWARE (the Yissocher back-to-back fix)
+//   A lonely Lake (Yosef) needs a 7th-grade partner. Two are available on a
+//   swappable sport: Yissocher (did Lake yesterday → daysSince 1) and Dan
+//   (never → null). The recruiter must prefer Dan, never forcing a back-to-back
+//   when a fresh grade-mate exists.
+// =============================================================================
+{
+    const sa = {
+        Yosef:     [lakeEnt()],     // lonely Lake @ window
+        Yissocher: [sportEnt()],    // swappable; did Lake yesterday
+        Dan:       [sportEnt()],    // swappable; never did Lake
+    };
+    const b2g = { Yosef: '7', Yissocher: '7', Dan: '7' };
+    const kind = { 'Yissocher|0': 'any', 'Dan|0': 'any' }; // both swappable (not sport-only)
+    const days = (name, bunk) => (bunk === 'Yissocher' ? 1 : null); // Yissocher=yesterday, Dan=never
+    const st = enforceMinBunks(sa, b2g, [LAKE()], kind, undefined, days);
+    ok('T14 floor reached by recruiting one partner', st.recruited === 1 && st.droppedBunks === 0);
+    ok('T14 FRESH bunk (Dan) recruited, not the back-to-back one', sa.Dan[0]._activity === 'Lake');
+    ok('T14 the back-to-back bunk (Yissocher) left on its sport', sa.Yissocher[0]._activity !== 'Lake');
+}
+
+// TEST 15 — recency only breaks ties WITHIN a tier: a Free bunk still beats a
+//   fresher swap candidate (Free = tier 0 wins even if it did it more recently)
+{
+    const sa = {
+        Yosef:  [lakeEnt()],
+        Asher:  [freeEnt()],     // tier 0 (Free) but did Lake recently
+        Dan:    [sportEnt()],    // tier 1 (swap) but never did Lake
+    };
+    const b2g = { Yosef: '7', Asher: '7', Dan: '7' };
+    const kind = { 'Dan|0': 'any' };
+    const days = (name, bunk) => (bunk === 'Asher' ? 1 : null);
+    const st = enforceMinBunks(sa, b2g, [LAKE()], kind, undefined, days);
+    ok('T15 Free bunk (tier 0) still wins over a fresher swap', sa.Asher[0]._activity === 'Lake' && st.swapped === 0);
 }
 
 console.log('\n[special_min_bunks_sim] ' + pass + '/' + pass + ' assertions passed ✅');

@@ -5698,9 +5698,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                     best = { bunk: b, idx: idx, grade: g, tier: 1 };
                                 }
                             }
-                            if (best) _cands63.push(best);
+                            if (best) {
+                                // Recency: prefer a partner who did NOT do this special recently,
+                                // so satisfying the floor never forces a back-to-back repeat when a
+                                // fresher grade-mate is available. getDaysSinceActivity → 0 today
+                                // (already excluded above), a day count, or null=never. null → 9999
+                                // (freshest); larger = longer since = better partner.
+                                let _days63 = 9999;
+                                try {
+                                    const _d63 = (window.RotationEngine && typeof window.RotationEngine.getDaysSinceActivity === 'function')
+                                        ? window.RotationEngine.getDaysSinceActivity(best.bunk, spec.name) : null;
+                                    if (typeof _d63 === 'number') _days63 = _d63;
+                                } catch (_eDays63) {}
+                                best.days = _days63;
+                                _cands63.push(best);
+                            }
                         });
-                        _cands63.sort((a, b) => a.tier - b.tier); // Free first, then swaps
+                        // Free slots before swaps (tier); within a tier, the freshest bunk
+                        // (longest since this special) first → avoids back-to-back recruits.
+                        _cands63.sort((a, b) => (a.tier - b.tier) || (b.days - a.days));
                         for (let ci = 0; ci < _cands63.length && grp.members.length < spec.minBunks && grp.members.length < spec.cap; ci++) {
                             const c = _cands63[ci];
                             const sl = _sa76[c.bunk];
