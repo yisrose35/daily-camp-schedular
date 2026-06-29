@@ -3622,6 +3622,56 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             console.log(`[CLEANUP] Removed ${_origLen - manualSkeleton.length} orphan Change tile(s)`);
         }
 
+        // =========================================================================
+        // STEP 2.45: PINNED-FACILITY PRE-LOCK (custom-pinned exclusion).
+        // A custom pinned tile must win its reserved facilities over EVERYTHING
+        // except another custom pinned tile. Electives (STEP 2.5) register their own
+        // per-division locks, and leagues + the solver run in STEP 4+. If the pinned
+        // facility lock is registered only during STEP 3 (AFTER electives), an
+        // elective that grabs the same facility/time first makes the later pinned
+        // lockField() silently fail on the shared slot-index key — leaving the
+        // facility protected by only the elective's DIVISION lock, which still lets
+        // the elective's OWN grade reuse it (invariant violation). Registering the
+        // pinned GLOBAL locks here, BEFORE electives, guarantees pinned always wins:
+        // a later elective lockFieldForDivision() yields to the existing global lock,
+        // and every consumer's time-based check sees the pinned lock. The matching
+        // re-lock in STEP 3 then becomes a harmless no-op (already locked at the same
+        // time). Scoped to type==='pinned' (the custom pinned tile). Pinned-vs-pinned
+        // coexistence is preserved because tile PLACEMENT in STEP 3 fills
+        // unconditionally — only the facility LOCK is pre-registered here.
+        // =========================================================================
+        if (window.GlobalFieldLocks) {
+            let _preLockCount = 0;
+            manualSkeleton.forEach(item => {
+                if (!item || item.type !== 'pinned') return;
+                const _divName = item.division;
+                if (allowedDivisionsSet && !allowedDivisionsSet.has(String(_divName))) return;
+                if (!((divisions[_divName] && divisions[_divName].bunks) || []).length) return;
+                const _sMin = Utils.parseTimeToMinutes(item.startTime);
+                const _eMin = Utils.parseTimeToMinutes(item.endTime);
+                if (_sMin == null || _eMin == null || _eMin <= _sMin) return;
+                const _exact = findExactSlotForTimeRange(_divName, _sMin, _eMin);
+                const _slots = _exact !== -1 ? [_exact] : Utils.findSlotsForRange(_sMin, _eMin, _divName);
+                if (!_slots.length) return;
+                const _eventName = item.event || item.type || 'Pinned Event';
+                const _pinFields = new Set();
+                const _add = (f) => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') _pinFields.add(f.trim()); };
+                _add(getLocationForPinnedEvent(item));
+                _add(typeof item.location === 'string' ? item.location : null);
+                if (Array.isArray(item.reservedFields)) item.reservedFields.forEach(_add);
+                _pinFields.forEach(_pinLoc => {
+                    const _ok = window.GlobalFieldLocks.lockField(_pinLoc, _slots, {
+                        lockedBy: 'pinned_event_location',
+                        division: _divName,
+                        startMin: _sMin, endMin: _eMin,
+                        activity: `${_eventName} (pinned @ ${_pinLoc})`
+                    });
+                    if (_ok) _preLockCount++;
+                });
+            });
+            console.log(`[STEP 2.45] Pinned-facility pre-lock: registered ${_preLockCount} custom-pinned facility lock(s) before electives`);
+        }
+
         console.log("\n[STEP 2.5] Processing elective tiles (incl. swim+elective hybrids)...");
         // ★ Hybrid 'swim_elective' tiles are processed alongside electives:
         //   they reserve the pool AND the elective activities.
@@ -5169,6 +5219,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 });
             });
             const _fieldFree76 = (fl, s, e) => { const arr = _occ76[fl] || []; for (let i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+            // ★ PINNED-FACILITY GUARD (custom-pinned exclusion). A custom pinned
+            //   tile globally locks every facility it reserves for its FULL
+            //   [startMin,endMin] window (STEP 3 → GlobalFieldLocks,
+            //   lockedBy:'pinned_event_location'). These free-fill passes index
+            //   occupancy by entry.field, but a pinned tile stores its EVENT NAME in
+            //   .field and the real facilities in _reservedFields/_location — so
+            //   _fieldFree76/_occL65 are BLIND to them and would otherwise drop a
+            //   sport/special onto a pinned-reserved facility. The pinned lock is a
+            //   GLOBAL lock, so isFieldLockedByTime blocks EVERY grade (only elective
+            //   division-locks exempt their own grade) for any overlapping time —
+            //   exactly the rule "nothing but another custom pinned tile may share a
+            //   reserved facility within its window". Mirrors the STEP 7.5 gate
+            //   (auto_fill_slot isFieldGloballyLocked) and the solver's own check.
+            const _fieldPinLocked76 = (fieldName, s, e, g) => {
+                try {
+                    return !!(window.GlobalFieldLocks && window.GlobalFieldLocks.isFieldLockedByTime
+                        && window.GlobalFieldLocks.isFieldLockedByTime(fieldName, s, e, g));
+                } catch (_) { return false; }
+            };
             // ★★★ CB-39: real per-slot timeRules availability gate. The candidate
             // filter above uses `!(f.timeRules && f.timeRules.enabled)`, which is
             // ALWAYS true (timeRules is an array and never has `.enabled`), so the
@@ -5212,7 +5281,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     for (let fi = 0; fi < _sportFields76.length; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
+                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                         let act = null;
                         const _blockedOnField76 = _disSportsByField76[f.name] || null;
                         for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1)) { act = c; break; } }
@@ -5275,7 +5344,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const g = pool[0].grade, s = pool[0].s, en = pool[0].e;
                     for (let fi = 0; fi < _sportFields76.length && pool.length >= 2; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (!_fieldFree76(fl, s, en) || !_access76(f, g) || !_fieldTimeOk76(f, s, en)) continue;
+                        if (!_fieldFree76(fl, s, en) || !_access76(f, g) || !_fieldTimeOk76(f, s, en) || _fieldPinLocked76(f.name, s, en, g)) continue;
                         const cap = _capOf62(f); if (cap < 2) continue; // a 1-bunk field can't host a forced pair
                         const blocked = _disSportsByField76[f.name] || null;
                         for (let ai = 0; ai < (f.activities || []).length; ai++) {
@@ -5421,6 +5490,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         const cfg = _loc65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
                         const occ = _occAt65(fl, t.s, t.e, String(b));
                         if (occ.length === 0 || occ.length >= cfg.cap) continue; // need 1+ occupant AND room under cap
+                        if (_fieldPinLocked76(occ[0].field || fl, t.s, t.e, g)) continue; // never share onto a pinned-reserved facility
                         if (occ.some(o => o.grade !== g)) continue;             // same-grade share only (always legal)
                         if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-started, no staggered share
                         if (cfg.type === 'custom' && cfg.divs.length > 0 && cfg.divs.indexOf(g) < 0) continue;
@@ -5458,6 +5528,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         // ★ special disabled today (facility-off cascade) or its location disabled
                         if (_disabledSpecialsLc76.has(String(an).toLowerCase().trim()) || _disabledLc76.has(String(sp.loc).toLowerCase().trim())) continue;
                         const cfg = _loc65[sp.loc] || { type: 'same_division', cap: 2 };
+                        if (_fieldPinLocked76(sp.locName || sp.loc, t.s, t.e, g)) continue; // never open a special on a pinned-reserved facility
                         const occ = _occAt65(sp.loc, t.s, t.e, String(b));
                         if (occ.some(o => String(o.act || '').toLowerCase().trim() !== String(an).toLowerCase().trim())) continue; // never open a special on a court already running a DIFFERENT activity (sport or other special)
                         if (cfg.type === 'not_sharable' ? occ.length > 0 : occ.length >= cfg.cap) continue; // full
