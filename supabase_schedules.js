@@ -743,10 +743,16 @@
         // (Full live reproduction needs 2 accounts; the prune itself is single-account-safe
         //  and is a no-op when no bunk is orphaned.)
         try {
-            // Only when MERGING ≥2 scheduler rows — resurrection requires a 2nd (stale)
-            // row; a single row is fully replaced by its own upsert so it can't resurrect.
-            // This makes single-user loads a guaranteed no-op (zero over-prune risk).
-            const _gs = (records.length > 1 && window.loadGlobalSettings) ? window.loadGlobalSettings() : null;
+            // Run whenever the camp structure is definitively loaded — INCLUDING a
+            // single row. The original ≥2-row gate assumed a lone row "fully replaces
+            // itself on upsert so it can't resurrect", but that's false when bunks are
+            // RENAMED in Campistry Me: the old-named entries stay inside the one row's
+            // schedule_data (invisible to the roster-keyed gen wipe), reload after reload,
+            // and blank the renamed division on render. Pruning any bunk not in the FULL
+            // camp structure (app1.divisions) cleans these ghosts on every load.
+            // Still GUARDED below: skip when the structure isn't loaded (_divs empty) or
+            // yields no valid bunks (_valid.size === 0) — never wipe a racing/early load.
+            const _gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null;
             const _divs = (_gs && _gs.app1 && _gs.app1.divisions) || null;
             if (_divs && Object.keys(_divs).length > 0) {
                 const _valid = new Set();

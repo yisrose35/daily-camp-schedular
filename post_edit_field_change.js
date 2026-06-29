@@ -229,6 +229,18 @@
     return Object.keys(set).sort();
   }
 
+  // Teams / sports configured for a league (drives the matchup-editor dropdowns).
+  function leagueConfig(leagueName) {
+    var byName = window.leaguesByName ||
+      (typeof window.loadGlobalSettings === 'function' && (window.loadGlobalSettings() || {}).leaguesByName) || {};
+    var lg = byName && byName[leagueName];
+    if (!lg) {
+      var k = Object.keys(byName || {}).filter(function (n) { return norm(n) === norm(leagueName); })[0];
+      lg = k ? byName[k] : null;
+    }
+    return { teams: (lg && Array.isArray(lg.teams)) ? lg.teams.slice() : [] };
+  }
+
   // ── context builder ──────────────────────────────────────────────────────
   // Returns null if the slot holds no editable league/specialty games.
   function buildSlotContext(divName, slotIdx, entryHint) {
@@ -280,19 +292,33 @@
   // ── APPLY ────────────────────────────────────────────────────────────────
   // Rewrites the field of ctx.game across every store, swaps the field lock,
   // and persists. Returns { ok, message }.
-  PEFC.applyFieldChange = function (ctx, newField, newSport) {
+  PEFC.applyFieldChange = function (ctx, newField, newSport, newTeams) {
     if (!ctx || !ctx.game || !newField) return { ok: false, message: 'Nothing to change.' };
     var oldField = ctx.game.field;
-    // A sport change alone (same field) is allowed; otherwise require the field free.
+    var oldA = ctx.game.teamA, oldB = ctx.game.teamB, oldSport = ctx.game.sport;
+    // Resolve new teams (fall back to old); unordered compare for "changed".
+    var newA = (newTeams && newTeams.teamA != null && newTeams.teamA !== '') ? newTeams.teamA : oldA;
+    var newB = (newTeams && newTeams.teamB != null && newTeams.teamB !== '') ? newTeams.teamB : oldB;
+    var changeTeams = !((norm(newA) === norm(oldA) && norm(newB) === norm(oldB)) ||
+                        (norm(newA) === norm(oldB) && norm(newB) === norm(oldA)));
+    // A sport / teams change alone (same field) is allowed; otherwise require free.
     var changeSport = !!(newSport && norm(newSport) !== norm(ctx.game.sport || ''));
-    if (norm(oldField) === norm(newField) && !changeSport) return { ok: false, message: 'That is already the field.' };
+    if (norm(oldField) === norm(newField) && !changeSport && !changeTeams) return { ok: false, message: 'Nothing changed.' };
+    if (changeTeams && norm(newA) === norm(newB)) return { ok: false, message: 'A team cannot play itself.' };
     if (norm(oldField) !== norm(newField) && !fieldIsFree(newField, ctx)) return { ok: false, message: newField + ' is already in use at this time.' };
 
-    // Rebuild a matchup string with the new field AND (for regular-league "@"
-    // matchups, which carry the sport) the new sport.
+    var newTeamsStr = newA + ' vs ' + newB;
+    // Rebuild a matchup string with the new field AND (regular-league "@"
+    // matchups carry the sport) the new sport AND the new teams.
     function rebuilt(p) {
       if (changeSport) p.sport = newSport;
+      if (changeTeams) p.teams = newTeamsStr;
       return PEFC.rebuildMatchup(p, newField);
+    }
+    function setTeamsOn(o) {
+      if (!changeTeams) return;
+      if ('team1' in o) o.team1 = newA; if ('teamA' in o || !('team1' in o)) o.teamA = newA;
+      if ('team2' in o) o.team2 = newB; if ('teamB' in o || !('team2' in o)) o.teamB = newB;
     }
 
     var touchedBunks = [];
@@ -326,7 +352,7 @@
         }
         if (Array.isArray(entry._assignments)) {
           entry._assignments.forEach(function (a) {
-            if (a && isTargetObj(a)) { a.field = newField; if (changeSport) a.sport = newSport; changed = true; }
+            if (a && isTargetObj(a)) { a.field = newField; if (changeSport) a.sport = newSport; setTeamsOn(a); changed = true; }
           });
         }
       }
@@ -351,16 +377,38 @@
               var p = PEFC.parseMatchup(item);
               if (isTarget(p)) laEntry[key][k] = rebuilt(p);
             } else if (item && typeof item === 'object' && (item.teamA || item.team1)) {
-              if (isTargetObj(item)) { item.field = newField; if (changeSport) item.sport = newSport; }
+              if (isTargetObj(item)) { item.field = newField; if (changeSport) item.sport = newSport; setTeamsOn(item); }
             }
           }
         });
       });
     });
 
-    // (3) Specialty history gameLog — best-effort (drives the bracket/print).
+    // (3) Rotation history sync.
     if (ctx.kind === 'specialty') {
-      try { updateSpecialtyGameLog(ctx, newField); } catch (e) { console.warn('[PEFC] gameLog update skipped:', e); }
+      // Specialty bracket/print gameLog — best-effort.
+      try { updateSpecialtyGameLog(ctx, newField, changeSport ? newSport : null, changeTeams ? { teamA: newA, teamB: newB } : null); }
+      catch (e) { console.warn('[PEFC] specialty gameLog update skipped:', e); }
+    } else if (changeTeams || changeSport) {
+      // Regular-league variety stores (gameLog/matchupHistory/teamSports) — only
+      // when teams/sport actually changed (a pure field move doesn't affect them).
+      try {
+        if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.editGameRecord === 'function') {
+          // ★ Use the date of the schedule actually loaded/edited (the unified
+          //   loader stamps window._scheduleAssignmentsDate when it loads a date
+          //   into window.scheduleAssignments — the very data applyFieldChange
+          //   mutates). window.currentScheduleDate is the global PICKER, which can
+          //   point at a different day than the grid being edited (e.g. viewing a
+          //   past date while the picker sits on another) — that mismatch sent the
+          //   rotation-history edit to the wrong day, so the change was never
+          //   reflected in the gameLog. Fall back to the picker if the stamp is unset.
+          window.SchedulerCoreLeagues.editGameRecord(
+            ctx.leagueName, (window._scheduleAssignmentsDate || window.currentScheduleDate),
+            { teamA: oldA, teamB: oldB, sport: oldSport },
+            { teamA: newA, teamB: newB, sport: changeSport ? newSport : oldSport }
+          );
+        }
+      } catch (e) { console.warn('[PEFC] league rotation sync skipped:', e); }
     }
 
     // (4) Field-lock swap so a later edit/regen can't double-book.
@@ -381,6 +429,7 @@
     // (5) Persist + re-render.
     ctx.game.field = newField; // reflect for any follow-up move in the same session
     if (changeSport) ctx.game.sport = newSport;
+    if (changeTeams) { ctx.game.teamA = newA; ctx.game.teamB = newB; ctx.game.teams = newTeamsStr; }
     try {
       if (typeof window.saveCurrentDailyData === 'function') {
         window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments);
@@ -395,7 +444,7 @@
     return { ok: true, message: ctx.game.teams + ' → ' + newField };
   };
 
-  function updateSpecialtyGameLog(ctx, newField) {
+  function updateSpecialtyGameLog(ctx, newField, newSport, newTeams) {
     if (typeof window.loadGlobalSettings !== 'function' || typeof window.saveGlobalSettings !== 'function') return;
     var gs = window.loadGlobalSettings() || {};
     var history = gs.specialtyLeagueHistory;
@@ -404,14 +453,20 @@
     var leagues = gs.specialtyLeagues || [];
     var league = leagues.filter(function (l) { return norm(l.name) === norm(ctx.leagueName); })[0];
     var id = league ? league.id : null;
-    var date = window.currentScheduleDate;
+    // ★ Date of the schedule actually being edited (see note in applyFieldChange) —
+    //   not the global picker, which can point at a different day than the grid.
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
     if (!id || !date || !history.gameLog[id] || !history.gameLog[id][date]) return;
     var entries = history.gameLog[id][date];
     var hit = false;
     entries.forEach(function (g) {
-      // ctx.game.field is still the OLD field here (reset to newField later).
+      // ctx.game still holds the OLD teams/field here (reset later).
       if (sameTeams({ teamA: g.tA, teamB: g.tB }, ctx.game) && norm(g.field) === norm(ctx.game.field)) {
-        g.field = newField; hit = true;
+        g.field = newField;
+        if (newSport != null && newSport !== '') g.sport = newSport;
+        if (newTeams && newTeams.teamA != null && newTeams.teamA !== '') g.tA = newTeams.teamA;
+        if (newTeams && newTeams.teamB != null && newTeams.teamB !== '') g.tB = newTeams.teamB;
+        hit = true;
       }
     });
     if (hit) window.saveGlobalSettings('specialtyLeagueHistory', history);
@@ -449,8 +504,8 @@
         '<div style="font-size:0.8rem;color:#6b7280;margin-top:2px;">' +
         (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div></button>';
     }).join('');
-    var box = shell(header('Change a game\'s field') +
-      '<div style="font-size:0.85rem;color:#6b7280;margin-bottom:12px;">' + esc(ctx.leagueName || 'League') + ' — pick the game to move:</div>' +
+    var box = shell(header('Edit a league game') +
+      '<div style="font-size:0.85rem;color:#6b7280;margin-bottom:12px;">' + esc(ctx.leagueName || 'League') + ' — pick the game to edit:</div>' +
       rows);
     box.querySelector('#pefc-close').onclick = closeModal;
     box.querySelectorAll('.pefc-game').forEach(function (btn) {
@@ -481,6 +536,29 @@
         '</select></div>';
     }
 
+    // Teams editor — change who plays whom (regular + specialty). Selections
+    // persist across sport re-renders via ctx.selectedTeamA/B.
+    if (ctx.selectedTeamA == null) ctx.selectedTeamA = ctx.game.teamA;
+    if (ctx.selectedTeamB == null) ctx.selectedTeamB = ctx.game.teamB;
+    var cfgTeams = leagueConfig(ctx.leagueName).teams;
+    var curA = ctx.selectedTeamA, curB = ctx.selectedTeamB;
+    function teamCtl(id, sel) {
+      var st = 'flex:1;min-width:0;padding:8px 10px;border:1.5px solid #6366f1;border-radius:8px;font-size:0.88rem;background:#fff;';
+      if (cfgTeams.length >= 2) {
+        var opts = cfgTeams.slice();
+        if (sel && opts.map(norm).indexOf(norm(sel)) === -1) opts = [sel].concat(opts);
+        return '<select id="' + id + '" style="' + st + 'cursor:pointer;">' +
+          opts.map(function (t) { return '<option value="' + esc(t) + '"' + (norm(t) === norm(sel) ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('') + '</select>';
+      }
+      return '<input id="' + id + '" type="text" value="' + esc(sel || '') + '" style="' + st + '">';
+    }
+    var teamsHtml = '<div style="margin-bottom:14px;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Teams</label>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' + teamCtl('pefc-teamA', curA) +
+      '<span style="color:#9ca3af;font-size:0.85rem;">vs</span>' + teamCtl('pefc-teamB', curB) + '</div></div>';
+    var teamsChanged = !((norm(curA) === norm(ctx.game.teamA) && norm(curB) === norm(ctx.game.teamB)) ||
+                         (norm(curA) === norm(ctx.game.teamB) && norm(curB) === norm(ctx.game.teamA)));
+
     var freeHtml = freeOnes.length
       ? freeOnes.map(function (c) {
         var isCur = norm(c.name) === norm(ctx.game.field);
@@ -498,16 +576,19 @@
       busyReal.map(function (c) { return esc(c.name); }).join(', ') + '</div>'
       : '';
 
-    // When a sport change is pending, offer to apply it WITHOUT moving fields.
+    // When a sport / teams change is pending, offer to apply it WITHOUT moving
+    // fields (a matchup or sport edit that keeps the same field).
     var sportChanged = canEditSport && norm(curSport) !== norm(ctx.game.sport || '');
-    var keepFieldHtml = sportChanged
-      ? '<button id="pefc-keep-field" style="width:100%;margin-top:12px;padding:9px;border:1.5px solid #6366f1;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.85rem;font-weight:600;cursor:pointer;">Keep ' + esc(ctx.game.field || 'current field') + ' — just change sport to ' + esc(curSport) + '</button>'
+    var pendingChange = sportChanged || teamsChanged;
+    var keepFieldHtml = pendingChange
+      ? '<button id="pefc-keep-field" style="width:100%;margin-top:12px;padding:9px;border:1.5px solid #6366f1;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.85rem;font-weight:600;cursor:pointer;">Save changes — keep ' + esc(ctx.game.field || 'current field') + '</button>'
       : '';
 
-    var box = shell(header('Move to which field?') +
+    var box = shell(header('Edit league game') +
       '<div style="background:#f3f4f6;padding:9px 12px;border-radius:8px;margin-bottom:14px;font-size:0.85rem;">' +
       '<div style="font-weight:600;color:#374151;">' + esc(ctx.game.teams) + '</div>' +
       '<div style="color:#6b7280;margin-top:2px;">' + (ctx.game.sport ? esc(ctx.game.sport) + ' · ' : '') + 'now on <strong>' + esc(ctx.game.field || '—') + '</strong></div></div>' +
+      teamsHtml +
       sportHtml +
       '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields' + (canEditSport ? ' for ' + esc(curSport) : '') + ':</div>' +
       '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + busyHtml + keepFieldHtml +
@@ -520,24 +601,36 @@
     var back = box.querySelector('#pefc-back');
     if (back) back.onclick = function () { showGamePicker(ctx); };
 
+    // Read the (possibly edited) teams from the controls.
+    function readTeams() {
+      var a = box.querySelector('#pefc-teamA'), b = box.querySelector('#pefc-teamB');
+      return { teamA: a ? String(a.value || '').trim() : curA, teamB: b ? String(b.value || '').trim() : curB };
+    }
+
     // Changing the sport re-filters the field list to fields that host it.
+    // Capture any pending team edits first so they survive the re-render.
     var sportSel = box.querySelector('#pefc-sport');
-    if (sportSel) sportSel.onchange = function () { ctx.selectedSport = sportSel.value; showFieldPicker(ctx); };
+    if (sportSel) sportSel.onchange = function () {
+      var t = readTeams(); ctx.selectedTeamA = t.teamA; ctx.selectedTeamB = t.teamB;
+      ctx.selectedSport = sportSel.value; showFieldPicker(ctx);
+    };
 
     var keepBtn = box.querySelector('#pefc-keep-field');
     if (keepBtn) keepBtn.onclick = function () {
-      var res = PEFC.applyFieldChange(ctx, ctx.game.field, curSport);
+      var res = PEFC.applyFieldChange(ctx, ctx.game.field, canEditSport ? curSport : null, readTeams());
+      if (!res.ok) { toast(res.message, 'warning'); return; }
       closeModal();
-      toast(res.ok ? ('Changed sport: ' + res.message) : res.message, res.ok ? 'success' : 'warning');
+      toast('Updated: ' + res.message, 'success');
     };
 
     box.querySelectorAll('.pefc-field').forEach(function (btn) {
       if (btn.disabled) return;
       btn.onclick = function () {
         var pickSport = canEditSport ? curSport : null;
-        var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport);
+        var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport, readTeams());
+        if (!res.ok) { toast(res.message, 'warning'); return; }
         closeModal();
-        toast(res.ok ? ('Moved: ' + res.message) : res.message, res.ok ? 'success' : 'warning');
+        toast('Updated: ' + res.message, 'success');
       };
     });
   }

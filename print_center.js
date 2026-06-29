@@ -42,7 +42,8 @@ var ICO = {
     monitor:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
     download: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
     check:    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
-    chevD:    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>'
+    chevD:    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
+    star:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
 };
 
 // =========================================================================
@@ -88,6 +89,10 @@ var DEFAULT_TEMPLATE = {
 var _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE);
 var _savedTemplates = [];
 var _activeView = 'division';
+// When true, the Facilities (location) view lists ONLY facilities/rooms where a
+// specialty activity is actually scheduled — used by the "Specialties Only" pack
+// so a head counselor can hand specialists a single sheet of just their areas.
+var _specialtiesOnly = false;
 var _zoomLevel = 100;
 var _isFullscreen = false;
 var _advancedOpen = false;
@@ -278,6 +283,17 @@ var USER_PACKS = [
         preset: 'classic',
         view: 'location',
         layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false }
+    },
+    {
+        id: 'specialties-only',
+        name: 'Specialties Only',
+        tagline: 'Just the specialty areas, packed onto one sheet — for your specialists.',
+        icon: 'star',
+        scope: 'all',
+        specialtiesOnly: true,
+        preset: 'classic',
+        view: 'location',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: true, orientation: 'portrait', pageBreakPerBunk: false, showPageBreaks: false }
     }
 ];
 
@@ -406,7 +422,7 @@ var LIVE_THEMES = [
             '--lv-close-border': 'rgba(255,255,255,.22)', '--lv-close-bg': 'rgba(255,255,255,.10)',
             '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.2)',
             '--lv-loading': '#94a3b8', '--lv-nav': 'rgba(255,255,255,.6)', '--lv-nav-hover': '#fbbf24',
-            '--lv-accent': '#fbbf24', '--lv-divrange': '#8aa0bd', '--lv-cell-border': '#2b3a55',
+            '--lv-accent': '#fbbf24', '--lv-divrange': '#8aa0bd', '--lv-cell-border': '#7d97bb',
             '--lv-th-bg': '#16233e', '--lv-th-text': '#f8fafc', '--lv-rowhead-text': '#aab8cc',
             '--lv-cell-bg': '#1c2a46', '--lv-cell-bg-alt': '#16223a', '--lv-cell-text': '#f1f5f9',
             '--lv-free-bg': '#131f33', '--lv-free-text': '#42536c',
@@ -431,7 +447,7 @@ var LIVE_THEMES = [
             '--lv-close-border': 'rgba(15,23,42,.18)', '--lv-close-bg': 'rgba(15,23,42,.05)',
             '--lv-close-text': '#0f172a', '--lv-close-bg-hover': 'rgba(15,23,42,.12)',
             '--lv-loading': '#64748b', '--lv-nav': 'rgba(15,23,42,.45)', '--lv-nav-hover': '#0e7490',
-            '--lv-accent': '#0f6e80', '--lv-divrange': '#64748b', '--lv-cell-border': '#cbd5e1',
+            '--lv-accent': '#0f6e80', '--lv-divrange': '#64748b', '--lv-cell-border': '#0f172a',
             '--lv-th-bg': '#e2e8f0', '--lv-th-text': '#0f172a', '--lv-rowhead-text': '#475569',
             '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f8fafc', '--lv-cell-text': '#1e293b',
             '--lv-free-bg': '#f1f5f9', '--lv-free-text': '#94a3b8',
@@ -456,7 +472,7 @@ var LIVE_THEMES = [
             '--lv-close-border': 'rgba(255,255,255,.3)', '--lv-close-bg': 'rgba(255,255,255,.14)',
             '--lv-close-text': '#ffffff', '--lv-close-bg-hover': 'rgba(255,255,255,.26)',
             '--lv-loading': '#0f6e80', '--lv-nav': 'rgba(15,95,110,.5)', '--lv-nav-hover': '#0F5F6E',
-            '--lv-accent': '#0F5F6E', '--lv-divrange': '#5b8a93', '--lv-cell-border': '#b6e3ea',
+            '--lv-accent': '#0F5F6E', '--lv-divrange': '#5b8a93', '--lv-cell-border': '#0a2c33',
             '--lv-th-bg': '#cdeef3', '--lv-th-text': '#0F5F6E', '--lv-rowhead-text': '#0f6e80',
             '--lv-cell-bg': '#ffffff', '--lv-cell-bg-alt': '#f3fcfd', '--lv-cell-text': '#134e57',
             '--lv-free-bg': '#ecfeff', '--lv-free-text': '#93b8bf',
@@ -1808,13 +1824,13 @@ function getStyles() {
 
     /* ── Schedule Table — Excel look ── */
     '.pc3-tbl{border-collapse:collapse;border-spacing:0;width:100%;table-layout:auto;user-select:none;font-family:Calibri,"Segoe UI",Arial,sans-serif;}' +
-    '.pc3-tbl th,.pc3-tbl td{border:1px solid #c6c6c6;padding:5px 9px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;line-height:1.25;}' +
+    '.pc3-tbl th,.pc3-tbl td{border:4px solid #000;padding:5px 9px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;line-height:1.25;}' +
     /* Column headers (period / bunk names) — Excel gray header bar */
-    '.pc3-tbl th{background:#f2f2f2;color:#1f1f1f;font-weight:600;position:sticky;z-index:2;font-size:12px;text-transform:none;letter-spacing:0;border-color:#b0b0b0;}' +
+    '.pc3-tbl th{background:#f2f2f2;color:#1f1f1f;font-weight:600;position:sticky;z-index:2;font-size:12px;text-transform:none;letter-spacing:0;border-color:#000;}' +
     '.pc3-tbl thead th{top:0;}' +
     '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#e6e6e6;}' +
     /* Row header column (time / bunk) — Excel gray, like the row-number gutter */
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f2f2f2;color:#1f1f1f;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;border-color:#b0b0b0;}' +
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f2f2f2;color:#1f1f1f;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;border-color:#000;}' +
     /* Data cells — plain white, black text */
     '.pc3-tbl td{font-weight:400;color:#000;background:#fff;}' +
     /* Empty slots */
@@ -1829,7 +1845,7 @@ function getStyles() {
     '.pc3-bw, .pc3-bw .pc3-sheet, .pc3-bw .pc3-sheet-head{background:#fff !important;}' +
     '.pc3-bw .pc3-sheet-head{border-bottom:1px solid #000 !important;}' +
     '.pc3-bw .pc3-sheet-title, .pc3-bw .pc3-sheet-subtitle, .pc3-bw .pc3-sheet-badge{color:#000 !important;background:#fff !important;}' +
-    '.pc3-bw .pc3-tbl th, .pc3-bw .pc3-tbl td{background:#fff !important;color:#000 !important;border:1px solid #000 !important;box-shadow:none !important;}' +
+    '.pc3-bw .pc3-tbl th, .pc3-bw .pc3-tbl td{background:#fff !important;color:#000 !important;border:4px solid #000 !important;box-shadow:none !important;}' +
     '.pc3-bw .pc3-tbl .cell-free{color:#000 !important;}' +
 
     /* ── Excel-style coordinate headers (A B C / 1 2 3) ── */
@@ -1893,7 +1909,7 @@ function getStyles() {
         '--lv-title:#ffffff;--lv-date:#fcd34d;--lv-clock:#e2e8f0;' +
         '--lv-close-border:rgba(255,255,255,.22);--lv-close-bg:rgba(255,255,255,.10);--lv-close-text:#ffffff;--lv-close-bg-hover:rgba(255,255,255,.2);' +
         '--lv-loading:#94a3b8;--lv-nav:rgba(255,255,255,.6);--lv-nav-hover:#fbbf24;' +
-        '--lv-accent:#fbbf24;--lv-divrange:#8aa0bd;--lv-cell-border:#2b3a55;' +
+        '--lv-accent:#fbbf24;--lv-divrange:#8aa0bd;--lv-cell-border:#7d97bb;' +
         '--lv-th-bg:#16233e;--lv-th-text:#f8fafc;--lv-rowhead-text:#aab8cc;' +
         '--lv-cell-bg:#1c2a46;--lv-cell-bg-alt:#16223a;--lv-cell-text:#f1f5f9;' +
         '--lv-free-bg:#131f33;--lv-free-text:#42536c;' +
@@ -1945,7 +1961,7 @@ function getStyles() {
     '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:var(--lv-accent);letter-spacing:.2px;}' +
     '.pc3-live-divrange{font-size:14px;font-weight:600;color:var(--lv-divrange);font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;font-size:20px;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid var(--lv-cell-border);padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:4px solid var(--lv-cell-border);padding:7px 8px;text-align:center;vertical-align:middle;white-space:pre-line;word-break:break-word;font-size:1em;}' +
     '.pc3-live-tbl th{background:var(--lv-th-bg);color:var(--lv-th-text);font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
     '.pc3-live-tbl th.row-head{color:var(--lv-rowhead-text);font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:pre-line;word-break:break-word;overflow:hidden;background:var(--lv-th-bg);font-variant-numeric:tabular-nums;}' +
@@ -1968,7 +1984,7 @@ function getStyles() {
        black borders, black text). The on-screen kiosk stays dark. */
     '.pc3-live-bw, .pc3-live-bw .pc3-live-page, .pc3-live-bw .pc3-live-page-inner, .pc3-live-bw .pc3-live-section{background:#fff !important;}' +
     '.pc3-live-bw .pc3-live-divname, .pc3-live-bw .pc3-live-divrange{color:#000 !important;}' +
-    '.pc3-live-bw .pc3-live-tbl th, .pc3-live-bw .pc3-live-tbl td{background:#fff !important;color:#000 !important;border:1px solid #000 !important;font-weight:600 !important;box-shadow:none !important;opacity:1 !important;}' +
+    '.pc3-live-bw .pc3-live-tbl th, .pc3-live-bw .pc3-live-tbl td{background:#fff !important;color:#000 !important;border:4px solid #000 !important;font-weight:600 !important;box-shadow:none !important;opacity:1 !important;}' +
     '.pc3-live-bw .pc3-live-tbl tr:nth-child(even) td{background:#fff !important;}' +
     '.pc3-live-bw .pc3-live-unified th.pc3-uni-grade, .pc3-live-bw .pc3-live-unified th.pc3-uni-bunk{background:#fff !important;color:#000 !important;border:1px solid #000 !important;}' +
 
@@ -2437,15 +2453,20 @@ function populateSidebar() {
             groups.push(grp);
         });
     } else if (_activeView === 'location') {
-        if (titleEl) titleEl.textContent = 'Facilities';
-        if (searchEl) searchEl.placeholder = 'Search facilities…';
+        if (titleEl) titleEl.textContent = _specialtiesOnly ? 'Specialties' : 'Facilities';
+        if (searchEl) searchEl.placeholder = _specialtiesOnly ? 'Search specialties…' : 'Search facilities…';
         var allLocs = {};
+        var nameSet = _specialtiesOnly ? pcSpecialtyNameSet() : null;
         var aa = getAssignments();
         Object.keys(aa).forEach(function (bk) {
             (aa[bk] || []).forEach(function (entry) {
                 if (!entry || entry.continuation) return;
                 var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
-                if (fn && fn !== 'Free' && fn !== 'Transition') allLocs[fn] = true;
+                if (!fn || fn === 'Free' || fn === 'Transition') return;
+                // In specialties-only mode, only surface facilities/rooms that
+                // actually host a specialty activity on this day.
+                if (_specialtiesOnly && !pcEntryIsSpecialty(entry, nameSet)) return;
+                allLocs[fn] = true;
             });
         });
         Object.keys(allLocs).sort(naturalSort).forEach(function (loc) {
@@ -3626,6 +3647,37 @@ function matchesLocation(entry, loc) {
     if (resolved && resolved === lc) return true;
     // Compound check: field contains the location name (e.g. "Basketball – Court 1" matches "Court 1")
     if (fnLc && fnLc.indexOf(lc) >= 0) return true;
+    return false;
+}
+
+/**
+ * Build a case-insensitive lookup of every configured specialty (special
+ * activity) name. getSpecialActivityByName is case-SENSITIVE, and the schedule
+ * stores activity/field names in mixed casing, so we normalize here.
+ */
+function pcSpecialtyNameSet() {
+    var set = {};
+    try {
+        var specials = (typeof window.getAllSpecialActivities === 'function') ? (window.getAllSpecialActivities() || []) : [];
+        specials.forEach(function (s) {
+            if (s && s.name) set[String(s.name).toLowerCase().trim()] = true;
+        });
+    } catch (e) {}
+    return set;
+}
+
+/**
+ * Is the activity placed in this schedule entry a specialty? Checks the
+ * activity name first (specials placed in a facility room) and the field name
+ * (name-only specials store the special's name as the field).
+ */
+function pcEntryIsSpecialty(entry, nameSet) {
+    if (!entry) return false;
+    var ns = nameSet || pcSpecialtyNameSet();
+    var act = entry._activity;
+    if (act && ns[String(act).toLowerCase().trim()]) return true;
+    var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    if (fn && ns[String(fn).toLowerCase().trim()]) return true;
     return false;
 }
 
@@ -6737,6 +6789,9 @@ function bindAll() {
     document.querySelectorAll('[data-view]').forEach(function (btn) {
         btn.addEventListener('click', function () {
             _activeView = this.getAttribute('data-view');
+            // Manually choosing the Facilities tab shows all facilities — the
+            // specialties-only filter only lives on its dedicated pack.
+            _specialtiesOnly = false;
             document.querySelectorAll('[data-view]').forEach(function (b) { b.classList.remove('active'); });
             this.classList.add('active');
             // Week view needs 7 days of cloud data — kick off async fetch
@@ -7310,6 +7365,10 @@ window._pc3ApplyPack = function (packId) {
     var pack = PRINT_PACKS.filter(function (p) { return p.id === packId; })[0];
     if (!pack) return;
     _activePack = pack.id;
+    // The specialties-only filter is exclusive to its USER_PACK — any built-in
+    // print pack (e.g. Facility Rosters) shows the full facility list.
+    var _wasSpecialtiesOnly = _specialtiesOnly;
+    _specialtiesOnly = false;
     // 1. Apply preset (color scheme)
     if (pack.preset) window._pc3ApplyPreset(pack.preset);
     // 2. Apply layout flags
@@ -7324,13 +7383,16 @@ window._pc3ApplyPack = function (packId) {
             var pbCb = el('pc3-page-break-bunk'); if (pbCb) pbCb.checked = _pageBreakPerBunk;
         }
     }
-    // 3. Switch view
+    // 3. Switch view (also repopulate if the specialties filter was just cleared
+    //    while staying on the same view, so the full facility list comes back).
     if (pack.view && pack.view !== _activeView) {
         _activeView = pack.view;
         document.querySelectorAll('[data-view]').forEach(function (b) {
             b.classList.toggle('active', b.getAttribute('data-view') === pack.view);
         });
         if (_activeView === 'week') ensureWeekDataLoaded(false);
+        populateSidebar();
+    } else if (_wasSpecialtiesOnly) {
         populateSidebar();
     }
     // 4. Apply selection
@@ -7362,6 +7424,9 @@ window._pc3ApplyPack = function (packId) {
 window._pc3ApplyUserPack = function (packId, divisionName) {
     var pack = USER_PACKS.filter(function (p) { return p.id === packId; })[0];
     if (!pack) return;
+    // 0. Specialties-only filter is a per-pack opt-in for the location view — reset
+    //    first so it never leaks into another pack, then turn on for this one.
+    _specialtiesOnly = !!pack.specialtiesOnly;
     // 1. Preset (color scheme)
     if (pack.preset) window._pc3ApplyPreset(pack.preset);
     // 2. Layout flags. Clear opt-in flags first so they never leak between
@@ -7496,7 +7561,10 @@ window._pc3Quickpick = function (kind) {
     var targetView = kind === 'all-bunks' ? 'bunk' :
                      kind === 'all-locations' ? 'location' :
                      'division';
-    if (_activeView !== targetView) {
+    // Quickpicks always show the full set for the view (e.g. all facilities).
+    var wasFiltered = _specialtiesOnly;
+    _specialtiesOnly = false;
+    if (_activeView !== targetView || wasFiltered) {
         _activeView = targetView;
         // Re-render the tab "active" state
         document.querySelectorAll('[data-view]').forEach(function (b) {

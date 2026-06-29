@@ -576,6 +576,18 @@
                 if (_wStartSL != null && _wEndSL != null) {
                     availableFields = availableFields.filter(f =>
                         !window.GlobalFieldLocks.isFieldLockedByTime(f, _wStartSL, _wEndSL, divName));
+                    // ★ Also honor Daily-Adjustments field reservations (window.fieldReservations),
+                    //   division-aware: block a field only when reserved by a DIFFERENT division
+                    //   (so this division's own signup-league pool stays usable). See RegularLeagues
+                    //   for the full rationale (the מתמדים Home Run Stadium double-book).
+                    if (window.fieldReservations) {
+                        const _myDiv = String(divName || '').toLowerCase().trim();
+                        availableFields = availableFields.filter(f => {
+                            const _rl = window.fieldReservations[f] || [];
+                            return !_rl.some(r => r && r.startMin < _wEndSL && r.endMin > _wStartSL &&
+                                r.division && String(r.division).toLowerCase().trim() !== _myDiv);
+                        });
+                    }
                 }
             }
 

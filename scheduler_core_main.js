@@ -1566,6 +1566,48 @@
                 //   (→ all options across the group); _usedOpts blocks any repeat.
                 const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
                 console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
+                // ★ LEAST-RECENT ALLOCATION for SCARCE field-less labels (e.g. Pickleball = 2 nets).
+                //   A capped direct-fill label (_directFillCap < ∞) has fewer slots than the bunks
+                //   whose TURN it is on a given day. Handing the slots to the lowest-index bunks
+                //   (the old behaviour) starves the tail of the division every day. Instead REUSE the
+                //   rotation engine's stored cross-day counts — the SAME data the field-based solver
+                //   ranks on — and give the slots to the LEAST-RECENT bunks. Winners are pre-chosen
+                //   here over the bunks whose PRIMARY pick (_o===0) is that label, so the day-offset
+                //   still rotates WHICH bunks are eligible, and least-recent breaks the over-subscription
+                //   fairly. The placement loop below only lets a chosen winner take the capped label;
+                //   any other bunk (a fall-through, or a non-winner) skips to its next option.
+                //   STRICT NO-OP for uncapped labels (Swim, ∞ cap) — they never enter _cappedWinners.
+                const _cappedWinners = {}; // labelNorm -> Set(bunk) allowed to take that capped label
+                (function _allocCappedLabels() {
+                    const _rotEng = window.RotationEngine;
+                    const _lrCount = (bunk, label) => {
+                        try { return (_rotEng && _rotEng.getActivityCount) ? (_rotEng.getActivityCount(bunk, label) || 0) : 0; }
+                        catch (_) { return 0; }
+                    };
+                    const _byLabel = {}; // labelNorm -> [{bunk,_bIdx,c}] (turn-bunks for that capped label)
+                    bunkList.forEach((bunk, _bIdx) => {
+                        const _ex = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
+                        if (_ex && _ex._bunkOverride) return;                 // overridden bunks untouchable
+                        const _primary = _rotOpts[(_dayNum + _bIdx + _grpOff) % _rotOpts.length];
+                        if (_directFillCap(_primary) === Infinity) return;     // only scarce capped labels
+                        const _pn = String(_primary || '').toLowerCase().trim();
+                        (_byLabel[_pn] = _byLabel[_pn] || []).push({ bunk, _bIdx, c: _lrCount(bunk, _primary) });
+                    });
+                    Object.keys(_byLabel).forEach(_pn => {
+                        const cap = _directFillCap(_pn);
+                        const arr = _byLabel[_pn];
+                        arr.sort((a, b) => (a.c - b.c) || (a._bIdx - b._bIdx)); // least-recent first; index tie-break = deterministic
+                        _cappedWinners[_pn] = new Set(arr.slice(0, cap).map(x => x.bunk));
+                        if (arr.length > cap) {
+                            console.log(`[SmartTile] LEAST-RECENT "${_pn}" (cap ${cap}/window): winners [${[...(_cappedWinners[_pn])].join(', ')}] of turn-bunks [${arr.map(x => x.bunk + ':' + x.c).join(', ')}]`);
+                        }
+                    });
+                })();
+                // May this bunk take field-less label `opt` right now? Capped labels go to the
+                // pre-chosen least-recent winners only; uncapped labels (Swim) place for whoever
+                // reaches them (unchanged).
+                const _mayTakeCapped = (opt, optNorm, bunk) =>
+                    (_directFillCap(opt) === Infinity) || !!(_cappedWinners[optNorm] && _cappedWinners[optNorm].has(bunk));
                 bunkList.forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
@@ -1658,21 +1700,27 @@
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                                 _placed = true;
-                            } else if (_o === 0 && _canClaimDirectFill(opt, _rStart, _rEnd)) {
-                                // No open field → place the named sport as its OWN field-less label,
-                                // but ONLY for the bunk whose PRIMARY rotation slot this is (_o===0),
-                                // and honor its hardcoded real-world cap (e.g. Pickleball = 2 nets,
-                                // _directFillCap). A bunk that merely FELL THROUGH here (its real pick
-                                // was unplaceable, _o>0) skips to its NEXT option instead — otherwise
-                                // the same low-index bunks grab the field-less label every day (their
-                                // turn or not), starving rotation. So the scarce label goes to the
-                                // bunks whose turn it actually is, and rotates as the daily offset moves.
+                            } else if (_canClaimDirectFill(opt, _rStart, _rEnd)
+                                       && ((_directFillCap(opt) !== Infinity) ? _mayTakeCapped(opt, optNorm, bunk) : _o === 0)) {
+                                // No open field → place the named sport as its OWN field-less label.
+                                //   • CAPPED label (e.g. Pickleball = 2 nets, _directFillCap < ∞): only a
+                                //     pre-chosen LEAST-RECENT winner takes it (_mayTakeCapped) — the scarce
+                                //     nets go to whoever's gone longest without, and rotate as the daily
+                                //     offset moves the turn-set.
+                                //   • UNCAPPED sport label: ONLY the bunk whose PRIMARY slot this is (_o===0),
+                                //     so a fall-through doesn't grab it (unchanged).
+                                //   Either way a bunk that doesn't qualify skips to its NEXT option, instead
+                                //   of the same low-index bunks grabbing the label every day and starving
+                                //   rotation.
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                 _placed = true;
                             } else {
-                                const _why = (_o !== 0) ? 'fell through here (not its turn)' : `at cap (${_directFillCap(opt)}/window)`;
+                                const _capped = _directFillCap(opt) !== Infinity;
+                                const _why = (_capped && !_mayTakeCapped(opt, optNorm, bunk)) ? `not a least-recent winner this window (cap ${_directFillCap(opt)})`
+                                    : (_o !== 0) ? 'fell through here (not its turn)'
+                                    : `at cap (${_directFillCap(opt)}/window)`;
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" ${_why}, no open field → next option`);
                             }
                         } else {
@@ -1685,7 +1733,15 @@
                             //   (e.g. 2 pickleball nets, _directFillCap): when that window is full,
                             //   leave _placed false so the bunk falls through to its NEXT rotation
                             //   option (Swim) — exactly like a scarce special does.
-                            if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
+                            //   ★ A CAPPED label (Pickleball — common when the camp has NO court for it,
+                            //   so it never reaches the named-sport branch above) goes to the pre-chosen
+                            //   LEAST-RECENT winners only (_mayTakeCapped). A bunk that merely fell through
+                            //   here, or a non-winner, skips to its next option (Swim) — without this guard
+                            //   the same starved bunks grabbed the 2 nets every day (the rotation bug).
+                            //   Uncapped labels (Swim, ∞ cap) are exempt and place for anyone, unchanged.
+                            if (!_mayTakeCapped(opt, optNorm, bunk)) {
+                                console.log(`[SmartTile] ${bunk} -> ROTATION "${opt}" (cap ${_directFillCap(opt)}/window) not a least-recent winner this window → next option`);
+                            } else if (_canClaimDirectFill(opt, _rStart, _rEnd)) {
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
@@ -3678,6 +3734,56 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             console.log(`[CLEANUP] Removed ${_origLen - manualSkeleton.length} orphan Change tile(s)`);
         }
 
+        // =========================================================================
+        // STEP 2.45: PINNED-FACILITY PRE-LOCK (custom-pinned exclusion).
+        // A custom pinned tile must win its reserved facilities over EVERYTHING
+        // except another custom pinned tile. Electives (STEP 2.5) register their own
+        // per-division locks, and leagues + the solver run in STEP 4+. If the pinned
+        // facility lock is registered only during STEP 3 (AFTER electives), an
+        // elective that grabs the same facility/time first makes the later pinned
+        // lockField() silently fail on the shared slot-index key — leaving the
+        // facility protected by only the elective's DIVISION lock, which still lets
+        // the elective's OWN grade reuse it (invariant violation). Registering the
+        // pinned GLOBAL locks here, BEFORE electives, guarantees pinned always wins:
+        // a later elective lockFieldForDivision() yields to the existing global lock,
+        // and every consumer's time-based check sees the pinned lock. The matching
+        // re-lock in STEP 3 then becomes a harmless no-op (already locked at the same
+        // time). Scoped to type==='pinned' (the custom pinned tile). Pinned-vs-pinned
+        // coexistence is preserved because tile PLACEMENT in STEP 3 fills
+        // unconditionally — only the facility LOCK is pre-registered here.
+        // =========================================================================
+        if (window.GlobalFieldLocks) {
+            let _preLockCount = 0;
+            manualSkeleton.forEach(item => {
+                if (!item || item.type !== 'pinned') return;
+                const _divName = item.division;
+                if (allowedDivisionsSet && !allowedDivisionsSet.has(String(_divName))) return;
+                if (!((divisions[_divName] && divisions[_divName].bunks) || []).length) return;
+                const _sMin = Utils.parseTimeToMinutes(item.startTime);
+                const _eMin = Utils.parseTimeToMinutes(item.endTime);
+                if (_sMin == null || _eMin == null || _eMin <= _sMin) return;
+                const _exact = findExactSlotForTimeRange(_divName, _sMin, _eMin);
+                const _slots = _exact !== -1 ? [_exact] : Utils.findSlotsForRange(_sMin, _eMin, _divName);
+                if (!_slots.length) return;
+                const _eventName = item.event || item.type || 'Pinned Event';
+                const _pinFields = new Set();
+                const _add = (f) => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') _pinFields.add(f.trim()); };
+                _add(getLocationForPinnedEvent(item));
+                _add(typeof item.location === 'string' ? item.location : null);
+                if (Array.isArray(item.reservedFields)) item.reservedFields.forEach(_add);
+                _pinFields.forEach(_pinLoc => {
+                    const _ok = window.GlobalFieldLocks.lockField(_pinLoc, _slots, {
+                        lockedBy: 'pinned_event_location',
+                        division: _divName,
+                        startMin: _sMin, endMin: _eMin,
+                        activity: `${_eventName} (pinned @ ${_pinLoc})`
+                    });
+                    if (_ok) _preLockCount++;
+                });
+            });
+            console.log(`[STEP 2.45] Pinned-facility pre-lock: registered ${_preLockCount} custom-pinned facility lock(s) before electives`);
+        }
+
         console.log("\n[STEP 2.5] Processing elective tiles (incl. swim+elective hybrids)...");
         // ★ Hybrid 'swim_elective' tiles are processed alongside electives:
         //   they reserve the pool AND the elective activities.
@@ -5225,6 +5331,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 });
             });
             const _fieldFree76 = (fl, s, e) => { const arr = _occ76[fl] || []; for (let i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+            // ★ PINNED-FACILITY GUARD (custom-pinned exclusion). A custom pinned
+            //   tile globally locks every facility it reserves for its FULL
+            //   [startMin,endMin] window (STEP 3 → GlobalFieldLocks,
+            //   lockedBy:'pinned_event_location'). These free-fill passes index
+            //   occupancy by entry.field, but a pinned tile stores its EVENT NAME in
+            //   .field and the real facilities in _reservedFields/_location — so
+            //   _fieldFree76/_occL65 are BLIND to them and would otherwise drop a
+            //   sport/special onto a pinned-reserved facility. The pinned lock is a
+            //   GLOBAL lock, so isFieldLockedByTime blocks EVERY grade (only elective
+            //   division-locks exempt their own grade) for any overlapping time —
+            //   exactly the rule "nothing but another custom pinned tile may share a
+            //   reserved facility within its window". Mirrors the STEP 7.5 gate
+            //   (auto_fill_slot isFieldGloballyLocked) and the solver's own check.
+            const _fieldPinLocked76 = (fieldName, s, e, g) => {
+                try {
+                    return !!(window.GlobalFieldLocks && window.GlobalFieldLocks.isFieldLockedByTime
+                        && window.GlobalFieldLocks.isFieldLockedByTime(fieldName, s, e, g));
+                } catch (_) { return false; }
+            };
             // ★★★ CB-39: real per-slot timeRules availability gate. The candidate
             // filter above uses `!(f.timeRules && f.timeRules.enabled)`, which is
             // ALWAYS true (timeRules is an array and never has `.enabled`), so the
@@ -5268,7 +5393,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     for (let fi = 0; fi < _sportFields76.length; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
+                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                         let act = null;
                         const _blockedOnField76 = _disSportsByField76[f.name] || null;
                         for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1)) { act = c; break; } }
@@ -5331,7 +5456,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const g = pool[0].grade, s = pool[0].s, en = pool[0].e;
                     for (let fi = 0; fi < _sportFields76.length && pool.length >= 2; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (!_fieldFree76(fl, s, en) || !_access76(f, g) || !_fieldTimeOk76(f, s, en)) continue;
+                        if (!_fieldFree76(fl, s, en) || !_access76(f, g) || !_fieldTimeOk76(f, s, en) || _fieldPinLocked76(f.name, s, en, g)) continue;
                         const cap = _capOf62(f); if (cap < 2) continue; // a 1-bunk field can't host a forced pair
                         const blocked = _disSportsByField76[f.name] || null;
                         for (let ai = 0; ai < (f.activities || []).length; ai++) {
@@ -5477,6 +5602,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         const cfg = _loc65[fl]; if (!cfg || cfg.type === 'not_sharable') continue;
                         const occ = _occAt65(fl, t.s, t.e, String(b));
                         if (occ.length === 0 || occ.length >= cfg.cap) continue; // need 1+ occupant AND room under cap
+                        if (_fieldPinLocked76(occ[0].field || fl, t.s, t.e, g)) continue; // never share onto a pinned-reserved facility
                         if (occ.some(o => o.grade !== g)) continue;             // same-grade share only (always legal)
                         if (occ.some(o => o.s !== t.s || o.e !== t.e)) continue; // co-started, no staggered share
                         if (cfg.type === 'custom' && cfg.divs.length > 0 && cfg.divs.indexOf(g) < 0) continue;
@@ -5514,6 +5640,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         // ★ special disabled today (facility-off cascade) or its location disabled
                         if (_disabledSpecialsLc76.has(String(an).toLowerCase().trim()) || _disabledLc76.has(String(sp.loc).toLowerCase().trim())) continue;
                         const cfg = _loc65[sp.loc] || { type: 'same_division', cap: 2 };
+                        if (_fieldPinLocked76(sp.locName || sp.loc, t.s, t.e, g)) continue; // never open a special on a pinned-reserved facility
                         const occ = _occAt65(sp.loc, t.s, t.e, String(b));
                         if (occ.some(o => String(o.act || '').toLowerCase().trim() !== String(an).toLowerCase().trim())) continue; // never open a special on a court already running a DIFFERENT activity (sport or other special)
                         if (cfg.type === 'not_sharable' ? occ.length > 0 : occ.length >= cfg.cap) continue; // full
