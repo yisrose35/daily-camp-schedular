@@ -1544,6 +1544,78 @@
         // (Rotation special-quota build + seniority reservation moved ABOVE the budget
         //  pre-pass — see "FAIR-SHARE SPECIAL ROOMS … + SENIORITY RESERVATION" block.)
 
+        // =====================================================================
+        // ★ CAMP-WIDE QUEUE for SCARCE CAPPED labels (e.g. Pickleball = 2 nets).
+        //   The cap is CAMP-WIDE (the whole camp shares the nets, enforced per
+        //   overlapping window by _directFillClaims), but each division's rotation
+        //   tile is a separate job. A per-division queue let whichever division ran
+        //   first grab both nets every day and STARVE the others (confirmed live:
+        //   div 9 took Pickleball daily, div 8's winners were chosen but never
+        //   placed → counts frozen at 0 → won forever). So pool EVERY rotation
+        //   bunk that wants the label in a shared time window into ONE queue and
+        //   give the cap-many slots to the least-recent bunks CAMP-WIDE. Counts are
+        //   read straight from saved schedules (not getActivityCount — that gates on
+        //   getValidActivityNames). The per-job loop below just consults these maps.
+        // =====================================================================
+        const _cappedWinners = {}; // labelNorm -> Set(bunk) (camp-wide winners)
+        const _winnerLabel = {};   // bunk -> raw label it won (placed up front in its job)
+        const _mayTakeCapped = (opt, optNorm, bunk) =>
+            (_directFillCap(opt) === Infinity) || !!(_cappedWinners[optNorm] && _cappedWinners[optNorm].has(bunk));
+        (function _allocCampWideCappedQueue() {
+            const _allDaily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
+            const _todayKey = window.currentScheduleDate || '';
+            const _pastDatesDesc = Object.keys(_allDaily)
+                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey))
+                .sort((a, b) => b.localeCompare(a)); // most recent first → index = days-ago
+            const _lrStats = (bunk, labelNorm) => {
+                let n = 0, ago = 1e9;
+                for (let di = 0; di < _pastDatesDesc.length; di++) {
+                    const sched = (_allDaily[_pastDatesDesc[di]] && _allDaily[_pastDatesDesc[di]].scheduleAssignments
+                        && _allDaily[_pastDatesDesc[di]].scheduleAssignments[bunk]) || [];
+                    for (let i = 0; i < sched.length; i++) {
+                        const e = sched[i];
+                        if (!e || e.continuation || e._isTransition) continue;
+                        if (String(e._activity || '').toLowerCase().trim() === labelNorm) { n++; if (di < ago) ago = di; break; }
+                    }
+                }
+                return { count: n, ago };
+            };
+            // Group every rotation job's capped-label demand by (label + window). Bunks
+            //   from DIFFERENT divisions sharing a window+label land in the same group →
+            //   one pool, one cap.
+            const groups = {}; // `${norm}|${start}|${end}` -> { raw, norm, cap, start, end, bunks:Set }
+            filteredJobs.forEach(job => {
+                const opts = _rotationOptions(job);
+                if (!opts || !job.blockA) return;
+                const start = job.blockA.startMin, end = job.blockA.endMin;
+                const slots = Utils.findSlotsForRange(start, end, job.division);
+                const seen = new Set();
+                opts.forEach(o => {
+                    const norm = String(o || '').toLowerCase().trim();
+                    if (_directFillCap(o) === Infinity || seen.has(norm)) return;
+                    seen.add(norm);
+                    const key = `${norm}|${start}|${end}`;
+                    const g = groups[key] || (groups[key] = { raw: o, norm, cap: _directFillCap(o), start, end, bunks: new Set() });
+                    (divisions[job.division]?.bunks || []).forEach(bunk => {
+                        const ex = (slots && slots[0] != null) ? window.scheduleAssignments[bunk]?.[slots[0]] : null;
+                        if (ex && ex._bunkOverride) return; // overridden bunks untouchable
+                        g.bunks.add(bunk);
+                    });
+                });
+            });
+            const claimed = new Set(); // a bunk wins at most one capped label
+            Object.keys(groups).forEach(key => {
+                const g = groups[key];
+                const ranked = Array.from(g.bunks)
+                    .filter(b => !claimed.has(b))
+                    .map(b => { const s = _lrStats(b, g.norm); return { bunk: b, c: s.count, ago: s.ago }; })
+                    .sort((a, b) => (a.c - b.c) || (b.ago - a.ago) || String(a.bunk).localeCompare(String(b.bunk)));
+                const winners = ranked.slice(0, g.cap);
+                winners.forEach(w => { claimed.add(w.bunk); _winnerLabel[w.bunk] = g.raw; (_cappedWinners[g.norm] = _cappedWinners[g.norm] || new Set()).add(w.bunk); });
+                console.log(`[SmartTile] CAMP-WIDE QUEUE "${g.norm}" @${g.start}-${g.end} (cap ${g.cap}): winners [${winners.map(x => x.bunk + ':' + x.c).join(', ')}] of ${ranked.length} bunks camp-wide [${ranked.map(x => x.bunk + ':' + x.c).join(', ')}]`);
+            });
+        })();
+
         filteredJobs.forEach((job, jobIdx) => {
 
             console.log(`\n[SmartTile] Job ${jobIdx + 1}: ${job.division}`);
@@ -1611,82 +1683,9 @@
                 //   (→ all options across the group); _usedOpts blocks any repeat.
                 const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
                 console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
-                // ★ DIVISION-WIDE QUEUE for SCARCE COURT-LESS labels (e.g. Pickleball = 2 nets, no
-                //   court modeled). EARLIER attempts tied this to the per-bunk day-offset "turn":
-                //   only the ~1/3 of bunks whose PRIMARY pick was the label that day could get it,
-                //   and least-recent was applied only within that turn-group. That fragments the
-                //   division into 3 independent mini-queues — so a bunk at count 0 in one group
-                //   can't take a slot on another group's day, and count-1 bunks get SECONDS while
-                //   count-0 bunks elsewhere are still at ZERO (the user's "repeats before others get
-                //   a first" bug, confirmed live: turn-group [כז:1, ל:1, לד:1] had no count-0 member
-                //   to pick). FIX: treat the scarce label as ONE division-wide queue — each day the
-                //   cap-many slots go to the LEAST-RECENT bunks across the WHOLE division (fewest
-                //   prior placements, then longest-ago, then index), regardless of whose offset-turn
-                //   it is. Winners are placed UP FRONT in the loop below (overriding their day
-                //   primary); everyone else runs the normal Special/Swim rotation. This guarantees
-                //   no bunk gets a 2nd turn until every bunk has had a 1st. Counts come straight from
-                //   the saved daily schedules (NOT RotationEngine.getActivityCount — that and the
-                //   cloud/local rotation_counts gate on getValidActivityNames, which EXCLUDES a
-                //   court-less label, so it always read 0 and collapsed to bunk-index order). Only
-                //   court-less capped labels enter the queue; a capped sport that HAS a court keeps
-                //   its real-field solver path untouched. NO-OP for uncapped labels (Swim).
-                const _cappedWinners = {}; // labelNorm -> Set(bunk) (division-wide least-recent winners)
-                const _winnerLabel = {};   // bunk -> raw label it won (placed up front)
-                (function _allocCappedQueue() {
-                    const _allDaily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
-                    const _todayKey = window.currentScheduleDate || '';
-                    const _pastDatesDesc = Object.keys(_allDaily)
-                        .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey))
-                        .sort((a, b) => b.localeCompare(a)); // most recent first → index = days-ago rank
-                    const _lrStats = (bunk, labelNorm) => {
-                        let n = 0, lastAgo = 1e9; // lastAgo: smaller = more recently had it; 1e9 = never
-                        for (let di = 0; di < _pastDatesDesc.length; di++) {
-                            const sched = (_allDaily[_pastDatesDesc[di]] && _allDaily[_pastDatesDesc[di]].scheduleAssignments
-                                && _allDaily[_pastDatesDesc[di]].scheduleAssignments[bunk]) || [];
-                            for (let i = 0; i < sched.length; i++) {
-                                const e = sched[i];
-                                if (!e || e.continuation || e._isTransition) continue;
-                                if (String(e._activity || '').toLowerCase().trim() === labelNorm) { n++; if (di < lastAgo) lastAgo = di; break; }
-                            }
-                        }
-                        return { count: n, ago: lastAgo };
-                    };
-                    // Every SCARCE capped label in this tile's options enters the queue — whether or
-                    //   not it has a court. (Pickleball usually DOES have a "Pickleball court" field,
-                    //   so it's court-backed and goes through the solver; the queue still decides WHO
-                    //   gets the cap-many slots. The up-front placement below routes a winner to the
-                    //   real court when one fits, else to a field-less label.)
-                    const _labels = [];
-                    const _seen = new Set();
-                    _rotOpts.forEach(o => {
-                        const n = String(o || '').toLowerCase().trim();
-                        if (_directFillCap(o) === Infinity || _seen.has(n)) return; // uncapped (Swim) skip
-                        _seen.add(n); _labels.push({ raw: o, norm: n });
-                    });
-                    if (!_labels.length) return;
-                    const _eligible = [];
-                    bunkList.forEach((bunk, _bIdx) => {
-                        const _ex = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
-                        if (_ex && _ex._bunkOverride) return; // overridden bunks untouchable
-                        _eligible.push({ bunk, _bIdx });
-                    });
-                    const _claimed = new Set(); // a bunk wins at most one capped label
-                    _labels.forEach(({ raw, norm }) => {
-                        const cap = _directFillCap(raw);
-                        const ranked = _eligible
-                            .filter(e => !_claimed.has(e.bunk))
-                            .map(e => { const s = _lrStats(e.bunk, norm); return { bunk: e.bunk, _bIdx: e._bIdx, c: s.count, ago: s.ago }; })
-                            .sort((a, b) => (a.c - b.c) || (b.ago - a.ago) || (a._bIdx - b._bIdx)); // fewest first, then longest-ago, then index
-                        const winners = ranked.slice(0, cap);
-                        _cappedWinners[norm] = new Set(winners.map(x => x.bunk));
-                        winners.forEach(w => { _claimed.add(w.bunk); _winnerLabel[w.bunk] = raw; });
-                        console.log(`[SmartTile] LEAST-RECENT QUEUE "${norm}" (cap ${cap}): winners [${winners.map(x => x.bunk + ':' + x.c).join(', ')}] of ${ranked.length} bunks [${ranked.map(x => x.bunk + ':' + x.c).join(', ')}]`);
-                    });
-                })();
-                // Non-winners must NOT take a queued capped label in their rotation walk (winners get
-                // it up front below); uncapped labels (Swim) place for whoever reaches them.
-                const _mayTakeCapped = (opt, optNorm, bunk) =>
-                    (_directFillCap(opt) === Infinity) || !!(_cappedWinners[optNorm] && _cappedWinners[optNorm].has(bunk));
+                // ★ Scarce capped labels (Pickleball) are owned by the CAMP-WIDE queue computed
+                //   once before this loop (_cappedWinners / _winnerLabel / _mayTakeCapped). Winners
+                //   for THIS division are placed up front below; non-winners skip the label.
                 bunkList.forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
@@ -1695,26 +1694,17 @@
                     // ★ DIVISION-WIDE QUEUE: if this bunk is one of the least-recent winners for a
                     //   scarce capped label (e.g. Pickleball), give it that label UP FRONT — overriding
                     //   its day-rotation primary — so the cap-many slots always go to the longest-
-                    //   waiting bunks across the whole division, not just this day's offset turn-group.
-                    //   If the label is a sport WITH a hosting field that fits (e.g. "Pickleball
-                    //   court"), hand it to the SOLVER to book the real court (so the court isn't
-                    //   double-booked); otherwise place it as a field-less label.
+                    //   waiting bunks across the whole CAMP, not this day's offset turn-group.
+                    //   Placed as a FIELD-LESS label (the camp-wide queue already enforces the cap, and
+                    //   this is the path proven to persist + be counted next day; the solver-restricted
+                    //   "real court" route silently dropped placements under cross-division contention,
+                    //   which froze a starved division's counts at 0).
                     const _wonRaw = _winnerLabel[bunk];
-                    if (_wonRaw) {
-                        const _wn = String(_wonRaw).toLowerCase().trim();
-                        const _wonFields = _sportFieldMap[_wn];
-                        const _wonFits = knownSportNames.has(_wn) && _wonFields && _wonFields.length && typeof Utils.canBlockFit === 'function'
-                            && _wonFields.some(_ff => Utils.canBlockFit({ divName, division: divName, bunk, startTime: _rStart, endTime: _rEnd, startMin: _rStart, endMin: _rEnd, slots: _rotSlots }, _ff, activityProperties, fieldUsageBySlot, _wonRaw));
-                        if (_wonFits) {
-                            console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent): ${_wonRaw} (solver-restricted, real court)`);
-                            schedulableSlotBlocks.push({ divName, bunk, event: _wonRaw, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [_wonRaw] });
-                            _placed = true; _placedOpt = _wn;
-                        } else if (_canClaimDirectFill(_wonRaw, _rStart, _rEnd)) {
-                            _registerDirectFillClaim(_wonRaw, _rStart, _rEnd);
-                            console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent): ${_wonRaw} (field-less label)`);
-                            window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _wonRaw, sport: null, _fixed: true, _activity: _wonRaw, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                            _placed = true; _placedOpt = _wn;
-                        }
+                    if (_wonRaw && _canClaimDirectFill(_wonRaw, _rStart, _rEnd)) {
+                        _registerDirectFillClaim(_wonRaw, _rStart, _rEnd);
+                        console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent, camp-wide): ${_wonRaw}`);
+                        window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _wonRaw, sport: null, _fixed: true, _activity: _wonRaw, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        _placed = true; _placedOpt = String(_wonRaw).toLowerCase().trim();
                     }
                     for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
                         const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
