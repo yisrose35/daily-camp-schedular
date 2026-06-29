@@ -1106,6 +1106,32 @@
         //       the same "deserving" bunks hogging specials in every window.
         //   Keyed by bunk (globally unique, same as historicalCounts).
         const _bunkSpecialsToday = {};
+        // ★ SEED FROM THE EXISTING SCHEDULE — the doubling fix. By the time smart
+        //   tiles run (STEP 6) a bunk may ALREADY hold a special placed by an
+        //   earlier pass: STEP 1.5 background-schedule restore (locked divisions),
+        //   STEP 2 bunk overrides, STEP 2.5 elective tiles, or a pinned special.
+        //   The tracker started empty and was blind to all of these, so the budget /
+        //   guarantee / rotation passes would re-hand the SAME special to a bunk that
+        //   already had it today — the "bunks already have specials, now doubled" bug.
+        //   Scan each bunk's current assignments and pre-load every known special it
+        //   already holds so every downstream dedup check (.has(name)) and the
+        //   fewest-specials-first ranking treat it as already-served. Additive and
+        //   self-limiting: only KNOWN special names are seeded, so sports/swim/empty
+        //   slots are untouched and an uncontended day is unchanged.
+        try {
+            const _sa = window.scheduleAssignments || {};
+            Object.keys(_sa).forEach(bunk => {
+                const arr = _sa[bunk];
+                if (!Array.isArray(arr)) return;
+                arr.forEach(e => {
+                    if (!e || e.continuation) return;
+                    const act = String(e._activity || e.field || '').toLowerCase().trim();
+                    if (act && knownSpecialNames.has(act)) {
+                        (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(act);
+                    }
+                });
+            });
+        } catch (_e) { /* fail-open: an unreadable schedule just means no pre-seed */ }
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
         // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
@@ -1136,8 +1162,10 @@
             const out = {};
             bunksInOrder.forEach(bunk => {
                 const hist = historicalCounts[bunk] || {};
+                const _had = _bunkSpecialsToday[bunk];
                 const cands = [...avail].sort((a, b) => (hist[a.name] || 0) - (hist[b.name] || 0));
                 for (const s of cands) {
+                    if (_had && _had.has(s.name.toLowerCase())) continue; // no double — bunk already has this special today
                     if (_specialGateBlocks(bunk, divName, s.name)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                     if (!_canClaim(s.name, startMin, endMin, s.capacity || 1, divName)) continue;
                     _registerClaim(s.name, startMin, endMin, divName);
@@ -1967,12 +1995,26 @@
                     // Specific SPECIAL: claim-checked direct fill — capacity and
                     // cross-division sharing enforced via the same claim tracker
                     // the budget system uses; falls back when at capacity.
+                    // ★ No-doubles guard: this path bypasses the budget pre-pass, so it
+                    //   also has to honor the day-wide tracker — otherwise a bunk that
+                    //   already holds this exact special (from another tile/window or an
+                    //   earlier pass) would be handed it a second time. If already had
+                    //   today, route to the fallback instead of doubling.
+                    const _alreadyHad = _bunkSpecialsToday[bunk] && _bunkSpecialsToday[bunk].has(_lblNorm);
                     const _sw = _getSharableWith(activityLabel);
                     const _swCap = (_sw && _sw.capacity) || 1;
-                    if (_canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
+                    if (!_alreadyHad && _canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
                         _registerClaim(activityLabel, startMin, endMin, divName);
+                        (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_lblNorm);
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special: ${activityLabel}`);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    } else if (_alreadyHad && _fbAct && needsGeneration(_fbAct)) {
+                        const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" already had today → ${_fbT} (no double)`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                    } else if (_alreadyHad && _fbAct) {
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" already had today → DIRECT FILL: ${_fbAct} (no double)`);
+                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     } else if (_fbAct && needsGeneration(_fbAct)) {
                         const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity → ${_fbT}`);
