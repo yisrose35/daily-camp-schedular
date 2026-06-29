@@ -2217,6 +2217,91 @@
             }
         });
 
+        // =====================================================================
+        // ★ RECLAIM IDLE SPECIAL ROOMS (light-attendance fill).
+        //   The rotation cycle deliberately sends many bunks to Swim each day for
+        //   week-long variety, and the fair-share quota caps how many special rooms
+        //   a division reserves. On a normal (full) day specials are scarce — nearly
+        //   every room gets claimed — so this pass is a STRICT NO-OP. But when bunks
+        //   are ABSENT, rooms sit idle while bunks sit on Swim (observed live: 9th
+        //   grade, 3 bunks present, Pizza Making + Sushi Making never used). This pass
+        //   hands each STILL-IDLE special room to a Swim bunk that can access it,
+        //   SENIORITY-FIRST (the oldest division benefits, matching how the rest of
+        //   the pipeline prioritises), then fairness within (fewest specials so far).
+        //   Self-limiting & safe:
+        //     • Only tiles that ALREADY rotate a special are considered (we never turn
+        //       a plain Swim tile into a special).
+        //     • Only rooms with REAL remaining capacity (_canClaim) are filled, so a
+        //       contended / full-attendance window reclaims nothing.
+        //     • Same bunk-access + no-doubles-today gates as the rotation loop.
+        //   Kill-switch: window.__smartTileReclaimEmptySpecials = false.
+        // =====================================================================
+        if (window.__smartTileReclaimEmptySpecials !== false) (function _reclaimIdleSpecials() {
+            let _reclaimed = 0;
+            Object.entries(_windowJobs).forEach(([wk, wJobs]) => {
+                const [startMin, endMin] = wk.split('|').map(Number);
+                // Collect Swim bunks that sit in a SPECIAL-OFFERING rotation tile.
+                const swimBunks = [];
+                wJobs.forEach(job => {
+                    const opts = _rotationOptions(job);
+                    if (!opts) return;
+                    const offersSpecial = opts.some(o => normalizeCategoryLabel(o) === 'special'
+                        || knownSpecialNames.has(String(o).toLowerCase().trim()));
+                    if (!offersSpecial) return;
+                    const divName = job.division;
+                    const bunkList = divisions[divName]?.bunks || [];
+                    const slots = Utils.findSlotsForRange(startMin, endMin, divName);
+                    if (!slots || !slots.length) return;
+                    const lead = slots[0];
+                    bunkList.forEach(bunk => {
+                        const e = window.scheduleAssignments[bunk]?.[lead];
+                        if (e && e._noRoomCap && !e._bunkOverride && !e._isTransition
+                            && /swim/i.test(String(e._activity || ''))
+                            && e._startMin === startMin && e._endMin === endMin) {
+                            const hist = historicalCounts[bunk] || {};
+                            const usage = _allSpecialNames.reduce((s, n) => s + (hist[n] || 0), 0);
+                            swimBunks.push({ bunk, divName, slots, usage });
+                        }
+                    });
+                });
+                if (!swimBunks.length) return;
+                // Seniority-first (oldest division), then fewest specials today, then
+                // fewest cumulatively — so a senior, special-starved bunk gets the idle room.
+                swimBunks.sort((a, b) =>
+                    (_senOf(a.divName) - _senOf(b.divName)) ||
+                    (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
+                    (a.usage - b.usage));
+                swimBunks.forEach(sb => {
+                    const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                        startMin, endMin, sb.divName, activityProperties, dailyFieldAvailability) || [];
+                    if (!avail.length) return;
+                    const had = _bunkSpecialsToday[sb.bunk];
+                    const hist = historicalCounts[sb.bunk] || {};
+                    // Least-historically-used idle room this bunk can access wins.
+                    const ranked = avail.slice().sort((a, b) => (hist[a.name] || 0) - (hist[b.name] || 0));
+                    for (const sp of ranked) {
+                        const low = sp.name.toLowerCase();
+                        if (had && had.has(low)) continue;                       // already had today
+                        if (typeof window.isSpecialAvailableForBunk === 'function'
+                            && !window.isSpecialAvailableForBunk(sp.name, sb.divName, sb.bunk, window.loadGlobalSettings?.())) continue;
+                        // ONLY genuinely-idle rooms (real remaining capacity) → no-op when contended/full.
+                        if (!_canClaim(sp.name, startMin, endMin, sp.capacity || 1, sb.divName)) continue;
+                        // Replace the Swim cell with the special (fillBlock won't overwrite a
+                        // non-transition entry, so clear the window's slots first).
+                        sb.slots.forEach(s => { if (window.scheduleAssignments[sb.bunk]) window.scheduleAssignments[sb.bunk][s] = null; });
+                        _registerClaim(sp.name, startMin, endMin, sb.divName);
+                        (_bunkSpecialsToday[sb.bunk] = _bunkSpecialsToday[sb.bunk] || new Set()).add(low);
+                        window.fillBlock({ divName: sb.divName, bunk: sb.bunk, startTime: startMin, endTime: endMin, slots: sb.slots },
+                            { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                        console.log(`[SmartTile RECLAIM] ${sb.bunk} (${sb.divName}) Swim → idle special "${sp.name}" @${startMin}-${endMin}`);
+                        _reclaimed++;
+                        break;
+                    }
+                });
+            });
+            if (_reclaimed) console.log(`[SmartTile RECLAIM] filled ${_reclaimed} idle special room(s) with Swim bunks (light-attendance fill; senior-first)`);
+        })();
+
         window.__smartCapTracker = sharedCapacityTracker; // debug
         return schedulableSlotBlocks;
     }
