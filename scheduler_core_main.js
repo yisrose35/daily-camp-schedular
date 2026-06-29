@@ -2947,10 +2947,32 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             // ★ Day 22.5: per-bunk gen scope. When window.__allowedBunkSet is set,
             //   only the explicitly-selected bunks are regenerated; others preserve.
             const _allowedBunkSet = window.__allowedBunkSet || null;
+            // ★ Partial (per-tile) regen: per-slot scope from Daily Adjustments.
+            //   { [bunk]: { regen: Set<slotIdx>, keep: { [slotIdx]: entry } } }
+            //   For in-scope bunks carrying this, rebuild the bunk from the snapshot:
+            //   `keep` slots are pinned (preserved, never moved), `regen` slots are
+            //   left empty for the solver to re-roll. This is immune to STEP 0's wipe.
+            const _regenSlotScope = window.__regenSlotScope || null;
 
             (divisions[divName].bunks || []).forEach(bunk => {
                 const bunkInScope = !_allowedBunkSet || _allowedBunkSet.has(String(bunk));
                 if (isBeingGenerated && bunkInScope) {
+                    const _rs = _regenSlotScope && _regenSlotScope[bunk];
+                    if (_rs && _rs.keep) {
+                        // ── Per-tile regen: keep non-selected slots (pinned), null the rest ──
+                        const arr = new Array(slotCount).fill(null);
+                        const keep = _rs.keep;
+                        for (const k in keep) {
+                            const i = parseInt(k, 10);
+                            if (i >= 0 && i < slotCount && keep[k]) {
+                                arr[i] = Object.assign({}, keep[k], {
+                                    _fixed: true, _pinned: true, _regenPreserved: true
+                                });
+                            }
+                        }
+                        window.scheduleAssignments[bunk] = arr;
+                        return; // selected slots stay null → solver fills only those
+                    }
                     // Always create fresh empty arrays. For mid-day rain,
                     // Step 1.1 re-places morning entries by TIME after
                     // divisionTimes is rebuilt (index-based copy is wrong
@@ -3257,6 +3279,26 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             );
         } else if (allowedDivisions) {
             console.log('[STEP 1.5] No snapshot provided - generating fresh for allowed divisions only');
+        }
+
+        // ★ STEP 1.6 — Partial (per-tile) regen: register field usage + locks for the
+        //   PRESERVED slots in the regenerated (in-scope) bunks. STEP 1.5 only registers
+        //   BACKGROUND (non-allowed) divisions, so without this the solver would not
+        //   "see" a kept tile's field and could double-book it when filling the empty
+        //   selected slots. Reuses registerFieldUsageFromRestoredSchedules with an EMPTY
+        //   allowed-list so it registers (does not skip) these in-scope entries.
+        if (window.__regenSlotScope && typeof window.registerFieldUsageFromRestoredSchedules === 'function') {
+            const _rsSnap = {};
+            Object.keys(window.__regenSlotScope).forEach(b => {
+                const arr = window.scheduleAssignments?.[b];
+                if (Array.isArray(arr)) _rsSnap[b] = arr;
+            });
+            if (Object.keys(_rsSnap).length > 0) {
+                const _rsReg = window.registerFieldUsageFromRestoredSchedules(
+                    _rsSnap, divisions, [], fieldUsageBySlot, activityProperties, existingUnifiedTimes
+                );
+                console.log('[STEP 1.6] ★ Per-tile regen: registered field usage for ' + _rsReg + ' preserved slot(s)');
+            }
         }
 
         // ★ LG-6: restore league matchups for divisions NOT in this scoped gen.
