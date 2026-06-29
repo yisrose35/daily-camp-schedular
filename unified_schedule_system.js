@@ -1397,6 +1397,29 @@ function shouldHighlightBunk(bunkName) {
                 activities: [s.name]
             });
         });
+        // General activities (Facilities editor → "General Activities", e.g.
+        // "Main activity" at the Auditorium) are hosted at a facility, not a
+        // sports field or a special. They were absent from the edit-modal
+        // activity dropdown. Surface each one as a location keyed to its host
+        // facility so picking it resolves to that facility's court the same way
+        // a field sport does. Capacity comes from the facility's sharing config.
+        try {
+            const _gaItems = (typeof window.getGeneralActivityPaletteItems === 'function')
+                ? window.getGeneralActivityPaletteItems() : [];
+            (_gaItems || []).forEach(ga => {
+                if (!ga || !ga.name || !ga.facility) return;
+                let cap = 1;
+                try {
+                    const info = window.getCustomActivitySharingInfo?.(ga.name, ga.facility, null, settings);
+                    if (info && isFinite(info.capacity) && info.capacity > 0) cap = info.capacity;
+                } catch (e) { /* default capacity */ }
+                locations.push({
+                    name: ga.facility, type: 'general',
+                    capacity: cap,
+                    activities: [ga.name]
+                });
+            });
+        } catch (e) { /* general activities optional */ }
         return locations;
     }
 

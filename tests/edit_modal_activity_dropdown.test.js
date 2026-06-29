@@ -56,6 +56,21 @@ function getAllLocations() {
             activities: [s.name]
         });
     });
+    // General activities (Facilities editor) — hosted at a facility, surfaced
+    // keyed to that facility so the activity dropdown includes them too.
+    try {
+        const _gaItems = (typeof window.getGeneralActivityPaletteItems === 'function')
+            ? window.getGeneralActivityPaletteItems() : [];
+        (_gaItems || []).forEach(ga => {
+            if (!ga || !ga.name || !ga.facility) return;
+            let cap = 1;
+            try {
+                const info = window.getCustomActivitySharingInfo?.(ga.name, ga.facility, null, settings);
+                if (info && isFinite(info.capacity) && info.capacity > 0) cap = info.capacity;
+            } catch (e) { /* default capacity */ }
+            locations.push({ name: ga.facility, type: 'general', capacity: cap, activities: [ga.name] });
+        });
+    } catch (e) { /* general activities optional */ }
     return locations;
 }
 
@@ -68,6 +83,8 @@ afterEach(() => {
     delete window.loadGlobalSettings;
     delete window.getAllSpecialActivities;
     delete window.specialActivities;
+    delete window.getGeneralActivityPaletteItems;
+    delete window.getCustomActivitySharingInfo;
 });
 
 describe('edit-modal activity dropdown population', () => {
@@ -103,6 +120,35 @@ describe('edit-modal activity dropdown population', () => {
     it('never throws and returns [] when no config is loaded', () => {
         window.loadGlobalSettings = () => ({});
         assert.deepEqual(activityOptions(), []);
+    });
+
+    it('FIX: general activities (facilities editor) appear in the dropdown', () => {
+        window.loadGlobalSettings = () => ({
+            app1: {
+                fields: [{ name: 'Court 1', activities: ['Basketball'] }],
+                specialActivities: [{ name: 'Baking' }]
+            }
+        });
+        window.getGeneralActivityPaletteItems = () => [
+            { name: 'Main activity', facility: 'Auditorium', quickType: 'custom' },
+            { name: 'Town Trip', facility: 'Lobby', quickType: 'custom' }
+        ];
+        const opts = activityOptions();
+        assert.ok(opts.includes('Main activity'), 'general activity appears in dropdown');
+        assert.ok(opts.includes('Town Trip'), 'second general activity appears');
+        assert.ok(opts.includes('Basketball'), 'field sports still appear');
+        assert.ok(opts.includes('Baking'), 'specials still appear');
+    });
+
+    it('general activity resolves to its host facility as the location', () => {
+        window.loadGlobalSettings = () => ({ app1: { fields: [], specialActivities: [] } });
+        window.getGeneralActivityPaletteItems = () => [
+            { name: 'Main activity', facility: 'Auditorium', quickType: 'custom' }
+        ];
+        const loc = getAllLocations().find(l => (l.activities || []).includes('Main activity'));
+        assert.ok(loc, 'a location hosts the general activity');
+        assert.equal(loc.name, 'Auditorium', 'location is keyed to the host facility');
+        assert.equal(loc.type, 'general');
     });
 
     it('the dropdown is non-empty whenever specials exist somewhere', () => {
