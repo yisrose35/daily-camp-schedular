@@ -108,6 +108,48 @@
         }
     }
 
+    // ★ Pull the AUTHORITATIVE league history straight from the cloud right before a
+    //   generation, so today's matchups/sports are chosen from the true cross-session
+    //   record (not a stale in-memory copy from another device/tab/session). Best-
+    //   effort + time-boxed: any failure leaves the existing hydrated copy in place so
+    //   generation is never blocked. Writes the fetched value into globalSettings +
+    //   the localStorage backup so the engine's sync loadLeagueHistory() reads it.
+    Leagues.refreshHistoryFromCloud = async function () {
+        try {
+            const sb = (typeof window !== 'undefined') && window.supabase;
+            const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
+            if (!sb || !campId) { console.log('[RegularLeagues] cloud refresh skipped (no client/camp)'); return false; }
+            const q = sb.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'leagueHistory').maybeSingle();
+            const timeout = new Promise(function (res) { setTimeout(function () { res({ _timedOut: true }); }, 6000); });
+            const r = await Promise.race([q, timeout]);
+            if (r && r._timedOut) { console.warn('[RegularLeagues] cloud history refresh timed out — using existing copy'); return false; }
+            if (r && r.error) { console.warn('[RegularLeagues] cloud history refresh error — using existing copy:', r.error); return false; }
+            const cloud = r && r.data && r.data.value;
+            if (!cloud || typeof cloud !== 'object' || !cloud.gameLog) { console.log('[RegularLeagues] no cloud history to refresh'); return false; }
+            // Adopt the cloud copy unless our in-memory/local copy is strictly newer
+            // (an unsynced local edit must not be clobbered — mirrors LG-7 recency).
+            let localSavedAt = 0;
+            try {
+                const cur = (window.loadGlobalSettings && window.loadGlobalSettings().leagueHistory) || {};
+                localSavedAt = Number(cur._savedAt) || 0;
+                const raw = localStorage.getItem(LEAGUE_HISTORY_KEY);
+                if (raw) { const l = JSON.parse(raw); localSavedAt = Math.max(localSavedAt, Number(l._savedAt) || 0); }
+            } catch (_) {}
+            if ((Number(cloud._savedAt) || 0) < localSavedAt) {
+                console.log('[RegularLeagues] local league history is newer than cloud — keeping local');
+                return false;
+            }
+            if (typeof window.saveGlobalSettings === 'function') { try { window.saveGlobalSettings('leagueHistory', cloud); } catch (_) {} }
+            try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(cloud)); } catch (_) {}
+            console.log('[RegularLeagues] ☁️ Refreshed league history from cloud (' +
+                Object.keys(cloud.gameLog || {}).length + ' league(s))');
+            return true;
+        } catch (e) {
+            console.warn('[RegularLeagues] cloud history refresh failed — using existing copy:', e);
+            return false;
+        }
+    };
+
     // =========================================================================
     // ★ NEW: CHRONOLOGICAL GAME NUMBERING
     // =========================================================================
@@ -595,6 +637,88 @@
             return chosen;
         } catch (e) {
             console.warn('[RegularLeagues] sport-variety pairing chooser failed — using round-robin:', e);
+            return fallbackMatchups;
+        }
+    }
+
+    // =========================================================================
+    // ★★★ DAILY PAIRING OPTIMIZER — scales to ANY league size ★★★
+    // =========================================================================
+    // Each day, chosen ANEW from history (opponents met + sports played), instead
+    // of walking a predestined round-robin. The old choosePairingsForSportVariety
+    // brute-force-enumerated every perfect matching, so it bailed to round-robin for
+    // >12-team leagues (e.g. a 16-team grade) — meaning big leagues NEVER got
+    // history-aware pairings and their sports were jammed onto fixed matchups.
+    //
+    // This uses a greedy max-weight matching that runs in O(n²) for any size. Each
+    // candidate PAIR is weighted by:
+    //   • opponent freshness  (-prior meetings) — keeps opponents rotating
+    //   • sport freshness     (can this pair BOTH get a sport neither has played
+    //                          today? 2 = both, 1 = one) — so a single scarce field
+    //                          serves two needy teams instead of one needy + a repeat
+    // The MODE only re-weights the two (per the camp's rule that BOTH rotations are
+    // kept, and the mode decides the tiebreak when they conflict):
+    //   • matchup_variety → opponents dominate (re-pair for sport only among
+    //                       equally-met options; never trade an opponent repeat)
+    //   • sport_variety   → sports dominate (will trade an opponent repeat to land a
+    //                       fresh sport); fewest meetings breaks ties.
+    // Always falls back to the round-robin matchups on any error. Kill switch:
+    // window.__leagueDailyOptimizer = false  → legacy behavior.
+    function chooseDailyMatchups(activeTeams, availablePool, leagueName, history, fallbackMatchups, dayId, mode) {
+        try {
+            if (typeof window !== 'undefined' && window.__leagueDailyOptimizer === false) {
+                return (mode === 'sport_variety')
+                    ? choosePairingsForSportVariety(activeTeams, availablePool, leagueName, history, fallbackMatchups, dayId)
+                    : fallbackMatchups;
+            }
+            if (!Array.isArray(activeTeams) || activeTeams.length < 2) return fallbackMatchups;
+            if (!Array.isArray(availablePool) || availablePool.length === 0) return fallbackMatchups;
+
+            const teams = activeTeams.slice();
+            const availSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
+            const played = {};
+            teams.forEach(function (t) { played[t] = new Set(getTeamSportHistoryByDate(leagueName, t, history, dayId)); });
+
+            function sportFresh(a, b) {   // 0,1,2 — best fresh-sport count for the pair today
+                let best = 0;
+                for (let k = 0; k < availSports.length; k++) {
+                    const s = availSports[k];
+                    const f = (played[a].has(s) ? 0 : 1) + (played[b].has(s) ? 0 : 1);
+                    if (f > best) { best = f; if (best === 2) break; }
+                }
+                return best;
+            }
+
+            const isMatchup = (mode === 'matchup_variety');
+            const W_OPP = isMatchup ? 1000 : 25;
+            const W_SPORT = isMatchup ? 8 : 300;
+
+            const pairs = [];
+            for (let i = 0; i < teams.length; i++) {
+                for (let j = i + 1; j < teams.length; j++) {
+                    const a = teams[i], b = teams[j];
+                    const met = getMatchupCount(leagueName, a, b, history);
+                    pairs.push({ a, b, met, w: (-met) * W_OPP + sportFresh(a, b) * W_SPORT });
+                }
+            }
+            // Greedy max-weight matching: best pair first, fewest meetings breaks ties.
+            pairs.sort(function (x, y) { return (y.w - x.w) || (x.met - y.met); });
+            const used = new Set(), matching = [];
+            for (let k = 0; k < pairs.length; k++) {
+                const p = pairs[k];
+                if (used.has(p.a) || used.has(p.b)) continue;
+                matching.push([p.a, p.b]); used.add(p.a); used.add(p.b);
+            }
+            if (!matching.length) return fallbackMatchups;   // (odd team left over = bye, handled by caller)
+
+            const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
+            if (_key(matching) !== _key(fallbackMatchups)) {
+                console.log('   ★ [DailyOptimizer/' + mode + '] pairings chosen from history: '
+                    + matching.map(function (p) { return p[0] + ' vs ' + p[1]; }).join(', '));
+            }
+            return matching;
+        } catch (e) {
+            console.warn('[RegularLeagues] daily matchup optimizer failed — using round-robin:', e);
             return fallbackMatchups;
         }
     }
@@ -2087,18 +2211,14 @@
                     const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     const _rrMatchups = fullSchedule[roundIndex] || [];
-                    // ★ FN-57: the two priorities differ in WHO plays WHOM.
-                    // matchup_variety: strict round-robin — every opponent
-                    // before any rematch. sport_variety: pairings chosen to
-                    // maximize teams getting a sport they haven't played
-                    // (ties prefer least-met opponents, so with plentiful
-                    // sports this matches round-robin behavior).
+                    // ★ DAILY PAIRING OPTIMIZER: choose today's matchups ANEW from history
+                    // (opponents met + sports played) rather than a predestined round-robin,
+                    // so big leagues (>12 teams) also get history-aware pairings that let a
+                    // scarce sport reach the teams that need it. BOTH rotations are kept; the
+                    // mode only decides the tiebreak when they conflict. Round-robin is the
+                    // safe fallback (and the kill switch). See chooseDailyMatchups.
                     const _prioMode = league.schedulingPriority || 'sport_variety';
-                    if (_prioMode === 'sport_variety') {
-                        matchups = choosePairingsForSportVariety(activeTeams, availablePool, league.name, history, _rrMatchups, dayId);
-                    } else {
-                        matchups = _rrMatchups;
-                    }
+                    matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);

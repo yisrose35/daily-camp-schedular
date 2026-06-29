@@ -5145,6 +5145,11 @@ async function runOptimizer() {
     _daOptimizerRunning = true;
     try {
 
+    // ★ Pull the authoritative LEAGUE HISTORY from the cloud right before generating,
+    //   so today's matchups + sports are chosen from the true cross-session record
+    //   (not a stale in-memory copy). Best-effort + time-boxed — never blocks the gen.
+    try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+
     // ★ FN-14 (final): snapshot the gen date NOW. The txn-wait + FN-17 guard above just
     //   confirmed the date transition has settled and picker === window.currentScheduleDate,
     //   so this is the AUTHORITATIVE date the user selected. runAutoScheduler (L873) reads
