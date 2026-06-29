@@ -7628,7 +7628,6 @@ function renderResourceOverridesUI() {
   const isRainy = isRainyDayActive();
   const rainyBanner = isRainy ? `
     <div class="da-rainy-banner">
-      <span>🌧️</span>
       <div>
         <strong>Rainy Day Mode Active</strong>
         <div style="font-size:12px;opacity:0.85;">Outdoor fields are automatically disabled</div>
@@ -7791,20 +7790,19 @@ function renderFacilityBunkAccess(containerEl, facilityName, rows) {
     const isEditing = _brEditKey === key;
 
     const rowEl = document.createElement('div');
-    rowEl.className = 'da-resource-item';
-    rowEl.style.cssText = 'flex-direction:column;align-items:stretch;gap:8px;';
+    rowEl.className = 'da-access-row' + (entry ? ' da-access-row-active' : '') + (isEditing ? ' da-access-row-editing' : '');
 
     // ── Summary line ──
     const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;';
+    head.className = 'da-access-head';
     const summary = entry
-      ? `<span style="color:#0A4A56;font-weight:600;">Only: ${_escHtml((entry.bunks || []).join(', '))}</span>`
-      : `<span style="color:#94a3b8;">All bunks</span>`;
+      ? `<span class="da-access-status da-access-status-set" title="${_escHtml((entry.bunks || []).join(', '))}">Bunks: ${_escHtml((entry.bunks || []).join(', '))}</span>`
+      : `<span class="da-access-status">All bunks</span>`;
     head.innerHTML = `
-      <span class="da-resource-name">${badge || ''}<strong>${_escHtml(label)}</strong></span>
-      <span style="display:flex;align-items:center;gap:8px;">${summary}
-        <button class="da-btn da-btn-sm br-edit">${isEditing ? 'Close' : (entry ? 'Edit' : 'Restrict…')}</button>
-        ${entry ? '<button class="da-btn da-btn-danger da-btn-sm br-clear">✕</button>' : ''}
+      <span class="da-access-label">${badge || ''}<strong>${_escHtml(label)}</strong></span>
+      <span class="da-access-controls">${summary}
+        <button class="da-btn da-btn-sm da-btn-outline br-edit">${isEditing ? 'Close' : (entry ? 'Edit' : 'Restrict')}</button>
+        ${entry ? '<button class="da-btn da-btn-sm da-btn-ghost-danger br-clear" title="Remove restriction">Clear</button>' : ''}
       </span>`;
     rowEl.appendChild(head);
 
@@ -7819,20 +7817,24 @@ function renderFacilityBunkAccess(containerEl, facilityName, rows) {
     if (isEditing) {
       const preselect = new Set(entry ? (entry.bunks || []).map(String) : []);
       const picker = document.createElement('div');
-      picker.style.cssText = 'border-top:1px dashed var(--da-border);padding-top:8px;';
+      picker.className = 'da-access-picker';
+      const hint = document.createElement('div');
+      hint.className = 'da-access-picker-hint';
+      hint.textContent = 'Select the bunk(s) allowed here today:';
+      picker.appendChild(hint);
       const chipsWrap = document.createElement('div');
       if (availableDivisions.length === 0) {
-        chipsWrap.innerHTML = '<span style="color:#94a3b8;font-size:12px;">No divisions found.</span>';
+        chipsWrap.innerHTML = '<span class="da-access-empty">No divisions found.</span>';
       } else {
         availableDivisions.forEach(divName => {
           const color = divisions[divName]?.color || '#64748b';
           const bunks = divisions[divName]?.bunks || [];
           if (!bunks.length) return;
           const grp = document.createElement('div');
-          grp.style.cssText = 'margin-bottom:8px;';
-          grp.innerHTML = `<div style="font-size:11px;font-weight:600;color:${color};margin-bottom:4px;">${_escHtml(divName)}</div>`;
+          grp.className = 'da-access-grp';
+          grp.innerHTML = `<div class="da-access-grp-label" style="color:${color};">${_escHtml(divName)}</div>`;
           const chipRow = document.createElement('div');
-          chipRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
+          chipRow.className = 'da-access-chiprow';
           bunks.forEach(b => {
             const chip = createChip(b, color);
             if (preselect.has(String(b))) {
@@ -7849,10 +7851,10 @@ function renderFacilityBunkAccess(containerEl, facilityName, rows) {
       picker.appendChild(chipsWrap);
 
       const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;gap:8px;margin-top:6px;';
+      actions.className = 'da-access-actions';
       actions.innerHTML = `
         <button class="da-btn da-btn-primary da-btn-sm br-save">Save</button>
-        <button class="da-btn da-btn-sm br-cancel">Cancel</button>`;
+        <button class="da-btn da-btn-sm da-btn-outline br-cancel">Cancel</button>`;
       picker.appendChild(actions);
       rowEl.appendChild(picker);
 
@@ -7875,10 +7877,10 @@ function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = f
   if (isRainyDisabled) el.style.opacity = '0.6';
   
   let badges = '';
-  if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>';
-  else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">🏠 Indoor</span>';
-  if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">🌧️ Rainy</span>';
-  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">⏰ Time Rules</span>';
+  if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">Outdoor</span>';
+  else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">Indoor</span>';
+  if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">Rainy</span>';
+  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">Time Rules</span>';
   
   el.innerHTML = `
     <span class="da-resource-name">${_escHtml(name)}${badges}</span>
@@ -7942,48 +7944,50 @@ function renderOverrideDetailPane() {
     const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        ${_escHtml(name)}
-        ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
-        ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
-          ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
-          : ''}
-      </h4>
-      
+      <div class="da-detail-head">
+        <h4 class="da-detail-title">${_escHtml(name)}</h4>
+        <div class="da-detail-badges">
+          ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">Indoor</span>' : '<span class="da-badge da-badge-outdoor">Outdoor</span>') : ''}
+          ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
+            ? facility.usedFor.map(u => `<span class="da-badge da-badge-use">${_escHtml(u)}</span>`).join('')
+            : ''}
+        </div>
+      </div>
+
       <div class="da-detail-section">
-        <h5>📋 Global Rules (from Setup)</h5>
+        <div class="da-detail-eyebrow">Global Rules <span class="da-detail-eyebrow-note">from Setup</span></div>
         <div id="da-global-rules-list"></div>
       </div>
-      
+
       <div class="da-detail-section">
-        <h5>📅 Today's Time Rules</h5>
-        <p class="da-section-desc">Add custom availability windows for today only. These override global rules.</p>
+        <div class="da-detail-eyebrow">Today's Time Rules</div>
+        <p class="da-section-desc">Add custom availability windows for today only. These override the global rules.</p>
         <div id="da-daily-rules-list"></div>
-        
+
         <div class="da-time-rule-form">
           <select id="da-rule-type" class="da-select da-select-sm">
-            <option value="Available">✅ Available</option>
-            <option value="Unavailable">❌ Unavailable</option>
+            <option value="Available">Available</option>
+            <option value="Unavailable">Unavailable</option>
           </select>
-          <span style="color:#64748b;">from</span>
-          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:80px;">
-          <span style="color:#64748b;">to</span>
-          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:80px;">
+          <span class="da-form-sep">from</span>
+          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:84px;">
+          <span class="da-form-sep">to</span>
+          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:84px;">
           <button id="da-add-rule-btn" class="da-btn da-btn-primary da-btn-sm">Add</button>
         </div>
       </div>
-      
+
       ${isFieldLike ? `
       <div class="da-detail-section">
-        <h5>🏃 Sports Availability</h5>
+        <div class="da-detail-eyebrow">Sports Availability</div>
         <p class="da-section-desc">Disable specific sports on this field for today.</p>
         <div id="da-sports-checkboxes"></div>
       </div>
       ` : ''}
 
-      <div class="da-detail-section">
-        <h5>🔒 Bunk-Only Access</h5>
-        <p class="da-section-desc">Reserve this facility (or one of its activities) for specific bunk(s) today — every other bunk is blocked from it here. Leave as "All bunks" for no restriction.</p>
+      <div class="da-detail-section da-detail-section-last">
+        <div class="da-detail-eyebrow">Bunk-Only Access</div>
+        <p class="da-section-desc">Reserve this facility — or one of its activities — for specific bunk(s) today. Every other bunk is blocked from it here. Leave as "All bunks" for no restriction.</p>
         <div id="da-bunk-access-list"></div>
       </div>
     `;
@@ -8000,8 +8004,8 @@ function renderOverrideDetailPane() {
           : ' <span style="font-size:11px;color:#94a3b8;margin-left:6px;">(all grades)</span>';
         return `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()}">
-          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>${tag}
+          <span class="da-rule-type"><span class="da-rule-dot"></span>${rule.type}</span>
+          <span class="da-rule-time">${rule.start} – ${rule.end}</span>${tag}
         </div>`;
       }).join('');
     }
@@ -8013,9 +8017,9 @@ function renderOverrideDetailPane() {
     } else {
       dailyRulesEl.innerHTML = dailyRules.map((rule, idx) => `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()} da-rule-daily">
-          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
-          <button class="da-rule-remove" data-idx="${idx}">✕</button>
+          <span class="da-rule-type"><span class="da-rule-dot"></span>${rule.type}</span>
+          <span class="da-rule-time">${rule.start} – ${rule.end}</span>
+          <button class="da-rule-remove" data-idx="${idx}" title="Remove">✕</button>
         </div>
       `).join('');
       
@@ -8089,9 +8093,9 @@ function renderOverrideDetailPane() {
     {
       const accessEl = document.getElementById('da-bunk-access-list');
       if (accessEl) {
-        const sportBadge = '<span class="da-badge" style="background:#ecfdf5;color:#065f46;">Sport</span>';
-        const specialBadge = '<span class="da-badge" style="background:#eef2ff;color:#3730a3;">Special</span>';
-        const rows = [{ activity: '*', label: 'Entire facility', badge: '<span class="da-badge" style="background:#f1f5f9;color:#334155;">Facility</span>' }];
+        const sportBadge = '<span class="da-badge da-badge-sport">Sport</span>';
+        const specialBadge = '<span class="da-badge da-badge-special">Special</span>';
+        const rows = [{ activity: '*', label: 'Entire facility', badge: '<span class="da-badge da-badge-facility">Facility</span>' }];
         // Sports hosted here (field-like facilities expose them as item.activities)
         (isFieldLike ? (item.activities || []) : []).forEach(sp => {
           rows.push({ activity: sp, label: sp, badge: sportBadge });
@@ -8450,6 +8454,63 @@ function getStyles() {
     
     /* Badge for time rules */
     .da-badge-time { background:#dbeafe; color:#1d4ed8; }
+
+    /* ============================================ */
+    /* RESOURCE DETAIL PANE — REFINED               */
+    /* ============================================ */
+    .da-resource-list h4 { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--da-text3); margin:0 0 8px; }
+    .da-resource-detail { padding:20px 22px; background:var(--da-bg); }
+
+    /* Header band */
+    .da-detail-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding-bottom:14px; margin-bottom:16px; border-bottom:1px solid var(--da-border); }
+    .da-detail-title { margin:0; font-size:17px; font-weight:700; color:var(--da-text); letter-spacing:-0.01em; }
+    .da-detail-badges { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+
+    /* Section eyebrow headers */
+    .da-detail-section { margin:0 0 18px; padding-bottom:18px; border-bottom:1px solid var(--da-border); }
+    .da-detail-section-last { border-bottom:none; padding-bottom:0; margin-bottom:0; }
+    .da-detail-eyebrow { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--da-text2); margin:0 0 8px; }
+    .da-detail-eyebrow-note { font-weight:500; text-transform:none; letter-spacing:0; color:var(--da-text3); }
+
+    /* Refined badges */
+    .da-badge { font-size:10px; line-height:1; padding:3px 8px; border-radius:999px; font-weight:600; letter-spacing:0.02em; }
+    .da-badge-use { background:#eef2ff; color:#3730a3; text-transform:capitalize; }
+    .da-badge-sport { background:#ecfdf5; color:#047857; }
+    .da-badge-special { background:#eef2ff; color:#4338ca; }
+    .da-badge-facility { background:#f1f5f9; color:#334155; }
+
+    /* Time-rule status dot (replaces emoji) */
+    .da-rule-type { display:flex; align-items:center; gap:7px; font-weight:600; min-width:96px; }
+    .da-rule-dot { width:7px; height:7px; border-radius:50%; background:var(--da-text3); flex:none; }
+    .da-rule-available .da-rule-dot { background:var(--da-success); }
+    .da-rule-unavailable .da-rule-dot { background:var(--da-danger); }
+    .da-rule-available .da-rule-type { color:#047857; }
+    .da-rule-unavailable .da-rule-type { color:#b91c1c; }
+    .da-form-sep { color:var(--da-text3); font-size:12px; }
+
+    /* Button variants */
+    .da-btn-outline { background:#fff; color:var(--da-text2); border:1px solid var(--da-border); }
+    .da-btn-outline:hover { border-color:var(--da-accent); color:var(--da-accent); background:#f8fbff; }
+    .da-btn-ghost-danger { background:transparent; color:var(--da-danger); border:1px solid transparent; }
+    .da-btn-ghost-danger:hover { background:rgba(239,68,68,0.08); }
+
+    /* Bunk-Only Access rows */
+    .da-access-row { border:1px solid var(--da-border); border-radius:8px; background:var(--da-bg); margin-bottom:8px; overflow:hidden; transition:border-color 0.15s, box-shadow 0.15s; }
+    .da-access-row-active { border-color:#bfdbfe; }
+    .da-access-row-editing { border-color:var(--da-accent); box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+    .da-access-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 12px; }
+    .da-access-label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--da-text); }
+    .da-access-label strong { font-weight:600; }
+    .da-access-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .da-access-status { font-size:12px; color:var(--da-text3); }
+    .da-access-status-set { color:#0A4A56; font-weight:600; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .da-access-picker { border-top:1px solid var(--da-border); background:var(--da-surface); padding:12px; }
+    .da-access-picker-hint { font-size:11px; font-weight:600; color:var(--da-text2); margin-bottom:8px; }
+    .da-access-grp { margin-bottom:10px; }
+    .da-access-grp-label { font-size:11px; font-weight:700; letter-spacing:0.02em; margin-bottom:5px; }
+    .da-access-chiprow { display:flex; gap:6px; flex-wrap:wrap; }
+    .da-access-actions { display:flex; gap:8px; margin-top:4px; }
+    .da-access-empty { color:var(--da-text3); font-size:12px; }
 
     /* ============================================ */
     /* IN-APP MODAL STYLES (v5.2)                  */
