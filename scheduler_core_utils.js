@@ -28,6 +28,29 @@
     const Utils = {};
 
     // =================================================================
+    // 0. "EVERY PERIOD" SPECIALS
+    // =================================================================
+    // An "every period" special is an activity the camp must run in EVERY
+    // period for eligible bunks (e.g. a dedicated learning/davening block, or
+    // a special-needs group's fixed activity). It is modeled as the strongest
+    // possible rotation floor: exempt from ceilings (maxUsage / exactFrequency
+    // / frequencyDays cooldown) so it may repeat in consecutive periods, and
+    // given a maximal escalation bonus so the solver picks it first in every
+    // period. Honored by both the auto engine (scheduler_core_auto.js) and the
+    // manual engine (smart_logic_adapter.js). Access restrictions, availableDays
+    // and field capacity still apply — "every period" only overrides the
+    // frequency caps that would otherwise stop it repeating.
+    Utils.isEveryPeriodSpecial = function (props) {
+        if (!props) return false;
+        var v = props.everyPeriod;
+        return v === true || v === 1 || v === 'true';
+    };
+    // Escalation magnitude for an unmet "every period" floor — far above any
+    // normal min/exact-frequency bonus so an every-period special always sorts
+    // ahead of ordinary rotation candidates in the per-period slot race.
+    Utils.EVERY_PERIOD_BONUS = 1000000;
+
+    // =================================================================
     // 1. BASIC HELPERS
     // =================================================================
 

@@ -5588,6 +5588,16 @@
                 //   are near-mandatory rather than a soft nudge that loses the slot race.
                 let _belowFloor = false;
 
+                // ★ "Every period": the strongest floor. This special must run
+                //   in every period for eligible bunks, so it always sits in the
+                //   urgent tier with a maximal escalation pull — far above any
+                //   normal min/exact bonus — and never gets skipped on a count.
+                if (window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(props) ||
+                    window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(cfg)) {
+                    score -= (window.SchedulerCoreUtils?.EVERY_PERIOD_BONUS || 1000000);
+                    _belowFloor = true;
+                }
+
                 // Exact frequency: acts as both ceiling and floor.
                 // Per-grade override takes precedence over the global value.
                 // Bonus escalates based on effective remaining camp days,
@@ -24074,7 +24084,10 @@
             // Out of scope here: rotationCohort (needs lifetime counts),
             // availableDays (caller already filters), same-day duplicate
             // protection (different bug class).
-            if (spByName && activityName && bunk != null) {
+            // ★ "Every period" specials are exempt from all frequency caps —
+            //   they must be allowed to repeat in consecutive periods/days.
+            const _isEveryPeriod = window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(spByName);
+            if (spByName && activityName && bunk != null && !_isEveryPeriod) {
                 try {
                     const _ru = window.SchedulerCoreUtils;
                     const _today = (typeof currentDate !== 'undefined' && currentDate)

@@ -555,6 +555,13 @@
         
        // ★ Per-grade cap: grade-specific override takes precedence over global
         const props2 = activityProps?.[special.name] || special.props || special;
+
+        // ★ "Every period" specials skip all frequency ceilings (maxUsage /
+        //   exactFrequency) so they can repeat in every period. Access (above)
+        //   and Part-1 eligibility (below) still apply.
+        const _isEveryPeriod = window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(props2)
+            || window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(special);
+
         let maxUsage = special.maxUsage || 0;
         if (divisionName && props2.maxUsagePerGrade && props2.maxUsagePerGrade[divisionName] > 0) {
             maxUsage = props2.maxUsagePerGrade[divisionName];
@@ -564,7 +571,7 @@
         const maxPeriod = props2.maxUsagePeriod || 'half';
         const usedCount = (_gpc && maxUsage > 0) ? _gpc(bunk, special.name, maxPeriod) : ((historicalCounts[bunk] || {})[special.name] || 0);
 
-        if (maxUsage > 0 && usedCount >= maxUsage) {
+        if (!_isEveryPeriod && maxUsage > 0 && usedCount >= maxUsage) {
             log(`      ${bunk}: maxed out ${special.name} (${usedCount}/${maxUsage}${divisionName ? ' for ' + divisionName : ''})`);
             return false;
         }
@@ -574,7 +581,7 @@
         if (divisionName && props2.exactFrequencyPerGrade && props2.exactFrequencyPerGrade[divisionName] > 0) {
             exactFreq = props2.exactFrequencyPerGrade[divisionName];
         }
-        if (exactFreq > 0) {
+        if (!_isEveryPeriod && exactFreq > 0) {
             const exactPeriod = props2.exactFrequencyPeriod || '1week';
             const exactCount = _gpc ? _gpc(bunk, special.name, exactPeriod) : usedCount;
             if (exactCount >= exactFreq) {
@@ -622,6 +629,13 @@
         const _floorEsc = {}; // special name -> escalation bonus from period-scoped floor deficit
         usableSpecials.forEach(sp => {
             const props = activityProps?.[sp.name] || sp;
+            // ★ "Every period": maximal floor pull so it sorts ahead of every
+            //   ordinary candidate and gets picked in each period.
+            if (window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(props)
+                || window.SchedulerCoreUtils?.isEveryPeriodSpecial?.(sp)) {
+                _floorEsc[sp.name] = window.SchedulerCoreUtils?.EVERY_PERIOD_BONUS || 1000000;
+                return;
+            }
             const minF = parseInt(props.minFrequency) || 0;
             const exactF = parseInt(props.exactFrequency) || 0;
             if (minF <= 0 && exactF <= 0) { _floorEsc[sp.name] = 0; return; }

@@ -442,7 +442,8 @@ function createDefaultSpecialActivity(name) {
         location: '',
         exactFrequency: null,
         exactFrequencyPeriod: '1week',
-        exactFrequencyPerGrade: {}
+        exactFrequencyPerGrade: {},
+        everyPeriod: false
     };
 }
 
@@ -2738,6 +2739,9 @@ function summarySpecialSchedulingMode(s) {
 }
 function summarySpecialUsage(s) {
     var parts = [];
+    if (s.everyPeriod === true || s.everyPeriod === 1 || s.everyPeriod === 'true') {
+        return 'Every period (no caps)';
+    }
     var m = parseInt(s.maxUsage) || 0;
     if (m > 0) {
         var period = s.maxUsagePeriod || 'half';
@@ -3656,6 +3660,40 @@ function renderSpecialUsage(saData) {
 
     var renderContent = function() {
         container.innerHTML = '';
+
+        // ── EVERY PERIOD ──────────────────────────────────────────────────
+        // When on, this activity runs in EVERY period for eligible bunks. It
+        // overrides all the frequency caps below (ceiling / exact / min /
+        // cooldown), so we render only this toggle while it's enabled.
+        var epEnabled = (saData.everyPeriod === true || saData.everyPeriod === 1 || saData.everyPeriod === 'true');
+
+        var epLabel = document.createElement('div');
+        epLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        epLabel.textContent = 'Every period';
+        container.appendChild(epLabel);
+
+        var epTogRow = document.createElement('div');
+        epTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (epEnabled ? '12px' : '4px') + ';';
+        var epTog = document.createElement('label'); epTog.className = 'switch';
+        var epCb = document.createElement('input'); epCb.type = 'checkbox'; epCb.checked = epEnabled;
+        var epSl = document.createElement('span'); epSl.className = 'slider';
+        epTog.appendChild(epCb); epTog.appendChild(epSl);
+        var epLbl = document.createElement('span');
+        epLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        epLbl.textContent = 'Schedule this in every single period';
+        epTogRow.appendChild(epTog); epTogRow.appendChild(epLbl);
+        container.appendChild(epTogRow);
+        epCb.onchange = function() { saData.everyPeriod = epCb.checked; saveSpecialData(saData); renderContent(); updateSummary(); };
+
+        if (epEnabled) {
+            var epNote = document.createElement('div');
+            epNote.style.cssText = 'font-size:0.78rem; color:#92400e; background:#fef3c7; padding:8px 10px; border-radius:6px; line-height:1.5; border:1px solid #fcd34d;';
+            epNote.innerHTML = 'Eligible bunks will get this activity in <strong>every period</strong>. ' +
+                'Access restrictions and available-days still apply, but frequency caps ' +
+                '(ceiling, exact, minimum, cooldown) are ignored while this is on.';
+            container.appendChild(epNote);
+            return; // caps below don't apply
+        }
 
         // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
         var ceilLabel = document.createElement('div');
