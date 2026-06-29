@@ -43,6 +43,9 @@ let displacedTiles = [];
 let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
+// ★ Partial-regen: main-grid period tiles double-clicked for regeneration.
+//   tileId -> { division, startMin, endMin }
+let _daRegenTiles = new Map();
 
 // ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
 let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
@@ -2337,6 +2340,10 @@ function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
 
+  // ★ Partial-regen: drop any stale period selection + its bar on a full re-render.
+  if (_daRegenTiles && _daRegenTiles.size) _daRegenTiles.clear();
+  { const _rb = document.getElementById('da-regen-bar'); if (_rb) _rb.remove(); }
+
   // Drop stale Change tiles before painting
   daCleanupOrphanChangeTiles();
   // ★ Day 27: drop tiles whose division no longer exists in the camp structure
@@ -3875,15 +3882,22 @@ function addRemoveListeners(gridEl) {
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
-      clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => { _showTileActionBar(tile); }, 280);
+      // A double-click is unfolding — let ondblclick handle it (don't pop Edit/Delete).
+      if (_clickTimer) return;
+      // Longer pause so the 2nd click of a double-click lands before Edit/Delete shows.
+      _clickTimer = setTimeout(() => { _clickTimer = null; _showTileActionBar(tile); }, 350);
     };
 
     tile.ondblclick = (e) => {
       e.stopPropagation();
-      clearTimeout(_clickTimer);
+      if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
       if (e.target.classList.contains('da-resize-handle')) return;
-      _showTileActionBar(tile);
+      e.preventDefault();
+      // Auto mode keeps the old behavior (Edit/Delete). Manual mode: double-click
+      // SELECTS this whole period for partial regeneration.
+      if (window._daBuilderMode === 'auto') { _showTileActionBar(tile); return; }
+      deselectAllTiles(); // clear any Edit/Delete bar the single-click timer may have popped
+      _daToggleTileRegenSelect(tile);
     };
   });
 }
@@ -7257,7 +7271,7 @@ function _boRenderBunkGrid(wrap, divName) {
         const startMin = parseInt(block.dataset.start);
         const endMin = parseInt(block.dataset.end);
         _boShowPicker(block, bunk, startMin, endMin);
-      }, 220);
+      }, 350);
     };
     block.ondblclick = (e) => {
       if (e.target.classList.contains('bo-revert-btn')) return;
@@ -7338,17 +7352,40 @@ function _boUpdateSelBar() {
 // sibling bunks (no selected tiles → empty `regen`) are fully preserved, immune to
 // STEP 0's division-level wipe.
 async function _boRegenerateSelectedCells() {
-  if (window._daBuilderMode === 'auto') {
-    await daShowAlert('Partial tile regeneration is available in Manual builder mode only.');
-    return;
-  }
   if (!_boSelectedCells || _boSelectedCells.size === 0) {
     await daShowAlert('Double-click one or more tiles to select them, then click Regenerate.');
     return;
   }
+  const selections = Array.from(_boSelectedCells.values()).map(s => ({
+    bunk: String(s.bunk), startMin: s.startMin, endMin: s.endMin
+  }));
+  const ran = await _daPartialRegenerate(selections);
+  if (ran) _boSelectedCells.clear();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shared partial-regen CORE — used by BOTH surfaces:
+//   • Bunk-Level Overrides grid (per-bunk cells)   → _boRegenerateSelectedCells
+//   • Main schedule grid (whole division period)   → _daRegenerateSelectedTiles
+// `selections` = [{ bunk, startMin, endMin }]. Returns true if a regen actually ran.
+//
+// Re-rolls ONLY the selected (bunk, slot) tiles, preserving every other already-
+// generated cell. Builds window.__regenSlotScope (consumed by scheduler_core_main
+// STEP 1) covering EVERY bunk of the affected divisions, so sibling bunks (no
+// selected tiles) are fully preserved and pinned — immune to STEP 0's wipe.
+// ─────────────────────────────────────────────────────────────────────────
+async function _daPartialRegenerate(selections) {
+  if (window._daBuilderMode === 'auto') {
+    await daShowAlert('Partial tile regeneration is available in Manual builder mode only.');
+    return false;
+  }
+  if (!Array.isArray(selections) || selections.length === 0) {
+    await daShowAlert('Select one or more tiles first.');
+    return false;
+  }
   if (typeof runOptimizer !== 'function') {
     await daShowAlert('Error: the generator is not available.');
-    return;
+    return false;
   }
 
   const divisions = window.divisions || masterSettings.app1?.divisions || {};
@@ -7356,7 +7393,7 @@ async function _boRegenerateSelectedCells() {
   Object.entries(divisions).forEach(([dn, di]) =>
     ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
 
-  // Map each selected tile to its division slot index (small time-window tolerance).
+  // Map a tile's time window to its division slot index (small tolerance).
   function _mapTileToSlot(divName, startMin, endMin) {
     const slots = window.divisionTimes?.[divName] || [];
     for (let i = 0; i < slots.length; i++) {
@@ -7366,7 +7403,6 @@ async function _boRegenerateSelectedCells() {
       if (ss != null && Math.abs(ss - startMin) <= 2 &&
           (se == null || endMin == null || Math.abs(se - endMin) <= 2)) return i;
     }
-    // Fallback: nearest slot by start time, within 30 min.
     let best = Infinity, bestIdx = -1;
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i] || {};
@@ -7378,11 +7414,11 @@ async function _boRegenerateSelectedCells() {
     return best <= 30 ? bestIdx : -1;
   }
 
-  // 1. Resolve selected tiles → per-bunk regen index sets.
-  const regenByBunk = {};          // { bunk: Set<slotIdx> }
+  // 1. Resolve selections → per-bunk regen index sets.
+  const regenByBunk = {};
   const affectedDivs = new Set();
   let unmapped = 0;
-  Array.from(_boSelectedCells.values()).forEach(sel => {
+  selections.forEach(sel => {
     const bunk = String(sel.bunk);
     const divName = bunkToDiv[bunk];
     if (!divName) { unmapped++; return; }
@@ -7392,8 +7428,7 @@ async function _boRegenerateSelectedCells() {
     regenByBunk[bunk].add(idx);
     affectedDivs.add(divName);
 
-    // Multi-period guard: if the slot belongs to a spanned activity, regenerate the
-    // whole block (never null one half of it).
+    // Multi-period guard: spanned activity → regenerate the whole block.
     const arr = window.scheduleAssignments?.[bunk] || [];
     const entry = arr[idx];
     const bs = entry && (entry._blockStart != null ? entry._blockStart
@@ -7409,15 +7444,13 @@ async function _boRegenerateSelectedCells() {
     }
   });
 
-  const selectedTileCount = Object.values(regenByBunk).reduce((n, s) => n + s.size, 0);
-  if (affectedDivs.size === 0 || selectedTileCount === 0) {
+  const selectedSlotCount = Object.values(regenByBunk).reduce((n, s) => n + s.size, 0);
+  if (affectedDivs.size === 0 || selectedSlotCount === 0) {
     await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
-    return;
+    return false;
   }
 
-  // 2. Build the per-slot scope snapshot covering EVERY bunk of the affected divisions.
-  //    Affected bunks: regen = selected slots, keep = all other slots.
-  //    Sibling bunks: regen = empty, keep = all slots (fully preserved + pinned).
+  // 2. Snapshot covering EVERY bunk of the affected divisions.
   const regenScope = {};
   const scopeBunks = new Set();
   affectedDivs.forEach(dn => {
@@ -7428,7 +7461,7 @@ async function _boRegenerateSelectedCells() {
       const arr = window.scheduleAssignments?.[bunk] || [];
       const keep = {};
       for (let i = 0; i < arr.length; i++) {
-        if (regen.has(i)) continue;       // re-roll this slot
+        if (regen.has(i)) continue;
         if (arr[i]) keep[i] = JSON.parse(JSON.stringify(arr[i]));
       }
       regenScope[bunk] = { regen, keep };
@@ -7437,28 +7470,98 @@ async function _boRegenerateSelectedCells() {
 
   // 3. Confirm.
   const affectedBunkCount = Object.values(regenByBunk).filter(s => s.size > 0).length;
-  let msg = 'Regenerate ' + selectedTileCount + (selectedTileCount === 1 ? ' tile' : ' tiles') +
+  let msg = 'Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
             ' across ' + affectedBunkCount + (affectedBunkCount === 1 ? ' bunk' : ' bunks') +
             '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.';
   if (unmapped > 0) msg += '<br><br><span style="color:#b45309;">(' + unmapped + ' selected tile(s) could not be mapped and will be skipped.)</span>';
   const ok = await daShowConfirm(msg, { confirmText: 'Regenerate', cancelText: 'Cancel' });
-  if (!ok) return;
+  if (!ok) return false;
 
-  // 4. Drive generation through the existing scope plumbing, then always restore the
-  //    user's prior generation scope (a regen click must not change their next full gen).
+  // 4. Drive generation through the existing scope plumbing; always restore the
+  //    user's prior generation scope afterward.
   const _savedScope = _generationScope;
   const _savedBunkScope = _generationBunkScope;
   try {
     _generationScope = new Set(affectedDivs);
     _generationBunkScope = scopeBunks;
     window.__regenSlotScope = regenScope;   // consumed by scheduler_core_main STEP 1
-    _boSelectedCells.clear();
     await runOptimizer();                    // reuses date guards, save, and grid re-render
   } finally {
     delete window.__regenSlotScope;
     _generationScope = _savedScope;
     _generationBunkScope = _savedBunkScope;
   }
+  return true;
+}
+
+// ── Main schedule grid: double-click to (de)select a whole division-period ──
+function _daToggleTileRegenSelect(tile) {
+  if (window._daBuilderMode === 'auto') return;
+  const id = tile && tile.dataset && tile.dataset.id;
+  if (!id) return;
+  const ev = (dailyOverrideSkeleton || []).find(x => x.id === id);
+  if (!ev) return;
+  const startMin = parseTimeToMinutes(ev.startTime);
+  const endMin = parseTimeToMinutes(ev.endTime);
+  if (startMin == null) return;
+  if (_daRegenTiles.has(id)) {
+    _daRegenTiles.delete(id);
+    tile.style.outline = ''; tile.style.outlineOffset = '';
+    tile.classList.remove('da-regen-selected');
+  } else {
+    _daRegenTiles.set(id, { division: ev.division, startMin, endMin });
+    tile.style.outline = '3px solid #16a34a'; tile.style.outlineOffset = '-2px';
+    tile.classList.add('da-regen-selected');
+  }
+  _daUpdateRegenBar();
+}
+
+function _daClearRegenTiles() {
+  _daRegenTiles.clear();
+  document.querySelectorAll('.da-event.da-regen-selected').forEach(el => {
+    el.style.outline = ''; el.style.outlineOffset = ''; el.classList.remove('da-regen-selected');
+  });
+  _daUpdateRegenBar();
+}
+
+function _daUpdateRegenBar() {
+  let bar = document.getElementById('da-regen-bar');
+  const n = _daRegenTiles.size;
+  if (n === 0) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'da-regen-bar';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:10001;display:flex;align-items:center;gap:10px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.18);padding:9px 14px;font-family:inherit;';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = '';
+  const label = document.createElement('strong');
+  label.style.cssText = 'font-size:13px;color:#065f46;';
+  label.textContent = '🔄 ' + n + (n === 1 ? ' period selected' : ' periods selected');
+  const regenBtn = document.createElement('button');
+  regenBtn.type = 'button';
+  regenBtn.textContent = 'Regenerate selected';
+  regenBtn.style.cssText = 'padding:6px 14px;font-size:12px;font-weight:700;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;';
+  regenBtn.onclick = () => { _daRegenerateSelectedTiles(); };
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.textContent = 'Clear';
+  clearBtn.style.cssText = 'padding:6px 10px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;';
+  clearBtn.onclick = () => { _daClearRegenTiles(); };
+  bar.appendChild(label); bar.appendChild(regenBtn); bar.appendChild(clearBtn);
+}
+
+async function _daRegenerateSelectedTiles() {
+  if (_daRegenTiles.size === 0) return;
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const selections = [];
+  _daRegenTiles.forEach(t => {
+    (divisions[t.division]?.bunks || []).forEach(b => {
+      selections.push({ bunk: String(b), startMin: t.startMin, endMin: t.endMin });
+    });
+  });
+  const ran = await _daPartialRegenerate(selections);
+  if (ran) _daClearRegenTiles();
 }
 
 // Searchable, multi-select activity picker. Pick ONE = a concrete override; pick
