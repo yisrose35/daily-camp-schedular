@@ -1941,6 +1941,30 @@
 
         const allGrades = Object.keys(divisions).filter(g => !allowedSet || allowedSet.has(String(g)));
 
+        // ★ SENIORITY-FIRST BASE ORDER (oldest → youngest).
+        //   Every downstream special-allocation pass iterates allGrades IN ORDER
+        //   and claims scarce specials greedily, so the grade processed LAST only
+        //   gets leftovers. The default Object.keys(divisions) insertion order left
+        //   the oldest grades (8th/9th) processed last → 9th grade was starved of
+        //   specials. This brings the auto solver in line with the manual builder's
+        //   documented seniority-first fix (scheduler_core_main.js) and with the
+        //   other auto-solver passes that already sort oldest-first via the SAME
+        //   single source of truth: window.getDivisionAgeOrder (index 0 = most
+        //   senior = oldest). The priority-list sort below still refines this and
+        //   wins when a special/field configures usePriority; its comparator returns
+        //   0 for grades with no priority votes, and Array.sort is stable, so the
+        //   seniority order is preserved for everyone the priority list doesn't rank.
+        try {
+            if (typeof window !== 'undefined' && typeof window.getDivisionAgeOrder === 'function') {
+                const _ageOrder = window.getDivisionAgeOrder(allGrades.slice());
+                const _senRank = {};
+                _ageOrder.forEach((g, i) => { _senRank[String(g)] = i; });
+                const _senOf = g => { const r = _senRank[String(g)]; return (r === undefined) ? 1e9 : r; };
+                allGrades.sort((a, b) => _senOf(a) - _senOf(b));
+                log('[STEP 1] Grade base order (seniority oldest→youngest): ' + allGrades.join(', '));
+            }
+        } catch (_eSen) {}
+
         // ════════════════════════════════════════════════════════════════════
         // ★ Shared-room custom staggered-slot computation (factored helper)
         //   A custom layer hosted in a SHARABLE room that does NOT permit
