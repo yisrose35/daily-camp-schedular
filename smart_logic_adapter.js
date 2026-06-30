@@ -1146,7 +1146,13 @@
                 //   then by cumulative special usage ascending — so the SAME bunks don't grab
                 //   the scarce special day after day. (sortedEligible already carries this order;
                 //   re-sorting here makes it explicit and robust to upstream changes.)
-                [...sortedEligible]
+                // ★ Include INELIGIBLE bunks too: STEP 3 screens eligibility against the
+                //   COMBINED block A+B slots, so a bunk whose only open special is locked in
+                //   its OTHER block (e.g. block B overlaps a senior division's special window)
+                //   is dropped from sortedEligible — even though that special is FREE in THIS
+                //   block. getUsableSpecialsForBunk re-validates against slotsA (block A only),
+                //   so a genuinely-unusable bunk is still skipped; one free here is upgraded.
+                [...sortedEligible, ...ineligibleBunks]
                     .filter(b => !specialWinnersA.has(b) && isSame(block1[b], effectiveA.open))
                     .sort((a, b) => {
                         const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
@@ -1261,7 +1267,10 @@
                     });
                     // ★ LEAST-SERVED-FIRST (same as Block A): free Block-B rooms go to the
                     //   fewest-served fallback bunks so the scarce special rotates across days.
-                    [...sortedEligible]
+                    // ★ Include INELIGIBLE bunks (see Block A note): screened against the
+                    //   combined A+B window, they may still take a special FREE in block B.
+                    //   getUsableSpecialsForBunk re-validates against slotsB (block B only).
+                    [...sortedEligible, ...ineligibleBunks]
                         .filter(b => !specialWinnersA.has(b) && isSame(block2[b], fbAct))
                         .sort((a, b) => {
                             const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
