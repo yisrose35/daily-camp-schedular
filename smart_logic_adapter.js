@@ -91,7 +91,10 @@
     const DEBUG_SMART_TILE = window.DEBUG_SMART_TILE || false;
 
     function log(...args) {
-        if (DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
+        // Read window.DEBUG_SMART_TILE LIVE so the trace can be toggled at runtime
+        // (set window.DEBUG_SMART_TILE = true, then regenerate) — it was previously
+        // captured once at load, so the flag could only be set before page load.
+        if (window.DEBUG_SMART_TILE || DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
     }
 
     // =========================================================================
@@ -1397,5 +1400,5 @@
         return available;
     };
 
-    console.log("[SmartTile] V44.3 loaded (cross-division capacity tracking)");
+    console.log("[SmartTile] V44.4 loaded (cross-division capacity tracking; ineligible-bunk leftover-fill; live DEBUG_SMART_TILE)");
 })();
