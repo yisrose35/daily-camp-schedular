@@ -2464,6 +2464,13 @@ function populateSidebar() {
     } else if (_activeView === 'location') {
         if (titleEl) titleEl.textContent = _specialtiesOnly ? 'Specialties' : 'Facilities';
         if (searchEl) searchEl.placeholder = _specialtiesOnly ? 'Search specialties…' : 'Search facilities…';
+        // allLocs: lowercased canonical key -> canonical display label, so a
+        // facility never appears two or three times because the schedule stored
+        // it under different casings or as a name-only special. Mirrors the
+        // Facilities-report folding (matchesLocation): resolve a name-only
+        // special to its configured room, then canonicalize casing (the
+        // lowercase-dup "arts & crafts" + "Arts & Crafts" + its room collapse to
+        // one). A complete no-op for facilities already stored canonically.
         var allLocs = {};
         var nameSet = _specialtiesOnly ? pcSpecialtyNameSet() : null;
         var aa = getAssignments();
@@ -2475,10 +2482,18 @@ function populateSidebar() {
                 // In specialties-only mode, only surface facilities/rooms that
                 // actually host a specialty activity on this day.
                 if (_specialtiesOnly && !pcEntryIsSpecialty(entry, nameSet)) return;
-                allLocs[fn] = true;
+                var canon = fn;
+                try {
+                    var resolved = (typeof pcResolveLocation === 'function') ? (pcResolveLocation(entry) || '') : '';
+                    if (resolved) canon = resolved;
+                    if (typeof pcCanonicalActivityName === 'function') canon = pcCanonicalActivityName(canon);
+                } catch (e) { /* fall back to the raw field name */ }
+                if (!canon || canon === 'Free' || canon === 'Transition') return;
+                var key = String(canon).toLowerCase().trim();
+                if (!allLocs[key]) allLocs[key] = canon; // first canonical wins
             });
         });
-        Object.keys(allLocs).sort(naturalSort).forEach(function (loc) {
+        Object.keys(allLocs).map(function (k) { return allLocs[k]; }).sort(naturalSort).forEach(function (loc) {
             items.push({ id: loc, label: loc });
         });
     }
