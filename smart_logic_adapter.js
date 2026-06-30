@@ -1412,5 +1412,5 @@
         return available;
     };
 
-    console.log("[SmartTile] V44.4 loaded (cross-division capacity tracking; ineligible-bunk leftover-fill; live DEBUG_SMART_TILE)");
+    console.log("[SmartTile] V44.5 loaded (need-first this-week fairness; perf: shared memoized period count)");
 })();
