@@ -2000,20 +2000,31 @@
                     //   already holds this exact special (from another tile/window or an
                     //   earlier pass) would be handed it a second time. If already had
                     //   today, route to the fallback instead of doubling.
+                    // ★ Rotation gate: likewise honor _specialGateBlocks here — every
+                    //   OTHER placement path consults it, but this explicit-name route
+                    //   skipped it, so a tile that NAMES a special (main1="Sushi") placed
+                    //   it every day ignoring frequencyDays cooldown / availableDays /
+                    //   multiPart spacing (the "too close to each other" divergence). The
+                    //   budget must not SWAP a user's explicit choice for fairness, but a
+                    //   hard rotation constraint (on cooldown, not available today, part 1
+                    //   not done) is not fairness — route to the fallback when it trips.
                     const _alreadyHad = _bunkSpecialsToday[bunk] && _bunkSpecialsToday[bunk].has(_lblNorm);
+                    const _gated = _specialGateBlocks(bunk, divName, activityLabel);
+                    const _blocked = _alreadyHad || _gated;
+                    const _blockWhy = _alreadyHad ? 'already had today' : 'rotation-gated (cooldown/availableDays/multiPart)';
                     const _sw = _getSharableWith(activityLabel);
                     const _swCap = (_sw && _sw.capacity) || 1;
-                    if (!_alreadyHad && _canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
+                    if (!_blocked && _canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
                         _registerClaim(activityLabel, startMin, endMin, divName);
                         (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_lblNorm);
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special: ${activityLabel}`);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                    } else if (_alreadyHad && _fbAct && needsGeneration(_fbAct)) {
+                    } else if (_blocked && _fbAct && needsGeneration(_fbAct)) {
                         const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
-                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" already had today → ${_fbT} (no double)`);
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" ${_blockWhy} → ${_fbT}`);
                         schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
-                    } else if (_alreadyHad && _fbAct) {
-                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" already had today → DIRECT FILL: ${_fbAct} (no double)`);
+                    } else if (_blocked && _fbAct) {
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" ${_blockWhy} → DIRECT FILL: ${_fbAct}`);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     } else if (_fbAct && needsGeneration(_fbAct)) {
                         const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
