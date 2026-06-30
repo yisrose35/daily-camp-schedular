@@ -40,7 +40,17 @@ function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h, asOf)
     for (const s of availSports) { const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1); if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; } }
     return freshBoth === 2 ? 3 : freshBoth;
   }
-  function pairScore(a, b) { return (-BIG) * rem(a, b) + val(a, b); }
+  // RECENCY tiebreak (mirrors source): once counts tie, prefer the pair met longest ago.
+  const MED = 1000;
+  const _gl = (h.gameLog || {})[LG] || {};
+  const _dates = Object.keys(_gl).filter(d => !asOf || d <= asOf).sort();
+  const _denom = _dates.length + 1;
+  function recency(a, b) {
+    const key = [a, b].sort().join('|'); let best = 0;
+    _dates.forEach((d, i) => (_gl[d] || []).forEach(e => { if (e && [e.t1, e.t2].sort().join('|') === key) best = (i + 1) / _denom; }));
+    return best;
+  }
+  function pairScore(a, b) { return (-BIG) * rem(a, b) - MED * recency(a, b) + val(a, b); }
   const m = rrMatchups.map(p => [p[0], p[1]]);
   let improved = true, guard = 0;
   while (improved && guard < 300) {
@@ -161,6 +171,32 @@ function keys(m) { return m.map(p => p.slice().sort().join('v')); }
   assert(meetings(out) < meetings(rr),
     'must move to genuinely less-met opponents (per gameLog): ' + k.join(','));
   console.log('TEST 5 PASS — gameLog count beats the inverted aggregate, rotates to: ' + k.join(', '));
+})();
+
+// ---- TEST 6: recency tiebreak — after a full cycle, don't repeat yesterday ----
+// 4 teams play a full round-robin over two days (06-29: 1v2/3v4, 06-30: 1v3/2v4 then
+// 1v4/2v3). Now every pair has met exactly once → counts all tie. The next day must
+// pick the round played LONGEST ago (1v2/3v4 from 06-29), NOT repeat 06-30's 1v4/2v3.
+(function () {
+  const h = H();
+  addGame(h, '2026-06-29', '1', '2', 'Kickball');
+  addGame(h, '2026-06-29', '3', '4', 'Dodgeball');
+  addGame(h, '2026-06-30', '1', '3', 'Kickball');
+  addGame(h, '2026-06-30', '2', '4', 'Dodgeball');
+  addGame(h, '2026-06-30', '1', '4', 'Kickball');
+  addGame(h, '2026-06-30', '2', '3', 'Dodgeball');
+  // every pair met exactly once → counts tie
+  ['1|2', '1|3', '1|4', '2|3', '2|4', '3|4'].forEach(k =>
+    assert.strictEqual(getMatchupCountByDate(h, k.split('|')[0], k.split('|')[1], '2026-07-01'), 1, 'precondition: all pairs met once'));
+  // round-robin hands today the most-recent round; recency must rotate away from it.
+  const rr = [['1', '4'], ['2', '3']];
+  const out = optimizeMatchupPairingForSport(rr, ['1', '2', '3', '4'], ['Kickball', 'Dodgeball'], h, '2026-07-01');
+  const k = keys(out);
+  assert(!(k.includes('1v4') && k.includes('2v3')),
+    'must NOT repeat yesterday (06-30) 1v4/2v3: ' + k.join(','));
+  assert(k.includes('1v2') && k.includes('3v4'),
+    'should pick the round played longest ago (06-29) 1v2/3v4: ' + k.join(','));
+  console.log('TEST 6 PASS — recency rotates to the oldest round instead of repeating: ' + k.join(', '));
 })();
 
 console.log('\n✅ ALL MATCHUP-SPORTOPT (option 3) TESTS PASS');

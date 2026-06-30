@@ -780,11 +780,12 @@
     //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
     //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
     //
-    // Acceptance uses a single scalar  score = -BIG*Σmeetings + Σval  (BIG ≫ max val), so
-    // reducing total meetings ALWAYS dominates any sport gain, sport only breaks meeting
-    // ties, and a swap can never raise total meetings. Monotonic (both axes bounded ints)
-    // → terminates. Falls back to the round-robin on any error or kill switch
-    // (window.__leagueDailyOptimizer === false).
+    // Acceptance uses a single scalar  score = -BIG*Σmeetings - MED*Σrecency + Σval
+    // (BIG ≫ MED ≫ max val), so reducing total meetings ALWAYS dominates; among equal
+    // meeting counts the LEAST-recently-met pairing wins (so consecutive days rotate
+    // through the distinct rounds); sport only breaks what's left. A swap can never
+    // raise total meetings. Monotonic (bounded) → terminates. Falls back to the
+    // round-robin on any error or kill switch (window.__leagueDailyOptimizer === false).
     function optimizeMatchupPairingForSport(rrMatchups, activeTeams, availablePool, leagueName, history, dayId) {
         try {
             if (typeof window !== 'undefined' && window.__leagueDailyOptimizer === false) return rrMatchups;
@@ -815,7 +816,35 @@
                 }
                 return freshBoth === 2 ? 3 : freshBoth;
             }
-            function pairScore(a, b) { return (-BIG) * rem(a, b) + val(a, b); }
+
+            // RECENCY tiebreak: in a small league every pair meets within one
+            // round-robin cycle, so meeting counts quickly TIE (all 1, all 2, …) and
+            // the count term cancels out. Without a tiebreak the pairing then repeats
+            // whatever sport-need happens to favor — which can re-stage yesterday's
+            // exact matchups (observed live: 1v4/2v3 two days running). Prefer the
+            // pairing whose teams met LONGEST AGO so consecutive days cycle through
+            // the distinct rounds. Derived from the date-keyed gameLog (regen-safe);
+            // 0 = never met (most preferred). MED ≫ val so recency breaks count ties
+            // ahead of sport, but ≪ BIG so it never overrides the meeting count.
+            const MED = 1000;
+            const _gl = (history.gameLog && history.gameLog[leagueName]) || {};
+            const _dates = Object.keys(_gl).filter(function (d) { return !dayId || d <= dayId; }).sort();
+            const _denom = _dates.length + 1;
+            const _recCache = {};
+            function recency(a, b) {
+                const key = getMatchupKey(a, b);
+                if (_recCache[key] != null) return _recCache[key];
+                let best = 0;
+                for (let i = 0; i < _dates.length; i++) {
+                    const entries = _gl[_dates[i]] || [];
+                    for (let j = 0; j < entries.length; j++) {
+                        const e = entries[j];
+                        if (e && getMatchupKey(e.t1, e.t2) === key) { best = (i + 1) / _denom; break; }
+                    }
+                }
+                return (_recCache[key] = best);
+            }
+            function pairScore(a, b) { return (-BIG) * rem(a, b) - MED * recency(a, b) + val(a, b); }
 
             // Byes stay put; only real pairings enter the swap set.
             const byes = [], m = [];
@@ -3135,5 +3164,5 @@ window._debugLeagueTimeData = timeData;
     };
 
     window.SchedulerCoreLeagues = Leagues;
-    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v8 (gameLog-derived matchup count)');
+    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v9 (gameLog matchup count + recency tiebreak)');
 })();
