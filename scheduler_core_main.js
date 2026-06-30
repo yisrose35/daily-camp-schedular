@@ -1380,7 +1380,90 @@
         //   quota) reserve — uncontended is a strict no-op. The rotation placement loop
         //   later CONSUMES these reservations (they are already claimed for the division).
         const _rotReserved = {}; // `${div}|${start}|${end}` -> [specialName,...] pre-claimed rooms
+        // ★ NEED-FIRST allocation (shared-window specials) — kill switch
+        //   window.__smartTileNeedFirst = false restores pure seniority. When ON, a deprived
+        //   bunk in a YOUNGER grade can win a scarce special over a well-served bunk in an
+        //   OLDER grade: rank by need (fewest specials so far, then longest since any special)
+        //   with SENIORITY as the TIEBREAK — so oldest still goes first when need is equal, and
+        //   the deprived catch up over the week. Applies WITHIN the rotation reservation (cross
+        //   rotation-division) and WITHIN the budget pre-allocation (cross budget-division).
+        const _needFirst = (window.__smartTileNeedFirst !== false);
+        const _scCache = {}, _ndCache = {};
+        const _bunkSpecialCount = (bunk) => {
+            if (bunk in _scCache) return _scCache[bunk];
+            const h = historicalCounts[bunk] || {}; let c = 0;
+            for (const n of _allSpecialNames) c += (h[n] || 0);
+            return (_scCache[bunk] = c);
+        };
+        const _bunkDaysSinceSpecial = (bunk) => {
+            if (bunk in _ndCache) return _ndCache[bunk];
+            let mn = Infinity; const RE = window.RotationEngine;
+            if (RE && typeof RE.getDaysSinceActivity === 'function') {
+                for (const n of _allSpecialNames) {
+                    try { const d = RE.getDaysSinceActivity(bunk, n); if (typeof d === 'number' && d >= 0 && d < mn) mn = d; } catch (_) {}
+                }
+            }
+            return (_ndCache[bunk] = mn); // Infinity = never had any special = neediest
+        };
+        // neediest first (fewest specials, then longest-since); seniority breaks ties.
+        const _needSenCmp = (bunkA, divA, bunkB, divB) =>
+            (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||
+            (_bunkDaysSinceSpecial(bunkB) - _bunkDaysSinceSpecial(bunkA)) ||
+            (_senOf(divA) - _senOf(divB)) ||
+            (Math.random() - 0.5);
+
         (function _reserveRotationSpecials() {
+            if (_needFirst) {
+                // ★ NEED-FIRST ACROSS GRADES: group rotation-special tiles by shared window;
+                //   rank ALL bunks across the window's divisions by need (seniority tiebreak);
+                //   reserve one usable room per bunk in that order until the window's rooms run
+                //   out. Neediest bunks (any grade) lock rooms first, so the per-division reserved
+                //   COUNT reflects need, not seniority. The consume loop is need-sorted too, so
+                //   within a division the neediest bunks claim the reserved rooms. Eligibility
+                //   mirrors the consume (access + gate + _canClaim) so a reserved room is one the
+                //   bunk can actually take.
+                const _rotSpecialJobs = filteredJobs.filter(job => {
+                    const opts = _rotationOptions(job);
+                    if (!opts || !job.blockA) return false;
+                    return opts.some(o => normalizeCategoryLabel(o) === 'special'
+                        || knownSpecialNames.has(String(o).toLowerCase().trim()));
+                });
+                const _byWin = {};
+                _rotSpecialJobs.forEach(job => {
+                    const k = `${job.blockA.startMin}|${job.blockA.endMin}`;
+                    (_byWin[k] = _byWin[k] || []).push(job);
+                });
+                Object.keys(_byWin).forEach(k => {
+                    const [sMin, eMin] = k.split('|').map(Number);
+                    const jobs = _byWin[k];
+                    const availByDiv = {};
+                    jobs.forEach(job => {
+                        availByDiv[job.division] = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                            sMin, eMin, job.division, activityProperties, dailyFieldAvailability) || [];
+                    });
+                    const _entries = [];
+                    jobs.forEach(job => (divisions[job.division]?.bunks || []).forEach(bunk => _entries.push({ bunk, divName: job.division })));
+                    _entries.sort((a, b) => _needSenCmp(a.bunk, a.divName, b.bunk, b.divName));
+                    _entries.forEach(({ bunk, divName }) => {
+                        const wQ = `${divName}|${sMin}|${eMin}`;
+                        for (const sp of (availByDiv[divName] || [])) {
+                            if (typeof window.isSpecialAvailableForBunk === 'function'
+                                && !window.isSpecialAvailableForBunk(sp.name, divName, bunk, window.loadGlobalSettings?.())) continue;
+                            if (_specialGateBlocks(bunk, divName, sp.name)) continue;
+                            if (!_canClaim(sp.name, sMin, eMin, sp.capacity || 1, divName)) continue;
+                            _registerClaim(sp.name, sMin, eMin, divName);
+                            (_rotReserved[wQ] = _rotReserved[wQ] || []).push(sp.name);
+                            break;
+                        }
+                    });
+                    jobs.forEach(job => {
+                        const wQ = `${job.division}|${sMin}|${eMin}`;
+                        if (_rotReserved[wQ] && _rotReserved[wQ].length)
+                            console.log(`[SmartTile NEED-RESERVE] ${job.division} @${sMin}-${eMin}: reserved ${_rotReserved[wQ].length} room(s) [${_rotReserved[wQ].join(', ')}] (need-first, seniority tiebreak)`);
+                    });
+                });
+                return;
+            }
             filteredJobs.forEach(job => {
                 const opts = _rotationOptions(job);
                 if (!opts || !job.blockA) return;
@@ -1483,7 +1566,8 @@
             // decides the cross-division order; fairness still rotates specials
             // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
-                (_senOf(a.divName) - _senOf(b.divName)) ||
+                (_needFirst ? (a.usage - b.usage) : 0) ||      // ★ need first across grades (a.usage = special count)
+                (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
@@ -1607,7 +1691,8 @@
             // priority list as a final tiebreak. Seniority decides the cross-division
             // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
-                (_senOf(a.divName) - _senOf(b.divName)) ||
+                (_needFirst ? (a.usage - b.usage) : 0) ||      // ★ need first across grades (a.usage = special count)
+                (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
                 (a.prioRank - b.prioRank) ||
@@ -1788,7 +1873,10 @@
                 // ★ Scarce capped labels (Pickleball) are owned by the CAMP-WIDE queue computed
                 //   once before this loop (_cappedWinners / _winnerLabel / _mayTakeCapped). Winners
                 //   for THIS division are placed up front below; non-winners skip the label.
-                bunkList.forEach((bunk, _bIdx) => {
+                // ★ need-first: process bunks neediest-first so within a division the
+                //   reserved rooms go to the bunks who've gone longest without a special
+                //   (seniority tiebreak). Kill switch → original roster order.
+                (_needFirst ? [...bunkList].sort((a, b) => _needSenCmp(a, divName, b, divName)) : bunkList).forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
                     const _usedOpts = _grp ? ((_groupOptsUsed[_grp] = _groupOptsUsed[_grp] || {})[bunk] = _groupOptsUsed[_grp][bunk] || new Set()) : null;
