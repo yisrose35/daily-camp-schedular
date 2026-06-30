@@ -13,9 +13,12 @@
  *                             PLUS specialtyLeagueHistory.gameLog[id][date][i].field.
  *   • Elective / special    — field is the per-bunk entry's _location / field.
  *
- * UX (per product decision): two-step — pick ONE game, then pick its new field.
- * Conflicts are HARD-BLOCKED: a field already locked/occupied at that time is
- * not offered (no override).
+ * UX (per product decision): two-step — pick ONE game, then edit its teams /
+ * sport / field. Teams + sport edits can be saved WITHOUT moving fields (the
+ * "Save changes — keep field" button is always available).
+ * Field conflicts are blocked BY DEFAULT (only free fields are clickable), but
+ * an OVERRIDE toggle lets the user deliberately pick any field — even one
+ * already in use — after a double-book warning.
  *
  * Pure helpers (parseMatchup / rebuildMatchup / normalizeGame) are exported on
  * the namespace so tests/post_edit_field_change.test.js can exercise the fragile
@@ -292,8 +295,9 @@
   // ── APPLY ────────────────────────────────────────────────────────────────
   // Rewrites the field of ctx.game across every store, swaps the field lock,
   // and persists. Returns { ok, message }.
-  PEFC.applyFieldChange = function (ctx, newField, newSport, newTeams) {
+  PEFC.applyFieldChange = function (ctx, newField, newSport, newTeams, opts) {
     if (!ctx || !ctx.game || !newField) return { ok: false, message: 'Nothing to change.' };
+    var override = !!(opts && opts.override); // user chose to bypass the field-busy block
     var oldField = ctx.game.field;
     var oldA = ctx.game.teamA, oldB = ctx.game.teamB, oldSport = ctx.game.sport;
     // Resolve new teams (fall back to old); unordered compare for "changed".
@@ -305,7 +309,8 @@
     var changeSport = !!(newSport && norm(newSport) !== norm(ctx.game.sport || ''));
     if (norm(oldField) === norm(newField) && !changeSport && !changeTeams) return { ok: false, message: 'Nothing changed.' };
     if (changeTeams && norm(newA) === norm(newB)) return { ok: false, message: 'A team cannot play itself.' };
-    if (norm(oldField) !== norm(newField) && !fieldIsFree(newField, ctx)) return { ok: false, message: newField + ' is already in use at this time.' };
+    // Field-busy is a hard block UNLESS the user explicitly overrode it (warned).
+    if (norm(oldField) !== norm(newField) && !override && !fieldIsFree(newField, ctx)) return { ok: false, message: newField + ' is already in use at this time.' };
 
     var newTeamsStr = newA + ' vs ' + newB;
     // Rebuild a matchup string with the new field AND (regular-league "@"
@@ -559,30 +564,54 @@
     var teamsChanged = !((norm(curA) === norm(ctx.game.teamA) && norm(curB) === norm(ctx.game.teamB)) ||
                          (norm(curA) === norm(ctx.game.teamB) && norm(curB) === norm(ctx.game.teamA)));
 
-    var freeHtml = freeOnes.length
-      ? freeOnes.map(function (c) {
-        var isCur = norm(c.name) === norm(ctx.game.field);
-        return '<button class="pefc-field" data-f="' + esc(c.name) + '" ' + (isCur ? 'disabled' : '') +
-          ' style="padding:8px 13px;margin:0 8px 8px 0;border:1.5px solid ' + (isCur ? '#cbd5e1' : '#86efac') + ';border-radius:8px;background:' + (isCur ? '#f1f5f9' : '#f0fdf4') + ';color:' + (isCur ? '#94a3b8' : '#065f46') + ';font-size:0.85rem;font-weight:500;cursor:' + (isCur ? 'default' : 'pointer') + ';">' +
-          esc(c.name) + (isCur ? ' (current)' : '') + (c.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + c.capacity + ')</span>' : '') + '</button>';
-      }).join('')
-      : '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No free fields for this game at this time. Free up a field first.</div>';
+    // OVERRIDE: when on, ANY field — even one already in use — becomes a
+    // clickable button so the user can deliberately place the game where they
+    // want (a double-book confirm fires on click). Off → only free fields are
+    // clickable and busy ones show as plain greyed text (conflict-safe default).
+    var override = !!ctx.override;
 
-    // Don't list the game's own current field as "in use" (it's just where the
-    // game already is). Everything else busy is genuinely occupied/blocked.
+    // Render one field as a button. `busy` fields are only clickable under
+    // override; the current field is never re-rendered as a button (it's shown
+    // in the summary header above).
+    function fieldBtn(c, busy) {
+      var isCur = norm(c.name) === norm(ctx.game.field);
+      var clickable = !isCur && (!busy || override);
+      var border = isCur ? '#cbd5e1' : (busy ? (override ? '#fca5a5' : '#e5e7eb') : '#86efac');
+      var bg = isCur ? '#f1f5f9' : (busy ? (override ? '#fef2f2' : '#f9fafb') : '#f0fdf4');
+      var color = isCur ? '#94a3b8' : (busy ? (override ? '#b91c1c' : '#9ca3af') : '#065f46');
+      return '<button class="pefc-field" data-f="' + esc(c.name) + '" data-busy="' + (busy ? '1' : '') + '" ' + (clickable ? '' : 'disabled') +
+        ' style="padding:8px 13px;margin:0 8px 8px 0;border:1.5px solid ' + border + ';border-radius:8px;background:' + bg + ';color:' + color + ';font-size:0.85rem;font-weight:500;cursor:' + (clickable ? 'pointer' : 'default') + ';">' +
+        (busy && override ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') +
+        (c.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + c.capacity + ')</span>' : '') +
+        (busy && override ? ' <span style="opacity:0.75;font-size:0.72rem;">in use</span>' : '') + '</button>';
+    }
+
+    // Don't list the game's own current field (it's just where the game already
+    // is). Everything else busy is genuinely occupied/blocked.
     var busyReal = busyOnes.filter(function (c) { return !c.current; });
-    var busyHtml = busyReal.length
-      ? '<div style="margin-top:12px;font-size:0.78rem;color:#9ca3af;">In use: ' +
-      busyReal.map(function (c) { return esc(c.name); }).join(', ') + '</div>'
+    var freeHtml = freeOnes.map(function (c) { return fieldBtn(c, false); }).join('');
+
+    var noFreeNote = (!freeOnes.length && !override)
+      ? '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No free fields for this game at this time. Turn on Override below to place it anyway, or free up a field first.</div>'
       : '';
 
-    // When a sport / teams change is pending, offer to apply it WITHOUT moving
-    // fields (a matchup or sport edit that keeps the same field).
+    var overrideHtml =
+      '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;margin-bottom:4px;font-size:0.82rem;color:#7c2d12;cursor:pointer;user-select:none;">' +
+      '<input type="checkbox" id="pefc-override"' + (override ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
+      'Override — let me pick <strong>any</strong> field (may double-book)</label>';
+
+    // Busy fields: clickable warning buttons under override, plain text otherwise.
+    var busyHtml = override
+      ? (busyReal.length ? '<div style="margin-top:6px;"><div style="font-weight:600;font-size:0.8rem;color:#b91c1c;margin-bottom:6px;">In use — pick to place anyway:</div><div style="display:flex;flex-wrap:wrap;">' + busyReal.map(function (c) { return fieldBtn(c, true); }).join('') + '</div></div>' : '')
+      : (busyReal.length ? '<div style="margin-top:12px;font-size:0.78rem;color:#9ca3af;">In use: ' + busyReal.map(function (c) { return esc(c.name); }).join(', ') + '</div>' : '');
+
+    // "Save changes" is ALWAYS available so a teams / sport edit can be committed
+    // WITHOUT moving fields (field buttons MOVE the game; this keeps it put).
+    // Highlighted when an edit is actually pending.
     var sportChanged = canEditSport && norm(curSport) !== norm(ctx.game.sport || '');
     var pendingChange = sportChanged || teamsChanged;
-    var keepFieldHtml = pendingChange
-      ? '<button id="pefc-keep-field" style="width:100%;margin-top:12px;padding:9px;border:1.5px solid #6366f1;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.85rem;font-weight:600;cursor:pointer;">Save changes — keep ' + esc(ctx.game.field || 'current field') + '</button>'
-      : '';
+    var keepFieldHtml =
+      '<button id="pefc-keep-field" style="width:100%;margin-top:14px;padding:9px;border:1.5px solid ' + (pendingChange ? '#6366f1' : '#d1d5db') + ';border-radius:8px;background:' + (pendingChange ? '#eef2ff' : '#fff') + ';color:' + (pendingChange ? '#4338ca' : '#6b7280') + ';font-size:0.85rem;font-weight:600;cursor:pointer;">Save changes — keep ' + esc(ctx.game.field || 'current field') + '</button>';
 
     var box = shell(header('Edit league game') +
       '<div style="background:#f3f4f6;padding:9px 12px;border-radius:8px;margin-bottom:14px;font-size:0.85rem;">' +
@@ -591,7 +620,7 @@
       teamsHtml +
       sportHtml +
       '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields' + (canEditSport ? ' for ' + esc(curSport) : '') + ':</div>' +
-      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + busyHtml + keepFieldHtml +
+      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + noFreeNote + overrideHtml + busyHtml + keepFieldHtml +
       '<div style="display:flex;gap:10px;margin-top:18px;">' +
       (ctx.games.length > 1 ? '<button id="pefc-back" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">← Back</button>' : '') +
       '<button id="pefc-cancel" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">Cancel</button></div>');
@@ -607,12 +636,22 @@
       return { teamA: a ? String(a.value || '').trim() : curA, teamB: b ? String(b.value || '').trim() : curB };
     }
 
-    // Changing the sport re-filters the field list to fields that host it.
-    // Capture any pending team edits first so they survive the re-render.
+    // Capture any pending team / sport edits before a re-render so they survive
+    // it (changing sport re-filters the field list; toggling override re-renders).
+    function captureEdits() {
+      var t = readTeams(); ctx.selectedTeamA = t.teamA; ctx.selectedTeamB = t.teamB;
+      if (sportSel) ctx.selectedSport = sportSel.value;
+    }
+
     var sportSel = box.querySelector('#pefc-sport');
     if (sportSel) sportSel.onchange = function () {
-      var t = readTeams(); ctx.selectedTeamA = t.teamA; ctx.selectedTeamB = t.teamB;
-      ctx.selectedSport = sportSel.value; showFieldPicker(ctx);
+      captureEdits(); ctx.selectedSport = sportSel.value; showFieldPicker(ctx);
+    };
+
+    // Override toggle re-renders so busy fields become clickable warning buttons.
+    var ovChk = box.querySelector('#pefc-override');
+    if (ovChk) ovChk.onchange = function () {
+      captureEdits(); ctx.override = ovChk.checked; showFieldPicker(ctx);
     };
 
     var keepBtn = box.querySelector('#pefc-keep-field');
@@ -627,7 +666,14 @@
       if (btn.disabled) return;
       btn.onclick = function () {
         var pickSport = canEditSport ? curSport : null;
-        var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport, readTeams());
+        var busy = btn.dataset.busy === '1';
+        if (busy) {
+          var ok = (typeof window.confirm === 'function')
+            ? window.confirm(btn.dataset.f + ' is already in use at this time.\n\nPlace this game there anyway? This will double-book the field.')
+            : true;
+          if (!ok) return;
+        }
+        var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport, readTeams(), { override: busy });
         if (!res.ok) { toast(res.message, 'warning'); return; }
         closeModal();
         toast('Updated: ' + res.message, 'success');
