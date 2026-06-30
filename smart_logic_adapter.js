@@ -1126,6 +1126,34 @@
                     bunks.forEach(b => specialWinnersA.add(b));
                 }
             }
+            // ★ PREFER-MAIN1 leftover fill (Block A / tile 1) — kill-switch
+            //   window.__smartTilePreferMain1=false. The cross-division pre-allocation can
+            //   UNDER-fill a division's special rooms (a junior division loses the special
+            //   budget under window contention), so its bunks were handed the open activity
+            //   (main2 / Swim) in tile 1 while a special room sat FREE. Recompute the
+            //   division's TRUE remaining capacity from the actual placements and upgrade any
+            //   open-activity bunk to a still-free special it can lawfully use — so nobody
+            //   gets main2/fallback in tile 1 while main1 is available. Only ever turns
+            //   open→special (never the reverse); remainingSlots (net of other divisions via
+            //   the V44.3 capacity subtraction) guarantees no over-allocation.
+            if (!effectiveA.allFallback && window.__smartTilePreferMain1 !== false) {
+                specialsBlockA.forEach(s => {
+                    const used = Object.values(block1).filter(a => isSame(a, s.name)).length;
+                    s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
+                });
+                sortedEligible.forEach(bunk => {
+                    if (specialWinnersA.has(bunk)) return;
+                    if (!isSame(block1[bunk], effectiveA.open)) return; // only upgrade the open/main2 bunks
+                    const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
+                    const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                    if (chosen && chosen.remainingSlots > 0) {
+                        block1[bunk] = chosen.name;
+                        specialWinnersA.add(bunk);
+                        chosen.remainingSlots--;
+                        log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room, was ${effectiveA.open})`);
+                    }
+                });
+            }
             // ★ V44.3: Record Block A consumption for other divisions
             Object.entries(block1).forEach(([bunk, act]) => {
                 if (!act || isSame(act, fbAct) || isSame(act, effectiveA.open)) return;
@@ -1212,6 +1240,27 @@
                         log(`\n  ★ FULL GRADE OVERRIDE (Block B): "${fullGradeActB}" → ALL ${bunks.length} bunks`);
                         bunks.forEach(bunk => { block2[bunk] = fullGradeActB; });
                     }
+                }
+                // ★ PREFER-MAIN1 leftover fill (Block B / tile 2): a loser-from-A sitting on
+                //   the fallback (Sport) takes a still-free special in tile 2 rather than
+                //   wasting the room. Winners-from-A keep their main2 (Swim) complement.
+                if (!effectiveB.allFallback && window.__smartTilePreferMain1 !== false) {
+                    specialsBlockB.forEach(s => {
+                        const used = Object.values(block2).filter(a => isSame(a, s.name)).length;
+                        s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
+                    });
+                    sortedEligible.forEach(bunk => {
+                        if (specialWinnersA.has(bunk)) return;       // winners keep the Swim complement
+                        if (!isSame(block2[bunk], fbAct)) return;     // only upgrade the fallback (Sport) bunks
+                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
+                        const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                        if (chosen && chosen.remainingSlots > 0) {
+                            block2[bunk] = chosen.name;
+                            chosen.remainingSlots--;
+                            nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                            log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room in B, was ${fbAct})`);
+                        }
+                    });
                 }
                 // ★ V44.3: Record Block B consumption for other divisions
                 Object.entries(block2).forEach(([bunk, act]) => {
