@@ -957,7 +957,12 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // Skip null/undefined (never done; nothing to cooldown from).
         if (_cdForEsc > 0) {
             var _daysSinceCD = RotationEngine.getDaysSinceActivity(bunkName, activityName);
-            if (typeof _daysSinceCD === 'number' && _daysSinceCD > 0 && _daysSinceCD < _cdForEsc) {
+            // ★ A cooldown requires an ACTUAL prior occurrence. Guard on getActivityCount > 0
+            //   (the schedule-derived count the user sees) so a stale lastDone with a zero
+            //   count — cloud rotation_counts diverging from the rebuilt history — can never
+            //   block a special the bunk has never done and force it to the Swim fallback.
+            if (typeof _daysSinceCD === 'number' && _daysSinceCD > 0 && _daysSinceCD < _cdForEsc
+                && RotationEngine.getActivityCount(bunkName, activityName) > 0) {
                 return Infinity;
             }
         }
@@ -1470,11 +1475,17 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 if (!local) {
                     // Activity not seen in local 14-day scan — cloud fills the gap
                     var daysSince = null;
-                    if (cloudLastDate && cloudLastDate < today) {
+                    // ★ Only carry a recency (daysSinceLast) when the cloud actually has a
+                    //   POSITIVE count. A stray lastDone date with a ZERO net count (e.g. the
+                    //   occurrence was regenerated away but rotation_counts' lastDone wasn't
+                    //   cleared) must NOT impose a daysSinceLast — otherwise getDaysSinceActivity
+                    //   reports "done yesterday" for an activity getActivityCount says is 0, and
+                    //   the frequencyDays cooldown wrongly blocks a never-done special (→ Swim).
+                    if (cloudCount > 0 && cloudLastDate && cloudLastDate < today) {
                         daysSince = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
                     }
                     history.byActivity[actLower] = {
-                        dates: cloudLastDate ? [{ dateKey: cloudLastDate, daysAgo: daysSince || 14 }] : [],
+                        dates: (daysSince !== null) ? [{ dateKey: cloudLastDate, daysAgo: daysSince }] : [],
                         count: cloudCount,
                         daysSinceLast: daysSince
                     };
