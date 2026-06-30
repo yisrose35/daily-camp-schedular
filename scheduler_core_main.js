@@ -1065,6 +1065,19 @@
             catch (_eGate) { return false; }
         };
 
+        // ★ Would ANY bunk in this division actually be allowed to take this special
+        //   right now? (bunk-level access + the rotation fairness gate: cooldown /
+        //   maxUsage / availableDays / multiPart / cohort.) Used so the seniority
+        //   RESERVE never pre-claims a room the whole division is barred from — a dead
+        //   reservation wastes the room AND its claim blocks every other (overlapping)
+        //   division from it, which is exactly how a free Lake/VR ends up empty while
+        //   bunks fall through to the Swim fallback.
+        const _divCanUseSpecial = (divName, specialName) =>
+            (divisions[divName]?.bunks || []).some(b =>
+                (typeof window.isSpecialAvailableForBunk !== 'function'
+                    || window.isSpecialAvailableForBunk(specialName, divName, b, window.loadGlobalSettings?.()))
+                && !_specialGateBlocks(b, divName, specialName));
+
         // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
         //   A rotation/tile option that is NOT a configured field, special, or hosted
         //   sport is placed as its own label — exactly like Swim (the "direct fill"
@@ -1373,6 +1386,9 @@
                     b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || [];
                 for (const sp of avail) {
                     if (toReserve <= 0) break;
+                    // ★ Don't reserve a room no bunk in this division can actually use —
+                    //   a dead reserve sits empty and blocks other divisions from it.
+                    if (!_divCanUseSpecial(divName, sp.name)) continue;
                     if (!_canClaim(sp.name, b.startMin, b.endMin, sp.capacity || 1, divName)) continue;
                     _registerClaim(sp.name, b.startMin, b.endMin, divName);
                     (_rotReserved[wQ] = _rotReserved[wQ] || []).push(sp.name);
