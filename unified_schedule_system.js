@@ -4835,6 +4835,51 @@ if (bypassStatus.highlight) {
         return result;
     }
 
+    // Scan for facilities reserved by a custom PINNED tile (or hybrid
+    // swim+elective) in the given time range. A pinned tile stores the EVENT
+    // NAME in entry.field/_activity and the REAL facility in _reservedFields[]
+    // (and/or _location). The name-based gates below (checkLocationConflict /
+    // checkFieldAvailableByTime) match only entry.field/_location/_activity, so
+    // a facility reserved via _reservedFields is invisible to them — the picker
+    // would report it as open even though a pin owns it exclusively. Mirrors the
+    // GlobalFieldLocks pinned lock (scheduler_core_main STEP 3) + the free-fill
+    // _fieldPinLocked76 guard. Returns a Set of lowercased reserved field names.
+    function _getPinnedReservedFieldsInTimeRange(startMin, endMin, excludeBunk) {
+        const result = new Set();
+        if (startMin == null || endMin == null) return result;
+        const assignments = window.scheduleAssignments || {};
+        const divisions = window.divisions || {};
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = window.divisionTimes?.[divName] || [];
+            for (const bunkName of (divData.bunks || [])) {
+                if (String(bunkName) === String(excludeBunk)) continue;
+                const bunkAssignments = assignments[bunkName];
+                if (!bunkAssignments) continue;
+                const scanLen = Math.max(divSlots.length, bunkAssignments.length);
+                for (let idx = 0; idx < scanLen; idx++) {
+                    const entry = bunkAssignments[idx];
+                    if (!entry || entry.continuation) continue;
+                    // Only custom/pinned/hybrid tiles carry _reservedFields. Normal
+                    // sports/specials store their real field in entry.field, which
+                    // the name-based gates already see — don't over-block those.
+                    const rf = Array.isArray(entry._reservedFields)
+                        ? entry._reservedFields.filter(Boolean) : [];
+                    if (!rf.length) continue;
+                    const slotInfo = divSlots[idx];
+                    const oS = (typeof entry._startMin === 'number') ? entry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+                    const oE = (typeof entry._endMin === 'number') ? entry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+                    if (oS === undefined || oE === undefined) continue;
+                    if (oE <= startMin || oS >= endMin) continue; // no time overlap
+                    rf.forEach(f => result.add(String(f).toLowerCase()));
+                    const loc = (typeof entry._location === 'string' && entry._location.trim())
+                        ? entry._location.trim().toLowerCase() : null;
+                    if (loc) result.add(loc);
+                }
+            }
+        }
+        return result;
+    }
+
     // ── Activity-first field search ─────────────────────────────────────────
     // Returns { open: [{name,capacity,...}], busy: [{name,capacity,conflict,...}] }
     // for fields that support the given activity at the given time range.
@@ -4846,6 +4891,10 @@ if (bypassStatus.highlight) {
         );
         if (matching.length === 0) return { open: [], busy: [], none: true };
         const actProps = getActivityProperties();
+        // Facilities reserved by a custom pinned tile in this window — invisible
+        // to the name-based capacity/conflict gates because a pin files its real
+        // facility under _reservedFields, not entry.field.
+        const pinnedFields = _getPinnedReservedFieldsInTimeRange(startMin, endMin, excludeBunk);
         const open = [], busy = [];
         for (const loc of matching) {
             const props = actProps[loc.name] || actProps[loc.name.toLowerCase()] || {};
@@ -4883,6 +4932,21 @@ if (bypassStatus.highlight) {
                     const comboBlocked = exclusiveFields.some(f => leagueFields.has(f.toLowerCase()));
                     if (comboBlocked) {
                         busy.push({ ...loc, reason: 'league_locked' });
+                        continue;
+                    }
+                }
+
+                // Custom pinned-tile reservation: a pin owns its facility
+                // exclusively for its whole window (nothing else but another pin).
+                const locLowerPin = loc.name.toLowerCase();
+                if (pinnedFields.has(locLowerPin)) {
+                    busy.push({ ...loc, reason: 'pinned_reserved' });
+                    continue;
+                }
+                if (window.FieldCombos?.isInCombo?.(loc.name)) {
+                    const exclusiveFields = window.FieldCombos.getExclusiveFields(loc.name);
+                    if (exclusiveFields.some(f => pinnedFields.has(f.toLowerCase()))) {
+                        busy.push({ ...loc, reason: 'pinned_reserved' });
                         continue;
                     }
                 }
@@ -5449,7 +5513,7 @@ if (bypassStatus.highlight) {
                 }).join('');
                 const busyNote = busy.length > 0
                     ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => {
-                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : 'in use';
+                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
                         return escapeHtml(b.name) + ' <span style="opacity:0.7">(' + reason + ')</span>';
                     }).join(', ')}</div>`
                     : '';
