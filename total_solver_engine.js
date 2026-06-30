@@ -2730,6 +2730,108 @@
     }
 
     // ========================================================================
+    // ★ RECENCY-AWARE SCARCE-FIELD SWAP (rotation fairness, v16)
+    // A single-capacity, single-sport field (e.g. one soccer field tied to a
+    // fixed coach — "Soccer with Rabbi H." on "Touchdown Park") becomes the
+    // forced overflow for whichever bunk the greedy group-matching places
+    // LAST. Because the processing order is deterministic, it is the SAME
+    // low-seniority bunk every day, so that bunk gets the same sport many days
+    // running while its peers rotate freely. The recency penalty can't prevent
+    // it: once peers claim the other single-cap fields, the repeat is the
+    // bunk's ONLY feasible option (everything else scores 999999), so a
+    // penalised-but-feasible repeat still wins.
+    //
+    // This post-pass rotates the burden. When a bunk is stuck on a sport it
+    // ALSO had in the last 1-2 real days, it looks for a same-period,
+    // same-division peer on its own single-cap sport field and swaps the two
+    // — but ONLY when the trade is strictly fresher for both AND the solver's
+    // own hard-feasibility gate (calculatePenaltyCost < 900000: field access,
+    // capacity, cross-division, cooldown, same-day-dup, timeRules, prefs,
+    // maxUsage) clears BOTH new placements. If no valid peer exists the bunk
+    // keeps the repeat (a real activity beats a Free slot). Recency is read
+    // from saved history (prior dates), so it is stable across the pass — no
+    // oscillation. Kill switch: window.__recencyScarceSwap = false.
+    // ========================================================================
+    function _rssApplyIndex(bi, blk, pick, candIdx, cost) {
+        S.applyPickToSchedule(blk, pick);
+        if (blk.startTime !== undefined && blk.endTime !== undefined) {
+            var fn = normName(pick.field), an = normName(pick._activity);
+            S.addToFieldTimeIndex(fn, blk.startTime, blk.endTime, blk.bunk, blk.divName || '', an || fn);
+            if (an && an !== fn) S.addToFieldTimeIndex(an, blk.startTime, blk.endTime, blk.bunk, blk.divName || '', an);
+        }
+        S._assignments.set(bi, { candIdx: candIdx, pick: pick, cost: cost });
+        S.invalidateRotationCacheForBunk(blk.bunk);
+    }
+    function recencyScarceSwap(activityBlocks) {
+        if (window.__recencyScarceSwap === false) return 0;
+        var RECENT = 2;   // a sport done within this many days counts as a repeat
+        var swaps = 0;
+        var _dsi = function (bunk, act) {
+            var d = S.getDaysSinceActivity ? S.getDaysSinceActivity(bunk, act) : null;
+            return (d == null) ? Infinity : d;
+        };
+        var _eligible = function (bi) {
+            var asg = S._assignments.get(bi);
+            if (!asg || asg.candIdx === -1 || !asg.pick) return false;
+            var pk = asg.pick;
+            if (pk._type !== 'sport' || pk._fullGrade) return false;   // rotation sports only
+            var blk = activityBlocks[bi];
+            if (!blk || blk.startTime === undefined || blk.endTime === undefined || !blk.divName) return false;
+            var actN = normName(pk._activity);
+            if (!actN || actN === 'free' || actN === 'free play') return false;
+            // The bunk must be the SOLE occupant of its field at this window so the
+            // exchange is a clean 1:1 (capacity is trivially preserved).
+            if (S.getFieldUsageFromTimeIndex(normName(pk.field), blk.startTime, blk.endTime, blk.bunk) !== 0) return false;
+            return true;
+        };
+        for (var ai = 0; ai < activityBlocks.length; ai++) {
+            if (!_eligible(ai)) continue;
+            var aAsg = S._assignments.get(ai), aBlk = activityBlocks[ai], aPick = aAsg.pick;
+            var aAct = aPick._activity, aActN = normName(aAct);
+            var aStuck = _dsi(aBlk.bunk, aAct);
+            if (aStuck < 1 || aStuck > RECENT) continue;   // only break genuine recent repeats
+            for (var bj = 0; bj < activityBlocks.length; bj++) {
+                if (bj === ai || !_eligible(bj)) continue;
+                var bBlk = activityBlocks[bj];
+                if (bBlk.bunk === aBlk.bunk) continue;
+                if (String(bBlk.divName) !== String(aBlk.divName)) continue;        // same division
+                if (bBlk.startTime !== aBlk.startTime || bBlk.endTime !== aBlk.endTime) continue; // same window
+                var bAsg = S._assignments.get(bj), bPick = bAsg.pick;
+                var bAct = bPick._activity, bActN = normName(bAct);
+                if (!bActN || bActN === aActN) continue;     // must be a DIFFERENT sport
+                // The trade must strictly help: A must not just hit another recent
+                // repeat, and B must be fresher for A's sport than A is.
+                if (_dsi(aBlk.bunk, bAct) <= RECENT) continue;
+                if (_dsi(bBlk.bunk, aAct) <= aStuck) continue;
+                // Tentatively pull both, then validate the swapped placements with the
+                // solver's own hard-feasibility gate.
+                S.undoPickFromSchedule(aBlk, aPick);
+                S.undoPickFromSchedule(bBlk, bPick);
+                S._todayCache.clear();
+                var pickAnew = { field: bPick.field, sport: bPick.sport, _activity: bPick._activity, _type: bPick._type, _fullGrade: false };
+                var pickBnew = { field: aPick.field, sport: aPick.sport, _activity: aPick._activity, _type: aPick._type, _fullGrade: false };
+                var costA = S.calculatePenaltyCost(aBlk, pickAnew);
+                var costB = S.calculatePenaltyCost(bBlk, pickBnew);
+                if (costA < 900000 && costB < 900000) {
+                    _rssApplyIndex(ai, aBlk, pickAnew, bAsg.candIdx, costA);
+                    _rssApplyIndex(bj, bBlk, pickBnew, aAsg.candIdx, costB);
+                    S._todayCache.clear();
+                    swaps++;
+                    console.log('[RECENCY-SWAP] ' + aBlk.bunk + ' "' + aAct + '" (repeat ' + aStuck + 'd) ⇄ ' + bBlk.bunk + ' "' + bAct + '" @' + aBlk.startTime);
+                    break;   // this block is resolved
+                } else {
+                    _rssApplyIndex(ai, aBlk, aPick, aAsg.candIdx, aAsg.cost);
+                    _rssApplyIndex(bj, bBlk, bPick, bAsg.candIdx, bAsg.cost);
+                    S._todayCache.clear();
+                }
+            }
+        }
+        if (swaps > 0) console.log('[RECENCY-SWAP] rotated ' + swaps + ' stuck repeat(s) off the scarce field');
+        return swaps;
+    }
+    Solver.recencyScarceSwap = recencyScarceSwap;
+
+    // ========================================================================
     // ★★★ v15.5: FIELD-QUALITY RE-OPTIMIZATION ★★★
     // After all heuristic phases, sweep through every assignment whose field
     // belongs to a quality group and try to swap it onto the best free
@@ -3256,6 +3358,13 @@
         //        better-ranked one in the same group is genuinely free. Sweep
         //        once at the end and swap upward where every constraint allows.
         fieldQualityReoptimize(activityBlocks);
+
+        // ★ v16: Recency-aware scarce-field swap — rotate a bunk off a sport it
+        //   was stuck repeating (single-cap/single-sport overflow field) onto a
+        //   same-period, same-division peer for whom the trade is fresher. Runs
+        //   BEFORE the final cross-division sweep so that backstop re-checks it
+        //   (swaps are same-division, so they never introduce a cross-div share).
+        recencyScarceSwap(activityBlocks);
 
         // ★ FN-53: FINAL cross-division invariant sweep — the duplicate sweep
         //   and quality passes above move blocks AFTER the first re-solve, so
