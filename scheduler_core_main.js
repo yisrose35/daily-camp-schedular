@@ -1410,6 +1410,13 @@
             }
             return (_scCache[bunk] = c);
         };
+        // ★ PERF: expose the MEMOIZED period count so the adapter (a separate module) reuses ONE
+        //   computed value per bunk. The adapter's getSpecialUsageCount runs inside sort
+        //   comparators; calling getPeriodActivityCount there per-comparator re-scanned history
+        //   tens of thousands of times and blew generation up to ~45s (the call is cheap when the
+        //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
+        //   memo caps it to one compute per bunk (~bunks×specials total).
+        window.__smartTileNeedCount = _bunkSpecialCount;
         // neediest first (fewest specials THIS PERIOD); seniority breaks ties.
         const _needSenCmp = (bunkA, divA, bunkB, divB) =>
             (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||

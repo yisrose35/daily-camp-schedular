@@ -1031,12 +1031,12 @@
                 //   a bunk well-served earlier doesn't stay deprioritized all week. Kill switch
                 //   window.__smartTileNeedFirst = false → lifetime (legacy). Period tunable via
                 //   window.__smartTileNeedPeriod (default '1week').
-                const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
-                if (window.__smartTileNeedFirst !== false && typeof _gpc === 'function') {
-                    const period = window.__smartTileNeedPeriod || '1week';
-                    let sum = 0;
-                    allAvailableSpecials.forEach(s => { try { sum += _gpc(bunk, s.name, period) || 0; } catch (_) {} });
-                    return sum;
+                // ★ PERF: reuse the ONE memoized period count exposed by scheduler_core_main
+                //   instead of re-scanning history here. This runs inside sort comparators —
+                //   calling getPeriodActivityCount per comparator blew generation up to ~45s.
+                //   The shared memo caps it to one compute per bunk.
+                if (window.__smartTileNeedFirst !== false && typeof window.__smartTileNeedCount === 'function') {
+                    try { return window.__smartTileNeedCount(bunk); } catch (_) {}
                 }
                 let sum = 0;
                 const bunkHist = historical[bunk] || {};
