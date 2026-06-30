@@ -41,6 +41,7 @@ var ICO = {
     zoomOut:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>',
     monitor:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
     download: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    message:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
     check:    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
     chevD:    '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
     star:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
@@ -1838,6 +1839,12 @@ function getStyles() {
     /* Standard Excel fill colors for categories */
     '.pc3-tbl .cell-pinned{background:#fff2cc;color:#000;}' +
     '.pc3-tbl .cell-league{background:#ddebf7;color:#000;}' +
+    /* League cells with multiple matchups: one matchup per line, a thin rule
+       between each so games are clearly separated (see pcCellHtml). */
+    '.pc3-tbl td .pc3-mu{display:block;padding:3px 5px;border-bottom:1px solid rgba(0,0,0,.35);line-height:1.25;}' +
+    '.pc3-tbl td .pc3-mu:first-child{padding-top:0;}' +
+    '.pc3-tbl td .pc3-mu:last-child{border-bottom:none;padding-bottom:0;}' +
+    '.pc3-tbl td .pc3-mu-head{font-weight:700;}' +
     '.pc3-tbl .cell-transition{background:#f2f2f2;color:#000;font-size:11px;font-weight:400;font-style:italic;}' +
     /* Black-and-white override for the print sheets — applied only while
        rasterizing the preview to a JPEG / image-print (white cells, black
@@ -2211,6 +2218,8 @@ function buildMainUI() {
                 '<div class="pcx-menu" id="pc3-output-menu">' +
                     '<div class="pcx-menu-label">Download</div>' +
                     '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
+                    '<div class="pcx-menu-label">Share</div>' +
+                    '<button onclick="window._pc3SpecialtyText();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.message + 'Activity schedule text</button>' +
                     '<div class="pcx-menu-label">Print</div>' +
                     '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
@@ -3001,11 +3010,10 @@ function renderSharedTimelineTable(grades) {
         var txt, cls;
         if (!seg) {
             var lg0 = pcLeagueInfoAt(c.grade, r.startMin);
-            if (lg0) { txt = lg0.label + (lg0.matchups.length && !t.hideLeagueMatchups ? ' │ ' + lg0.matchups.join(', ') : ''); cls = 'cell-league'; }
+            if (lg0) { txt = pcLeagueCellText(lg0.label, t.hideLeagueMatchups ? [] : lg0.matchups); cls = 'cell-league'; }
             else { txt = '—'; cls = 'cell-free'; }
         } else if (!auto && seg.isLeague) {
-            txt = seg.event || 'League Game';
-            if (!t.hideLeagueMatchups) { var mm = buildLeagueMatchups(seg, c.grade); if (mm.length) txt += ' │ ' + mm.join(', '); }
+            txt = pcLeagueCellText(seg.event || 'League Game', t.hideLeagueMatchups ? [] : buildLeagueMatchups(seg, c.grade));
             cls = 'cell-league';
         } else {
             var isLeagueAct = !!(seg.entry && (seg.entry._h2h || seg.entry._league || seg.entry._isSpecialtyLeague || seg.entry._allMatchups));
@@ -3013,7 +3021,7 @@ function renderSharedTimelineTable(grades) {
             if (isLeagueAct || leagueInfo) {
                 var lbl = (seg.entry && (seg.entry._gameLabel || seg.entry._leagueName)) || (leagueInfo && leagueInfo.label) || 'League Game';
                 var ms = (leagueInfo && leagueInfo.matchups) || [];
-                txt = lbl + (ms.length && !t.hideLeagueMatchups ? ' │ ' + ms.join(', ') : '');
+                txt = pcLeagueCellText(lbl, t.hideLeagueMatchups ? [] : ms);
                 cls = 'cell-league';
             } else {
                 txt = seg.entry ? formatEntry(seg.entry) : '—';
@@ -3106,7 +3114,7 @@ function renderSharedTimelineTable(grades) {
                 }
                 for (var rr = ri; rr < ri + rowspan; rr++) for (var c2 = ci; c2 < ci + colspan; c2++) done[kk(rr, c2)] = 1;
                 html += '<td class="' + cell.cls + '"' + (colspan > 1 ? ' colspan="' + colspan + '"' : '') + (rowspan > 1 ? ' rowspan="' + rowspan + '"' : '') +
-                    ' data-cell-text="' + escHtml(cell.text) + '" style="text-align:center;">' + escHtml(cell.text) + '</td>';
+                    ' data-cell-text="' + escHtml(cell.text.replace(/\n/g, ' │ ')) + '" style="text-align:center;white-space:pre-line;">' + pcCellHtml(cell.text) + '</td>';
             }
             html += '</tr>';
         });
@@ -3141,7 +3149,7 @@ function renderSharedTimelineTable(grades) {
                 }
                 for (var rr2 = bi; rr2 < bi + rowspanT; rr2++) for (var c3 = ti; c3 < ti + colspanT; c3++) done[kk(rr2, c3)] = 1;
                 html += '<td class="' + cellT.cls + '"' + (colspanT > 1 ? ' colspan="' + colspanT + '"' : '') + (rowspanT > 1 ? ' rowspan="' + rowspanT + '"' : '') +
-                    ' data-cell-text="' + escHtml(cellT.text) + '" style="text-align:center;">' + escHtml(cellT.text) + '</td>';
+                    ' data-cell-text="' + escHtml(cellT.text.replace(/\n/g, ' │ ')) + '" style="text-align:center;white-space:pre-line;">' + pcCellHtml(cellT.text) + '</td>';
             }
             html += '</tr>';
         });
@@ -3195,15 +3203,12 @@ function renderManualBunksTop(divName, bunks, blocks) {
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
         if (eb.isLeague) {
-            // ★ #V2-17: escape the league event + matchup names (user-controlled) before
-            //   injecting; keep the intentional <br>. The sibling paths (renderManualTimeTop
-            //   L2320, live views L3654/3618/3598) already escape — this was the lone raw render.
-            var leagueText = escHtml(eb.event);
-            if (!_currentTemplate.hideLeagueMatchups) {
-                var matchups = buildLeagueMatchups(eb, divName);
-                if (matchups.length) leagueText += '<br>' + escHtml(matchups.join(', '));
-            }
-            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + leagueText + '</strong></td>';
+            // Each matchup on its own line, with a thin rule between games
+            // (pcCellHtml + .pc3-mu styling). pcCellHtml escapes the user-controlled
+            // event + matchup names. The game label renders as the bold head line.
+            var _lgMatchups = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, divName);
+            var _lgText = pcLeagueCellText(eb.event, _lgMatchups);
+            html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_lgText.replace(/\n/g, ' │ ')) + '" colspan="' + bunks.length + '" style="text-align:center;white-space:pre-line;">' + pcCellHtml(_lgText) + '</td>';
         } else {
             bunks.forEach(function (b, bi) {
                 var si = findFirstSlotForTime(eb.startMin, divName);
@@ -3271,12 +3276,10 @@ function renderManualTimeTop(divName, bunks, blocks) {
             if (!text && type === 'free') text = '\u2014';
             if (eb.isLeague) {
                 type = 'league';
-                text = eb.event || 'League Game';
-                if (!_currentTemplate.hideLeagueMatchups) {
-                    var matchups = buildLeagueMatchups(eb, divName, b);
-                    if (matchups.length) text = matchups.join(', ');
-                }
-                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '">' + escHtml(text) + '</td>';
+                var _mtMatchups = _currentTemplate.hideLeagueMatchups ? [] : buildLeagueMatchups(eb, divName, b);
+                // Per-bunk cell: just this bunk's game(s), one matchup per line.
+                text = _mtMatchups.length ? pcLeagueCellText('', _mtMatchups) : (eb.event || 'League Game');
+                html += '<td class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + blkIdx) + '" data-cell-text="' + escHtml(text.replace(/\n/g, ' │ ')) + '" data-bunk="' + escHtml(b) + '" data-slot="' + si + '" data-div="' + escHtml(divName) + '" style="white-space:pre-line;">' + pcCellHtml(text) + '</td>';
             } else {
                 var inner = pcCellInnerHtml(text, type, {
                     preChange: entry ? (entry._splitPreChange || 0) : 0,
@@ -3679,6 +3682,238 @@ function pcEntryIsSpecialty(entry, nameSet) {
     var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
     if (fn && ns[String(fn).toLowerCase().trim()]) return true;
     return false;
+}
+
+/**
+ * Resolve the specialty name to GROUP an entry under for the text roster.
+ * Checks the activity name first (specials placed in a facility room), then the
+ * field name (name-only specials store the special's name as the field). The
+ * activity name is canonicalized for display; lookups stay against the raw name
+ * so a canonical alias that differs from the configured name still matches.
+ */
+function pcEntrySpecialtyName(entry, nameSet) {
+    if (!entry) return '';
+    var ns = nameSet || pcSpecialtyNameSet();
+    var actRaw = entry._activity || '';
+    if (actRaw && ns[String(actRaw).toLowerCase().trim()]) return pcCanonicalActivityName(actRaw) || actRaw;
+    var fn = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
+    if (fn && ns[String(fn).toLowerCase().trim()]) return fn;
+    return '';
+}
+
+// =========================================================================
+// ACTIVITY SCHEDULE TEXT
+// Build a copy-pasteable, group-text-friendly roster of the day's activities,
+// grouped activity → time/s → bunk/s. Whole camp, both builder modes. The user
+// picks exactly which activities to include — specialties (e.g. VR, Archery)
+// are offered checked by default, sports / other activities unchecked so they
+// can opt them in. Mirrors the auto/manual iteration of scanLocationAcrossBunks.
+// =========================================================================
+
+// Resolve the name to GROUP an entry under for the roster: specialty name first,
+// then the sport / general activity name (canonicalized for display).
+function pcEntryActivityName(entry, nameSet) {
+    if (!entry) return '';
+    var spec = pcEntrySpecialtyName(entry, nameSet);
+    if (spec) return spec;
+    var s = entry.sport || entry._activity || '';
+    if (!s) return '';
+    return pcCanonicalActivityName(s) || s;
+}
+
+// Scan the whole camp for the current day and bucket every schedulable activity
+// by name. Returns { name: { name, isSpecialty, byTime: { label: {label,startMin,bunks[]} } } }.
+function pcScanActivitiesForText() {
+    var divs = getDivisions();
+    var nameSet = pcSpecialtyNameSet();
+    var activities = {};
+
+    function record(name, isSpecialty, timeLabel, startMin, bunk) {
+        if (!name) return;
+        if (!activities[name]) activities[name] = { name: name, isSpecialty: !!isSpecialty, byTime: {} };
+        if (isSpecialty) activities[name].isSpecialty = true;
+        var bt = activities[name].byTime;
+        if (!bt[timeLabel]) bt[timeLabel] = { label: timeLabel, startMin: startMin, bunks: [] };
+        if (bt[timeLabel].bunks.indexOf(bunk) === -1) bt[timeLabel].bunks.push(bunk);
+    }
+
+    function consider(entry, slot, bunk) {
+        if (!entry || entry.continuation) return;
+        // Skip structural / non-activity slots and league games (head-to-head
+        // matchups don't fit the activity → time → bunks roster shape).
+        if (entry._isTransition || entry._isDismissal || entry._isSnack || entry._league || entry._h2h) return;
+        var name = pcEntryActivityName(entry, nameSet);
+        if (!name || name === 'Free') return;
+        record(name, pcEntryIsSpecialty(entry, nameSet),
+            minutesToTimeLabel(slot.startMin) + ' - ' + minutesToTimeLabel(slot.endMin),
+            slot.startMin, bunk);
+    }
+
+    var _orderedDivKeys = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(Object.keys(divs))
+        : Object.keys(divs).sort(naturalSort);
+
+    if (isAutoMode()) {
+        // AUTO MODE: each bunk carries its own slot indices.
+        _orderedDivKeys.forEach(function (dn) {
+            (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice().forEach(function (bk) {
+                getPerBunkSchedule(bk, dn).forEach(function (slot, si) { consider(getEntry(bk, si), slot, bk); });
+            });
+        });
+    } else {
+        // MANUAL MODE: all bunks share division-level slot indices.
+        _orderedDivKeys.forEach(function (dn) {
+            var divSlots = window.divisionTimes && window.divisionTimes[dn] ? window.divisionTimes[dn] : [];
+            var bunks = (divs[dn] && divs[dn].bunks ? divs[dn].bunks : []).slice();
+            divSlots.forEach(function (slot, si) {
+                bunks.forEach(function (bk) { consider(getEntry(bk, si), slot, bk); });
+            });
+        });
+    }
+    return activities;
+}
+
+// Render the message text from a scanned activity map, including only the names
+// flagged true in `selected`.
+function buildActivityScheduleText(activities, selected) {
+    var lines = [];
+    var dateStr = '';
+    try {
+        if (window.currentScheduleDate) {
+            var d = new Date(window.currentScheduleDate + 'T12:00:00');
+            dateStr = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        }
+    } catch (e) { dateStr = ''; }
+    lines.push('Hey everyone! Here is the activity schedule for today'
+        + (dateStr ? ', ' + dateStr : '')
+        + '. Please review your times and the bunks assigned to you:');
+    lines.push('');
+
+    var names = Object.keys(activities).filter(function (n) { return selected[n]; }).sort(naturalSort);
+    if (!names.length) {
+        lines.push('(No activities selected.)');
+        return lines.join('\n');
+    }
+
+    names.forEach(function (nm) {
+        lines.push(nm);
+        var times = Object.values(activities[nm].byTime).sort(function (a, b) { return a.startMin - b.startMin; });
+        times.forEach(function (t) {
+            // Bunks within a time follow the division/bunk iteration order above.
+            lines.push('• ' + t.label + ': ' + t.bunks.join(', '));
+        });
+        lines.push('');
+    });
+
+    return lines.join('\n').replace(/\n+$/, '');
+}
+
+// Preview modal: an activity checklist on top (specialties checked by default,
+// sports / other opt-in) feeding a live, editable message textarea with a
+// one-click copy-to-clipboard.
+function pcOpenSpecialtyTextModal() {
+    var activities = pcScanActivitiesForText();
+    var allNames = Object.keys(activities).sort(naturalSort);
+    var specialtyNames = allNames.filter(function (n) { return activities[n].isSpecialty; });
+    var otherNames = allNames.filter(function (n) { return !activities[n].isSpecialty; });
+    var selected = {};
+    specialtyNames.forEach(function (n) { selected[n] = true; });
+
+    var existing = document.getElementById('pc3-spectext-overlay');
+    if (existing) existing.parentNode.removeChild(existing);
+
+    function rowHtml(n) {
+        var i = allNames.indexOf(n);
+        return '<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:7px;cursor:pointer;font-size:13px;color:#0f172a;">'
+            + '<input type="checkbox" data-i="' + i + '"' + (selected[n] ? ' checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:#147D91;">'
+            + '<span>' + escHtml(n) + '</span></label>';
+    }
+    function sectionHtml(title, list) {
+        if (!list.length) return '';
+        return '<div style="margin-bottom:8px;">'
+            + '<div style="display:flex;align-items:center;justify-content:space-between;padding:0 6px 4px;">'
+                + '<div style="font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;">' + escHtml(title) + '</div>'
+                + '<div style="font-size:11px;color:#147D91;">'
+                    + '<a href="#" data-bulk="all" data-sec="' + escHtml(title) + '" style="text-decoration:none;color:#147D91;">All</a>'
+                    + ' · <a href="#" data-bulk="none" data-sec="' + escHtml(title) + '" style="text-decoration:none;color:#94a3b8;">None</a>'
+                + '</div>'
+            + '</div>' + list.map(rowHtml).join('') + '</div>';
+    }
+
+    var checklistHtml = allNames.length
+        ? (sectionHtml('Specialties', specialtyNames) + sectionHtml('Sports & other', otherNames))
+        : '<div style="color:#94a3b8;font-size:13px;padding:8px;">No activities are scheduled for this day.</div>';
+
+    var overlay = document.createElement('div');
+    overlay.id = 'pc3-spectext-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:24px;';
+
+    var card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.35);width:min(560px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;font-family:inherit;';
+    card.innerHTML =
+        '<div style="padding:16px 20px;border-bottom:1px solid #eef2f7;display:flex;align-items:center;justify-content:space-between;">' +
+            '<div style="font-weight:700;font-size:15px;color:#0f172a;">Activity schedule text</div>' +
+            '<button id="pc3-spectext-x" style="border:none;background:#f1f5f9;border-radius:8px;width:28px;height:28px;cursor:pointer;font-size:16px;color:#475569;line-height:1;">×</button>' +
+        '</div>' +
+        '<div style="padding:14px 20px 6px;font-size:12px;color:#64748b;">Pick which activities to include, then copy the message to send to your staff.</div>' +
+        '<div id="pc3-spectext-list" style="margin:0 20px;padding:8px;border:1px solid #e2e8f0;border-radius:10px;max-height:26vh;overflow:auto;">' + checklistHtml + '</div>' +
+        '<div style="padding:10px 20px 6px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;">Message</div>' +
+        '<div style="padding:0 20px 8px;flex:1;overflow:auto;">' +
+            '<textarea id="pc3-spectext-area" spellcheck="false" style="width:100%;height:34vh;resize:vertical;border:1px solid #e2e8f0;border-radius:10px;padding:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;color:#0f172a;box-sizing:border-box;"></textarea>' +
+        '</div>' +
+        '<div style="padding:14px 20px;border-top:1px solid #eef2f7;display:flex;gap:10px;justify-content:flex-end;">' +
+            '<button id="pc3-spectext-close" style="padding:9px 16px;border:1px solid #e2e8f0;background:#fff;border-radius:9px;cursor:pointer;font-size:13px;color:#475569;">Close</button>' +
+            '<button id="pc3-spectext-copy" style="padding:9px 18px;border:none;background:#147D91;color:#fff;border-radius:9px;cursor:pointer;font-size:13px;font-weight:600;">Copy to clipboard</button>' +
+        '</div>';
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    var area = card.querySelector('#pc3-spectext-area');
+    function renderText() { area.value = buildActivityScheduleText(activities, selected); }
+    renderText();
+
+    // Checkbox toggles + section All/None links rebuild the message live.
+    card.querySelector('#pc3-spectext-list').addEventListener('change', function (e) {
+        var cb = e.target;
+        if (cb && cb.type === 'checkbox') {
+            var n = allNames[parseInt(cb.getAttribute('data-i'), 10)];
+            if (n) { selected[n] = cb.checked; renderText(); }
+        }
+    });
+    card.querySelector('#pc3-spectext-list').addEventListener('click', function (e) {
+        var a = e.target;
+        if (a && a.tagName === 'A' && a.getAttribute('data-bulk')) {
+            e.preventDefault();
+            var on = a.getAttribute('data-bulk') === 'all';
+            var sec = a.getAttribute('data-sec');
+            var list = (sec === 'Specialties') ? specialtyNames : otherNames;
+            list.forEach(function (n) { selected[n] = on; });
+            card.querySelectorAll('#pc3-spectext-list input[type="checkbox"]').forEach(function (cb) {
+                var n = allNames[parseInt(cb.getAttribute('data-i'), 10)];
+                if (list.indexOf(n) !== -1) cb.checked = on;
+            });
+            renderText();
+        }
+    });
+
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    card.querySelector('#pc3-spectext-x').addEventListener('click', close);
+    card.querySelector('#pc3-spectext-close').addEventListener('click', close);
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+
+    card.querySelector('#pc3-spectext-copy').addEventListener('click', function () {
+        var btn = this;
+        var val = area.value;
+        function ok() {
+            btn.textContent = 'Copied ✓';
+            if (window.showToast) window.showToast('Schedule copied', 'success');
+            setTimeout(function () { btn.textContent = 'Copy to clipboard'; }, 1800);
+        }
+        function fallback() { area.focus(); area.select(); try { document.execCommand('copy'); ok(); } catch (e) {} }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(val).then(ok).catch(fallback);
+        } else { fallback(); }
+    });
 }
 
 // =========================================================================
@@ -7630,6 +7865,7 @@ function doWeekStackPrint(keys) {
     runPrint(combinedHtml, t);
 }
 window._pc3ExportExcel = exportExcel;
+window._pc3SpecialtyText = pcOpenSpecialtyTextModal;
 window._pc3OpenLive = openLiveWindow;
 window._pc3RunLiveStandalone = runLiveStandalone;
 // The live-view pagination arrows use inline onclick="livePageNav(±1)", which

@@ -1397,6 +1397,58 @@ function shouldHighlightBunk(bunkName) {
                 activities: [s.name]
             });
         });
+        // General activities (Facilities editor → "General Activities", e.g.
+        // "Main activity" at the Auditorium) are hosted at a facility, not a
+        // sports field or a special. They were absent from the edit-modal
+        // activity dropdown. Surface each one as a location keyed to its host
+        // facility so picking it resolves to that facility's court the same way
+        // a field sport does. Capacity comes from the facility's sharing config.
+        try {
+            const _gaItems = (typeof window.getGeneralActivityPaletteItems === 'function')
+                ? window.getGeneralActivityPaletteItems() : [];
+            (_gaItems || []).forEach(ga => {
+                if (!ga || !ga.name || !ga.facility) return;
+                let cap = 1;
+                try {
+                    const info = window.getCustomActivitySharingInfo?.(ga.name, ga.facility, null, settings);
+                    if (info && isFinite(info.capacity) && info.capacity > 0) cap = info.capacity;
+                } catch (e) { /* default capacity */ }
+                locations.push({
+                    name: ga.facility, type: 'general',
+                    capacity: cap,
+                    activities: [ga.name]
+                });
+            });
+        } catch (e) { /* general activities optional */ }
+        // Fixed pinned items (Swim, Lunch, Snacks, Dinner, Dismissal …) and
+        // custom pinned tiles (e.g. "Regroup") are pinned events — not field
+        // sports, specials, or general activities — so they were also missing
+        // from the edit-modal dropdown. Source the fixed items from the camp's
+        // Pinned Tile Defaults (which carry each one's default location, e.g.
+        // Swim → Pool) and always offer the standard set; harvest custom
+        // pinned names from the current skeleton. Each is keyed to its default
+        // location so picking it resolves the right court where one exists.
+        try {
+            const _seen = new Set(locations.flatMap(l => (l.activities || []).map(a => String(a).toLowerCase())));
+            const _pushPinned = (name, loc, kind) => {
+                if (!name) return;
+                const k = String(name).toLowerCase();
+                if (_seen.has(k)) return;
+                _seen.add(k);
+                locations.push({ name: loc || name, type: kind, capacity: 1, activities: [name] });
+            };
+            const _ptd = (typeof window.getPinnedTileDefaults === 'function')
+                ? window.getPinnedTileDefaults() : (settings.pinnedTileDefaults || {});
+            Object.entries(_ptd || {}).forEach(([act, loc]) => _pushPinned(act, loc, 'fixed'));
+            ['Swim', 'Lunch', 'Snacks', 'Dinner', 'Dismissal'].forEach(a => _pushPinned(a, null, 'fixed'));
+            let _skel = [];
+            try { _skel = (typeof getSkeleton === 'function') ? (getSkeleton() || []) : []; } catch (e) { _skel = []; }
+            (_skel || []).forEach(t => {
+                if (!t) return;
+                const nm = t.customActivity || ((t.type === 'custom' || t.type === 'pinned') ? t.event : null);
+                if (nm) _pushPinned(nm, t.customField || t.location || null, 'custom');
+            });
+        } catch (e) { /* fixed / custom pinned optional */ }
         return locations;
     }
 
@@ -6347,7 +6399,7 @@ function minutesToTimeString(mins) {
                     <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">Override field manually</summary>
                     <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; margin-top:8px; box-sizing:border-box;">
                         <option value="">-- No specific field --</option>
-                        ${allLocations.map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
+                        ${allLocations.filter(loc => loc.type === 'field' || loc.type === 'special').map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
                     </select>
                 </details>
                 <div id="multi-conflict-preview" style="display: none;"></div>

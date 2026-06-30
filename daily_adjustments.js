@@ -36,12 +36,16 @@ let currentOverrides = {
   dailyDisabledSportsByField: {},
   disabledFields: [],
   disabledSpecials: [],
-  bunkActivityOverrides: []
+  bunkActivityOverrides: [],
+  dailyActivityBunkRestrictions: []
 };
 let displacedTiles = [];
 let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
+// ★ Partial-regen: main-grid period tiles double-clicked for regeneration.
+//   tileId -> { division, startMin, endMin }
+let _daRegenTiles = new Map();
 
 // ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
 let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
@@ -2336,6 +2340,10 @@ function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
 
+  // ★ Partial-regen: drop any stale period selection + its bar on a full re-render.
+  if (_daRegenTiles && _daRegenTiles.size) _daRegenTiles.clear();
+  { const _rb = document.getElementById('da-regen-bar'); if (_rb) _rb.remove(); }
+
   // Drop stale Change tiles before painting
   daCleanupOrphanChangeTiles();
   // ★ Day 27: drop tiles whose division no longer exists in the camp structure
@@ -3062,30 +3070,45 @@ function addDragToRepositionListeners(gridEl) {
       }
     });
     
-    cell.addEventListener('drop', (e) => {
+    cell.addEventListener('drop', async (e) => {
       cell.style.background = '';
       if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
-      
+
       if (e.dataTransfer.types.includes('text/event-move')) {
         e.preventDefault();
         const eventId = e.dataTransfer.getData('text/event-move');
         const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
+
         const divName = cell.dataset.div;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
         const y = e.clientY - rect.top;
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
-        
+
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        const newStart = minutesToTime(cellStartMin + snapMin);
-        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+        const newStartMin = cellStartMin + snapMin;
+        const newStart = minutesToTime(newStartMin);
+        const newEnd = minutesToTime(newStartMin + duration);
+
+        // ★ NIGHT ACTIVITY on MOVE: the new-tile drop path asks "is this a Night
+        //   Activity?" when a tile lands past the division's end time, but MOVING an
+        //   existing tile bypassed that prompt — so a tile dragged into the after-hours
+        //   (night) zone never got tagged isNightActivity and was then dropped by the
+        //   generator's division-boundary clip (never scheduled). Mirror the create-flow
+        //   prompt here for any moved tile starting at/after the target division's end.
+        const targetDiv = window.divisions[divName] || {};
+        const targetDivEndMin = parseTimeToMinutes(targetDiv.endTime);
+        let isNight = false;
+        if (targetDivEndMin !== null && newStartMin >= targetDivEndMin) {
+          isNight = await daShowConfirm('⏰ "' + _escHtml(newStart) + '" is after this division\'s end time (' + _escHtml(targetDiv.endTime) + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Cancel Move' });
+          if (!isNight) return; // declined → abort the move, leave the tile where it was
+        }
 
         if (divName !== event.division) {
           // Cross-grade drop. Remap league reference so the copy points
           // at a league assigned to the new grade (not the source's).
-          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd, isNightActivity: isNight };
           if (typeof window._mbRemapLeagueForGrade === 'function') {
             window._mbRemapLeagueForGrade(copy, divName);
           }
@@ -3094,6 +3117,9 @@ function addDragToRepositionListeners(gridEl) {
         } else {
           event.startTime = newStart;
           event.endTime = newEnd;
+          // Re-tag based on the new position: set when moved into the night zone,
+          // clear when moved back into normal hours (so a stale flag can't linger).
+          event.isNightActivity = isNight;
           bumpOverlappingTiles(event, divName);
         }
 
@@ -3874,15 +3900,22 @@ function addRemoveListeners(gridEl) {
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
-      clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => { _showTileActionBar(tile); }, 280);
+      // A double-click is unfolding — let ondblclick handle it (don't pop Edit/Delete).
+      if (_clickTimer) return;
+      // Longer pause so the 2nd click of a double-click lands before Edit/Delete shows.
+      _clickTimer = setTimeout(() => { _clickTimer = null; _showTileActionBar(tile); }, 350);
     };
 
     tile.ondblclick = (e) => {
       e.stopPropagation();
-      clearTimeout(_clickTimer);
+      if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
       if (e.target.classList.contains('da-resize-handle')) return;
-      _showTileActionBar(tile);
+      e.preventDefault();
+      // Auto mode keeps the old behavior (Edit/Delete). Manual mode: double-click
+      // SELECTS this whole period for partial regeneration.
+      if (window._daBuilderMode === 'auto') { _showTileActionBar(tile); return; }
+      deselectAllTiles(); // clear any Edit/Delete bar the single-click timer may have popped
+      _daToggleTileRegenSelect(tile);
     };
   });
 }
@@ -5487,7 +5520,8 @@ async function runOptimizer() {
     },
     dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
     dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || [],
+    dailyActivityBunkRestrictions: currentOverrides.dailyActivityBunkRestrictions || []
   };
 
   if (isPartialWipe) {
@@ -5609,6 +5643,7 @@ async function runOptimizer() {
   window.saveCurrentDailyData("dailyDisabledSportsByField", savedResourceOverrides.dailyDisabledSportsByField);
   window.saveCurrentDailyData("dailyFieldAvailability", savedResourceOverrides.dailyFieldAvailability);
   window.saveCurrentDailyData("disabledSpecialtyLeagues", savedResourceOverrides.disabledSpecialtyLeagues);
+  window.saveCurrentDailyData("dailyActivityBunkRestrictions", savedResourceOverrides.dailyActivityBunkRestrictions);
   console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
 
   window.invalidateSmartLogicSpecialsCache?.();
@@ -7148,8 +7183,9 @@ function _boRenderBunkGrid(wrap, divName) {
   let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:20;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
     <span style="font-size:16px;">🎯</span>
     <strong id="bo-sel-count" style="font-size:13px;color:#1e40af;">0 slots selected</strong>
-    <span style="font-size:11px;color:#3b82f6;">— double-click slots to (de)select, then Assign</span>
+    <span style="font-size:11px;color:#3b82f6;">— double-click slots to (de)select, then Assign or Regenerate</span>
     <div style="flex:1;"></div>
+    <button id="bo-sel-regen" type="button" style="padding:5px 12px;font-size:12px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">🔄 Regenerate selected</button>
     <button id="bo-sel-assign" type="button" style="padding:5px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Assign…</button>
     <button id="bo-sel-clear" type="button" style="padding:5px 10px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Clear</button>
   </div>`;
@@ -7253,7 +7289,7 @@ function _boRenderBunkGrid(wrap, divName) {
         const startMin = parseInt(block.dataset.start);
         const endMin = parseInt(block.dataset.end);
         _boShowPicker(block, bunk, startMin, endMin);
-      }, 220);
+      }, 350);
     };
     block.ondblclick = (e) => {
       if (e.target.classList.contains('bo-revert-btn')) return;
@@ -7271,6 +7307,8 @@ function _boRenderBunkGrid(wrap, divName) {
   };
   const _clearBtn = wrap.querySelector('#bo-sel-clear');
   if (_clearBtn) _clearBtn.onclick = () => { _boSelectedCells.clear(); renderBunkOverridesUI(); };
+  const _regenBtn = wrap.querySelector('#bo-sel-regen');
+  if (_regenBtn) _regenBtn.onclick = () => { _boRegenerateSelectedCells(); };
 
   // Revert buttons on overrides
   wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
@@ -7319,6 +7357,229 @@ function _boUpdateSelBar() {
   bar.style.display = 'flex';
   const cnt = bar.querySelector('#bo-sel-count');
   if (cnt) cnt.textContent = n + (n === 1 ? ' slot selected' : ' slots selected');
+}
+
+// ★ Partial (per-tile) regeneration — Manual builder only.
+// Re-roll ONLY the double-clicked tiles, preserving every other already-generated
+// cell. Reuses the existing per-bunk scope plumbing (runOptimizer → __allowedBunkSet
+// → runSkeletonOptimizer) plus a new per-slot signal `window.__regenSlotScope`:
+//   { [bunk]: { regen: Set<slotIdx>, keep: { [slotIdx]: entry } } }
+// STEP 1 of scheduler_core_main.js rebuilds each in-scope bunk from this snapshot —
+// `keep` slots are pinned (solver never moves them), `regen` slots are left empty for
+// the solver to fill. The snapshot covers EVERY bunk of the affected divisions so
+// sibling bunks (no selected tiles → empty `regen`) are fully preserved, immune to
+// STEP 0's division-level wipe.
+async function _boRegenerateSelectedCells() {
+  if (!_boSelectedCells || _boSelectedCells.size === 0) {
+    await daShowAlert('Double-click one or more tiles to select them, then click Regenerate.');
+    return;
+  }
+  const selections = Array.from(_boSelectedCells.values()).map(s => ({
+    bunk: String(s.bunk), startMin: s.startMin, endMin: s.endMin
+  }));
+  const ran = await _daPartialRegenerate(selections);
+  if (ran) _boSelectedCells.clear();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shared partial-regen CORE — used by BOTH surfaces:
+//   • Bunk-Level Overrides grid (per-bunk cells)   → _boRegenerateSelectedCells
+//   • Main schedule grid (whole division period)   → _daRegenerateSelectedTiles
+// `selections` = [{ bunk, startMin, endMin }]. Returns true if a regen actually ran.
+//
+// Re-rolls ONLY the selected (bunk, slot) tiles, preserving every other already-
+// generated cell. Builds window.__regenSlotScope (consumed by scheduler_core_main
+// STEP 1) covering EVERY bunk of the affected divisions, so sibling bunks (no
+// selected tiles) are fully preserved and pinned — immune to STEP 0's wipe.
+// ─────────────────────────────────────────────────────────────────────────
+async function _daPartialRegenerate(selections) {
+  if (window._daBuilderMode === 'auto') {
+    await daShowAlert('Partial tile regeneration is available in Manual builder mode only.');
+    return false;
+  }
+  if (!Array.isArray(selections) || selections.length === 0) {
+    await daShowAlert('Select one or more tiles first.');
+    return false;
+  }
+  if (typeof runOptimizer !== 'function') {
+    await daShowAlert('Error: the generator is not available.');
+    return false;
+  }
+
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const bunkToDiv = {};
+  Object.entries(divisions).forEach(([dn, di]) =>
+    ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+
+  // Map a tile's time window to its division slot index (small tolerance).
+  function _mapTileToSlot(divName, startMin, endMin) {
+    const slots = window.divisionTimes?.[divName] || [];
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i] || {};
+      const ss = (s.startMin != null) ? s.startMin : s.start;
+      const se = (s.endMin != null) ? s.endMin : s.end;
+      if (ss != null && Math.abs(ss - startMin) <= 2 &&
+          (se == null || endMin == null || Math.abs(se - endMin) <= 2)) return i;
+    }
+    let best = Infinity, bestIdx = -1;
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i] || {};
+      const ss = (s.startMin != null) ? s.startMin : s.start;
+      if (ss == null) continue;
+      const d = Math.abs(ss - startMin);
+      if (d < best) { best = d; bestIdx = i; }
+    }
+    return best <= 30 ? bestIdx : -1;
+  }
+
+  // 1. Resolve selections → per-bunk regen index sets.
+  const regenByBunk = {};
+  const affectedDivs = new Set();
+  let unmapped = 0;
+  selections.forEach(sel => {
+    const bunk = String(sel.bunk);
+    const divName = bunkToDiv[bunk];
+    if (!divName) { unmapped++; return; }
+    const idx = _mapTileToSlot(divName, sel.startMin, sel.endMin);
+    if (idx < 0) { unmapped++; return; }
+    if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
+    regenByBunk[bunk].add(idx);
+    affectedDivs.add(divName);
+
+    // Multi-period guard: spanned activity → regenerate the whole block.
+    const arr = window.scheduleAssignments?.[bunk] || [];
+    const entry = arr[idx];
+    const bs = entry && (entry._blockStart != null ? entry._blockStart
+                         : (entry._startMin != null ? entry._startMin : null));
+    if (entry && bs != null) {
+      for (let j = 0; j < arr.length; j++) {
+        const e = arr[j];
+        if (!e) continue;
+        const ebs = (e._blockStart != null ? e._blockStart
+                     : (e._startMin != null ? e._startMin : null));
+        if (ebs === bs) regenByBunk[bunk].add(j);
+      }
+    }
+  });
+
+  const selectedSlotCount = Object.values(regenByBunk).reduce((n, s) => n + s.size, 0);
+  if (affectedDivs.size === 0 || selectedSlotCount === 0) {
+    await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
+    return false;
+  }
+
+  // 2. Snapshot covering EVERY bunk of the affected divisions.
+  const regenScope = {};
+  const scopeBunks = new Set();
+  affectedDivs.forEach(dn => {
+    (divisions[dn]?.bunks || []).forEach(b => {
+      const bunk = String(b);
+      scopeBunks.add(bunk);
+      const regen = regenByBunk[bunk] || new Set();
+      const arr = window.scheduleAssignments?.[bunk] || [];
+      const keep = {};
+      for (let i = 0; i < arr.length; i++) {
+        if (regen.has(i)) continue;
+        if (arr[i]) keep[i] = JSON.parse(JSON.stringify(arr[i]));
+      }
+      regenScope[bunk] = { regen, keep };
+    });
+  });
+
+  // 3. Confirm.
+  const affectedBunkCount = Object.values(regenByBunk).filter(s => s.size > 0).length;
+  let msg = 'Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
+            ' across ' + affectedBunkCount + (affectedBunkCount === 1 ? ' bunk' : ' bunks') +
+            '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.';
+  if (unmapped > 0) msg += '<br><br><span style="color:#b45309;">(' + unmapped + ' selected tile(s) could not be mapped and will be skipped.)</span>';
+  const ok = await daShowConfirm(msg, { confirmText: 'Regenerate', cancelText: 'Cancel' });
+  if (!ok) return false;
+
+  // 4. Drive generation through the existing scope plumbing; always restore the
+  //    user's prior generation scope afterward.
+  const _savedScope = _generationScope;
+  const _savedBunkScope = _generationBunkScope;
+  try {
+    _generationScope = new Set(affectedDivs);
+    _generationBunkScope = scopeBunks;
+    window.__regenSlotScope = regenScope;   // consumed by scheduler_core_main STEP 1
+    await runOptimizer();                    // reuses date guards, save, and grid re-render
+  } finally {
+    delete window.__regenSlotScope;
+    _generationScope = _savedScope;
+    _generationBunkScope = _savedBunkScope;
+  }
+  return true;
+}
+
+// ── Main schedule grid: double-click to (de)select a whole division-period ──
+function _daToggleTileRegenSelect(tile) {
+  if (window._daBuilderMode === 'auto') return;
+  const id = tile && tile.dataset && tile.dataset.id;
+  if (!id) return;
+  const ev = (dailyOverrideSkeleton || []).find(x => x.id === id);
+  if (!ev) return;
+  const startMin = parseTimeToMinutes(ev.startTime);
+  const endMin = parseTimeToMinutes(ev.endTime);
+  if (startMin == null) return;
+  if (_daRegenTiles.has(id)) {
+    _daRegenTiles.delete(id);
+    tile.style.outline = ''; tile.style.outlineOffset = '';
+    tile.classList.remove('da-regen-selected');
+  } else {
+    _daRegenTiles.set(id, { division: ev.division, startMin, endMin });
+    tile.style.outline = '3px solid #16a34a'; tile.style.outlineOffset = '-2px';
+    tile.classList.add('da-regen-selected');
+  }
+  _daUpdateRegenBar();
+}
+
+function _daClearRegenTiles() {
+  _daRegenTiles.clear();
+  document.querySelectorAll('.da-event.da-regen-selected').forEach(el => {
+    el.style.outline = ''; el.style.outlineOffset = ''; el.classList.remove('da-regen-selected');
+  });
+  _daUpdateRegenBar();
+}
+
+function _daUpdateRegenBar() {
+  let bar = document.getElementById('da-regen-bar');
+  const n = _daRegenTiles.size;
+  if (n === 0) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'da-regen-bar';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:10001;display:flex;align-items:center;gap:10px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.18);padding:9px 14px;font-family:inherit;';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = '';
+  const label = document.createElement('strong');
+  label.style.cssText = 'font-size:13px;color:#065f46;';
+  label.textContent = '🔄 ' + n + (n === 1 ? ' period selected' : ' periods selected');
+  const regenBtn = document.createElement('button');
+  regenBtn.type = 'button';
+  regenBtn.textContent = 'Regenerate selected';
+  regenBtn.style.cssText = 'padding:6px 14px;font-size:12px;font-weight:700;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;';
+  regenBtn.onclick = () => { _daRegenerateSelectedTiles(); };
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.textContent = 'Clear';
+  clearBtn.style.cssText = 'padding:6px 10px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;';
+  clearBtn.onclick = () => { _daClearRegenTiles(); };
+  bar.appendChild(label); bar.appendChild(regenBtn); bar.appendChild(clearBtn);
+}
+
+async function _daRegenerateSelectedTiles() {
+  if (_daRegenTiles.size === 0) return;
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const selections = [];
+  _daRegenTiles.forEach(t => {
+    (divisions[t.division]?.bunks || []).forEach(b => {
+      selections.push({ bunk: String(b), startMin: t.startMin, endMin: t.endMin });
+    });
+  });
+  const ran = await _daPartialRegenerate(selections);
+  if (ran) _daClearRegenTiles();
 }
 
 // Searchable, multi-select activity picker. Pick ONE = a concrete override; pick
@@ -7597,12 +7858,14 @@ function saveOverridesUnified() {
   window.saveCurrentDailyData?.("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
   window.saveCurrentDailyData?.("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
   window.saveCurrentDailyData?.("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+  window.saveCurrentDailyData?.("dailyActivityBunkRestrictions", currentOverrides.dailyActivityBunkRestrictions);
   try {
     localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
       overrides: fullOverrides,
       dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
       dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-      disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+      disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || [],
+      dailyActivityBunkRestrictions: currentOverrides.dailyActivityBunkRestrictions || []
     }));
     // Iron-gate time-rules key (read by _ironGateTimeRulesV1 in
     // scheduler_core_auto.js as PRIMARY for time-rule clearing).
@@ -7623,7 +7886,6 @@ function renderResourceOverridesUI() {
   const isRainy = isRainyDayActive();
   const rainyBanner = isRainy ? `
     <div class="da-rainy-banner">
-      <span>🌧️</span>
       <div>
         <strong>Rainy Day Mode Active</strong>
         <div style="font-size:12px;opacity:0.85;">Outdoor fields are automatically disabled</div>
@@ -7733,16 +7995,150 @@ function renderResourceOverridesUI() {
   renderOverrideDetailPane();
 }
 
+// =================================================================
+// BUNK-ONLY ACCESS — per-facility, inside the facility detail pane.
+// "On THIS facility, this activity is only available for these bunk(s) today."
+// FACILITY-SCOPED, restriction-only: listed bunks may receive it; all other
+// bunks are blocked from that (facility, activity) placement.
+// Entry shape: { id, facility, activity, bunks } where activity '*' = whole
+// facility. Persists via the dailyActivityBunkRestrictions resource-override
+// key (saveOverridesUnified → cloud + campResourceOverrides_<date>).
+// =================================================================
+
+// Which (facility||activity) row is currently expanded for editing, or null.
+let _brEditKey = null;
+
+function _brGenId() {
+  return 'r_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function _brFindEntry(facility, activity) {
+  const fLc = String(facility).toLowerCase();
+  return (currentOverrides.dailyActivityBunkRestrictions || []).find(r =>
+    r && String(r.facility).toLowerCase() === fLc && String(r.activity) === String(activity));
+}
+
+// Save (create/update) or clear a facility-scoped restriction for (facility, activity).
+// An empty bunk list removes the entry (= "all bunks", no restriction).
+function _brSetEntry(facility, activity, bunks) {
+  let arr = (currentOverrides.dailyActivityBunkRestrictions || []).filter(r =>
+    !(String(r.facility).toLowerCase() === String(facility).toLowerCase() && String(r.activity) === String(activity)));
+  if (Array.isArray(bunks) && bunks.length > 0) {
+    arr = arr.concat([{ id: _brGenId(), facility, activity, bunks }]);
+  }
+  currentOverrides.dailyActivityBunkRestrictions = arr;
+  saveOverridesUnified();
+}
+
+// Render the "Bunk-Only Access" section for ONE facility into containerEl.
+// rows = [{ activity, label, badge }] (activity '*' for the whole facility).
+function renderFacilityBunkAccess(containerEl, facilityName, rows) {
+  if (!containerEl) return;
+  containerEl.innerHTML = '';
+
+  const divisions = masterSettings.app1?.divisions || {};
+  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_rawAvail.slice())
+    : _rawAvail.slice();
+
+  rows.forEach(({ activity, label, badge }) => {
+    const key = facilityName + '||' + activity;
+    const entry = _brFindEntry(facilityName, activity);
+    const isEditing = _brEditKey === key;
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'da-access-row' + (entry ? ' da-access-row-active' : '') + (isEditing ? ' da-access-row-editing' : '');
+
+    // ── Summary line ──
+    const head = document.createElement('div');
+    head.className = 'da-access-head';
+    const summary = entry
+      ? `<span class="da-access-status da-access-status-set" title="${_escHtml((entry.bunks || []).join(', '))}">Bunks: ${_escHtml((entry.bunks || []).join(', '))}</span>`
+      : `<span class="da-access-status">All bunks</span>`;
+    head.innerHTML = `
+      <span class="da-access-label">${badge || ''}<strong>${_escHtml(label)}</strong></span>
+      <span class="da-access-controls">${summary}
+        <button class="da-btn da-btn-sm da-btn-outline br-edit">${isEditing ? 'Close' : (entry ? 'Edit' : 'Restrict')}</button>
+        ${entry ? '<button class="da-btn da-btn-sm da-btn-ghost-danger br-clear" title="Remove restriction">Clear</button>' : ''}
+      </span>`;
+    rowEl.appendChild(head);
+
+    head.querySelector('.br-edit').onclick = () => {
+      _brEditKey = isEditing ? null : key;
+      renderOverrideDetailPane();
+    };
+    const clearBtn = head.querySelector('.br-clear');
+    if (clearBtn) clearBtn.onclick = () => { _brSetEntry(facilityName, activity, []); _brEditKey = null; renderOverrideDetailPane(); };
+
+    // ── Inline chip picker (only for the expanded row) ──
+    if (isEditing) {
+      const preselect = new Set(entry ? (entry.bunks || []).map(String) : []);
+      const picker = document.createElement('div');
+      picker.className = 'da-access-picker';
+      const hint = document.createElement('div');
+      hint.className = 'da-access-picker-hint';
+      hint.textContent = 'Select the bunk(s) allowed here today:';
+      picker.appendChild(hint);
+      const chipsWrap = document.createElement('div');
+      if (availableDivisions.length === 0) {
+        chipsWrap.innerHTML = '<span class="da-access-empty">No divisions found.</span>';
+      } else {
+        availableDivisions.forEach(divName => {
+          const color = divisions[divName]?.color || '#64748b';
+          const bunks = divisions[divName]?.bunks || [];
+          if (!bunks.length) return;
+          const grp = document.createElement('div');
+          grp.className = 'da-access-grp';
+          grp.innerHTML = `<div class="da-access-grp-label" style="color:${color};">${_escHtml(divName)}</div>`;
+          const chipRow = document.createElement('div');
+          chipRow.className = 'da-access-chiprow';
+          bunks.forEach(b => {
+            const chip = createChip(b, color);
+            if (preselect.has(String(b))) {
+              chip.classList.add('selected');
+              chip.style.backgroundColor = color;
+              chip.style.color = 'white';
+            }
+            chipRow.appendChild(chip);
+          });
+          grp.appendChild(chipRow);
+          chipsWrap.appendChild(grp);
+        });
+      }
+      picker.appendChild(chipsWrap);
+
+      const actions = document.createElement('div');
+      actions.className = 'da-access-actions';
+      actions.innerHTML = `
+        <button class="da-btn da-btn-primary da-btn-sm br-save">Save</button>
+        <button class="da-btn da-btn-sm da-btn-outline br-cancel">Cancel</button>`;
+      picker.appendChild(actions);
+      rowEl.appendChild(picker);
+
+      actions.querySelector('.br-save').onclick = () => {
+        const selected = Array.from(chipsWrap.querySelectorAll('.da-chip.selected')).map(c => c.dataset.value);
+        _brSetEntry(facilityName, activity, selected);
+        _brEditKey = null;
+        renderOverrideDetailPane();
+      };
+      actions.querySelector('.br-cancel').onclick = () => { _brEditKey = null; renderOverrideDetailPane(); };
+    }
+
+    containerEl.appendChild(rowEl);
+  });
+}
+
 function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false, hasTimeRules = false) {
   const el = document.createElement('div');
   el.className = 'da-resource-item' + (selectedOverrideId === type + '-' + name ? ' selected' : '');
   if (isRainyDisabled) el.style.opacity = '0.6';
   
   let badges = '';
-  if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>';
-  else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">🏠 Indoor</span>';
-  if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">🌧️ Rainy</span>';
-  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">⏰ Time Rules</span>';
+  if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">Outdoor</span>';
+  else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">Indoor</span>';
+  if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">Rainy</span>';
+  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">Time Rules</span>';
   
   el.innerHTML = `
     <span class="da-resource-name">${_escHtml(name)}${badges}</span>
@@ -7806,44 +8202,52 @@ function renderOverrideDetailPane() {
     const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        ${_escHtml(name)}
-        ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
-        ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
-          ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
-          : ''}
-      </h4>
-      
+      <div class="da-detail-head">
+        <h4 class="da-detail-title">${_escHtml(name)}</h4>
+        <div class="da-detail-badges">
+          ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">Indoor</span>' : '<span class="da-badge da-badge-outdoor">Outdoor</span>') : ''}
+          ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
+            ? facility.usedFor.map(u => `<span class="da-badge da-badge-use">${_escHtml(u)}</span>`).join('')
+            : ''}
+        </div>
+      </div>
+
       <div class="da-detail-section">
-        <h5>📋 Global Rules (from Setup)</h5>
+        <div class="da-detail-eyebrow">Global Rules <span class="da-detail-eyebrow-note">from Setup</span></div>
         <div id="da-global-rules-list"></div>
       </div>
-      
+
       <div class="da-detail-section">
-        <h5>📅 Today's Time Rules</h5>
-        <p class="da-section-desc">Add custom availability windows for today only. These override global rules.</p>
+        <div class="da-detail-eyebrow">Today's Time Rules</div>
+        <p class="da-section-desc">Add custom availability windows for today only. These override the global rules.</p>
         <div id="da-daily-rules-list"></div>
-        
+
         <div class="da-time-rule-form">
           <select id="da-rule-type" class="da-select da-select-sm">
-            <option value="Available">✅ Available</option>
-            <option value="Unavailable">❌ Unavailable</option>
+            <option value="Available">Available</option>
+            <option value="Unavailable">Unavailable</option>
           </select>
-          <span style="color:#64748b;">from</span>
-          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:80px;">
-          <span style="color:#64748b;">to</span>
-          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:80px;">
+          <span class="da-form-sep">from</span>
+          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:84px;">
+          <span class="da-form-sep">to</span>
+          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:84px;">
           <button id="da-add-rule-btn" class="da-btn da-btn-primary da-btn-sm">Add</button>
         </div>
       </div>
-      
+
       ${isFieldLike ? `
       <div class="da-detail-section">
-        <h5>🏃 Sports Availability</h5>
+        <div class="da-detail-eyebrow">Sports Availability</div>
         <p class="da-section-desc">Disable specific sports on this field for today.</p>
         <div id="da-sports-checkboxes"></div>
       </div>
       ` : ''}
+
+      <div class="da-detail-section da-detail-section-last">
+        <div class="da-detail-eyebrow">Bunk-Only Access</div>
+        <p class="da-section-desc">Reserve this facility — or one of its activities — for specific bunk(s) today. Every other bunk is blocked from it here. Leave as "All bunks" for no restriction.</p>
+        <div id="da-bunk-access-list"></div>
+      </div>
     `;
     
     // Render global rules
@@ -7858,8 +8262,8 @@ function renderOverrideDetailPane() {
           : ' <span style="font-size:11px;color:#94a3b8;margin-left:6px;">(all grades)</span>';
         return `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()}">
-          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>${tag}
+          <span class="da-rule-type"><span class="da-rule-dot"></span>${rule.type}</span>
+          <span class="da-rule-time">${rule.start} – ${rule.end}</span>${tag}
         </div>`;
       }).join('');
     }
@@ -7871,9 +8275,9 @@ function renderOverrideDetailPane() {
     } else {
       dailyRulesEl.innerHTML = dailyRules.map((rule, idx) => `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()} da-rule-daily">
-          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
-          <button class="da-rule-remove" data-idx="${idx}">✕</button>
+          <span class="da-rule-type"><span class="da-rule-dot"></span>${rule.type}</span>
+          <span class="da-rule-time">${rule.start} – ${rule.end}</span>
+          <button class="da-rule-remove" data-idx="${idx}" title="Remove">✕</button>
         </div>
       `).join('');
       
@@ -7940,6 +8344,30 @@ function renderOverrideDetailPane() {
           };
           checkboxesEl.appendChild(label);
         });
+      }
+    }
+
+    // ── Bunk-Only Access rows: whole facility + each hosted activity ──
+    {
+      const accessEl = document.getElementById('da-bunk-access-list');
+      if (accessEl) {
+        const sportBadge = '<span class="da-badge da-badge-sport">Sport</span>';
+        const specialBadge = '<span class="da-badge da-badge-special">Special</span>';
+        const rows = [{ activity: '*', label: 'Entire facility', badge: '<span class="da-badge da-badge-facility">Facility</span>' }];
+        // Sports hosted here (field-like facilities expose them as item.activities)
+        (isFieldLike ? (item.activities || []) : []).forEach(sp => {
+          rows.push({ activity: sp, label: sp, badge: sportBadge });
+        });
+        // Special activities whose configured location is this facility
+        const nameLc = String(name).toLowerCase();
+        (masterSettings.app1?.specialActivities || []).forEach(s => {
+          if (s && s.location && String(s.location).toLowerCase() === nameLc) {
+            if (!rows.some(r => String(r.activity).toLowerCase() === String(s.name).toLowerCase())) {
+              rows.push({ activity: s.name, label: s.name, badge: specialBadge });
+            }
+          }
+        });
+        renderFacilityBunkAccess(accessEl, name, rows);
       }
     }
   } else {
@@ -8286,6 +8714,63 @@ function getStyles() {
     .da-badge-time { background:#dbeafe; color:#1d4ed8; }
 
     /* ============================================ */
+    /* RESOURCE DETAIL PANE — REFINED               */
+    /* ============================================ */
+    .da-resource-list h4 { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--da-text3); margin:0 0 8px; }
+    .da-resource-detail { padding:20px 22px; background:var(--da-bg); }
+
+    /* Header band */
+    .da-detail-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding-bottom:14px; margin-bottom:16px; border-bottom:1px solid var(--da-border); }
+    .da-detail-title { margin:0; font-size:17px; font-weight:700; color:var(--da-text); letter-spacing:-0.01em; }
+    .da-detail-badges { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+
+    /* Section eyebrow headers */
+    .da-detail-section { margin:0 0 18px; padding-bottom:18px; border-bottom:1px solid var(--da-border); }
+    .da-detail-section-last { border-bottom:none; padding-bottom:0; margin-bottom:0; }
+    .da-detail-eyebrow { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--da-text2); margin:0 0 8px; }
+    .da-detail-eyebrow-note { font-weight:500; text-transform:none; letter-spacing:0; color:var(--da-text3); }
+
+    /* Refined badges */
+    .da-badge { font-size:10px; line-height:1; padding:3px 8px; border-radius:999px; font-weight:600; letter-spacing:0.02em; }
+    .da-badge-use { background:#eef2ff; color:#3730a3; text-transform:capitalize; }
+    .da-badge-sport { background:#ecfdf5; color:#047857; }
+    .da-badge-special { background:#eef2ff; color:#4338ca; }
+    .da-badge-facility { background:#f1f5f9; color:#334155; }
+
+    /* Time-rule status dot (replaces emoji) */
+    .da-rule-type { display:flex; align-items:center; gap:7px; font-weight:600; min-width:96px; }
+    .da-rule-dot { width:7px; height:7px; border-radius:50%; background:var(--da-text3); flex:none; }
+    .da-rule-available .da-rule-dot { background:var(--da-success); }
+    .da-rule-unavailable .da-rule-dot { background:var(--da-danger); }
+    .da-rule-available .da-rule-type { color:#047857; }
+    .da-rule-unavailable .da-rule-type { color:#b91c1c; }
+    .da-form-sep { color:var(--da-text3); font-size:12px; }
+
+    /* Button variants */
+    .da-btn-outline { background:#fff; color:var(--da-text2); border:1px solid var(--da-border); }
+    .da-btn-outline:hover { border-color:var(--da-accent); color:var(--da-accent); background:#f8fbff; }
+    .da-btn-ghost-danger { background:transparent; color:var(--da-danger); border:1px solid transparent; }
+    .da-btn-ghost-danger:hover { background:rgba(239,68,68,0.08); }
+
+    /* Bunk-Only Access rows */
+    .da-access-row { border:1px solid var(--da-border); border-radius:8px; background:var(--da-bg); margin-bottom:8px; overflow:hidden; transition:border-color 0.15s, box-shadow 0.15s; }
+    .da-access-row-active { border-color:#bfdbfe; }
+    .da-access-row-editing { border-color:var(--da-accent); box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+    .da-access-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 12px; }
+    .da-access-label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--da-text); }
+    .da-access-label strong { font-weight:600; }
+    .da-access-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .da-access-status { font-size:12px; color:var(--da-text3); }
+    .da-access-status-set { color:#0A4A56; font-weight:600; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .da-access-picker { border-top:1px solid var(--da-border); background:var(--da-surface); padding:12px; }
+    .da-access-picker-hint { font-size:11px; font-weight:600; color:var(--da-text2); margin-bottom:8px; }
+    .da-access-grp { margin-bottom:10px; }
+    .da-access-grp-label { font-size:11px; font-weight:700; letter-spacing:0.02em; margin-bottom:5px; }
+    .da-access-chiprow { display:flex; gap:6px; flex-wrap:wrap; }
+    .da-access-actions { display:flex; gap:8px; margin-top:4px; }
+    .da-access-empty { color:var(--da-text3); font-size:12px; }
+
+    /* ============================================ */
     /* IN-APP MODAL STYLES (v5.2)                  */
     /* ============================================ */
     [id^="da-modal-input-overlay"] { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:100000; backdrop-filter:blur(2px); animation:daModalFadeIn 0.15s ease; }
@@ -8512,6 +8997,7 @@ function loadCurrentOverrides() {
         if (parsed.dailyDisabledSportsByField !== undefined) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
         if (parsed.dailyFieldAvailability !== undefined) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
         if (parsed.disabledSpecialtyLeagues !== undefined) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+        if (parsed.dailyActivityBunkRestrictions !== undefined) dailyData.dailyActivityBunkRestrictions = parsed.dailyActivityBunkRestrictions;
         // Sync to dailyData (cloud) so other consumers also see the right state.
         try { window.saveCurrentDailyData?.("overrides", dailyOverrides); } catch (_e) {}
       }
@@ -8523,7 +9009,8 @@ function loadCurrentOverrides() {
           overrides: dailyOverrides,
           dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
           dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
-          disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
+          disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || [],
+          dailyActivityBunkRestrictions: dailyData.dailyActivityBunkRestrictions || []
         }));
       } catch (_e2) {}
     }
@@ -8542,6 +9029,7 @@ function loadCurrentOverrides() {
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
+  currentOverrides.dailyActivityBunkRestrictions = dailyData.dailyActivityBunkRestrictions || [];
   // Load bunk overrides from multiple sources (same pattern as trips)
   let bunkOv = dailyData.bunkActivityOverrides || [];
   if (bunkOv.length === 0) {

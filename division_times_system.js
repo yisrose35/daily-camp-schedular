@@ -265,6 +265,16 @@
 
             const validated = (divStartMin !== null && divEndMin !== null)
                 ? parsed.reduce((acc, block) => {
+                    // ★ NIGHT ACTIVITY: a tile flagged as a night/late-night event
+                    // legitimately ends — and often starts — AFTER the division's end
+                    // time. The boundary clip/drop below would otherwise drop it (start
+                    // ≥ divEnd) or clip it to nothing (end > divEnd), so it would never
+                    // reach the slot grid and never get scheduled, even though the DA
+                    // grid extends to display it. Exempt it and keep its real times.
+                    if (block.isNightActivity) {
+                        acc.push(block);
+                        return acc;
+                    }
                     // Entirely outside division hours → drop with warning
                     if (block.endMin <= divStartMin || block.startMin >= divEndMin) {
                         log(`  ⚠️ DROPPED block "${block.event}" (${minutesToTimeLabel(block.startMin)}-${minutesToTimeLabel(block.endMin)}) — outside ${divName} hours (${minutesToTimeLabel(divStartMin)}-${minutesToTimeLabel(divEndMin)})`);

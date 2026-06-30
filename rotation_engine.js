@@ -937,6 +937,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   disabled special is never picked. activityProperties carries `available`
         //   for every special (buildActivityProperties copies it), so props is reliable.
         if (props.available === false) return Infinity;
+        // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
+        //   Auto rotation gate for special/sport targets (matches by activity name).
+        //   Facility targets are enforced in the field gate (isFieldAvailable).
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return Infinity;
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
 

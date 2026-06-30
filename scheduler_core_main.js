@@ -1046,6 +1046,25 @@
             _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
         }
 
+        // ★ BUNK-LEVEL ROTATION GATE — single source of truth (rotation_engine.js).
+        //   Every OTHER manual special-placement path scores candidates through
+        //   RotationEngine.calculateLimitScore; the Smart Tile budget pre-pass,
+        //   guarantee pre-pass (_seatSpecials) and the per-bunk rotation loop did
+        //   NOT, so smart-placed specials ignored: frequencyDays cooldown,
+        //   availableDays weekday, multiPart daysBetween/totalParts, rotationCohort,
+        //   and even the maxUsage / exactFrequency ceilings. calculateLimitScore
+        //   returns Infinity exactly when the special must NOT be placed for this
+        //   bunk — re-use it so the swap engine matches the rest of the builder.
+        //   Fail-open (only block on an explicit Infinity) so nothing is silently
+        //   dropped if the engine isn't loaded; blocked specials simply route the
+        //   bunk to its fallback/open activity, so slots are never left empty.
+        const _specialGateBlocks = (bunk, divName, specialName) => {
+            const RE = window.RotationEngine;
+            if (!RE || typeof RE.calculateLimitScore !== 'function' || !specialName) return false;
+            try { return RE.calculateLimitScore(bunk, specialName, activityProperties, divName) === Infinity; }
+            catch (_eGate) { return false; }
+        };
+
         // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
         //   A rotation/tile option that is NOT a configured field, special, or hosted
         //   sport is placed as its own label — exactly like Swim (the "direct fill"
@@ -1087,6 +1106,32 @@
         //       the same "deserving" bunks hogging specials in every window.
         //   Keyed by bunk (globally unique, same as historicalCounts).
         const _bunkSpecialsToday = {};
+        // ★ SEED FROM THE EXISTING SCHEDULE — the doubling fix. By the time smart
+        //   tiles run (STEP 6) a bunk may ALREADY hold a special placed by an
+        //   earlier pass: STEP 1.5 background-schedule restore (locked divisions),
+        //   STEP 2 bunk overrides, STEP 2.5 elective tiles, or a pinned special.
+        //   The tracker started empty and was blind to all of these, so the budget /
+        //   guarantee / rotation passes would re-hand the SAME special to a bunk that
+        //   already had it today — the "bunks already have specials, now doubled" bug.
+        //   Scan each bunk's current assignments and pre-load every known special it
+        //   already holds so every downstream dedup check (.has(name)) and the
+        //   fewest-specials-first ranking treat it as already-served. Additive and
+        //   self-limiting: only KNOWN special names are seeded, so sports/swim/empty
+        //   slots are untouched and an uncontended day is unchanged.
+        try {
+            const _sa = window.scheduleAssignments || {};
+            Object.keys(_sa).forEach(bunk => {
+                const arr = _sa[bunk];
+                if (!Array.isArray(arr)) return;
+                arr.forEach(e => {
+                    if (!e || e.continuation) return;
+                    const act = String(e._activity || e.field || '').toLowerCase().trim();
+                    if (act && knownSpecialNames.has(act)) {
+                        (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(act);
+                    }
+                });
+            });
+        } catch (_e) { /* fail-open: an unreadable schedule just means no pre-seed */ }
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
         // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
@@ -1117,8 +1162,11 @@
             const out = {};
             bunksInOrder.forEach(bunk => {
                 const hist = historicalCounts[bunk] || {};
+                const _had = _bunkSpecialsToday[bunk];
                 const cands = [...avail].sort((a, b) => (hist[a.name] || 0) - (hist[b.name] || 0));
                 for (const s of cands) {
+                    if (_had && _had.has(s.name.toLowerCase())) continue; // no double — bunk already has this special today
+                    if (_specialGateBlocks(bunk, divName, s.name)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                     if (!_canClaim(s.name, startMin, endMin, s.capacity || 1, divName)) continue;
                     _registerClaim(s.name, startMin, endMin, divName);
                     out[bunk] = s.name;
@@ -1411,6 +1459,7 @@
                     .sort((a, b) => (hist[a[0]] || 0) - (hist[b[0]] || 0));
                let _assigned = false;
                for (const [candidateName] of candidates) {
+                    if (_specialGateBlocks(entry.bunk, entry.divName, candidateName)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                     const _maxCap = _uniqueSpecials.get(candidateName) || 1;
                     if (!_canClaim(candidateName, startMin, endMin, _maxCap, entry.divName)) continue;
                     _specialPool.set(candidateName, _specialPool.get(candidateName) - 1);
@@ -1738,6 +1787,7 @@
                                         if (_had && _had.has(_rn.toLowerCase())) continue;       // already had today
                                         if (typeof window.isSpecialAvailableForBunk === 'function'
                                             && !window.isSpecialAvailableForBunk(_rn, divName, bunk, window.loadGlobalSettings?.())) continue;
+                                        if (_specialGateBlocks(bunk, divName, _rn)) continue;    // cooldown/availableDays/multiPart/cohort/ceiling
                                         _resvList.splice(_ri, 1);                                 // consume (already claimed)
                                         _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
                                         (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_rn.toLowerCase());
@@ -1754,6 +1804,7 @@
                                     //   bunk that has no access (e.g. "Sushi" gated to certain bunks).
                                     if (typeof window.isSpecialAvailableForBunk === 'function'
                                         && !window.isSpecialAvailableForBunk(sp.name, divName, bunk, window.loadGlobalSettings?.())) continue;
+                                    if (_specialGateBlocks(bunk, divName, sp.name)) continue;   // cooldown/availableDays/multiPart/cohort/ceiling
                                     if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
                                     _registerClaim(sp.name, _rStart, _rEnd, divName);
                                     _rotSpecialClaimed[_wQ] = (_rotSpecialClaimed[_wQ] || 0) + 1;
@@ -1784,7 +1835,7 @@
                             }
                         } else if (knownSpecialNames.has(optNorm)) {
                             const _had2 = _bunkSpecialsToday[bunk];
-                            if (!(_had2 && _had2.has(optNorm))) { // skip if already had this special today
+                            if (!(_had2 && _had2.has(optNorm)) && !_specialGateBlocks(bunk, divName, opt)) { // skip if already had today OR rotation-gated (cooldown/availableDays/multiPart/cohort/ceiling)
                                 const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
                                 if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
                                     _registerClaim(opt, _rStart, _rEnd, divName);
@@ -1944,12 +1995,37 @@
                     // Specific SPECIAL: claim-checked direct fill — capacity and
                     // cross-division sharing enforced via the same claim tracker
                     // the budget system uses; falls back when at capacity.
+                    // ★ No-doubles guard: this path bypasses the budget pre-pass, so it
+                    //   also has to honor the day-wide tracker — otherwise a bunk that
+                    //   already holds this exact special (from another tile/window or an
+                    //   earlier pass) would be handed it a second time. If already had
+                    //   today, route to the fallback instead of doubling.
+                    // ★ Rotation gate: likewise honor _specialGateBlocks here — every
+                    //   OTHER placement path consults it, but this explicit-name route
+                    //   skipped it, so a tile that NAMES a special (main1="Sushi") placed
+                    //   it every day ignoring frequencyDays cooldown / availableDays /
+                    //   multiPart spacing (the "too close to each other" divergence). The
+                    //   budget must not SWAP a user's explicit choice for fairness, but a
+                    //   hard rotation constraint (on cooldown, not available today, part 1
+                    //   not done) is not fairness — route to the fallback when it trips.
+                    const _alreadyHad = _bunkSpecialsToday[bunk] && _bunkSpecialsToday[bunk].has(_lblNorm);
+                    const _gated = _specialGateBlocks(bunk, divName, activityLabel);
+                    const _blocked = _alreadyHad || _gated;
+                    const _blockWhy = _alreadyHad ? 'already had today' : 'rotation-gated (cooldown/availableDays/multiPart)';
                     const _sw = _getSharableWith(activityLabel);
                     const _swCap = (_sw && _sw.capacity) || 1;
-                    if (_canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
+                    if (!_blocked && _canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
                         _registerClaim(activityLabel, startMin, endMin, divName);
+                        (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_lblNorm);
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special: ${activityLabel}`);
                         window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    } else if (_blocked && _fbAct && needsGeneration(_fbAct)) {
+                        const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" ${_blockWhy} → ${_fbT}`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                    } else if (_blocked && _fbAct) {
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" ${_blockWhy} → DIRECT FILL: ${_fbAct}`);
+                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     } else if (_fbAct && needsGeneration(_fbAct)) {
                         const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                         console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity → ${_fbT}`);
@@ -2424,7 +2500,7 @@
                 const records = await window.ScheduleDB.loadDateRange(startDate, today);
                 if (records && records.length > 0) {
                     const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
-                    const LOCAL_ONLY = ['bunkActivityOverrides','overrides','autoSkeleton','_autoGenerated','_autoBuildTimelines','_autoGenMeta','manualSkeleton','skeleton','dailyDisabledSportsByField','dailyFieldAvailability','disabledSpecialtyLeagues','leagueRoundState','leagueDayCounters'];
+                    const LOCAL_ONLY = ['bunkActivityOverrides','overrides','autoSkeleton','_autoGenerated','_autoBuildTimelines','_autoGenMeta','manualSkeleton','skeleton','dailyDisabledSportsByField','dailyFieldAvailability','disabledSpecialtyLeagues','dailyActivityBunkRestrictions','leagueRoundState','leagueDayCounters'];
                     let hydrated = 0;
                     const byDate = {};
                     for (const rec of records) {
@@ -2947,10 +3023,32 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             // ★ Day 22.5: per-bunk gen scope. When window.__allowedBunkSet is set,
             //   only the explicitly-selected bunks are regenerated; others preserve.
             const _allowedBunkSet = window.__allowedBunkSet || null;
+            // ★ Partial (per-tile) regen: per-slot scope from Daily Adjustments.
+            //   { [bunk]: { regen: Set<slotIdx>, keep: { [slotIdx]: entry } } }
+            //   For in-scope bunks carrying this, rebuild the bunk from the snapshot:
+            //   `keep` slots are pinned (preserved, never moved), `regen` slots are
+            //   left empty for the solver to re-roll. This is immune to STEP 0's wipe.
+            const _regenSlotScope = window.__regenSlotScope || null;
 
             (divisions[divName].bunks || []).forEach(bunk => {
                 const bunkInScope = !_allowedBunkSet || _allowedBunkSet.has(String(bunk));
                 if (isBeingGenerated && bunkInScope) {
+                    const _rs = _regenSlotScope && _regenSlotScope[bunk];
+                    if (_rs && _rs.keep) {
+                        // ── Per-tile regen: keep non-selected slots (pinned), null the rest ──
+                        const arr = new Array(slotCount).fill(null);
+                        const keep = _rs.keep;
+                        for (const k in keep) {
+                            const i = parseInt(k, 10);
+                            if (i >= 0 && i < slotCount && keep[k]) {
+                                arr[i] = Object.assign({}, keep[k], {
+                                    _fixed: true, _pinned: true, _regenPreserved: true
+                                });
+                            }
+                        }
+                        window.scheduleAssignments[bunk] = arr;
+                        return; // selected slots stay null → solver fills only those
+                    }
                     // Always create fresh empty arrays. For mid-day rain,
                     // Step 1.1 re-places morning entries by TIME after
                     // divisionTimes is rebuilt (index-based copy is wrong
@@ -3257,6 +3355,26 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             );
         } else if (allowedDivisions) {
             console.log('[STEP 1.5] No snapshot provided - generating fresh for allowed divisions only');
+        }
+
+        // ★ STEP 1.6 — Partial (per-tile) regen: register field usage + locks for the
+        //   PRESERVED slots in the regenerated (in-scope) bunks. STEP 1.5 only registers
+        //   BACKGROUND (non-allowed) divisions, so without this the solver would not
+        //   "see" a kept tile's field and could double-book it when filling the empty
+        //   selected slots. Reuses registerFieldUsageFromRestoredSchedules with an EMPTY
+        //   allowed-list so it registers (does not skip) these in-scope entries.
+        if (window.__regenSlotScope && typeof window.registerFieldUsageFromRestoredSchedules === 'function') {
+            const _rsSnap = {};
+            Object.keys(window.__regenSlotScope).forEach(b => {
+                const arr = window.scheduleAssignments?.[b];
+                if (Array.isArray(arr)) _rsSnap[b] = arr;
+            });
+            if (Object.keys(_rsSnap).length > 0) {
+                const _rsReg = window.registerFieldUsageFromRestoredSchedules(
+                    _rsSnap, divisions, [], fieldUsageBySlot, activityProperties, existingUnifiedTimes
+                );
+                console.log('[STEP 1.6] ★ Per-tile regen: registered field usage for ' + _rsReg + ' preserved slot(s)');
+            }
         }
 
         // ★ LG-6: restore league matchups for divisions NOT in this scoped gen.
@@ -5197,6 +5315,33 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 for (var k = u.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false }; } else break; }
                 _rdemoted++; return true;
             }
+            // ★ PER-DATE BUNK-ONLY RESTRICTION sweep (Daily Adjustments → Resources →
+            //   Bunk-Only Access). Demote any special/sport a bunk received that is
+            //   reserved for OTHER bunk(s) on this facility today. This is the safety
+            //   net for the SmartTile budget/rotation pool, which assigns specials to
+            //   bunks WITHOUT consulting canBlockFit (so the field/auto gates miss it).
+            //   Freed slots flow into the STEP 7.6/7.65 refill below (which honor the
+            //   same restriction), so the bunk gets an allowed activity instead.
+            //   Protected slots (league/pinned/override) are never demoted.
+            (function _brRestrictionSweep() {
+                var _brFn = window.SchedulerCoreUtils && window.SchedulerCoreUtils.isBunkRestrictedFromTarget;
+                if (typeof _brFn !== 'function') return;
+                var _brN = 0;
+                Object.keys(_rbyLoc).forEach(function (fl) {
+                    _rbyLoc[fl].forEach(function (u) {
+                        if (!_rlive(u) || u.prot) return;
+                        var _ent = _rsa[u.bunk] && _rsa[u.bunk][u.idx];
+                        var _act = u.act || (_ent && (_ent._activity || _ent._assignedSpecial || _ent.field)) || '';
+                        var _restricted = false;
+                        try { _restricted = _brFn(u.bunk, _act, fl, u.grade); } catch (_e) {}
+                        if (_restricted && _rdemote(u)) {
+                            _brN++;
+                            console.log('[STEP 7.55] 🔒 Bunk-only restriction: demoted ' + u.bunk + ' off "' + _act + '" @ ' + fl + ' (reserved for other bunk(s) today)');
+                        }
+                    });
+                });
+                if (_brN) console.log('[STEP 7.55] 🔒 Bunk-only restriction: removed ' + _brN + ' placement(s) reserved for other bunk(s)');
+            })();
             Object.keys(_rbyLoc).forEach(function (fl) {
                 // Unknown room → not_sharable cap-1, exactly as auto_validator defaults it.
                 var cfg = _rcfg[fl] || { type: 'not_sharable', cap: 1, pairs: {}, divs: [] };

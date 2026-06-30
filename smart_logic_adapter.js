@@ -588,7 +588,27 @@
             log(`      ${bunk}: blocked from ${special.name} (hasn't completed Part 1)`);
             return false;
         }
-        
+
+        // ★ Manual rotation gates — single source of truth (rotation_engine.js).
+        //   Every OTHER manual special-placement path scores candidates through
+        //   RotationEngine.calculateLimitScore, which hard-blocks (Infinity) a
+        //   special that is inside its frequencyDays cooldown, on a disallowed
+        //   availableDays weekday, inside a multiPart daysBetween gap (or past
+        //   totalParts), ahead of its rotationCohort minimum, or over its
+        //   maxUsage / exactFrequency ceiling. The Smart Tile selection bypassed
+        //   it, so smart-placed specials ignored all of those. Re-use the same
+        //   gate here so the swap path matches the rest of the builder. Fail-open
+        //   (only block on an explicit Infinity) so nothing is dropped if the
+        //   engine isn't loaded.
+        if (window.RotationEngine && typeof window.RotationEngine.calculateLimitScore === 'function') {
+            try {
+                if (window.RotationEngine.calculateLimitScore(bunk, special.name, activityProps, divisionName) === Infinity) {
+                    log(`      ${bunk}: blocked from ${special.name} (rotation gate: cooldown/availableDays/multiPart/cohort/ceiling)`);
+                    return false;
+                }
+            } catch (_eGate) { /* fail-open */ }
+        }
+
         return true;
     }
 

@@ -322,7 +322,7 @@ all[date].updated_at = new Date().toISOString();
             // note set today for a FUTURE date would be lost on a fresh session/device.
             // This path round-trips through camp_state_kv so it's ready on the day.
             try {
-                var _RES_KEYS = ['overrides', 'dailyDisabledSportsByField', 'dailyFieldAvailability', 'disabledSpecialtyLeagues'];
+                var _RES_KEYS = ['overrides', 'dailyDisabledSportsByField', 'dailyFieldAvailability', 'disabledSpecialtyLeagues', 'dailyActivityBunkRestrictions'];
                 if (_RES_KEYS.indexOf(key) > -1 && typeof window.loadGlobalSettings === 'function' && typeof window.saveGlobalSettings === 'function') {
                     var _sgs = window.loadGlobalSettings() || {};
                     if (!_sgs.app1) _sgs.app1 = {};
