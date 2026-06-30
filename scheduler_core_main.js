@@ -1390,8 +1390,22 @@
                 const b = job.blockA;
                 const wQ = `${divName}|${b.startMin}|${b.endMin}`;
                 const quota = _rotSpecialQuota[wQ];
-                if (quota === undefined || quota === Infinity) return; // only contended windows
-                let toReserve = Math.min(quota, (divisions[divName]?.bunks || []).length);
+                const _bunkN = (divisions[divName]?.bunks || []).length;
+                let toReserve;
+                if (window.__smartTilePreferMain1 !== false) {
+                    // ★ GREEDY SENIORITY: reserve up to ALL of this (senior) division's bunks'
+                    //   worth of special rooms NOW — this pass runs BEFORE the junior budget
+                    //   tiles' pre-claim, and filteredJobs is seniority-ordered (9 → 8 → 7 …),
+                    //   so an older grade locks the shared rooms first and a younger grade gets
+                    //   only what's left. _canClaim caps it to rooms physically free;
+                    //   _divCanUseSpecial skips rooms no bunk in the division can use. Without
+                    //   this, prefer-main1 set the quota to Infinity → this pass used to skip,
+                    //   so 8/9 never reserved and the 7th-grade budget pre-claim took their rooms.
+                    toReserve = _bunkN;
+                } else {
+                    if (quota === undefined || quota === Infinity) return; // legacy: only contended windows
+                    toReserve = Math.min(quota, _bunkN);
+                }
                 if (toReserve <= 0) return;
                 const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
                     b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || [];
