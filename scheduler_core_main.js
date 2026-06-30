@@ -1939,6 +1939,19 @@
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                 _placed = true;
+                            } else if (_directFillCap(opt) !== Infinity && _mayTakeCapped(opt, optNorm, bunk) && _canClaimDirectFill(opt, _rStart, _rEnd)) {
+                                // ★ CAPPED sport (e.g. Pickleball = 2 nets) whose hosting court can't fit
+                                //   here (time-ruled / locked) — but this bunk IS one of the camp-wide
+                                //   queue's least-recent winners. The nets don't need the court field, so
+                                //   place it as its OWN field-less label. The legacy queue did this UP
+                                //   FRONT; prefer-main1 disabled that up-front placement (so the special is
+                                //   tried first), which left a capped winner with no open court stranded on
+                                //   Swim. Net cap stays enforced via _canClaimDirectFill / the winner set,
+                                //   so still ≤ cap and only the chosen winners — never floods every bunk.
+                                _registerDirectFillClaim(opt, _rStart, _rEnd);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" (capped winner, no open court → field-less net)`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
                             } else {
                                 const _why = (_directFillCap(opt) !== Infinity && !_mayTakeCapped(opt, optNorm, bunk)) ? 'not a least-recent queue winner this window'
                                     : (_o !== 0) ? 'fell through here (not its turn)'
