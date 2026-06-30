@@ -5893,6 +5893,98 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             } catch (_e63) { console.warn('[STEP 7.63] special min-bunks pairing failed:', _e63); }
 
             // ─────────────────────────────────────────────────────────────
+            // STEP 7.64: Force-placement — guarantee a "must run" special is
+            // actually given out each generation. When a special is flagged
+            // forcePlacement, this seeds ONE session of it (>= its minBunks
+            // floor, or 1 if no floor) when none is already running, choosing
+            // the window + the MOST-DUE eligible bunks (least-recent rotation)
+            // and seating them (Free slots first, else swap a plain sport). If
+            // no window can host the floor it logs and skips (genuinely
+            // impossible) rather than create an under-min session. Runs AFTER
+            // STEP 7.63 so a special that was placed lonely + dropped is re-
+            // seeded at a window where the floor CAN be met. Inert unless a
+            // special opts in (forcePlacement) → zero change to other specials.
+            // ─────────────────────────────────────────────────────────────
+            try {
+                const _forced64 = {};
+                ((_gs76.app1 && _gs76.app1.specialActivities) || _gs76.specialActivities || []).forEach(s => {
+                    if (!s || !s.name || s.forcePlacement !== true || s.available === false) return;
+                    const sw = s.sharableWith || {};
+                    const cap = (sw.type === 'not_sharable') ? 1 : (parseInt(sw.capacity, 10) || 2);
+                    let floor = parseInt(sw.minBunks, 10) || 0; if (floor < 2) floor = 1; floor = Math.min(floor, cap);
+                    _forced64[String(s.name).toLowerCase().trim()] = { name: s.name, floor: floor, cap: cap, type: sw.type || 'not_sharable', pairs: sw.allowedPairs || {}, loc: s.location || null };
+                });
+                if (Object.keys(_forced64).length) {
+                    const _isFree64 = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
+                    const _winOf64 = (b, g, idx, e) => (e && e._startMin != null && e._endMin != null) ? { s: e._startMin, e: e._endMin } : _stime76(b, g, idx, e);
+                    const _daysOf64 = (b, name) => { try { const d = (window.RotationEngine && typeof window.RotationEngine.getDaysSinceActivity === 'function') ? window.RotationEngine.getDaysSinceActivity(b, name) : null; return (typeof d === 'number') ? d : 9999; } catch (_e) { return 9999; } };
+                    let _forcedSeeded64 = 0, _forcedFail64 = 0;
+                    Object.keys(_forced64).forEach(actLC => {
+                        const F = _forced64[actLC];
+                        // Already running with >= floor bunks at some window?
+                        const _byWin = {};
+                        Object.keys(_sa76).forEach(b => {
+                            const g = _b2g76[String(b)] || '?';
+                            (_sa76[b] || []).forEach((e, idx) => {
+                                if (!e || e.continuation) return;
+                                if (String(e._activity || e._assignedSpecial || '').toLowerCase().trim() !== actLC) return;
+                                const t = _winOf64(b, g, idx, e); if (!t || t.s == null) return;
+                                _byWin[t.s + '|' + t.e] = (_byWin[t.s + '|' + t.e] || 0) + 1;
+                            });
+                        });
+                        if (Object.keys(_byWin).some(k => _byWin[k] >= F.floor)) return; // satisfied
+                        // Gather eligible bunks per (window|grade) — same-grade groups.
+                        const _grpW = {};
+                        Object.keys(_sa76).forEach(b => {
+                            if (_allowed76 && !_allowed76.has(String(b))) return;
+                            const g = _b2g76[String(b)] || '?';
+                            if (F.floor > 1 && F.type === 'cross_division' && F.pairs[[g, g].sort().join('|')] !== true) return; // same-grade sharing not allowed
+                            if (_done76[b] && _done76[b][actLC]) return;
+                            if (typeof window.isSpecialAvailableForBunk === 'function'
+                                && !window.isSpecialAvailableForBunk(F.name, g, b, window.globalSettings || null)) return;
+                            const arr = _sa76[b] || [];
+                            for (let idx = 0; idx < arr.length; idx++) {
+                                const e = arr[idx];
+                                if (!e || e.continuation || e._isTransition || e._league || e._h2h || e._postEdit || e._pinned || e._bunkOverride) continue;
+                                const t = _winOf64(b, g, idx, e); if (!t || t.s == null || t.e == null) continue;
+                                const ck = _kindByCell76[String(b) + '|' + idx];
+                                const kind = (ck && ck !== 'any') ? ck : slotKindOf(_slotEvent76(b, g, idx, e));
+                                if (kind === 'sport') continue;
+                                let free = false, ok = false;
+                                if (_isFree64(e)) { free = true; ok = true; }
+                                else if (e.sport && !e._assignedSpecial && !_skip76[String(e.field || '').toLowerCase().trim()]) { ok = true; }
+                                if (!ok) continue;
+                                const kk = t.s + '|' + t.e + '|' + g;
+                                (_grpW[kk] = _grpW[kk] || []).push({ bunk: b, idx: idx, s: t.s, e: t.e, free: free, days: _daysOf64(b, F.name) });
+                                break; // one slot per bunk
+                            }
+                        });
+                        // Pick the window|grade group that can host the floor and is most overdue.
+                        let bestKey = null, bestScore = -1;
+                        Object.keys(_grpW).forEach(kk => {
+                            const list = _grpW[kk]; if (list.length < F.floor) return;
+                            const top = list.slice().sort((a, b) => b.days - a.days).slice(0, F.floor);
+                            const score = top.reduce((acc, x) => acc + x.days, 0) + list.length * 0.001;
+                            if (score > bestScore) { bestScore = score; bestKey = kk; }
+                        });
+                        if (!bestKey) { _forcedFail64++; console.warn('[STEP 7.64] force-placement: could not seat "' + F.name + '" — no window with ' + F.floor + ' co-available eligible bunk(s)'); return; }
+                        // Seat exactly the floor — most-due first, Free slots preferred on ties.
+                        const take = _grpW[bestKey].slice().sort((a, b) => (b.days - a.days) || (b.free - a.free)).slice(0, F.floor);
+                        const fld = F.loc || F.name;
+                        take.forEach(c => {
+                            const sl = _sa76[c.bunk];
+                            _sa76[c.bunk][c.idx] = { field: fld, sport: null, _activity: F.name, _assignedSpecial: F.name, _specialLocation: fld, _startMin: c.s, _endMin: c.e, _fixed: true, _freeFilled: true, _minBunkFilled: true, _forcedPlaced: true, _minBunkSwapped: (!c.free) || undefined, continuation: false };
+                            for (let k = c.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, continuation: false }; } else break; }
+                            (_done76[c.bunk] = _done76[c.bunk] || {})[actLC] = 1;
+                        });
+                        _forcedSeeded64++;
+                    });
+                    if (_forcedSeeded64 + _forcedFail64 > 0) console.log('[STEP 7.64] force-placement: seeded ' + _forcedSeeded64 + ' forced special session(s)' + (_forcedFail64 ? ', ' + _forcedFail64 + ' could not be placed' : ''));
+                    else console.log('[STEP 7.64] force-placement: ✅ all forced specials already running');
+                }
+            } catch (_e64) { console.warn('[STEP 7.64] force-placement failed:', _e64); }
+
+            // ─────────────────────────────────────────────────────────────
             // STEP 7.65: No-repeat fill. The empty-field pass only seats a Free
             // bunk on a COMPLETELY EMPTY sport field, so a bunk whose only
             // remaining fresh option was sharing a grade-mate's half-full room —

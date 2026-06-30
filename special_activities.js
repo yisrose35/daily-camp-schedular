@@ -201,6 +201,11 @@ function validateSpecialActivity(activity, activityName) {
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
        fullGrade: activity.fullGrade === true,
+        // ★ forcePlacement: "must run every generation". When true, the manual
+        //   generator guarantees at least one session of this special (>= its
+        //   minBunks floor, or 1) is placed each build, seating the most-due
+        //   eligible bunks. Default false → no change to normal specials.
+        forcePlacement: activity.forcePlacement === true,
         fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
         // ★ consecutiveBunks: auto-only. When ON, the auto solver schedules each
         //   bunk in the grade sequentially (one slot after another). Per-bunk
@@ -271,7 +276,7 @@ function createDefaultActivity(name) {
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
-        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
+        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false, forcePlacement: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
         minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, minFrequencyPerGrade: {},
         exactFrequency: null, exactFrequencyPeriod: '1week', exactFrequencyPerGrade: {}, availableDays: [] };

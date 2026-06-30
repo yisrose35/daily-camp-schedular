@@ -436,4 +436,116 @@ function planMinBunks(windows, props) {
     ok('T15 Free bunk (tier 0) still wins over a fresher swap', sa.Asher[0]._activity === 'Lake' && st.swapped === 0);
 }
 
+// =============================================================================
+// STEP 7.64 force-placement — ported seeding logic
+//   Guarantees a forcePlacement special runs once per generation (>= floor),
+//   seating the most-due eligible bunks (Free first, else swap a sport).
+// =============================================================================
+function forceSeed(sa, b2g, specials, kindByCell, isAvail, daysOf) {
+    kindByCell = kindByCell || {}; isAvail = isAvail || (() => true); daysOf = daysOf || (() => 9999);
+    const done = {};
+    Object.keys(sa).forEach(b => { done[b] = {}; (sa[b] || []).forEach(e => { if (!e || e.continuation) return; const a = e._activity || e.sport; if (a && String(a).toLowerCase() !== 'free') done[b][String(a).toLowerCase()] = 1; }); });
+    const forced = {};
+    specials.forEach(s => {
+        if (!s || !s.name || s.forcePlacement !== true || s.available === false) return;
+        const sw = s.sharableWith || {};
+        const cap = (sw.type === 'not_sharable') ? 1 : (parseInt(sw.capacity, 10) || 2);
+        let floor = parseInt(sw.minBunks, 10) || 0; if (floor < 2) floor = 1; floor = Math.min(floor, cap);
+        forced[String(s.name).toLowerCase().trim()] = { name: s.name, floor, cap, type: sw.type || 'not_sharable', pairs: sw.allowedPairs || {}, loc: s.location || null };
+    });
+    const isFree = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
+    const winOf = (e) => (e && e._startMin != null) ? { s: e._startMin, e: e._endMin } : null;
+    const stats = { seeded: 0, failed: 0 };
+    Object.keys(forced).forEach(actLC => {
+        const F = forced[actLC];
+        const byWin = {};
+        Object.keys(sa).forEach(b => (sa[b] || []).forEach((e, idx) => {
+            if (!e || e.continuation) return;
+            if (String(e._activity || e._assignedSpecial || '').toLowerCase().trim() !== actLC) return;
+            const t = winOf(e); if (!t) return; byWin[t.s + '|' + t.e] = (byWin[t.s + '|' + t.e] || 0) + 1;
+        }));
+        if (Object.keys(byWin).some(k => byWin[k] >= F.floor)) return;
+        const grpW = {};
+        Object.keys(sa).forEach(b => {
+            const g = b2g[b] || '?';
+            if (F.floor > 1 && F.type === 'cross_division' && F.pairs[[g, g].sort().join('|')] !== true) return;
+            if (done[b] && done[b][actLC]) return;
+            if (!isAvail(F.name, g, b)) return;
+            const arr = sa[b] || [];
+            for (let idx = 0; idx < arr.length; idx++) {
+                const e = arr[idx];
+                if (!e || e.continuation || e._isTransition || e._league || e._h2h || e._postEdit || e._pinned || e._bunkOverride) continue;
+                const t = winOf(e); if (!t || t.s == null) continue;
+                const ck = kindByCell[b + '|' + idx]; const kind = (ck && ck !== 'any') ? ck : 'any';
+                if (kind === 'sport') continue;
+                let free = false, ok = false;
+                if (isFree(e)) { free = true; ok = true; }
+                else if (e.sport && !e._assignedSpecial) { ok = true; }
+                if (!ok) continue;
+                const kk = t.s + '|' + t.e + '|' + g;
+                (grpW[kk] = grpW[kk] || []).push({ bunk: b, idx, s: t.s, e: t.e, free, days: daysOf(b, F.name) });
+                break;
+            }
+        });
+        let bestKey = null, bestScore = -1;
+        Object.keys(grpW).forEach(kk => {
+            const list = grpW[kk]; if (list.length < F.floor) return;
+            const top = list.slice().sort((a, b) => b.days - a.days).slice(0, F.floor);
+            const score = top.reduce((acc, x) => acc + x.days, 0) + list.length * 0.001;
+            if (score > bestScore) { bestScore = score; bestKey = kk; }
+        });
+        if (!bestKey) { stats.failed++; return; }
+        const take = grpW[bestKey].slice().sort((a, b) => (b.days - a.days) || (b.free - a.free)).slice(0, F.floor);
+        const fld = F.loc || F.name;
+        take.forEach(c => { sa[c.bunk][c.idx] = { field: fld, sport: null, _activity: F.name, _assignedSpecial: F.name, _startMin: c.s, _endMin: c.e, _forcedPlaced: true, continuation: false }; (done[c.bunk] = done[c.bunk] || {})[actLC] = 1; });
+        stats.seeded++;
+    });
+    return stats;
+}
+
+const LAKEF = (extra) => ({ name: 'Lake', forcePlacement: true, sharableWith: Object.assign({ type: 'cross_division', capacity: 4, minBunks: 2, allowedPairs: { 'A|A': true, 'B|B': true } }, extra || {}) });
+
+// TEST 16 — FORCE seeds a session when Lake isn't running at all (packed schedule)
+{
+    const sa = { A1: [sportEnt()], A2: [sportEnt()], A3: [sportEnt(700, 740)] };
+    const st = forceSeed(sa, { A1: 'A', A2: 'A', A3: 'A' }, [LAKEF()]);
+    ok('T16 seeded one forced session', st.seeded === 1 && st.failed === 0);
+    const onLake = ['A1', 'A2', 'A3'].filter(b => sa[b][0]._activity === 'Lake').length;
+    ok('T16 exactly floor (2) bunks seeded onto Lake', onLake === 2);
+    ok('T16 seeded entries flagged _forcedPlaced', ['A1', 'A2', 'A3'].some(b => sa[b][0]._forcedPlaced === true));
+}
+
+// TEST 17 — FORCE picks the MOST-DUE bunks
+{
+    const sa = { A1: [sportEnt()], A2: [sportEnt()], A3: [sportEnt()] };
+    // A1 did Lake 1 day ago, A2 5 days ago, A3 never → most due = A3, A2
+    const days = (b) => ({ A1: 1, A2: 5, A3: 9999 }[b]);
+    const st = forceSeed(sa, { A1: 'A', A2: 'A', A3: 'A' }, [LAKEF()], {}, (n, g, b) => true, (b) => days(b));
+    ok('T17 seeded', st.seeded === 1);
+    ok('T17 chose the two most-due (A3 + A2), not A1', sa.A3[0]._activity === 'Lake' && sa.A2[0]._activity === 'Lake' && sa.A1[0]._activity === 'Kickball');
+}
+
+// TEST 18 — FORCE is a no-op when Lake already runs with >= floor
+{
+    const sa = { A1: [lakeEnt()], A2: [lakeEnt()], A3: [sportEnt()] };
+    const st = forceSeed(sa, { A1: 'A', A2: 'A', A3: 'A' }, [LAKEF()]);
+    ok('T18 nothing seeded (already running)', st.seeded === 0 && st.failed === 0);
+}
+
+// TEST 19 — FORCE fails gracefully when the floor cannot be met (only 1 eligible)
+{
+    // A1 free/swappable, A2 on a sport-only tile (can't host Lake) → only 1 eligible < floor 2
+    const sa = { A1: [sportEnt()], A2: [sportEnt()] };
+    const st = forceSeed(sa, { A1: 'A', A2: 'A' }, [LAKEF()], { 'A2|0': 'sport' });
+    ok('T19 could not seed (floor unreachable) → no partial session', st.seeded === 0 && st.failed === 1);
+    ok('T19 left schedule untouched', sa.A1[0]._activity === 'Kickball' && sa.A2[0]._activity === 'Kickball');
+}
+
+// TEST 20 — INERT when forcePlacement is off
+{
+    const sa = { A1: [sportEnt()], A2: [sportEnt()] };
+    const st = forceSeed(sa, { A1: 'A', A2: 'A' }, [LAKEF({}) ].map(s => ({ ...s, forcePlacement: false })));
+    ok('T20 nothing seeded when force is off', st.seeded === 0 && st.failed === 0 && sa.A1[0]._activity === 'Kickball');
+}
+
 console.log('\n[special_min_bunks_sim] ' + pass + '/' + pass + ' assertions passed ✅');

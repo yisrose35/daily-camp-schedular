@@ -3689,6 +3689,26 @@ function renderSpecialUsage(saData) {
     var renderContent = function() {
         container.innerHTML = '';
 
+        // ── FORCE: must run every generation ──────────────────────────────
+        var forceRow = document.createElement('div');
+        forceRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:6px;';
+        var forceTog = document.createElement('label'); forceTog.className = 'switch';
+        var forceCb = document.createElement('input'); forceCb.type = 'checkbox'; forceCb.checked = saData.forcePlacement === true;
+        var forceSl = document.createElement('span'); forceSl.className = 'slider';
+        forceTog.appendChild(forceCb); forceTog.appendChild(forceSl);
+        var forceLbl = document.createElement('span');
+        forceLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        forceLbl.textContent = 'Always schedule this every generation';
+        forceRow.appendChild(forceTog); forceRow.appendChild(forceLbl);
+        container.appendChild(forceRow);
+        forceCb.onchange = function() { saData.forcePlacement = forceCb.checked; saveSpecialData(saData); renderContent(); updateSummary(); };
+        var forceNote = document.createElement('div');
+        forceNote.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-bottom:16px; line-height:1.5;';
+        forceNote.textContent = saData.forcePlacement === true
+            ? 'Every time you generate, the scheduler guarantees this runs at least once (with the minimum bunks), giving it to the bunks most overdue for it. It only skips if no eligible bunks/time exist that day.'
+            : 'Off: this is placed by normal rotation and may not appear on a given day. Turn on to force it into every generation.';
+        container.appendChild(forceNote);
+
         // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
         var ceilLabel = document.createElement('div');
         ceilLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
