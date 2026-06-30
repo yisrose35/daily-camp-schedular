@@ -738,15 +738,22 @@
     // same sport, so one scarce field serves two needy teams instead of one needy
     // and one repeat.
     //
-    //   rem(a,b) = 1 if a & b have already met (this pairing would be a rematch), else 0
+    //   rem(a,b) = how many times a & b have ALREADY met (NOT a 0/1 flag). This must
+    //              be the real meeting COUNT: in a small league (e.g. 4 teams) every
+    //              pair meets within one round-robin cycle, so a binary "have they met"
+    //              flag becomes 1 for EVERY pairing — the -BIG term then cancels out of
+    //              every comparison and the guard goes blind, letting sport-need re-pair
+    //              the league into the SAME matchup every day (observed live: a 4-team
+    //              league stuck on 1v2/3v4 across all games). Counting meetings keeps the
+    //              guard meaningful past saturation: it always prefers the LEAST-met pair.
     //   val(a,b) = sport-need concentration: 3 if some available sport is fresh for
     //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
     //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
     //
-    // Acceptance uses a single scalar  score = -BIG*Σrem + Σval  (BIG ≫ max val), so
-    // reducing a rematch ALWAYS dominates any sport gain, sport only breaks rem ties,
-    // and a swap can never raise total rematches. Monotonic (both axes bounded ints) →
-    // terminates. Falls back to the round-robin on any error or kill switch
+    // Acceptance uses a single scalar  score = -BIG*Σmeetings + Σval  (BIG ≫ max val), so
+    // reducing total meetings ALWAYS dominates any sport gain, sport only breaks meeting
+    // ties, and a swap can never raise total meetings. Monotonic (both axes bounded ints)
+    // → terminates. Falls back to the round-robin on any error or kill switch
     // (window.__leagueDailyOptimizer === false).
     function optimizeMatchupPairingForSport(rrMatchups, activeTeams, availablePool, leagueName, history, dayId) {
         try {
@@ -763,7 +770,9 @@
             }
             (activeTeams || []).forEach(function (t) { playedSet(t); });
 
-            function rem(a, b) { return getMatchupCount(leagueName, a, b, history) > 0 ? 1 : 0; }
+            // Real meeting COUNT, not a 0/1 flag — see header note: a binary flag goes
+            // blind once every pair has met (small leagues), collapsing variety.
+            function rem(a, b) { return getMatchupCount(leagueName, a, b, history); }
             function val(a, b) {
                 const pa = playedSet(a), pb = playedSet(b);
                 let freshBoth = 0;

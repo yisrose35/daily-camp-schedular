@@ -23,7 +23,9 @@ function playedSports(h, t) {
 
 function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h) {
   const played = {}; teams.forEach(t => played[t] = playedSports(h, t));
-  function rem(a, b) { return getMatchupCount(h, a, b) > 0 ? 1 : 0; }
+  // Real meeting COUNT (not 0/1) — a binary flag goes blind once every pair has met
+  // (small leagues), collapsing variety. Mirrors the source fix.
+  function rem(a, b) { return getMatchupCount(h, a, b); }
   function val(a, b) {
     const pa = played[a], pb = played[b]; let freshBoth = 0;
     for (const s of availSports) { const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1); if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; } }
@@ -119,6 +121,30 @@ function keys(m) { return m.map(p => p.slice().sort().join('v')); }
     'sport gain must NOT override an opponent repeat: ' + k.join(','));
   assert.strictEqual(countRematches(h, out), 0, 'output keeps zero rematches: ' + k.join(','));
   console.log('TEST 4 PASS — refused the rematch despite the sport bait: ' + k.join(', '));
+})();
+
+// ---- TEST 5: SATURATED league — graduated meeting-count keeps rotating opponents ----
+// Regression for the live bug: a 4-team league where every pair has already met
+// collapsed to the SAME pairing (1v2/3v4) every game, because a binary "have they
+// met" guard is 1 for every pair → the rematch term cancels out and sport-need
+// alone decides. Counting real meetings restores least-met rotation.
+(function () {
+  const h = H();
+  // sport history (so val is meaningful: 1&2 still need Kickball, 3&4 need Dodgeball)
+  addGame(h, '2026-06-29', '1', '2', 'Dodgeball');
+  addGame(h, '2026-06-29', '4', '3', 'Kickball');
+  // saturated cumulative meetings — every pair has met; 1-2 and 3-4 the most.
+  h.matchupHistory = { 'L:1|2': 3, 'L:1|3': 2, 'L:1|4': 2, 'L:2|3': 2, 'L:2|4': 2, 'L:3|4': 3 };
+  const meetings = m => m.reduce((n, p) => n + getMatchupCount(h, p[0], p[1]), 0);
+  const rr = [['1', '2'], ['3', '4']];                  // the MOST-met arrangement (total 6)
+  const out = optimizeMatchupPairingForSport(rr, ['1', '2', '3', '4'], ['Kickball', 'Dodgeball'], h);
+  const k = keys(out);
+  assert(!(k.includes('1v2') && k.includes('3v4')),
+    'saturated league must NOT stay stuck on 1v2/3v4: ' + k.join(','));
+  assert(meetings(out) < meetings(rr),
+    'must move to a LESS-met arrangement than the round-robin input: ' + k.join(','));
+  console.log('TEST 5 PASS — saturated league rotates instead of collapsing (' +
+    meetings(rr) + '→' + meetings(out) + ' meetings): ' + k.join(', '));
 })();
 
 console.log('\n✅ ALL MATCHUP-SPORTOPT (option 3) TESTS PASS');
