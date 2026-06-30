@@ -1747,7 +1747,19 @@
                 //   in the group so each bunk gets a DIFFERENT option per connected tile
                 //   (→ all options across the group); _usedOpts blocks any repeat.
                 const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
-                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
+                // ★ PREFER-MAIN1 (default ON; kill-switch window.__smartTilePreferMain1=false):
+                //   every bunk attempts the special (main1) FIRST, then main2, then the fallback —
+                //   so a bunk only ever lands on main2/fallback when main1 was genuinely unplaceable
+                //   (special capacity exhausted, cooldown/maxUsage/access gate, or already had today).
+                //   This replaces the legacy day+bunk offset that SPREAD the division across the three
+                //   options for variety. Capacity (_canClaim), the fair-share quota, seniority reserve,
+                //   per-bunk gates and the connected-group no-repeat (_usedOpts) all still apply.
+                const _preferMain1 = (window.__smartTilePreferMain1 !== false);
+                //   Fixed priority order: special → sport(main2) → fallback. main1 is always _rotOpts[0];
+                //   build [main1, main2, fallback] from the job so main2 precedes the fallback regardless
+                //   of how _rotOpts ordered them.
+                const _preferOrder = [job.main1, job.main2, job.fallbackActivity].filter(o => o != null && String(o) !== '');
+                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${(_preferMain1 ? _preferOrder : _rotOpts).join(' → ')}]${_preferMain1 ? ' (prefer-main1: specials filled first)' : ', offset ' + ((_dayNum + _grpOff) % _rotOpts.length)}`);
                 // ★ Scarce capped labels (Pickleball) are owned by the CAMP-WIDE queue computed
                 //   once before this loop (_cappedWinners / _winnerLabel / _mayTakeCapped). Winners
                 //   for THIS division are placed up front below; non-winners skip the label.
@@ -1764,15 +1776,23 @@
                     //   this is the path proven to persist + be counted next day; the solver-restricted
                     //   "real court" route silently dropped placements under cross-division contention,
                     //   which froze a starved division's counts at 0).
-                    const _wonRaw = _winnerLabel[bunk];
+                    //   ★ Prefer-main1: do NOT pre-empt with the camp-wide capped-label (Pickleball)
+                    //   queue — that would hand a bunk main2 before it ever tries the special. The cap
+                    //   is still enforced inside the option loop via _mayTakeCapped, so winners still
+                    //   get the scarce label when they DON'T get a special first.
+                    const _wonRaw = _preferMain1 ? null : _winnerLabel[bunk];
                     if (_wonRaw && _canClaimDirectFill(_wonRaw, _rStart, _rEnd)) {
                         _registerDirectFillClaim(_wonRaw, _rStart, _rEnd);
                         console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent, camp-wide): ${_wonRaw}`);
                         window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _wonRaw, sport: null, _fixed: true, _activity: _wonRaw, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                         _placed = true; _placedOpt = String(_wonRaw).toLowerCase().trim();
                     }
-                    for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
-                        const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
+                    const _optCount = _preferMain1 ? _preferOrder.length : _rotOpts.length;
+                    for (let _o = 0; _o < _optCount && !_placed; _o++) {
+                        const opt = _preferMain1
+                            ? _preferOrder[_o]
+                            : _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
+                        if (!opt) continue;
                         const optNorm = opt.toLowerCase().trim();
                         if (_usedOpts && _usedOpts.has(optNorm)) continue; // already got this option in the group
                         _placedOpt = optNorm;
