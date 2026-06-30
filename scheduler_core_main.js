@@ -1356,10 +1356,21 @@
                     if (denom > 0) q += cap * j.demand / denom;
                     if (sharers > 1) contended = true;
                 });
-                // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
-                // byte-for-byte no-op for the common case.
-                _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
-                if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
+                // ★ PREFER-MAIN1 = GREEDY SENIORITY (default ON; kill-switch
+                //   window.__smartTilePreferMain1=false): NO fair-share cap. Rotation tiles are
+                //   processed oldest→youngest, and _canClaim already prevents double-booking, so
+                //   removing the cap lets the SENIOR grade claim as many special rooms as it can
+                //   FIRST; junior overlapping tiles get only what's left. This is what makes an
+                //   older grade fill specials before a younger one (e.g. div 9 was capped at 1).
+                //   The demand-split fair-share below only applies when prefer-main1 is OFF.
+                if (window.__smartTilePreferMain1 !== false) {
+                    _rotSpecialQuota[j.key] = Infinity;
+                } else {
+                    // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
+                    // byte-for-byte no-op for the common case.
+                    _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
+                    if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
+                }
             });
         })();
 
