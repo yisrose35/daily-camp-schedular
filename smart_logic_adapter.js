@@ -1141,18 +1141,28 @@
                     const used = Object.values(block1).filter(a => isSame(a, s.name)).length;
                     s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
                 });
-                sortedEligible.forEach(bunk => {
-                    if (specialWinnersA.has(bunk)) return;
-                    if (!isSame(block1[bunk], effectiveA.open)) return; // only upgrade the open/main2 bunks
-                    const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
-                    const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
-                    if (chosen && chosen.remainingSlots > 0) {
-                        block1[bunk] = chosen.name;
-                        specialWinnersA.add(bunk);
-                        chosen.remainingSlots--;
-                        log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room, was ${effectiveA.open})`);
-                    }
-                });
+                // ★ LEAST-SERVED-FIRST: a free room goes to the bunk with the FEWEST
+                //   specials so far — yesterday's bumped-to-fallback bunks (divPriority) first,
+                //   then by cumulative special usage ascending — so the SAME bunks don't grab
+                //   the scarce special day after day. (sortedEligible already carries this order;
+                //   re-sorting here makes it explicit and robust to upstream changes.)
+                [...sortedEligible]
+                    .filter(b => !specialWinnersA.has(b) && isSame(block1[b], effectiveA.open))
+                    .sort((a, b) => {
+                        const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
+                        if (pa !== pb) return pb - pa;
+                        return getSpecialUsageCount(a) - getSpecialUsageCount(b);
+                    })
+                    .forEach(bunk => {
+                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
+                        const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                        if (chosen && chosen.remainingSlots > 0) {
+                            block1[bunk] = chosen.name;
+                            specialWinnersA.add(bunk);
+                            chosen.remainingSlots--;
+                            log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room, was ${effectiveA.open})`);
+                        }
+                    });
             }
             // ★ V44.3: Record Block A consumption for other divisions
             Object.entries(block1).forEach(([bunk, act]) => {
@@ -1249,18 +1259,25 @@
                         const used = Object.values(block2).filter(a => isSame(a, s.name)).length;
                         s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
                     });
-                    sortedEligible.forEach(bunk => {
-                        if (specialWinnersA.has(bunk)) return;       // winners keep the Swim complement
-                        if (!isSame(block2[bunk], fbAct)) return;     // only upgrade the fallback (Sport) bunks
-                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
-                        const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
-                        if (chosen && chosen.remainingSlots > 0) {
-                            block2[bunk] = chosen.name;
-                            chosen.remainingSlots--;
-                            nextDayPriority = nextDayPriority.filter(p => p !== bunk);
-                            log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room in B, was ${fbAct})`);
-                        }
-                    });
+                    // ★ LEAST-SERVED-FIRST (same as Block A): free Block-B rooms go to the
+                    //   fewest-served fallback bunks so the scarce special rotates across days.
+                    [...sortedEligible]
+                        .filter(b => !specialWinnersA.has(b) && isSame(block2[b], fbAct))
+                        .sort((a, b) => {
+                            const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
+                            if (pa !== pb) return pb - pa;
+                            return getSpecialUsageCount(a) - getSpecialUsageCount(b);
+                        })
+                        .forEach(bunk => {
+                            const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
+                            const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                            if (chosen && chosen.remainingSlots > 0) {
+                                block2[bunk] = chosen.name;
+                                chosen.remainingSlots--;
+                                nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                                log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room in B, was ${fbAct})`);
+                            }
+                        });
                 }
                 // ★ V44.3: Record Block B consumption for other divisions
                 Object.entries(block2).forEach(([bunk, act]) => {
