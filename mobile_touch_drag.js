@@ -854,7 +854,7 @@ function onTouchRepositionMove(touch, module, wrapper) {
   }
 }
 
-function finishTouchReposition(touch, module, wrapper) {
+async function finishTouchReposition(touch, module, wrapper) {
   if (!repositionState) { isRepositioning = false; return; }
 
   const cellSelector = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
@@ -879,9 +879,36 @@ function finishTouchReposition(touch, module, wrapper) {
     const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
 
     const _prevDiv121 = event.division;
+    const _newStartMin121 = cellStartMin + snapMin;
+
+    // ★ NIGHT ACTIVITY on touch MOVE (DA only): mirror the desktop move handler.
+    //   If the tile lands at/after the target division's end time, ask whether it's a
+    //   Night Activity and tag it so the generator schedules it (instead of dropping it
+    //   via the division-boundary clip). Declining aborts the move. MS has no night concept.
+    let _isNight121 = false;
+    if (module !== 'ms') {
+      const _tdiv = window.divisions?.[divName] || {};
+      const _tEnd = parseTimeToMinutes(_tdiv.endTime);
+      if (_tEnd !== null && _newStartMin121 >= _tEnd) {
+        _isNight121 = (typeof window.daShowConfirm === 'function')
+          ? await window.daShowConfirm('⏰ "' + minutesToTime(_newStartMin121) + '" is after this division\'s end time (' + _tdiv.endTime + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Cancel Move' })
+          : true;
+        if (!_isNight121) {
+          // declined → abort the move, run cleanup without mutating the tile
+          repositionState.tileEl.classList.remove('mobile-repositioning');
+          if (dragGhost) dragGhost.style.display = 'none';
+          isRepositioning = false;
+          repositionState = null;
+          return;
+        }
+      }
+    }
+
     event.division = divName;
-    event.startTime = minutesToTime(cellStartMin + snapMin);
-    event.endTime = minutesToTime(cellStartMin + snapMin + duration);
+    event.startTime = minutesToTime(_newStartMin121);
+    event.endTime = minutesToTime(_newStartMin121 + duration);
+    // Re-tag based on the new position (set in night zone, clear back in hours).
+    if (module !== 'ms') event.isNightActivity = _isNight121;
 
     // ★★★ CB-121: a cross-grade reposition of a LEAGUE tile must remap its league
     // reference to the destination grade's league. The desktop drop handlers call

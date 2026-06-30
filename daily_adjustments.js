@@ -3070,30 +3070,45 @@ function addDragToRepositionListeners(gridEl) {
       }
     });
     
-    cell.addEventListener('drop', (e) => {
+    cell.addEventListener('drop', async (e) => {
       cell.style.background = '';
       if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
-      
+
       if (e.dataTransfer.types.includes('text/event-move')) {
         e.preventDefault();
         const eventId = e.dataTransfer.getData('text/event-move');
         const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
+
         const divName = cell.dataset.div;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
         const y = e.clientY - rect.top;
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
-        
+
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        const newStart = minutesToTime(cellStartMin + snapMin);
-        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+        const newStartMin = cellStartMin + snapMin;
+        const newStart = minutesToTime(newStartMin);
+        const newEnd = minutesToTime(newStartMin + duration);
+
+        // ★ NIGHT ACTIVITY on MOVE: the new-tile drop path asks "is this a Night
+        //   Activity?" when a tile lands past the division's end time, but MOVING an
+        //   existing tile bypassed that prompt — so a tile dragged into the after-hours
+        //   (night) zone never got tagged isNightActivity and was then dropped by the
+        //   generator's division-boundary clip (never scheduled). Mirror the create-flow
+        //   prompt here for any moved tile starting at/after the target division's end.
+        const targetDiv = window.divisions[divName] || {};
+        const targetDivEndMin = parseTimeToMinutes(targetDiv.endTime);
+        let isNight = false;
+        if (targetDivEndMin !== null && newStartMin >= targetDivEndMin) {
+          isNight = await daShowConfirm('⏰ "' + _escHtml(newStart) + '" is after this division\'s end time (' + _escHtml(targetDiv.endTime) + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Cancel Move' });
+          if (!isNight) return; // declined → abort the move, leave the tile where it was
+        }
 
         if (divName !== event.division) {
           // Cross-grade drop. Remap league reference so the copy points
           // at a league assigned to the new grade (not the source's).
-          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd, isNightActivity: isNight };
           if (typeof window._mbRemapLeagueForGrade === 'function') {
             window._mbRemapLeagueForGrade(copy, divName);
           }
@@ -3102,6 +3117,9 @@ function addDragToRepositionListeners(gridEl) {
         } else {
           event.startTime = newStart;
           event.endTime = newEnd;
+          // Re-tag based on the new position: set when moved into the night zone,
+          // clear when moved back into normal hours (so a stale flag can't linger).
+          event.isNightActivity = isNight;
           bumpOverlappingTiles(event, divName);
         }
 
