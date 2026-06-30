@@ -459,6 +459,32 @@
         return history.matchupHistory[matchupKey] || 0;
     }
 
+    // ★ Meeting count derived from the date-keyed gameLog (dates ≤ asOfDate),
+    // mirroring getTeamSportHistoryByDate. The flat matchupHistory aggregate is
+    // NOT regen-safe: rollbackDayRecords can only subtract games that are IN the
+    // gameLog, so any meetings recorded before the gameLog existed (FN-54) are
+    // frozen in the aggregate forever while regenerated pairs get decremented —
+    // the counts INVERT (the most-played pair looks least-played), and the
+    // pairing optimizer then keeps re-selecting it (observed live: a 4-team
+    // league pinned to 1v2/3v4 every game). Counting straight from the gameLog
+    // is immune: a never-logged pair is simply 0, and today's in-progress games
+    // (logged incrementally before the next game is paired) are included so
+    // back-to-back games on the same day still rotate. Falls back to the flat
+    // aggregate only when the league has no gameLog at all (pure legacy data).
+    function getMatchupCountByDate(leagueName, team1, team2, history, asOfDate) {
+        const gl = history.gameLog && history.gameLog[leagueName];
+        if (!gl) return getMatchupCount(leagueName, team1, team2, history);
+        const key = getMatchupKey(team1, team2);
+        let n = 0;
+        Object.keys(gl).forEach(function (d) {
+            if (asOfDate && d > asOfDate) return;          // ignore strictly-future dates
+            (gl[d] || []).forEach(function (e) {
+                if (e && getMatchupKey(e.t1, e.t2) === key) n++;
+            });
+        });
+        return n;
+    }
+
     function recordMatchup(leagueName, team1, team2, history) {
         const matchupKey = `${leagueName}:${getMatchupKey(team1, team2)}`;
         history.matchupHistory[matchupKey] = (history.matchupHistory[matchupKey] || 0) + 1;
@@ -697,7 +723,7 @@
             for (let i = 0; i < teams.length; i++) {
                 for (let j = i + 1; j < teams.length; j++) {
                     const a = teams[i], b = teams[j];
-                    const met = getMatchupCount(leagueName, a, b, history);
+                    const met = getMatchupCountByDate(leagueName, a, b, history, dayId);
                     pairs.push({ a, b, met, w: (-met) * W_OPP + sportFresh(a, b) * W_SPORT });
                 }
             }
@@ -738,14 +764,18 @@
     // same sport, so one scarce field serves two needy teams instead of one needy
     // and one repeat.
     //
-    //   rem(a,b) = how many times a & b have ALREADY met (NOT a 0/1 flag). This must
-    //              be the real meeting COUNT: in a small league (e.g. 4 teams) every
-    //              pair meets within one round-robin cycle, so a binary "have they met"
-    //              flag becomes 1 for EVERY pairing — the -BIG term then cancels out of
-    //              every comparison and the guard goes blind, letting sport-need re-pair
-    //              the league into the SAME matchup every day (observed live: a 4-team
-    //              league stuck on 1v2/3v4 across all games). Counting meetings keeps the
-    //              guard meaningful past saturation: it always prefers the LEAST-met pair.
+    //   rem(a,b) = how many times a & b have ALREADY met, counted from the date-keyed
+    //              gameLog (getMatchupCountByDate), NOT the flat matchupHistory aggregate.
+    //              Two reasons it must be a gameLog COUNT and not a 0/1 flag on the
+    //              aggregate: (1) a binary flag goes blind once every pair has met (a
+    //              4-team league saturates in one round-robin cycle) — the -BIG term then
+    //              cancels out of every comparison and sport-need alone re-pairs the
+    //              league. (2) the flat aggregate INVERTS under regeneration: rollback can
+    //              only subtract games present in the gameLog, so pre-gameLog meetings
+    //              freeze while regenerated pairs get decremented, making the MOST-played
+    //              pair look LEAST-played — the optimizer then locks onto it (observed
+    //              live: a league stuck on 1v2/3v4 every game). The gameLog count is
+    //              immune and always prefers the genuinely LEAST-met pair.
     //   val(a,b) = sport-need concentration: 3 if some available sport is fresh for
     //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
     //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
@@ -770,9 +800,11 @@
             }
             (activeTeams || []).forEach(function (t) { playedSet(t); });
 
-            // Real meeting COUNT, not a 0/1 flag — see header note: a binary flag goes
-            // blind once every pair has met (small leagues), collapsing variety.
-            function rem(a, b) { return getMatchupCount(leagueName, a, b, history); }
+            // Real meeting COUNT from the date-keyed gameLog (NOT the flat aggregate,
+            // which inverts under regen — see getMatchupCountByDate). Counting (vs a
+            // 0/1 flag) also keeps the guard meaningful once every pair has met in a
+            // small league. Together: always prefers the genuinely LEAST-met pair.
+            function rem(a, b) { return getMatchupCountByDate(leagueName, a, b, history, dayId); }
             function val(a, b) {
                 const pa = playedSet(a), pb = playedSet(b);
                 let freshBoth = 0;
@@ -1257,7 +1289,7 @@
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const h1 = _teamHist(t1);
             const h2 = _teamHist(t2);
-            const matchupCount = getMatchupCount(leagueName, t1, t2, history);
+            const matchupCount = getMatchupCountByDate(leagueName, t1, t2, history, dayId);
             const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
             return {
                 t1, t2, matchupCount, indoorMin,
@@ -3103,5 +3135,5 @@ window._debugLeagueTimeData = timeData;
     };
 
     window.SchedulerCoreLeagues = Leagues;
-    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v7');
+    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v8 (gameLog-derived matchup count)');
 })();

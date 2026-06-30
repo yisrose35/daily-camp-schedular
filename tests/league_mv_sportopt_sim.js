@@ -15,17 +15,26 @@ const LG = 'L';
 const BIG = 1e6;
 
 function getMatchupCount(h, a, b) { return (h.matchupHistory || {})[LG + ':' + [a, b].sort().join('|')] || 0; }
+// Regen-safe meeting count from the date-keyed gameLog (mirrors getMatchupCountByDate
+// in scheduler_core_leagues.js). asOf=null → count all logged dates.
+function getMatchupCountByDate(h, a, b, asOf) {
+  const gl = (h.gameLog || {})[LG]; if (!gl) return getMatchupCount(h, a, b);
+  const key = [a, b].sort().join('|'); let n = 0;
+  Object.keys(gl).forEach(d => { if (asOf && d > asOf) return;
+    (gl[d] || []).forEach(e => { if (e && [e.t1, e.t2].sort().join('|') === key) n++; }); });
+  return n;
+}
 function playedSports(h, t) {
   const gl = (h.gameLog || {})[LG] || {}, out = new Set();
   Object.keys(gl).forEach(d => (gl[d] || []).forEach(e => { if (e.sport && (e.t1 === t || e.t2 === t)) out.add(e.sport); }));
   return out;
 }
 
-function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h) {
+function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h, asOf) {
   const played = {}; teams.forEach(t => played[t] = playedSports(h, t));
-  // Real meeting COUNT (not 0/1) — a binary flag goes blind once every pair has met
-  // (small leagues), collapsing variety. Mirrors the source fix.
-  function rem(a, b) { return getMatchupCount(h, a, b); }
+  // Real meeting COUNT from the date-keyed gameLog (not a 0/1 flag, not the flat
+  // aggregate which inverts under regen). Mirrors the source fix.
+  function rem(a, b) { return getMatchupCountByDate(h, a, b, asOf); }
   function val(a, b) {
     const pa = played[a], pb = played[b]; let freshBoth = 0;
     for (const s of availSports) { const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1); if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; } }
@@ -123,28 +132,35 @@ function keys(m) { return m.map(p => p.slice().sort().join('v')); }
   console.log('TEST 4 PASS — refused the rematch despite the sport bait: ' + k.join(', '));
 })();
 
-// ---- TEST 5: SATURATED league — graduated meeting-count keeps rotating opponents ----
-// Regression for the live bug: a 4-team league where every pair has already met
-// collapsed to the SAME pairing (1v2/3v4) every game, because a binary "have they
-// met" guard is 1 for every pair → the rematch term cancels out and sport-need
-// alone decides. Counting real meetings restores least-met rotation.
+// ---- TEST 5: regen-INVERTED aggregate — gameLog count keeps rotating opponents ----
+// The live bug: a 4-team league stuck on 1v2/3v4 every game. The flat matchupHistory
+// aggregate had INVERTED: pre-gameLog meetings for 1v3/1v4/2v3/2v4 froze at 2 (rollback
+// can't subtract what isn't in the gameLog), while the actually-overplayed 1v2/3v4 got
+// decremented to 1 on each regen — so the aggregate said 1v2/3v4 were the LEAST-met and
+// the optimizer kept re-selecting them. Counting from the gameLog (truth) fixes it.
 (function () {
   const h = H();
-  // sport history (so val is meaningful: 1&2 still need Kickball, 3&4 need Dodgeball)
+  // gameLog TRUTH: only 1v2 and 3v4 have ever actually been logged (the collapse).
   addGame(h, '2026-06-29', '1', '2', 'Dodgeball');
-  addGame(h, '2026-06-29', '4', '3', 'Kickball');
-  // saturated cumulative meetings — every pair has met; 1-2 and 3-4 the most.
-  h.matchupHistory = { 'L:1|2': 3, 'L:1|3': 2, 'L:1|4': 2, 'L:2|3': 2, 'L:2|4': 2, 'L:3|4': 3 };
-  const meetings = m => m.reduce((n, p) => n + getMatchupCount(h, p[0], p[1]), 0);
-  const rr = [['1', '2'], ['3', '4']];                  // the MOST-met arrangement (total 6)
-  const out = optimizeMatchupPairingForSport(rr, ['1', '2', '3', '4'], ['Kickball', 'Dodgeball'], h);
+  addGame(h, '2026-06-29', '3', '4', 'Kickball');
+  // flat aggregate is INVERTED (phantom pre-gameLog counts the rollback never cleared):
+  h.matchupHistory = { 'L:1|2': 1, 'L:1|3': 2, 'L:1|4': 2, 'L:2|3': 2, 'L:2|4': 2, 'L:3|4': 1 };
+
+  // Sanity: the OLD flat-aggregate guard would pick the WRONG (overplayed) pairs.
+  const remFlat = (a, b) => getMatchupCount(h, a, b);
+  assert(remFlat('1', '2') < remFlat('1', '3'),
+    'precondition: flat aggregate is inverted (1v2 looks rarer than 1v3)');
+
+  // gameLog-derived optimizer must AVOID the truly-overplayed 1v2/3v4.
+  const meetings = m => m.reduce((n, p) => n + getMatchupCountByDate(h, p[0], p[1], '2026-06-30'), 0);
+  const rr = [['1', '2'], ['3', '4']];                 // the round-robin round that lands today
+  const out = optimizeMatchupPairingForSport(rr, ['1', '2', '3', '4'], ['Kickball', 'Dodgeball'], h, '2026-06-30');
   const k = keys(out);
   assert(!(k.includes('1v2') && k.includes('3v4')),
-    'saturated league must NOT stay stuck on 1v2/3v4: ' + k.join(','));
+    'must NOT stay stuck on the truly-overplayed 1v2/3v4: ' + k.join(','));
   assert(meetings(out) < meetings(rr),
-    'must move to a LESS-met arrangement than the round-robin input: ' + k.join(','));
-  console.log('TEST 5 PASS — saturated league rotates instead of collapsing (' +
-    meetings(rr) + '→' + meetings(out) + ' meetings): ' + k.join(', '));
+    'must move to genuinely less-met opponents (per gameLog): ' + k.join(','));
+  console.log('TEST 5 PASS — gameLog count beats the inverted aggregate, rotates to: ' + k.join(', '));
 })();
 
 console.log('\n✅ ALL MATCHUP-SPORTOPT (option 3) TESTS PASS');
