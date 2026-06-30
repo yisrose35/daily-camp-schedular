@@ -1026,6 +1026,18 @@
             const divPriority = priorityQueue[divisionName] || [];
 
             function getSpecialUsageCount(bunk) {
+                // ★ Within-division fairness = specials this bunk has had THIS PERIOD (default
+                //   this week), not lifetime — matches the cross-division need-first ordering so
+                //   a bunk well-served earlier doesn't stay deprioritized all week. Kill switch
+                //   window.__smartTileNeedFirst = false → lifetime (legacy). Period tunable via
+                //   window.__smartTileNeedPeriod (default '1week').
+                const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                if (window.__smartTileNeedFirst !== false && typeof _gpc === 'function') {
+                    const period = window.__smartTileNeedPeriod || '1week';
+                    let sum = 0;
+                    allAvailableSpecials.forEach(s => { try { sum += _gpc(bunk, s.name, period) || 0; } catch (_) {} });
+                    return sum;
+                }
                 let sum = 0;
                 const bunkHist = historical[bunk] || {};
                 allAvailableSpecials.forEach(s => {

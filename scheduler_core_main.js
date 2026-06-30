@@ -1388,27 +1388,31 @@
         //   the deprived catch up over the week. Applies WITHIN the rotation reservation (cross
         //   rotation-division) and WITHIN the budget pre-allocation (cross budget-division).
         const _needFirst = (window.__smartTileNeedFirst !== false);
-        const _scCache = {}, _ndCache = {};
+        const _scCache = {};
+        // ★ "Need" = how many specials the bunk has had THIS PERIOD (default this week), NOT
+        //   lifetime — so each period everyone starts ~even and a bunk that's gone days without
+        //   a special rises to the top and catches up. (A lifetime count let a bunk that was
+        //   well-served earlier sit at 0 for a whole week despite being eligible.) Falls back to
+        //   lifetime counts only if the period-count helper isn't loaded. Tunable:
+        //   window.__smartTileNeedPeriod ('1week' | 'half' | …); default '1week'. The unreliable
+        //   getDaysSinceActivity tiebreak was dropped (it reported "1 day ago" for never-done
+        //   specials, which mis-ranked need).
+        const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+        const _needPeriod = window.__smartTileNeedPeriod || '1week';
         const _bunkSpecialCount = (bunk) => {
             if (bunk in _scCache) return _scCache[bunk];
-            const h = historicalCounts[bunk] || {}; let c = 0;
-            for (const n of _allSpecialNames) c += (h[n] || 0);
+            let c = 0;
+            if (typeof _gpc === 'function') {
+                for (const n of _allSpecialNames) { try { c += _gpc(bunk, n, _needPeriod) || 0; } catch (_) {} }
+            } else {
+                const h = historicalCounts[bunk] || {};
+                for (const n of _allSpecialNames) c += (h[n] || 0);
+            }
             return (_scCache[bunk] = c);
         };
-        const _bunkDaysSinceSpecial = (bunk) => {
-            if (bunk in _ndCache) return _ndCache[bunk];
-            let mn = Infinity; const RE = window.RotationEngine;
-            if (RE && typeof RE.getDaysSinceActivity === 'function') {
-                for (const n of _allSpecialNames) {
-                    try { const d = RE.getDaysSinceActivity(bunk, n); if (typeof d === 'number' && d >= 0 && d < mn) mn = d; } catch (_) {}
-                }
-            }
-            return (_ndCache[bunk] = mn); // Infinity = never had any special = neediest
-        };
-        // neediest first (fewest specials, then longest-since); seniority breaks ties.
+        // neediest first (fewest specials THIS PERIOD); seniority breaks ties.
         const _needSenCmp = (bunkA, divA, bunkB, divB) =>
             (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||
-            (_bunkDaysSinceSpecial(bunkB) - _bunkDaysSinceSpecial(bunkA)) ||
             (_senOf(divA) - _senOf(divB)) ||
             (Math.random() - 0.5);
 
@@ -1566,7 +1570,7 @@
             // decides the cross-division order; fairness still rotates specials
             // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
-                (_needFirst ? (a.usage - b.usage) : 0) ||      // ★ need first across grades (a.usage = special count)
+                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
                 (a.usage - b.usage) ||
@@ -1691,7 +1695,7 @@
             // priority list as a final tiebreak. Seniority decides the cross-division
             // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
-                (_needFirst ? (a.usage - b.usage) : 0) ||      // ★ need first across grades (a.usage = special count)
+                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
