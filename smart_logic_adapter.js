@@ -291,7 +291,12 @@
                     if (isRainyMode && (props.rainyDayAvailable === false || props.availableOnRainyDay === false)) {
                         return; // Skip non-rainy-available on rainy days
                     }
-                    if (!allSpecials.find(s => s.name === name)) {
+                    // ★ Case-INSENSITIVE existence check. This camp duplicates every
+                    //   special cap/lowercase; activityProperties is keyed by the
+                    //   lowercased activity name, so a case-sensitive `s.name === name`
+                    //   never matches the proper-case config entry and injects a bogus
+                    //   lowercase TWIN ("Lake" config + "lake" props) into the pool.
+                    if (!allSpecials.find(s => isSame(s.name, name))) {
                         propsSpecials.push({ name, ...props });
                     }
                 }
@@ -482,9 +487,43 @@
             });
         });
 
-        const totalCap = available.reduce((s, a) => s + a.capacity, 0);
-        log(`  TOTAL FOR ${divisionName}: ${available.length} specials, ${totalCap} slots`);
-        return available;
+        // ★ CASE-DUP COLLAPSE — the actual fix for "plenty of specials free but
+        //   bunks get the Swim fallback". This camp stores every special TWICE,
+        //   cap + lowercase ("Lake" + "lake", "VR" + "vr", "Arts & Crafts" + "arts
+        //   & crafts"). Both survive into the pool because the two sources
+        //   (getGlobalSpecialActivities + activityProperties) merge case-sensitively.
+        //   Two pool entries for ONE physical room then:
+        //     (a) DOUBLE the apparent special capacity the pre-allocator budgets, and
+        //     (b) block each other on the shared facility claim key — a room reserved
+        //         under the lowercase twin reads "full" to the proper-case one (and to
+        //         the very division it was reserved for), so the rotation's "Special"
+        //         step finds every candidate taken and falls through to Swim while the
+        //         room sits empty. Collapsing also stops the lowercase placements that
+        //         evaded the case-sensitive cooldown/maxUsage ledger.
+        //   Collapse is by special NAME (case-insensitive) — different specials that
+        //   merely SHARE a room (e.g. "Arts & Crafts" + "Leather" → one shack) have
+        //   distinct names and are never merged. Within a case-variant group keep the
+        //   canonical (non-all-lowercase) name; tie-break on richer capacity.
+        const _canonByLcName = new Map();
+        available.forEach(a => {
+            const k = String(a.name).toLowerCase().trim();
+            const prev = _canonByLcName.get(k);
+            if (!prev) { _canonByLcName.set(k, a); return; }
+            const aUpper = a.name !== a.name.toLowerCase();
+            const pUpper = prev.name !== prev.name.toLowerCase();
+            let keep;
+            if (aUpper !== pUpper) keep = aUpper ? a : prev;          // canonical case wins
+            else keep = (a.capacity > prev.capacity) ? a : prev;       // else richer config
+            _canonByLcName.set(k, keep);
+        });
+        const deduped = [..._canonByLcName.values()];
+        if (deduped.length !== available.length) {
+            log(`  ⚖️ Collapsed ${available.length - deduped.length} case-duplicate special(s) → ${deduped.length} canonical`);
+        }
+
+        const totalCap = deduped.reduce((s, a) => s + a.capacity, 0);
+        log(`  TOTAL FOR ${divisionName}: ${deduped.length} specials, ${totalCap} slots`);
+        return deduped;
     }
 
     /**
