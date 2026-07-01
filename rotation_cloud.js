@@ -364,6 +364,67 @@
     }
 
     // =====================================================================
+    // RENAME BUNK: Move all counts from oldBunk → newBunk across every date +
+    // activity, MERGING into any existing newBunk rows, then delete the old-bunk
+    // rows. Mirrors renameActivityCounts but on the `bunk` column. Used when a
+    // bunk is renamed in Campistry Me so its rotation history follows the new
+    // name instead of orphaning under the old one (which would make the renamed
+    // bunk look like it has no history and skew fairness).
+    // =====================================================================
+    function renameBunkCounts(oldBunk, newBunk) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !oldBunk || !newBunk || oldBunk === newBunk) {
+            return Promise.resolve(false);
+        }
+
+        // 1) Read every old-bunk row, plus every existing new-bunk row to merge.
+        return Promise.all([
+            client.from(TABLE).select('date_key,activity,count').eq('camp_id', campId).eq('bunk', oldBunk),
+            client.from(TABLE).select('date_key,activity,count').eq('camp_id', campId).eq('bunk', newBunk)
+        ]).then(function(results) {
+            var oldRes = results[0], newRes = results[1];
+            if (oldRes.error) { console.error('[RotationCloud] bunk-rename read(old) error:', oldRes.error.message); return false; }
+            if (newRes.error) { console.error('[RotationCloud] bunk-rename read(new) error:', newRes.error.message); return false; }
+            var oldRows = oldRes.data || [];
+            if (oldRows.length === 0) return true; // nothing to migrate
+
+            // Merge counts per (date_key, activity): existing new-bunk count + old count.
+            // Split on the FIRST '|' only — activity names may contain '|', date_key never does.
+            var merged = {};
+            (newRes.data || []).forEach(function(r) { merged[r.date_key + '|' + r.activity] = r.count; });
+            oldRows.forEach(function(r) {
+                var k = r.date_key + '|' + r.activity;
+                merged[k] = (merged[k] || 0) + r.count;
+            });
+
+            var nowIso = new Date().toISOString();
+            var rows = Object.keys(merged).map(function(k) {
+                var i = k.indexOf('|');
+                return { camp_id: campId, date_key: k.slice(0, i), bunk: newBunk, activity: k.slice(i + 1), count: merged[k], updated_at: nowIso };
+            });
+
+            // 2) Upsert merged new-bunk rows, THEN delete the old-bunk rows.
+            return client.from(TABLE)
+                .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' })
+                .then(function(up) {
+                    if (up.error) { console.error('[RotationCloud] bunk-rename upsert error:', up.error.message); return false; }
+                    return client.from(TABLE).delete().eq('camp_id', campId).eq('bunk', oldBunk)
+                        .then(function(del) {
+                            if (del.error) { console.error('[RotationCloud] bunk-rename delete(old) error:', del.error.message); return false; }
+                            _cache = null;
+                            _loadGen++;
+                            console.log('[RotationCloud] Renamed bunk "' + oldBunk + '" → "' + newBunk + '" (' + rows.length + ' rows)');
+                            return true;
+                        });
+                });
+        }).catch(function(e) {
+            console.error('[RotationCloud] bunk-rename failed:', e);
+            return false;
+        });
+    }
+
+    // =====================================================================
     // CLEAR ALL: Remove all rotation data for this camp (used on half reset)
     // =====================================================================
     function clearAllRotationCounts() {
@@ -438,6 +499,7 @@
         deleteDate: deleteRotationCounts,
         deleteActivity: deleteActivityCounts,
         renameActivity: renameActivityCounts,
+        renameBunk: renameBunkCounts,
         clearAll: clearAllRotationCounts,
         clearForBunks: clearForBunks,
         invalidateCache: invalidateCache,

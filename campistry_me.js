@@ -1834,6 +1834,29 @@ function _propagateBunkRename(oldB,newB){
             });
         }).catch(function(err){console.error('[Me] bunk-rename cloud propagate failed:',err);});
     }catch(e){console.error('[Me] bunk-rename exception:',e);}
+    // 3. rotation_counts (cloud) — carry the bunk's rotation HISTORY to the new
+    //    name so fairness doesn't treat the renamed bunk as brand-new (which would
+    //    let it re-draw activities it just did). Best-effort; mirrors the activity
+    //    rename migration. Async, non-blocking.
+    try{
+        if(window.RotationCloud&&typeof window.RotationCloud.renameBunk==='function'){
+            window.RotationCloud.renameBunk(oldB,newB);
+        }
+    }catch(_){}
+    // 4. bunkMetaData (size / player-count config in the app1 blob) — rename the key
+    //    so the renamed bunk keeps its configured size instead of resetting.
+    try{
+        var _gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var _app1=_gs&&_gs.app1;
+        if(_app1&&_app1.bunkMetaData&&_app1.bunkMetaData[oldB]!==undefined&&_app1.bunkMetaData[newB]===undefined){
+            _app1.bunkMetaData[newB]=_app1.bunkMetaData[oldB];
+            delete _app1.bunkMetaData[oldB];
+            if(typeof window.saveGlobalSettings==='function'){
+                window.saveGlobalSettings('app1',_app1);
+                if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            }
+        }
+    }catch(_){}
 }
 
 // ── BUNK BUILDER ─────────────────────────────────────────────────

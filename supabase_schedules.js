@@ -821,6 +821,35 @@
     // =========================================================================
     // SAVE OPERATIONS — ★★★ v5.4: PERMISSION-AWARE ERROR HANDLING ★★★
     // =========================================================================
+    // ★ Shared structure-aware bunk prune — the renamed/deleted-bunk GHOST cleaner.
+    // Drops (in place) any bunk key not present in the FULL camp structure
+    // (app1.divisions, config-level, shared by all users — NOT the scope-filtered
+    // window.divisions, so a scoped scheduler's out-of-scope bunks are never
+    // over-pruned). Returns the count removed.
+    //   • The load path (#V2-25, in mergeSchedules) prunes the MERGED result so a
+    //     ghost can't render or re-persist.
+    //   • The save path calls this too, so a ghost is never physically written into
+    //     the cloud row in the first place (defense in depth).
+    // GUARDED: a no-op when the structure isn't definitively loaded (no app1.divisions,
+    // or it yields zero valid bunks) — never strip a legit schedule during an early
+    // or racing load/save.
+    function pruneOrphanBunks(assignmentsObj) {
+        if (!assignmentsObj || typeof assignmentsObj !== 'object') return 0;
+        let gs = null;
+        try { gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null; } catch (_) { return 0; }
+        const divs = (gs && gs.app1 && gs.app1.divisions) || null;
+        if (!divs || Object.keys(divs).length === 0) return 0;
+        const valid = new Set();
+        Object.values(divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => valid.add(String(b))); });
+        if (valid.size === 0) return 0;
+        let pruned = 0;
+        Object.keys(assignmentsObj).forEach(b => {
+            if (!valid.has(String(b))) { delete assignmentsObj[b]; pruned++; }
+        });
+        return pruned;
+    }
+
+    // =========================================================================
     /**
      * Save schedule for a date.
      * Automatically filters to user's divisions and UPSERTs.
@@ -1055,6 +1084,19 @@
             } else {
                 // Use our fixed filtering function
                 filteredAssignments = filterScheduleToMyBunks(data.scheduleAssignments || {});
+            }
+
+            // ★ Rename-ghost guard (save side, defense-in-depth with the load-side
+            //   #V2-25 prune): never physically write a bunk key that isn't in the
+            //   current camp structure. Prune a COPY so the caller's object is never
+            //   mutated (the skipFilter path passes data.scheduleAssignments by ref).
+            {
+                const _copy = Object.assign({}, filteredAssignments);
+                const _dropped = pruneOrphanBunks(_copy);
+                if (_dropped > 0) {
+                    filteredAssignments = _copy;
+                    log(`★ save-prune: dropped ${_dropped} renamed/orphan ghost bunk(s) not in camp structure`);
+                }
             }
 
             const filteredBunkCount = Object.keys(filteredAssignments).length;
@@ -1703,7 +1745,8 @@
         
         // Merge
         mergeSchedules,
-        
+        pruneOrphanBunks, // ★ shared renamed/orphan-bunk ghost cleaner (load + save)
+
         // Local storage helpers
         getLocalSchedule,
         setLocalSchedule,
