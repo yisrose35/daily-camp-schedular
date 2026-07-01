@@ -3550,6 +3550,37 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
         }
 
+        // ★ STEP 1.7 — Partial (per-tile) regen: DIVISION-AWARE hard-lock of every
+        //   PRESERVED (non-regenerated) placement's field. STEP 1.5 only hard-locks a
+        //   field once it is AT capacity, so an under-capacity same_division court held
+        //   by a preserved bunk stays unlocked → a fallback fill (STEP 7.55 demote →
+        //   7.6 empty-field free-fill) can place a regenerated bunk onto it CROSS-division
+        //   → conflict → auto-demote to a blank slot. lockFieldForDivision blocks OTHER
+        //   divisions while still letting a same-division bunk legitimately share.
+        if (window.__regenSlotScope && window.GlobalFieldLocks &&
+            typeof window.GlobalFieldLocks.lockFieldForDivision === 'function') {
+            const _divOf17 = {};
+            Object.entries(divisions || {}).forEach(([dn, di]) =>
+                ((di && di.bunks) || []).forEach(b => { _divOf17[String(b)] = String(dn); }));
+            let _locked17 = 0;
+            for (const _b in window.scheduleAssignments) {
+                const _arr17 = window.scheduleAssignments[_b];
+                if (!Array.isArray(_arr17)) continue;
+                const _dn17 = _divOf17[String(_b)] || null;
+                for (let i = 0; i < _arr17.length; i++) {
+                    const _e17 = _arr17[i];
+                    if (!_e17 || _e17.continuation || _e17._isTransition) continue;
+                    const _f17 = _e17.field;
+                    if (!_f17) continue;
+                    try {
+                        window.GlobalFieldLocks.lockFieldForDivision(_f17, [i], _dn17, 'regen_preserve');
+                        _locked17++;
+                    } catch (_e) { /* non-fatal */ }
+                }
+            }
+            if (_locked17 > 0) console.log('[STEP 1.7] ★ Per-tile regen: division-locked ' + _locked17 + ' preserved field(s) against cross-division poaching');
+        }
+
         // ★ LG-6: restore league matchups for divisions NOT in this scoped gen.
         //   Step 1.5 above restored their SCHEDULE (scheduleAssignments); their
         //   leagueAssignments were wiped at the top of this run and the partial gen
