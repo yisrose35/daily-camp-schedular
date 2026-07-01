@@ -1273,6 +1273,17 @@ function shouldHighlightBunk(bunkName) {
     function resolveEntryLocation(entry) {
         if (!entry) return '';
         const name = entry._activity || entry.sport || '';
+        // ★ Sports: entry.field is the AUTHORITATIVE placement (what capacity, field
+        //   locks and share-detection all read). Trust it over any _location left
+        //   behind by a field move — e.g. field-quality re-opt rewrites .field but
+        //   not _location, so a moved bunk would otherwise DISPLAY its pre-move
+        //   field (and read as "playing another bunk on a different field" when
+        //   it's really sharing the new one). A special stores field = its NAME, so
+        //   only override for a REAL field (present, not 'Free', ≠ the activity name).
+        const _fieldReal = fieldLabel(entry.field);
+        if (_fieldReal && _fieldReal !== 'Free' && _fieldReal.toLowerCase() !== String(name).toLowerCase()) {
+            return _fieldReal;
+        }
         let loc = entry._specialLocation || entry._customField || entry._location || entry._partLocation || '';
         if (!loc) {
             const f = fieldLabel(entry.field);

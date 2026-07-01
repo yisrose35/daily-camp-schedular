@@ -497,6 +497,19 @@
             });
         } catch (_eD) { try { console.warn('[FQ-REOPT D] ' + (_eD && _eD.message)); } catch (_e4) {} }
 
+        // A field move rewrites entry.field but NOT the display label. Readers that
+        // prefer _location / location (resolveEntryLocation, print, camper locator)
+        // would then show the PRE-move field — which surfaces as "two bunks on
+        // different fields" when a moved bunk is really sharing its new field with
+        // another. Sync the label to the new field on every moved sport entry.
+        // (FQ-reopt only moves real sport fields, never a special whose field holds
+        // the activity name, so this leaves the special room convention alone.)
+        var _fqSyncLoc = function (s, fld) {
+            if (!s || !fld) return;
+            if (typeof s._location === 'string' && s._location && s._location !== fld) s._location = fld;
+            if (typeof s.location === 'string' && s.location && s.location !== fld) s.location = fld;
+        };
+
         // Continuation sync: a multi-period block stores its field on EVERY slot
         // (lead + continuations). The phases above move only the lead slot, so
         // propagate any moved lead's new field to its trailing continuation slots
@@ -508,9 +521,10 @@
                 var s = arr[i];
                 if (!s) { lead = null; continue; }
                 if (s.continuation) {
-                    if (lead && lead._fqMoved && s.field && s.field !== 'Free') s.field = lead.field;
+                    if (lead && lead._fqMoved && s.field && s.field !== 'Free') { s.field = lead.field; _fqSyncLoc(s, lead.field); }
                 } else {
                     lead = s;
+                    if (s._fqMoved && s.field && s.field !== 'Free') _fqSyncLoc(s, s.field);
                 }
             }
         });
