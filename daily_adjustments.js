@@ -5139,6 +5139,77 @@ function _boToggleView() {
 }
 
 // =================================================================
+// DA TIME-RULE IRON GATE (shared auto + manual)
+// =================================================================
+// Post-generation scrub: clear any placement that overlaps a facility's
+// Daily-Adjustments "Unavailable" window, or (when the field has any
+// "Available" window) that falls outside it — per-grade scoped. This is the
+// catch-all for direct-fill paths that never reach canBlockFit (smart tiles,
+// split tiles, swim+elective, full-grade, fallback via fillBlock). AUTO ran
+// this inline; MANUAL had NO equivalent, so a smart/split tile could sit in
+// an Unavailable window. Extracted here so BOTH builder modes run it.
+function _applyDailyTimeRuleIronGate() {
+    try {
+        const _dk = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        let _rules = null;
+        try {
+            const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
+            if (_enf) { const p = JSON.parse(_enf); if (p && Object.keys(p).length > 0) _rules = p; }
+        } catch (_e) {}
+        if (!_rules) {
+            const _dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+            if (_dd && Object.keys(_dd).length > 0) _rules = _dd;
+        }
+        if (!_rules) {
+            try {
+                const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
+            } catch (_e) {}
+        }
+        if (_rules) {
+            const _sa = window.scheduleAssignments || {};
+            const _divs = window.divisions || {};
+            let _cleared = 0;
+            for (const [_bunk, _slots] of Object.entries(_sa)) {
+                if (!Array.isArray(_slots)) continue;
+                let _grade = null;
+                for (const [_d, _info] of Object.entries(_divs)) {
+                    if ((_info.bunks || []).includes(_bunk)) { _grade = _d; break; }
+                }
+                for (let _i = 0; _i < _slots.length; _i++) {
+                    const _s = _slots[_i];
+                    if (!_s || _s.continuation) continue;
+                    const _field = (typeof _s.field === 'object') ? _s.field?.name : _s.field;
+                    if (!_field || _field === 'Free') continue;
+                    const _sM = _s._startMin, _eM = _s._endMin;
+                    if (_sM == null || _eM == null) continue;
+                    const _rs = _rules[_field];
+                    if (!Array.isArray(_rs) || _rs.length === 0) continue;
+                    let _bad = false, _hasAvail = false, _inside = false;
+                    for (const _r of _rs) {
+                        const _t = String(_r.type || '').toLowerCase();
+                        const _iU = _t === 'unavailable' || _r.available === false;
+                        const _iA = _t === 'available' || _r.available === true;
+                        const _rsM = _r.startMin ?? null, _reM = _r.endMin ?? null;
+                        if (_rsM == null || _reM == null) continue;
+                        if (Array.isArray(_r.divisions) && _r.divisions.length > 0
+                            && _grade != null && !_r.divisions.map(String).includes(String(_grade))) continue;
+                        if (_iU && _rsM < _eM && _reM > _sM) { _bad = true; break; }
+                        if (_iA) { _hasAvail = true; if (_sM >= _rsM && _eM <= _reM) _inside = true; }
+                    }
+                    if (!_bad && _hasAvail && !_inside) _bad = true;
+                    if (_bad) {
+                        _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'DA time rule on ' + _field, continuation: false };
+                        _cleared++;
+                    }
+                }
+            }
+            if (_cleared > 0) console.warn('[IRON GATE INLINE] cleared ' + _cleared + ' time-rule violation(s)');
+        }
+    } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
+}
+
+// =================================================================
 // RUN OPTIMIZER
 // =================================================================
 async function runOptimizer() {
@@ -5343,68 +5414,10 @@ async function runOptimizer() {
             } finally {
                 delete window.__allowedBunkSet;
             }
-            // ★ Day 22.5 IRON GATE: inline post-gen time-rule scrub.
+            // ★ Day 22.5 IRON GATE: post-gen time-rule scrub (shared helper).
             //   Runs SYNCHRONOUSLY after runAutoScheduler returns, BEFORE the
             //   schedule-generated event dispatches / save / UI re-render.
-            //   Reads from dedicated key (primary) + dailyData + LS fallback.
-            try {
-                const _dk = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                let _rules = null;
-                try {
-                    const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
-                    if (_enf) { const p = JSON.parse(_enf); if (p && Object.keys(p).length > 0) _rules = p; }
-                } catch (_e) {}
-                if (!_rules) {
-                    const _dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
-                    if (_dd && Object.keys(_dd).length > 0) _rules = _dd;
-                }
-                if (!_rules) {
-                    try {
-                        const _s = localStorage.getItem('campResourceOverrides_' + _dk);
-                        if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
-                    } catch (_e) {}
-                }
-                if (_rules) {
-                    const _sa = window.scheduleAssignments || {};
-                    const _divs = window.divisions || {};
-                    let _cleared = 0;
-                    for (const [_bunk, _slots] of Object.entries(_sa)) {
-                        if (!Array.isArray(_slots)) continue;
-                        let _grade = null;
-                        for (const [_d, _info] of Object.entries(_divs)) {
-                            if ((_info.bunks || []).includes(_bunk)) { _grade = _d; break; }
-                        }
-                        for (let _i = 0; _i < _slots.length; _i++) {
-                            const _s = _slots[_i];
-                            if (!_s || _s.continuation) continue;
-                            const _field = (typeof _s.field === 'object') ? _s.field?.name : _s.field;
-                            if (!_field || _field === 'Free') continue;
-                            const _sM = _s._startMin, _eM = _s._endMin;
-                            if (_sM == null || _eM == null) continue;
-                            const _rs = _rules[_field];
-                            if (!Array.isArray(_rs) || _rs.length === 0) continue;
-                            let _bad = false, _hasAvail = false, _inside = false;
-                            for (const _r of _rs) {
-                                const _t = String(_r.type || '').toLowerCase();
-                                const _iU = _t === 'unavailable' || _r.available === false;
-                                const _iA = _t === 'available' || _r.available === true;
-                                const _rsM = _r.startMin ?? null, _reM = _r.endMin ?? null;
-                                if (_rsM == null || _reM == null) continue;
-                                if (Array.isArray(_r.divisions) && _r.divisions.length > 0
-                                    && _grade != null && !_r.divisions.map(String).includes(String(_grade))) continue;
-                                if (_iU && _rsM < _eM && _reM > _sM) { _bad = true; break; }
-                                if (_iA) { _hasAvail = true; if (_sM >= _rsM && _eM <= _reM) _inside = true; }
-                            }
-                            if (!_bad && _hasAvail && !_inside) _bad = true;
-                            if (_bad) {
-                                _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'DA time rule on ' + _field, continuation: false };
-                                _cleared++;
-                            }
-                        }
-                    }
-                    if (_cleared > 0) console.warn('[IRON GATE INLINE] cleared ' + _cleared + ' time-rule violation(s)');
-                }
-            } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
+            _applyDailyTimeRuleIronGate();
             delete window.selectedDivisionsForGeneration;
             if (success) {
                 // ★ FN-14 SAVE-SERIALIZATION: persist THIS date's schedule (awaited +
@@ -5672,6 +5685,12 @@ async function runOptimizer() {
   }
 
 if (success) {
+      // ★ IRON GATE (manual parity): scrub any DA time-rule violation before the
+      //   manual schedule is saved. The manual solver's direct-fill paths
+      //   (smart/split/swim+elective via fillBlock) don't reach canBlockFit, and
+      //   unlike auto there was no post-gen scrub here — so a tile could sit in a
+      //   facility's Unavailable window. Same helper the auto branch runs.
+      _applyDailyTimeRuleIronGate();
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
