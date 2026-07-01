@@ -167,6 +167,7 @@ LOW_COVERAGE_BONUS: -3500,             // Bunk has tried <50% of activities
     // =========================================================================
 
     let _historyCache = new Map();
+    let _fairShareFloorCache = new Map();   // activityName(lower) -> fair-share floor (per gen)
     let _historyCacheDate = null;
 // ★★★ v2.3: Activity-done-today cache ★★★
 var _todayActivityCache = new Map();
@@ -309,6 +310,7 @@ var _todayCacheGeneration = 0;
      */
    RotationEngine.clearHistoryCache = function() {
     _historyCache.clear();
+    _fairShareFloorCache.clear();
     _todayActivityCache.clear();
     _todayCacheGeneration++;
     console.log('[RotationEngine] History + today cache cleared (gen ' + _todayCacheGeneration + ')');
@@ -349,6 +351,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     RotationEngine.rebuildAllHistory = function() {
     console.log('[RotationEngine] Rebuilding all history...');
     _historyCache.clear();
+    _fairShareFloorCache.clear();
     _todayActivityCache.clear();
     _historyCacheDate = null;
     _todayCacheGeneration++;
@@ -582,6 +585,38 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var count = RotationEngine.getActivityCount(bunkName, activityName);
         var average = RotationEngine.getBunkAverageActivityCount(bunkName, allActivities);
         return count - average;
+    };
+
+    /**
+     * ★ Fair-share floor: the LOWEST activity-count among bunks that have actually
+     *   done this activity (count >= 1). calculateLimitScore's hard cap blocks any
+     *   bunk sitting 2+ above this floor, so no one laps the field on a scarce /
+     *   contended activity. The pool is "bunks that have done it" rather than every
+     *   camp bunk, so divisions that never touch it (access/structure) don't pin the
+     *   floor at 0 and false-block everyone; never-done bunks are still favoured by
+     *   the existing NEVER_DONE bonus. Returns null when fewer than 2 bunks have done
+     *   it (no real distribution yet) or when disabled. Cached per generation.
+     *   Kill switch: window.__fairShareHardCap = false.
+     */
+    RotationEngine.getFairShareFloor = function(activityName) {
+        if (window.__fairShareHardCap === false) return null;
+        var key = (activityName || '').toLowerCase().trim();
+        if (!key) return null;
+        if (_fairShareFloorCache.has(key)) return _fairShareFloorCache.get(key);
+        var divisions = window.divisions || {};
+        var min = Infinity, doers = 0;
+        for (var dn in divisions) {
+            if (!Object.prototype.hasOwnProperty.call(divisions, dn)) continue;
+            var dv = divisions[dn];
+            var bunks = (dv && dv.bunks) || [];
+            for (var i = 0; i < bunks.length; i++) {
+                var c = RotationEngine.getActivityCount(bunks[i], activityName);
+                if (c >= 1) { doers++; if (c < min) min = c; }
+            }
+        }
+        var floor = (doers >= 2 && min !== Infinity) ? min : null;
+        _fairShareFloorCache.set(key, floor);
+        return floor;
     };
 
     /**
@@ -1121,6 +1156,22 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage, undefined, _cdForEsc);
                 return -(_mfEsc || (shortage * 8000));
             }
+        }
+
+        // ★ FAIR-SHARE HARD CAP: a bunk that has done this activity 2+ more times
+        //   than the least-served participant is BLOCKED until the laggards catch up
+        //   — stops one bunk lapping the field on a scarce/contended activity even
+        //   when the soft frequency/distribution penalties get overridden by field
+        //   contention. Placed LAST so an explicit maxUsage/exactFrequency ceiling or
+        //   a below-floor min-frequency pull always wins; this only governs activities
+        //   no per-bunk limit rule already decided. Counts are from saved history
+        //   (stable within a gen). Trade-off: a capped bunk with no other feasible
+        //   option gets a Free slot. Kill switch: window.__fairShareHardCap = false;
+        //   gap override: window.__fairShareGap (default 2).
+        var _fsFloor = RotationEngine.getFairShareFloor(activityName);
+        if (_fsFloor !== null) {
+            var _fsGap = (typeof window.__fairShareGap === 'number' && window.__fairShareGap > 0) ? window.__fairShareGap : 2;
+            if (RotationEngine.getActivityCount(bunkName, activityName) >= _fsFloor + _fsGap) return Infinity;
         }
 
         return 0;
