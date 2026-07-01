@@ -757,6 +757,23 @@
             if (!s.name || disabledSet.has(s.name)) return;
             // ★ Config-level shut-off: special toggled UNAVAILABLE in Facilities.
             if (s.available === false) return;
+            // ★ Force + min-bunks specials (e.g. the lake: "always run it" + "min 2
+            //   together") are placed EXCLUSIVELY by the manual generator's
+            //   force-placement pass (scheduler_core_main STEP 7.64), which seats
+            //   ONE proper session (>= minBunks) on the most-due bunks. If the
+            //   opportunistic solver also placed them, it scattered lonely copies
+            //   across other windows that STEP 7.63 then had to drop — and in a
+            //   packed schedule a dropped bunk can be left with a blank period.
+            //   Excluding them here removes that churn at the root: the solver
+            //   fills those bunks with normal sports (never blanks) and 7.64 does
+            //   the placing. MANUAL only — the auto path has no 7.64, so keep the
+            //   candidate there. Tightly gated (force + min>=2) → no effect on any
+            //   other special.
+            var _swMB = s.sharableWith || {};
+            if (s.forcePlacement === true && (parseInt(_swMB.minBunks, 10) || 0) >= 2
+                && window._daBuilderMode !== 'auto') {
+                return;
+            }
             var key = s.name + '|special';
             if (seenKeys.has(key)) return;
             seenKeys.add(key);
