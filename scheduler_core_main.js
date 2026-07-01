@@ -6603,6 +6603,96 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.9: PINNED-FACILITY EXCLUSION SWEEP (invariant enforcement)
+        // A custom pinned tile reserves its facilities for its WHOLE window; nothing
+        // else may sit on them (except another pin). The solver (canBlockFit →
+        // fieldReservations) and Smart Tiles (isFieldLocked) already honor this
+        // WITHIN a generation — so in a clean full gen this sweep finds nothing.
+        // But two paths can leave a stale non-pinned entry on a reserved facility
+        // that no in-gen check re-examines:
+        //   (1) PARTIAL regen — an out-of-scope division is preserved (STEP 1.5)
+        //       from an earlier gen and never re-solved against a pin that a NOW
+        //       in-scope division placed this run;
+        //   (2) a pin ADDED/edited after a prior full gen, then a scoped/partial
+        //       regen that doesn't touch the bunk already sitting on the facility.
+        // Both surface as a real cross-division double-book on the pinned facility
+        // (e.g. "Masmidim pins Lake, but a 5th-grade bunk also has Lake"). This
+        // final sweep demotes any such non-pinned placement to Free so a pin can
+        // never be double-booked. Reads the SAME source the solver's canBlockFit
+        // uses (window.fieldReservations, built from the skeleton's reservedFields
+        // at STEP 0), so its verdict matches the generator's own gate exactly.
+        // Killswitch: window.__pinnedFacilityEvictSweep = false
+        // =========================================================================
+        try {
+            const _resv = window.fieldReservations;
+            if (window.__pinnedFacilityEvictSweep !== false && _resv && Object.keys(_resv).length) {
+                // lc facility name → original reservation key
+                const _resvKeyLc = {};
+                Object.keys(_resv).forEach(k => { _resvKeyLc[String(k).toLowerCase().trim()] = k; });
+                // special name (lc) → physical location (first-with-location wins;
+                // mirrors STEP 6.95's cap/lowercase-dup handling)
+                const _evGS = window.loadGlobalSettings ? window.loadGlobalSettings() : (window.globalSettings || {});
+                const _evSpecLoc = {};
+                ((_evGS.app1 && _evGS.app1.specialActivities) || _evGS.specialActivities || []).forEach(s => {
+                    if (!s || !s.name || !s.location) return;
+                    const n = String(s.name).toLowerCase().trim();
+                    if (!_evSpecLoc[n]) _evSpecLoc[n] = s.location;
+                });
+                // pseudo-activities that never occupy a bookable facility (mirror _skip76)
+                const _evSkip = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1,
+                    'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1,
+                    'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1, 'main activity': 1 };
+                const _evResolve = window.getLocationForActivity || getLocationForActivity;
+                const _evSA = window.scheduleAssignments || {};
+                let _evicted = 0;
+                Object.keys(_evSA).forEach(bunk => {
+                    const arr = _evSA[bunk];
+                    if (!Array.isArray(arr)) return;
+                    arr.forEach((e, idx) => {
+                        // Never touch: a pin's own fill, a continuation, an explicit user
+                        // override, a league block (teams≠bunks; those live in the lock
+                        // registry and already yield), or a non-facility pseudo-activity.
+                        if (!e || e._pinned || e.continuation || e._bunkOverride) return;
+                        if (e._isLeague || e._leagueMatchups || e.matchups || e._leagueName) return;
+                        const sM = e._startMin, eM = e._endMin;
+                        if (sM == null || eM == null) return;
+                        const act = e._activity || e.field;
+                        if (act && _evSkip[String(act).toLowerCase().trim()]) return;
+                        // Physical facilities this entry occupies (sport field, explicit
+                        // location, reserved fields, or a special's host room).
+                        const cands = new Set();
+                        const _add = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') cands.add(f.trim()); };
+                        _add(e.field);
+                        _add(e._location);
+                        if (Array.isArray(e._reservedFields)) e._reservedFields.forEach(_add);
+                        _add(_evSpecLoc[String(act || '').toLowerCase().trim()]);
+                        try { _add(_evResolve && _evResolve(act)); } catch (_ig) {}
+                        // Is any candidate reserved by a pin overlapping this entry's time?
+                        let hit = null;
+                        for (const cf of cands) {
+                            const key = _resvKeyLc[String(cf).toLowerCase().trim()];
+                            if (!key) continue;
+                            const r = Utils.isFieldReserved(key, sM, eM, _resv);
+                            if (r) { hit = { field: key, resv: r }; break; }
+                        }
+                        if (!hit) return;
+                        // Belt-and-suspenders: if this entry IS the reservation's own
+                        // pinned event (edge: pin fill not flagged _pinned), leave it.
+                        if (String(act || '').toLowerCase().trim() === String(hit.resv.event || '').toLowerCase().trim()) return;
+                        console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
+                            ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" (' + hit.resv.division + ') → Free');
+                        arr[idx] = { field: 'Free', _activity: 'Free', _startMin: sM, _endMin: eM, _pinnedFacilityEvicted: true };
+                        _evicted++;
+                    });
+                });
+                if (_evicted) console.log('[STEP 7.9] Pinned-facility exclusion sweep: demoted ' + _evicted + ' conflicting placement(s) → Free');
+                else console.log('[STEP 7.9] Pinned-facility exclusion sweep: ✅ no conflicts');
+            }
+        } catch (_e79) {
+            console.warn('[STEP 7.9] pinned-facility exclusion sweep failed:', _e79);
+        }
+
+        // =========================================================================
         // STEP 8: Update History
         // =========================================================================
 
