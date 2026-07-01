@@ -553,6 +553,60 @@
             }
         }
 
+        // ★ Per-date Daily-Adjustments shut-offs (parity with canBlockFit). The
+        //   config `available` gate above only catches the PERMANENT Facilities
+        //   toggle — no code ever writes available:false for a DAILY shut-off, so
+        //   a facility/special/sport turned off for TODAY in DA Resources lives
+        //   ONLY in the per-date override sets (currentDisabledFields /
+        //   overrides.disabledSpecials / dailyDisabledSportsByField). fillBlock is
+        //   the universal direct-fill chokepoint (smart-tile, split-tile,
+        //   swim+elective, full-grade, fallback), and none of those reach
+        //   canBlockFit — so enforce the daily shut-offs here too. League fills
+        //   returned above; label/transition writes (Swim/Free/Change) never match
+        //   a facility/special/sport name so they pass through untouched.
+        if (!isLeagueFill) {
+            try {
+                const _fL = Utils.fieldLabel(pick.field);
+                const _fLc = _fL ? String(_fL).toLowerCase().trim() : '';
+                const _actName = (pick && (pick._activity || pick.sport)) || '';
+                const _actLc = _actName ? String(_actName).toLowerCase().trim() : '';
+                // Disabled facilities — currentDisabledFields is the live per-date
+                // union (DA Resources + rainy) the solver builds this generation.
+                if (_fL) {
+                    const _disFields = window.currentDisabledFields || [];
+                    if (_disFields.some(n => { const s = String(n); return s === _fL || s.toLowerCase().trim() === _fLc; })) {
+                        console.log('[fillBlock] skip — field "' + _fL + '" is DISABLED today (DA Resources)');
+                        return;
+                    }
+                }
+                const _daily = window.loadCurrentDailyData?.() || {};
+                const _ov = _daily.overrides || {};
+                // Disabled specials (DA Resources). Config-mode already filters
+                // masterSpecials, but a hard-coded smart/split tile can name one.
+                if (_actName) {
+                    const _disSpecials = _ov.disabledSpecials || [];
+                    if (_disSpecials.some(n => String(n).toLowerCase().trim() === _actLc)) {
+                        console.log('[fillBlock] skip — special "' + _actName + '" is DISABLED today (DA Resources)');
+                        return;
+                    }
+                }
+                // Per-field disabled sports (DA Resources).
+                if (_fL && _actName) {
+                    const _dsbf = _daily.dailyDisabledSportsByField || {};
+                    const _blk = _dsbf[_fL] || _dsbf[_fLc];
+                    if (_blk) {
+                        const _has = Array.isArray(_blk)
+                            ? _blk.some(x => String(x).toLowerCase().trim() === _actLc)
+                            : (typeof _blk.has === 'function' && (_blk.has(_actName) || _blk.has(_actLc)));
+                        if (_has) {
+                            console.log('[fillBlock] skip — sport "' + _actName + '" disabled on field "' + _fL + '" today (DA Resources)');
+                            return;
+                        }
+                    }
+                }
+            } catch (_eShut) { /* never block a legal fill on a lookup error */ }
+        }
+
         const fName = Utils.fieldLabel(pick.field);
         const trans = Utils.getTransitionRules(fName, activityProperties);
         const {
