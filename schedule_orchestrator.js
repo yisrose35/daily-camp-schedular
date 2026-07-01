@@ -1197,7 +1197,28 @@
                     });
                     return { success: false, error: 'Permission denied', target: 'permission-error' };
                 }
-                throw new Error(result?.error || 'Save failed');
+                // ★ Intentional skips are NOT failures. ScheduleDB.saveSchedule
+                //   deliberately refuses certain writes and tags them with a
+                //   `skipped` reason (e.g. 'date-mismatch' — the cross-date
+                //   corruption guard declining to save one day's in-memory
+                //   schedule under another day's key during a date switch, or a
+                //   'wipe-blocked-*' / 'stripped-downgrade-blocked' guard). These
+                //   are the system working correctly, so return quietly instead of
+                //   throwing — which previously surfaced a noisy
+                //   `Cloud save exception: Error: [object Object]` (result.error is
+                //   an object, not a string) AND triggered pointless retries of a
+                //   write that will always be refused.
+                if (result?.skipped) {
+                    log('Cloud save skipped (' + result.skipped + ') — no retry needed');
+                    _isSaving = false;
+                    return { success: true, target: 'skipped', skipped: result.skipped, bunkCount };
+                }
+                // Genuine failure: stringify a possibly-object error so the log is
+                // readable instead of "[object Object]".
+                const _errMsg = (result && result.error &&
+                    (typeof result.error === 'string' ? result.error : (result.error.message || JSON.stringify(result.error))))
+                    || 'Save failed';
+                throw new Error(_errMsg);
             }
 
             if (result.target !== 'cloud' && result.target !== 'cloud-verified' && result.target !== 'cloud-unverified') {
