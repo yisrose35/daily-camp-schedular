@@ -643,6 +643,13 @@
             const _slRainy = window.isRainyDay === true;
             availableFields = availableFields.filter(fName => {
                 const fc = _fcfgSL[fName]; if (!fc) return true;
+                // ★ Config-level shut-off: court toggled UNAVAILABLE in Facilities
+                //   (available:false). Regular leagues drop these at their pool
+                //   build (field.available===false), sports/specials are dropped
+                //   at the loader — but specialty leagues use their OWN configured
+                //   court pool and never checked the master toggle, so a court you
+                //   turned off in Facilities could still host specialty games.
+                if (fc.available === false) return false;
                 if (fc.accessRestrictions && fc.accessRestrictions.enabled) {
                     const allowed = Object.keys(fc.accessRestrictions.divisions || {});
                     if (allowed.length > 0 && !_slDivs.some(d => allowed.includes(d))) return false;
