@@ -6384,6 +6384,61 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     else if (_blanks66.length) console.log('[STEP 7.66] min-bunks anti-blank: ' + _blanks66.length + ' dropped slot(s) still Free — no shareable field at that time');
                 }
             } catch (_e66) { console.warn('[STEP 7.66] min-bunks anti-blank failed:', _e66); }
+
+            // ─────────────────────────────────────────────────────────────
+            // STEP 7.67: post-swap empty-field fill. The swap passes above
+            // (7.63 min-bunks recruit, 7.64 force-placement) can VACATE a sport
+            // field by moving a bunk onto a special — but that happens AFTER the
+            // STEP 7.6 empty-field pass already ran, and STEP 7.65 only ever
+            // JOINS an occupied room (never opens an empty one). So a bunk left
+            // Free could be sitting next to a field that a swap just emptied
+            // (observed live: an 8th-grade bunk Free while "Baseball Back" was
+            // empty + accessible). This re-runs the empty-field fill on the
+            // FINAL post-swap schedule (fresh occupancy): seat any still-Free
+            // bunk on a completely empty, accessible, enabled field with a
+            // FRESH (non-repeat) sport. Reuses every 7.6 gate; never repeats.
+            // ─────────────────────────────────────────────────────────────
+            try {
+                const _occ67 = {};
+                Object.keys(_sa76).forEach(b => {
+                    const g = _b2g76[String(b)] || '?';
+                    (_sa76[b] || []).forEach((e, idx) => {
+                        if (!e || e.continuation) return;
+                        const fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                        if (!fl || _skip76[fl] || e.field === 'Free') return;
+                        const t = _stime76(b, g, idx, e); if (!t || t.s == null) return;
+                        (_occ67[fl] = _occ67[fl] || []).push({ s: t.s, e: t.e });
+                    });
+                });
+                const _free67 = (fl, s, e) => { const arr = _occ67[fl] || []; for (let i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+                let _filled67 = 0;
+                Object.keys(_sa76).forEach(b => {
+                    if (_allowed76 && !_allowed76.has(String(b))) return;
+                    const g = _b2g76[String(b)] || '?';
+                    (_sa76[b] || []).forEach((e, idx) => {
+                        if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                        const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
+                        if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
+                        const _ck = _kindByCell76[String(b) + '|' + idx];
+                        if (_ck === 'special' || (!_ck && slotKindOf(_slotEvent76(b, g, idx, e)) === 'special')) return; // special-only tile → leave for specials
+                        const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                        for (let fi = 0; fi < _sportFields76.length; fi++) {
+                            const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                            if (_skip76[fl] || !_free67(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
+                            const blocked = _disSportsByField76[f.name] || null;
+                            let act = null;
+                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1)) { act = c; break; } }
+                            if (!act) continue;
+                            _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
+                            (_occ67[fl] = _occ67[fl] || []).push({ s: t.s, e: t.e });
+                            (_done76[b] = _done76[b] || {})[String(act).toLowerCase()] = 1; _filled67++;
+                            break;
+                        }
+                    });
+                });
+                if (_filled67 > 0) console.log('[STEP 7.67] post-swap empty-field fill: filled ' + _filled67 + ' Free slot(s) on fields freed by swaps');
+                else console.log('[STEP 7.67] post-swap empty-field fill: nothing to fill');
+            } catch (_e67) { console.warn('[STEP 7.67] post-swap fill failed:', _e67); }
         } catch (_e76) {
             console.warn('[STEP 7.6] Empty-field free-fill failed:', _e76);
         }

@@ -628,4 +628,85 @@ const FIELD = (name, cap) => ({ name, sharableWith: { type: 'same_division', cap
     ok('T24 a plain Free (not our drop) is left alone', r.seated === 0 && sa.A1[0]._activity === 'Free');
 }
 
+// =============================================================================
+// STEP 7.67 post-swap empty-field fill — ported logic
+//   Any still-Free bunk on a general/sport tile is seated on a completely
+//   empty, accessible, enabled field with a FRESH (non-repeat) sport — catching
+//   fields that a swap vacated after the earlier empty-field pass ran.
+// =============================================================================
+function postSwapFill(sa, b2g, fields, opts) {
+    opts = opts || {};
+    const disabled = new Set((opts.disabled || []).map(x => String(x).toLowerCase().trim()));
+    const disSports = opts.disSportsByField || {};
+    const kindByCell = opts.kindByCell || {};
+    const accessOk = (f, g) => { const ar = f && f.accessRestrictions; if (!ar || !ar.enabled) return true; const d = ar.divisions || {}; if (!Object.keys(d).length) return true; return !!d[g]; };
+    const sportFields = fields.filter(f => f && f.name && f.available !== false && !disabled.has(String(f.name).toLowerCase().trim()) && Array.isArray(f.activities) && f.activities.length);
+    const win = e => (e && e._startMin != null) ? { s: e._startMin, e: e._endMin } : null;
+    const done = {}; Object.keys(sa).forEach(b => { done[b] = {}; (sa[b] || []).forEach(e => { if (!e || e.continuation) return; const a = e._activity || e.sport; if (a && String(a).toLowerCase() !== 'free') done[b][String(a).toLowerCase()] = 1; }); });
+    const occ = {}; Object.keys(sa).forEach(b => (sa[b] || []).forEach(e => { if (!e || e.continuation || !e.field || e.field === 'Free') return; const fl = String(e.field).toLowerCase().trim(); const t = win(e); if (!t) return; (occ[fl] = occ[fl] || []).push({ s: t.s, e: t.e }); }));
+    const free = (fl, s, e) => { const arr = occ[fl] || []; for (let i = 0; i < arr.length; i++) if (arr[i].s < e && arr[i].e > s) return false; return true; };
+    let filled = 0;
+    Object.keys(sa).forEach(b => {
+        const g = b2g[b] || '?';
+        (sa[b] || []).forEach((e, idx) => {
+            if (!e || e.continuation) return;
+            const a = String(e._activity || e.field || '').toLowerCase().trim();
+            if (!(a === '' || a === 'free')) return;
+            if (kindByCell[b + '|' + idx] === 'special') return; // special-only tile
+            const t = win(e); if (!t) return;
+            for (const f of sportFields) {
+                const fl = String(f.name).toLowerCase().trim();
+                if (!free(fl, t.s, t.e) || !accessOk(f, g)) continue;
+                const blocked = disSports[f.name] || null;
+                let act = null;
+                for (const c of f.activities) { if (c && !done[b][String(c).toLowerCase()] && !(blocked && blocked.indexOf(c) !== -1)) { act = c; break; } }
+                if (!act) continue;
+                sa[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, continuation: false };
+                (occ[fl] = occ[fl] || []).push({ s: t.s, e: t.e });
+                done[b][String(act).toLowerCase()] = 1; filled++;
+                break;
+            }
+        });
+    });
+    return { filled };
+}
+
+const FLD = (name, acts, extra) => Object.assign({ name, activities: acts, sharableWith: { type: 'same_division', capacity: 1 } }, extra || {});
+
+// TEST 25 — a Free bunk gets seated on an empty field freed by a swap (the live bug)
+{
+    const sa = { Moshe: [{ field: 'Free', _activity: 'Free', _startMin: 880, _endMin: 930, continuation: false }] };
+    const r = postSwapFill(sa, { Moshe: '8th' }, [FLD('Baseball Back', ['Baseball', 'Football'])]);
+    ok('T25 filled the Free bunk on the empty field', r.filled === 1);
+    ok('T25 got a fresh sport (Baseball)', sa.Moshe[0]._activity === 'Baseball');
+}
+
+// TEST 26 — respects daily-disabled + unavailable fields (Shlome's real case)
+{
+    const sa = { Shlome: [{ field: 'Free', _activity: 'Free', _startMin: 820, _endMin: 870, continuation: false }] };
+    const r = postSwapFill(sa, { Shlome: '8th' }, [FLD('Hockey Old', ['Hockey']), FLD('Football', ['Football'], { available: false })], { disabled: ['Hockey Old'] });
+    ok('T26 left Free — every field disabled/unavailable', r.filled === 0 && sa.Shlome[0]._activity === 'Free');
+}
+
+// TEST 27 — never repeats an activity the bunk already did today
+{
+    const sa = { A1: [{ field: 'Court 1', sport: 'Baseball', _activity: 'Baseball', _startMin: 800, _endMin: 850, continuation: false }, { field: 'Free', _activity: 'Free', _startMin: 880, _endMin: 930, continuation: false }] };
+    const r = postSwapFill(sa, { A1: '8th' }, [FLD('Baseball Back', ['Baseball'])]); // only Baseball, already done
+    ok('T27 stays Free rather than repeat Baseball', r.filled === 0 && sa.A1[1]._activity === 'Free');
+}
+
+// TEST 28 — never sport-fills a special-only tile
+{
+    const sa = { A1: [{ field: 'Free', _activity: 'Free', _startMin: 880, _endMin: 930, continuation: false }] };
+    const r = postSwapFill(sa, { A1: '8th' }, [FLD('Baseball Back', ['Baseball'])], { kindByCell: { 'A1|0': 'special' } });
+    ok('T28 special tile left alone', r.filled === 0 && sa.A1[0]._activity === 'Free');
+}
+
+// TEST 29 — respects per-grade access on the field
+{
+    const sa = { A1: [{ field: 'Free', _activity: 'Free', _startMin: 880, _endMin: 930, continuation: false }] };
+    const r = postSwapFill(sa, { A1: '8th' }, [FLD('Baseball Back', ['Baseball'], { accessRestrictions: { enabled: true, divisions: { '7th': true } } })]);
+    ok('T29 no-access field not used', r.filled === 0 && sa.A1[0]._activity === 'Free');
+}
+
 console.log('\n[special_min_bunks_sim] ' + pass + '/' + pass + ' assertions passed ✅');
