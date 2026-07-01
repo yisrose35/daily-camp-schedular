@@ -2374,24 +2374,20 @@
                         console.warn('   ⚠️ Away league "' + league.name + '" @' + timeKey + ' → zone "' + _awayZoneForPeriod + '" has no available fields; keeping full pool.');
                     }
                 }
-                // ★ Multi-game-per-day: exclude sports already used by this
-                // league EARLIER today so games get distinct sports even when
-                // the matchup is identical (e.g., 2-team league).
-                if (todayGameIndex > 0 && availablePool.length > 1) {
-                    var _prevSports = new Set();
-                    var _leagueTeamKeys = leagueTeams.map(function(t) { return league.name + '|' + t; });
-                    _leagueTeamKeys.forEach(function(k) {
-                        var hist = history.teamSports[k] || [];
-                        if (hist.length > 0) _prevSports.add(hist[hist.length - 1]);
-                    });
-                    if (_prevSports.size > 0) {
-                        var filtered = availablePool.filter(function(p) { return !_prevSports.has(p.sport); });
-                        if (filtered.length > 0) {
-                            console.log('   ★ Multi-game: excluding sports from earlier game(s): [' + [..._prevSports].join(', ') + ']');
-                            availablePool = filtered;
-                        }
-                    }
-                }
+                // ★ Multi-game-per-day sport variety is now handled PER-MATCHUP,
+                // not league-wide. The old code here shrank the single shared
+                // availablePool by removing every sport that ANY team in the
+                // league had played earlier today — which banned fresh pairs
+                // (e.g. Team 3 vs Team 4) from a sport just because a DIFFERENT
+                // pair (Team 1 vs Team 2) already used it. With few fields per
+                // sport that collapsed the pool below the matchup count and
+                // forced byes. The per-matchup assignment functions
+                // (assignMatchupsToFieldsAndSports_{Sport,Matchup}Variety)
+                // already enforce variety correctly against each pair's OWN
+                // history: they exclude sports THIS pair has played together
+                // (getPairSports) and apply a strong penalty against repeating
+                // each team's most-recent sport. So a fresh pair can reuse a
+                // sport another pair played, keeping variety without the byes.
 
                 console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
                 availablePool.slice(0, 10).forEach(p =>
