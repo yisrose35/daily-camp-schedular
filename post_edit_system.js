@@ -853,9 +853,14 @@
                 return null;
             };
             const periodLabel = (p) => p === 'half' ? '/half' : p === 'week' ? '/wk' : p === 'month' ? '/mo' : '';
-            const limitTxt = (lim) => lim ? ` / ${lim.max}${periodLabel(lim.period)} max` : '';
+
+            // --- Summary stats ---
+            const triedCount = done.filter(d => d.count > 0).length;
+            const totalDone = done.reduce((s, d) => s + d.count, 0);
+            const maxCount = Math.max(1, ...done.map(d => d.count));
 
             // --- Live note for the activity currently being entered ---
+            const note = (bg, bd, fg, txt) => `<div style="display:flex;gap:7px;align-items:flex-start;background:${bg};border:1px solid ${bd};color:${fg};border-radius:8px;padding:8px 11px;font-size:0.78rem;line-height:1.35;margin-bottom:12px;"><span style="width:6px;height:6px;border-radius:50%;background:${fg};margin-top:6px;flex:0 0 auto;"></span><span>${txt}</span></div>`;
             let noteHtml = '';
             if (selKey) {
                 const inDone = done.find(d => d.sel);
@@ -863,65 +868,88 @@
                 const known = inDone || inNever;
                 if (known) {
                     if (todayLower.has(selKey)) {
-                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">${escHtml(known.act)} is already scheduled for this bunk today.</div>`;
+                        noteHtml = note('#fef2f2', '#fecaca', '#b91c1c', `<b>${escHtml(known.act)}</b> is already scheduled for this bunk today.`);
                     } else if (inDone && inDone.limit && inDone.count >= inDone.limit.max) {
-                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">${escHtml(known.act)} is at its limit (${inDone.count}/${inDone.limit.max}${periodLabel(inDone.limit.period)}).</div>`;
+                        noteHtml = note('#fef2f2', '#fecaca', '#b91c1c', `<b>${escHtml(known.act)}</b> is at its limit (${inDone.count}/${inDone.limit.max}${periodLabel(inDone.limit.period)}).`);
                     } else if (inNever) {
-                        noteHtml = `<div style="background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">First time — this bunk hasn't done ${escHtml(known.act)} yet.</div>`;
+                        noteHtml = note('#f0fdf4', '#bbf7d0', '#15803d', `First time — this bunk hasn't done <b>${escHtml(known.act)}</b> yet.`);
                     } else {
                         const rec = recencyLabel(inDone.daysSince);
-                        noteHtml = `<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">${escHtml(inDone.act)}: done ${inDone.count}×${inDone.limit ? ` (max ${inDone.limit.max}${periodLabel(inDone.limit.period)})` : ''}${rec ? `, last ${rec}` : ''}.</div>`;
+                        noteHtml = note('#eff6ff', '#bfdbfe', '#1d4ed8', `<b>${escHtml(inDone.act)}</b>: done ${inDone.count}×${inDone.limit ? ` (max ${inDone.limit.max}${periodLabel(inDone.limit.period)})` : ''}${rec ? `, last ${rec}` : ''}.`);
                     }
                 } else if (masterSet.has(selKey) && !accessibleSet.has(selKey)) {
-                    // A real configured activity, but restricted for this bunk.
-                    noteHtml = `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">“${escHtml(selectedActivity.trim())}” is restricted — this bunk isn't allowed to do it.</div>`;
+                    noteHtml = note('#fffbeb', '#fde68a', '#b45309', `<b>${escHtml(selectedActivity.trim())}</b> is restricted — this bunk isn't allowed to do it.`);
                 }
             }
 
-            // --- Section HTML ---
-            const todayHtml = todayActs.length
-                ? todayActs.map(a => `<span style="display:inline-block;background:#dbeafe;color:#1e40af;border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(a.name)}</span>`).join('')
-                : `<span style="color:#9ca3af;font-size:0.75rem;">Nothing scheduled yet today</span>`;
+            // --- Reusable bits ---
+            const chip = (label, bg, fg, extra) => `<span style="display:inline-flex;align-items:center;background:${bg};color:${fg};border-radius:20px;padding:3px 10px;font-size:0.72rem;font-weight:500;margin:0 4px 4px 0;">${label}${extra || ''}</span>`;
+            const sectionTitle = (t, badge) => `<div style="display:flex;align-items:center;gap:6px;margin:14px 0 7px 0;"><span style="font-weight:700;color:#6b7280;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em;">${t}</span>${badge != null ? `<span style="background:#eef2ff;color:#4338ca;font-size:0.65rem;font-weight:700;border-radius:10px;padding:1px 7px;">${badge}</span>` : ''}<span style="flex:1;height:1px;background:#f0f0f2;"></span></div>`;
+            const empty = (t) => `<div style="color:#9ca3af;font-size:0.75rem;font-style:italic;">${t}</div>`;
 
+            // --- Stat strip ---
+            const statPill = (n, l, c) => `<div style="flex:1;text-align:center;background:#f9fafb;border:1px solid #eef0f2;border-radius:8px;padding:7px 4px;">
+                <div style="font-size:1.05rem;font-weight:700;color:${c};line-height:1.1;">${n}</div>
+                <div style="font-size:0.62rem;color:#9ca3af;text-transform:uppercase;letter-spacing:0.04em;margin-top:1px;">${l}</div></div>`;
+            const statHtml = `<div style="display:flex;gap:8px;margin-bottom:6px;">
+                ${statPill(totalDone, 'Total done', '#4338ca')}
+                ${statPill(triedCount, 'Activities', '#0f766e')}
+                ${statPill(never.length, 'Not tried', '#b45309')}
+            </div>`;
+
+            // --- Scheduled today ---
+            const todayHtml = todayActs.length
+                ? todayActs.map(a => chip(escHtml(a.name), '#dbeafe', '#1e40af')).join('')
+                : empty('Nothing scheduled yet today');
+
+            // --- Rotation balance (bar rows) ---
             const doneRows = done.length
                 ? done.map(d => {
-                    const rec = recencyLabel(d.daysSince);
-                    const recTxt = d.isToday ? 'today' : (rec || '');
+                    const rec = d.isToday ? 'today' : (recencyLabel(d.daysSince) || '');
                     const atLimit = d.limit && d.count >= d.limit.max;
-                    const rowBg = d.sel ? 'background:#eef2ff;border-radius:5px;' : '';
-                    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 5px;font-size:0.76rem;${rowBg}">
-                        <span style="color:#374151;${d.sel ? 'font-weight:600;' : ''}">${escHtml(d.act)}</span>
-                        <span style="white-space:nowrap;color:${atLimit ? '#dc2626' : '#6b7280'};">${d.count}×<span style="color:${atLimit ? '#dc2626' : '#9ca3af'};">${limitTxt(d.limit)}</span>${recTxt ? ` · <span style="color:#9ca3af;">${recTxt}</span>` : ''}</span>
+                    const pct = Math.round((d.count / maxCount) * 100);
+                    const barColor = atLimit ? '#ef4444' : (d.sel ? '#4f46e5' : '#818cf8');
+                    const rowBg = d.sel ? 'background:#eef2ff;' : '';
+                    const limitBadge = d.limit ? `<span style="color:${atLimit ? '#dc2626' : '#9ca3af'};font-weight:500;">/${d.limit.max}${periodLabel(d.limit.period)}</span>` : '';
+                    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;${rowBg}">
+                        <span style="flex:0 0 34%;color:#374151;font-size:0.76rem;${d.sel ? 'font-weight:700;' : 'font-weight:500;'}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(d.act)}</span>
+                        <span style="flex:1;height:7px;background:#eef0f5;border-radius:4px;overflow:hidden;"><span style="display:block;height:100%;width:${pct}%;background:${barColor};border-radius:4px;"></span></span>
+                        <span style="flex:0 0 auto;font-size:0.74rem;color:${atLimit ? '#dc2626' : '#4b5563'};font-weight:700;white-space:nowrap;">${d.count}${limitBadge}</span>
+                        <span style="flex:0 0 52px;text-align:right;font-size:0.68rem;color:#9ca3af;white-space:nowrap;">${rec}</span>
                     </div>`;
                 }).join('')
-                : `<div style="color:#9ca3af;font-size:0.75rem;">No prior activity history</div>`;
+                : empty('No prior activity history');
 
+            // --- Not yet done ---
             const neverHtml = never.length
                 ? never.map(d => {
-                    const selStyle = d.sel ? 'background:#c7d2fe;color:#3730a3;font-weight:600;' : 'background:#fef3c7;color:#92400e;';
-                    return `<span style="display:inline-block;${selStyle}border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(d.act)}${d.limit ? ` <span style="opacity:0.7;">(max ${d.limit.max}${periodLabel(d.limit.period)})</span>` : ''}</span>`;
+                    const bg = d.sel ? '#c7d2fe' : '#fef3c7';
+                    const fg = d.sel ? '#3730a3' : '#92400e';
+                    const ex = d.limit ? `<span style="opacity:0.65;font-weight:400;margin-left:5px;">max ${d.limit.max}${periodLabel(d.limit.period)}</span>` : '';
+                    return chip(escHtml(d.act), bg, fg, ex);
                 }).join('')
-                : `<span style="color:#9ca3af;font-size:0.75rem;">None — every activity has been done</span>`;
+                : empty('Every accessible activity has been done');
 
+            // --- Open fields now ---
             const openHtml = openFields.length
                 ? openFields.map(l => {
                     const av = locationAvailMap[l.name] || { status: 'free' };
                     const partial = av.status === 'partial';
-                    return `<span style="display:inline-block;background:${partial ? '#fef9c3' : '#dcfce7'};color:${partial ? '#854d0e' : '#166534'};border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(l.name)}${partial ? ` (${av.usage}/${av.max})` : ''}</span>`;
+                    const ex = partial ? `<span style="opacity:0.7;font-weight:400;margin-left:5px;">${av.usage}/${av.max}</span>` : '';
+                    return chip(escHtml(l.name), partial ? '#fef9c3' : '#dcfce7', partial ? '#854d0e' : '#166534', ex);
                 }).join('')
-                : `<span style="color:#9ca3af;font-size:0.75rem;">No open fields at this time</span>`;
-
-            const sectionTitle = (t) => `<div style="font-weight:600;color:#374151;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.03em;margin:12px 0 5px 0;">${t}</div>`;
+                : empty('No open fields at this time');
 
             return `
                 ${noteHtml}
-                ${sectionTitle('Scheduled today')}
+                ${statHtml}
+                ${sectionTitle('Scheduled today', todayActs.length || null)}
                 <div>${todayHtml}</div>
-                ${sectionTitle('Done so far (count · limit · last done)')}
-                <div style="max-height:150px;overflow-y:auto;padding-right:4px;">${doneRows}</div>
-                ${sectionTitle('Not yet done')}
+                ${sectionTitle('Rotation balance', triedCount || null)}
+                <div style="max-height:168px;overflow-y:auto;margin:0 -2px;">${doneRows}</div>
+                ${sectionTitle('Not yet done', never.length || null)}
                 <div>${neverHtml}</div>
-                ${sectionTitle('Open fields at this time')}
+                ${sectionTitle('Open fields now', openFields.length || null)}
                 <div>${openHtml}</div>`;
         } catch (e) {
             debugLog('renderBunkReportBody error', e);
@@ -929,13 +957,28 @@
         }
     }
 
+    // Shared collapsible card wrapper for the report (identical markup wherever
+    // the report is shown). `bodyHtml` is the pre-rendered inner body.
+    function _reportCardHtml(bunk, bodyHtml) {
+        return `
+            <details id="post-edit-bunk-report" open style="background:#fff;border:1px solid #e8eaed;border-radius:12px;padding:0;margin-bottom:16px;box-shadow:0 1px 3px rgba(16,24,40,0.05);overflow:hidden;">
+                <summary style="list-style:none;cursor:pointer;outline:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;background:linear-gradient(180deg,#fafbff,#f4f6fb);border-bottom:1px solid #eef0f4;">
+                    <span style="display:flex;align-items:center;gap:8px;">
+                        <span style="width:26px;height:26px;border-radius:7px;background:#eef2ff;color:#4338ca;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:800;">${escHtml((bunk || '?').trim().charAt(0).toUpperCase())}</span>
+                        <span style="display:flex;flex-direction:column;line-height:1.15;">
+                            <span style="font-weight:700;color:#111827;font-size:0.9rem;">${escHtml(bunk)}</span>
+                            <span style="font-weight:500;color:#9ca3af;font-size:0.68rem;">Activity report</span>
+                        </span>
+                    </span>
+                    <span style="width:8px;height:8px;border-right:2px solid #c4c7ce;border-bottom:2px solid #c4c7ce;transform:rotate(45deg);display:inline-block;margin-right:2px;"></span>
+                </summary>
+                <div id="post-edit-report-body" style="padding:12px 14px 14px;">${bodyHtml}</div>
+            </details>`;
+    }
+
     function renderBunkMiniReport(bunk, divName, locations, locationAvailMap) {
         try {
-            return `
-            <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
-                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;outline:none;">${escHtml(bunk)} — Activity Report</summary>
-                <div id="post-edit-report-body">${renderBunkReportBody(bunk, divName, locations, locationAvailMap, '')}</div>
-            </details>`;
+            return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, locations, locationAvailMap, ''));
         } catch (e) {
             debugLog('renderBunkMiniReport error', e);
             return '';
@@ -2801,22 +2844,21 @@
     // one in unified_schedule_system.js) can render the same panel. Builds its
     // own location/availability context from the time range.
     window.PostEditReport = {
-        panelHtml(bunk, divName, startMin, endMin, selectedActivity) {
+        // opts.locations / opts.locationAvailMap let the caller pass a correctly
+        // computed availability map (the unified editor knows the right per-bunk
+        // slots); otherwise a best-effort context is built here.
+        panelHtml(bunk, divName, startMin, endMin, selectedActivity, opts) {
             try {
                 divName = divName || peiGetDivForBunk(bunk);
-                const { locations, locationAvailMap } = _reportBuildContext(bunk, startMin, endMin);
-                return `
-            <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
-                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;outline:none;">${escHtml(bunk)} — Activity Report</summary>
-                <div id="post-edit-report-body">${renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity || '')}</div>
-            </details>`;
+                const ctx = (opts && opts.locationAvailMap) ? opts : _reportBuildContext(bunk, startMin, endMin);
+                return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || ''));
             } catch (e) { debugLog('PostEditReport.panelHtml error', e); return ''; }
         },
-        bodyHtml(bunk, divName, startMin, endMin, selectedActivity) {
+        bodyHtml(bunk, divName, startMin, endMin, selectedActivity, opts) {
             try {
                 divName = divName || peiGetDivForBunk(bunk);
-                const { locations, locationAvailMap } = _reportBuildContext(bunk, startMin, endMin);
-                return renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity || '');
+                const ctx = (opts && opts.locationAvailMap) ? opts : _reportBuildContext(bunk, startMin, endMin);
+                return renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || '');
             } catch (e) { debugLog('PostEditReport.bodyHtml error', e); return ''; }
         }
     };

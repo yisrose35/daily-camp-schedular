@@ -5437,6 +5437,20 @@ if (bypassStatus.highlight) {
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
 
+        // Field-availability context for the bunk activity report, computed with
+        // the CORRECT per-bunk slots (post_edit's own builder can't resolve those
+        // and would over-report open fields in auto per-bunk mode).
+        const _reportCtx = (() => {
+            const map = {};
+            for (const loc of locations) {
+                try {
+                    const c = checkLocationConflict(loc.name, slots, bunk);
+                    map[loc.name] = { status: c.hasConflict ? (c.canShare ? 'partial' : 'busy') : 'free', usage: c.currentUsage, max: c.maxCapacity };
+                } catch (_) { map[loc.name] = { status: 'free' }; }
+            }
+            return { locations, locationAvailMap: map };
+        })();
+
         // Auto Change runs the module-level computeAutoChangeCandidate (shared
         // with window.diagnoseAutoChange so the diagnostic never drifts).
 
@@ -5449,7 +5463,7 @@ if (bypassStatus.highlight) {
                 <span style="font-weight:600;color:#374151;">${escapeHtml(bunk)}</span>
                 <span style="color:#6b7280;margin-left:8px;">${minutesToTimeLabel(startMin)} – ${minutesToTimeLabel(endMin)}</span>
             </div>
-            ${window.PostEditReport?.panelHtml?.(bunk, divName, startMin, endMin, currentActivity) || ''}
+            ${window.PostEditReport?.panelHtml?.(bunk, divName, startMin, endMin, currentActivity, _reportCtx) || ''}
             <div style="display:flex;flex-direction:column;gap:14px;">
                 <div>
                     <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">What activity?</label>
@@ -5626,7 +5640,7 @@ if (bypassStatus.highlight) {
         function refreshBunkReport() {
             const body = document.getElementById('post-edit-report-body');
             if (!body || !window.PostEditReport?.bodyHtml) return;
-            body.innerHTML = window.PostEditReport.bodyHtml(bunk, divName, startMin, endMin, actInput.value);
+            body.innerHTML = window.PostEditReport.bodyHtml(bunk, divName, startMin, endMin, actInput.value, _reportCtx);
         }
         actInput.addEventListener('change', refreshBunkReport);
 
