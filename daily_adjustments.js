@@ -7487,11 +7487,12 @@ async function _daPartialRegenerate(selections) {
       const regen = regenByBunk[bunk] || new Set();
       const arr = window.scheduleAssignments?.[bunk] || [];
       const keep = {};
+      const orig = {};   // pre-regen activity of each SELECTED slot — no-blank fallback
       for (let i = 0; i < arr.length; i++) {
-        if (regen.has(i)) continue;
+        if (regen.has(i)) { if (arr[i]) orig[i] = JSON.parse(JSON.stringify(arr[i])); continue; }
         if (arr[i]) keep[i] = JSON.parse(JSON.stringify(arr[i]));
       }
-      regenScope[bunk] = { regen, keep };
+      regenScope[bunk] = { regen, keep, orig };
     });
   });
 
@@ -9458,6 +9459,30 @@ function init() {
             const access = (f, g) => { const ar = f.accessRestrictions; if (!ar || !ar.enabled) return true; const d = ar.divisions || {}; if (!Object.keys(d).length) return true; return !!d[g]; };
             Object.keys(sa).forEach(b => { const g = b2g[String(b)] || '?'; if (!_capSportAll && !_capSportGrades[g]) return; /* ★ sports-free grade → never inject a field sport on refill */ (sa[b] || []).forEach((e, i) => { if (!e || e.continuation || !e._constraintDemoted) return; const s = e._startMin, en = e._endMin; if (s == null) return; for (let fi = 0; fi < sportFields.length; fi++) { const f = sportFields[fi]; const fl = String(f.name).toLowerCase().trim(); if (!fieldFree(fl, s, en) || !access(f, g)) continue; let act = null; for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !done[b][String(c).toLowerCase()]) { act = c; break; } } if (!act) continue; sa[b][i] = { field: f.name, sport: act, _activity: act, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, continuation: false }; (occ[fl] = occ[fl] || []).push({ s: s, e: en }); done[b][String(act).toLowerCase()] = 1; filled++; break; } }); });
           } catch (_eff) {}
+          // ★ Partial (per-tile) regen NO-BLANK net: if a demoted slot belongs to a
+          //   regenerated tile and could not be sport-refilled above, restore its
+          //   ORIGINAL pre-regen activity (when that field is free) instead of leaving
+          //   it Free. Guarantees a regen never blanks a tile — worst case unchanged.
+          try {
+            const _rss = window.__regenSlotScope;
+            if (_rss) {
+              Object.keys(sa).forEach(b => {
+                const _o = _rss[b] && _rss[b].orig;
+                if (!_o) return;
+                (sa[b] || []).forEach((e, i) => {
+                  if (!e || e.continuation || !e._constraintDemoted) return;
+                  const o = _o[i];
+                  if (!o || !o.field || String(o.field).toLowerCase().trim() === 'free') return;
+                  const fl = String(o.field).toLowerCase().trim();
+                  const s = o._startMin, en = o._endMin;
+                  if (s == null || en == null || !fieldFree(fl, s, en)) return;
+                  sa[b][i] = Object.assign({}, o, { _fixed: true, _regenOriginalRestored: true, continuation: false });
+                  (occ[fl] = occ[fl] || []).push({ s: s, e: en });
+                  filled++;
+                });
+              });
+            }
+          } catch (_eRestore) {}
           console.warn('[CAPACITY REPAIR GATE] demoted ' + repaired + ' validator-flagged placement(s) → Free, refilled ' + filled);
           try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
           const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];

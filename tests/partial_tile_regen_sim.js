@@ -198,6 +198,53 @@ test('league is preserved when its period is NOT selected, re-rolled when it IS'
   assert.strictEqual(leagueBlockTargeted(scope2, ['A', 'B'], 1), true, 'league re-rolled');
 });
 
+// Capacity-repair-gate NO-BLANK net: a demoted regen slot is restored to its ORIGINAL
+// activity iff that field is free; otherwise it stays Free. Mirrors the production guard.
+function restoreDemotedRegenSlots(sa, regenScope, occByField) {
+  const fieldFree = (fl, s, en) => !(occByField[fl] || []).some(iv => iv.s < en && iv.e > s);
+  let filled = 0;
+  Object.keys(sa).forEach(b => {
+    const o = regenScope[b] && regenScope[b].orig;
+    if (!o) return;
+    (sa[b] || []).forEach((e, i) => {
+      if (!e || !e._constraintDemoted) return;
+      const orig = o[i];
+      if (!orig || !orig.field) return;
+      const fl = orig.field.toLowerCase();
+      if (!fieldFree(fl, orig._startMin, orig._endMin)) return;
+      sa[b][i] = Object.assign({}, orig, { _regenOriginalRestored: true });
+      (occByField[fl] = occByField[fl] || []).push({ s: orig._startMin, e: orig._endMin });
+      filled++;
+    });
+  });
+  return filled;
+}
+
+test('no-blank net: demoted regen slot restores its original when the field is free', () => {
+  // Bunk A slot 1 was regenerated, conflicted, and got demoted to Free by the gate.
+  const sa = {
+    A: [{ _activity: 'Swim', field: 'Pool', _startMin: 600, _endMin: 660 },
+        { _activity: 'Free', field: 'Free', _startMin: 660, _endMin: 720, _constraintDemoted: true }],
+  };
+  const regenScope = { A: { orig: { 1: { _activity: 'Art', field: 'Art Room', _startMin: 660, _endMin: 720 } } } };
+  const filled = restoreDemotedRegenSlots(sa, regenScope, {});
+  assert.strictEqual(filled, 1);
+  assert.strictEqual(sa.A[1]._activity, 'Art', 'original restored — no blank');
+  assert.ok(sa.A[1]._regenOriginalRestored);
+});
+
+test('no-blank net: leaves Free when the original field is now occupied (no new conflict)', () => {
+  const sa = {
+    A: [{ _activity: 'Free', field: 'Free', _startMin: 660, _endMin: 720, _constraintDemoted: true }],
+  };
+  const regenScope = { A: { orig: { 0: { _activity: 'Art', field: 'Art Room', _startMin: 660, _endMin: 720 } } } };
+  // Art Room already taken 660-720 by someone else.
+  const occ = { 'art room': [{ s: 660, e: 720 }] };
+  const filled = restoreDemotedRegenSlots(sa, regenScope, occ);
+  assert.strictEqual(filled, 0);
+  assert.strictEqual(sa.A[0]._activity, 'Free', 'stays Free rather than double-book');
+});
+
 test('multi-period selection expands to the whole block', () => {
   const divisions = { Div1: { bunks: ['A'] } };
   // A 60-min Cooking spanning slots 1 & 2 (continuation), same _blockStart.
