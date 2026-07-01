@@ -668,7 +668,7 @@
         if (!Array.isArray(list) || list.length === 0) {
             // localStorage fallback (mirror of isFieldAvailable @ scheduler_core_auto.js:2818)
             try {
-                const dk = window.currentScheduleDate || '';
+                const dk = window._activeGenDate || window.currentScheduleDate || '';
                 if (dk) {
                     const stored = localStorage.getItem('campResourceOverrides_' + dk);
                     if (stored) {

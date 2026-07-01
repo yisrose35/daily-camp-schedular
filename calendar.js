@@ -208,7 +208,17 @@
     
     window.loadCurrentDailyData = function() {
         const all = window.loadAllDailyData();
-        const date = window.currentScheduleDate;
+        // ★ FN-14 / shut-off race: during a generation run, prefer the
+        //   authoritative gen-date snapshot (window._activeGenDate, set by
+        //   runOptimizer after the FN-17 settle guard) over
+        //   window.currentScheduleDate — which the code elsewhere documents can
+        //   transiently REVERT to the previously-loaded date mid-gen. If the
+        //   override loader read currentScheduleDate during that revert window,
+        //   it would load the WRONG day's daily-adjustment overrides (disabled
+        //   fields/specials/leagues), so a facility shut off for the gen date
+        //   could slip back into the schedule. _activeGenDate is null outside a
+        //   generation, so normal UI reads are unchanged.
+        const date = window._activeGenDate || window.currentScheduleDate;
         if (!all[date]) {
             all[date] = {
                 scheduleAssignments: {},

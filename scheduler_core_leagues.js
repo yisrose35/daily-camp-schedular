@@ -911,6 +911,33 @@
             return s;
         })();
 
+        // ★ Shut-off: a sport turned OFF for a specific field TODAY in Daily
+        //   Adjustments (dailyDisabledSportsByField) blocks SPORT placement via
+        //   canBlockFit, but leagues build their OWN field/sport pool and never
+        //   consulted it — so a league whose sport was disabled on a court could
+        //   still be handed that court. Resolve the per-date map once (same
+        //   sources the sport fillers use, keyed to the authoritative gen-date)
+        //   and drop the affected (field, sport) pairs in the sport loop below.
+        const _leagueDisabledSportsByField = (function () {
+            try {
+                const dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : null;
+                if (dd && dd.dailyDisabledSportsByField && Object.keys(dd.dailyDisabledSportsByField).length) {
+                    return dd.dailyDisabledSportsByField;
+                }
+            } catch (_e) {}
+            try {
+                const _dk = window._activeGenDate || window.currentScheduleDate || '';
+                if (_dk) {
+                    const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                    if (_s) {
+                        const _p = JSON.parse(_s);
+                        if (_p && _p.dailyDisabledSportsByField) return _p.dailyDisabledSportsByField;
+                    }
+                }
+            } catch (_e) {}
+            return {};
+        })();
+
         const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
         // ★ CROSS-LEAGUE DOUBLE-BOOK FIX: anchor the period window on the
         //   authoritative WALL-CLOCK time, not on indexing the shared `slots`
@@ -1049,6 +1076,13 @@
 
             for (const sport of leagueSports) {
                 if (!fieldSports.includes(sport)) continue;
+                // ★ Shut-off: this sport is turned off on this field for today.
+                const _dsList = _leagueDisabledSportsByField[field.name];
+                if (_dsList && (Array.isArray(_dsList) ? _dsList.includes(sport)
+                        : (typeof _dsList.has === 'function' && _dsList.has(sport)))) {
+                    console.log(`[RegularLeagues] ⚠️ Sport "${sport}" disabled on field "${field.name}" today — not offered to leagues`);
+                    continue;
+                }
 
                 pool.push({
                     field: field.name,

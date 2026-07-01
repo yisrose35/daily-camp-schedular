@@ -4037,7 +4037,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   whatever else landed in that window (idempotent when the skeleton
         //   already placed the same trip in manual-mode-add).
         try {
-            const _dk = window.currentScheduleDate || '';
+            const _dk = window._activeGenDate || window.currentScheduleDate || '';
             let _dTrips = [];
             try { const _s = localStorage.getItem('campDailyTrips_' + _dk); if (_s) _dTrips = JSON.parse(_s); } catch (_e) {}
             if (!Array.isArray(_dTrips) || !_dTrips.length) {

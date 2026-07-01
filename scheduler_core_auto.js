@@ -1213,7 +1213,10 @@
             if (Array.isArray(_ovNested.disabledFields) && _ovNested.disabledFields.length) {
                 _dailyDisabledOv = _ovNested.disabledFields;
             } else {
-                const _dk = window.currentScheduleDate || '';
+                // ★ FN-14 / shut-off race: prefer the authoritative gen-date so
+                //   this localStorage fallback can't read the previous day's
+                //   disabledFields when currentScheduleDate reverts mid-gen.
+                const _dk = window._activeGenDate || window.currentScheduleDate || '';
                 if (_dk) {
                     const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                     if (_stored) {
@@ -1236,7 +1239,9 @@
         try {
             let dfa = dailyData.dailyFieldAvailability || {};
             if (!Object.keys(dfa).length) {
-                const _dk = window.currentScheduleDate || '';
+                // ★ FN-14 / shut-off race: prefer the authoritative gen-date so
+                //   the time-rule fallback tracks the same day as the rest of gen.
+                const _dk = window._activeGenDate || window.currentScheduleDate || '';
                 if (_dk) {
                     const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                     if (_stored) {
@@ -1412,7 +1417,7 @@
         let dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
         if (dailyDisabledSpecials.length === 0) {
             try {
-                const _dk = window.currentScheduleDate || '';
+                const _dk = window._activeGenDate || window.currentScheduleDate || '';
                 if (_dk) {
                     const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                     if (_stored) {
@@ -2721,7 +2726,7 @@
             } else {
                 // Fallback: dedicated localStorage key
                 try {
-                    const dateKey = window.currentScheduleDate || '';
+                    const dateKey = window._activeGenDate || window.currentScheduleDate || '';
                     const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
                     if (stored) {
                         const parsed = JSON.parse(stored);
@@ -2737,7 +2742,7 @@
             // Fallback to dedicated localStorage key (survives cloud overwrites)
             if (!Object.keys(dailyDisabledSports).length) {
                 try {
-                    const dateKey = window.currentScheduleDate || '';
+                    const dateKey = window._activeGenDate || window.currentScheduleDate || '';
                     if (dateKey) {
                         const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
                         if (stored) {
@@ -2874,7 +2879,7 @@
             try {
                 let _daRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
                 if (!Array.isArray(_daRules) || _daRules.length === 0) {
-                    const _dk = window.currentScheduleDate || '';
+                    const _dk = window._activeGenDate || window.currentScheduleDate || '';
                     if (_dk) {
                         const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                         if (_stored) {
@@ -15012,7 +15017,7 @@
             let dailyDisabledSpecialtyLeagues = dailyData?.disabledSpecialtyLeagues || [];
             if (dailyDisabledLeagues.length === 0 || dailyDisabledSpecialtyLeagues.length === 0) {
                 try {
-                    const _dk = window.currentScheduleDate || '';
+                    const _dk = window._activeGenDate || window.currentScheduleDate || '';
                     if (_dk) {
                         const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                         if (_stored) {
@@ -23926,7 +23931,7 @@
                     const _dd = window.loadCurrentDailyData?.()?.dailyDisabledSportsByField;
                     if (_dd && _dd[fieldName]) _dailySports = _dd[fieldName];
                     else {
-                        const _dk = window.currentScheduleDate || '';
+                        const _dk = window._activeGenDate || window.currentScheduleDate || '';
                         if (_dk) {
                             const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                             if (_stored) {
@@ -24015,7 +24020,7 @@
                     if (Array.isArray(_ddRules) && _ddRules.length > 0) {
                         _writeRules = _ddRules.slice();
                     } else {
-                        const _dk = window.currentScheduleDate || '';
+                        const _dk = window._activeGenDate || window.currentScheduleDate || '';
                         if (_dk) {
                             const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                             if (_stored) {
@@ -26915,7 +26920,7 @@
                                             if (Array.isArray(_ddRules) && _ddRules.length > 0) {
                                                 _safetyRules = _ddRules;
                                             } else {
-                                                const _dk = window.currentScheduleDate || '';
+                                                const _dk = window._activeGenDate || window.currentScheduleDate || '';
                                                 if (_dk) {
                                                     const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
                                                     if (_stored) {
@@ -27303,7 +27308,9 @@
             function _getDaily(fieldName) {
               try {
                 // ★ Day 22.5: PRIMARY source — dedicated iron-gate key (no solver path touches it).
-                const dk = window.currentScheduleDate || '';
+                // ★ FN-14 / shut-off race: prefer the authoritative gen-date so the
+                //   iron gate scrubs against the day being generated, not a reverted one.
+                const dk = window._activeGenDate || window.currentScheduleDate || '';
                 if (dk) {
                   const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
                   if (enf) {
@@ -29649,7 +29656,7 @@
                         var _disabledForDay = new Set((window.currentDisabledFields || []).map(String));
                         var _dailyDisabledSportsByField = {};
                         try {
-                            var _dk = window.currentScheduleDate || '';
+                            var _dk = window._activeGenDate || window.currentScheduleDate || '';
                             if (_dk) {
                                 var _s = localStorage.getItem('campResourceOverrides_' + _dk);
                                 if (_s) {

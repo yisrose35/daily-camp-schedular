@@ -63,7 +63,7 @@
                 if (dd && dd.dailyDisabledSportsByField && dd.dailyDisabledSportsByField[fieldName]) {
                     dailySports = dd.dailyDisabledSportsByField[fieldName];
                 } else {
-                    var dk = window.currentScheduleDate || '';
+                    var dk = window._activeGenDate || window.currentScheduleDate || '';
                     if (dk) {
                         var stored = localStorage.getItem('campResourceOverrides_' + dk);
                         if (stored) {
@@ -123,7 +123,7 @@
                 if (Array.isArray(ddRules) && ddRules.length > 0) {
                     rules = ddRules.slice();
                 } else {
-                    var dk2 = window.currentScheduleDate || '';
+                    var dk2 = window._activeGenDate || window.currentScheduleDate || '';
                     if (dk2) {
                         var stored2 = localStorage.getItem('campResourceOverrides_' + dk2);
                         if (stored2) {

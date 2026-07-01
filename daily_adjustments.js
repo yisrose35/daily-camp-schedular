@@ -5192,6 +5192,15 @@ async function runOptimizer() {
     //   the finally below.
     try { window._activeGenDate = window.currentScheduleDate || (document.getElementById('calendar-date-picker') || {}).value || ''; } catch (_eSnap) {}
 
+    // ★ Shut-off sync: refresh the in-memory currentOverrides from storage for the
+    //   gen-date NOW (loadCurrentOverrides prefers window._activeGenDate, just set
+    //   above). currentOverrides otherwise only refreshes when the Resources panel
+    //   is opened, so a shut-off toggled and then navigated away from could leave
+    //   the panel state — and the campTimeRulesEnforce_ key it re-seeds — diverged
+    //   from what the solver reads. The solver reads storage directly, so this
+    //   never LOOSENED enforcement, but it keeps the UI/iron-gate state honest.
+    try { if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides(); } catch (_eLCO) {}
+
     // ★★★ v3.13: Apply generation scope from settings picker ★★★
     // ★ MS-1 (multi-scheduler): clamp the scope to the ROLE's generatable
     // divisions. The scheduler-mode banner promises "Generate scoped to:
@@ -5339,7 +5348,7 @@ async function runOptimizer() {
             //   schedule-generated event dispatches / save / UI re-render.
             //   Reads from dedicated key (primary) + dailyData + LS fallback.
             try {
-                const _dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                const _dk = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
                 let _rules = null;
                 try {
                     const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
@@ -8980,7 +8989,11 @@ function refreshFromCloud() {
 }
 
 function loadCurrentOverrides() {
-  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  // ★ Shut-off race: prefer the authoritative gen-date when a generation is in
+  //   flight (window._activeGenDate) so a refresh triggered at gen start syncs
+  //   currentOverrides to the day being generated, not a transiently-reverted
+  //   window.currentScheduleDate. Null outside a generation → normal UI date.
+  const dateKey = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const dailyData = window.loadCurrentDailyData?.() || {};
   let dailyOverrides = dailyData.overrides || {};
 

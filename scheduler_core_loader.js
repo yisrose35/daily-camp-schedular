@@ -503,7 +503,11 @@
         // Fallback: dedicated localStorage key (survives cloud overwrites)
         if (!dailyOvNested.disabledFields?.length && !dailyOvNested.disabledSpecials?.length) {
             try {
-                const dateKey = window.currentScheduleDate || '';
+                // ★ FN-14 / shut-off race: key off the authoritative gen-date
+                //   (window._activeGenDate) first so this fallback can't read a
+                //   different day's overrides when currentScheduleDate reverts
+                //   mid-gen. Null outside a generation → normal behavior.
+                const dateKey = window._activeGenDate || window.currentScheduleDate || '';
                 const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
                 if (stored) {
                     const parsed = JSON.parse(stored);
