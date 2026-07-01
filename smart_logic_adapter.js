@@ -91,7 +91,10 @@
     const DEBUG_SMART_TILE = window.DEBUG_SMART_TILE || false;
 
     function log(...args) {
-        if (DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
+        // Read window.DEBUG_SMART_TILE LIVE so the trace can be toggled at runtime
+        // (set window.DEBUG_SMART_TILE = true, then regenerate) — it was previously
+        // captured once at load, so the flag could only be set before page load.
+        if (window.DEBUG_SMART_TILE || DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
     }
 
     // =========================================================================
@@ -291,7 +294,12 @@
                     if (isRainyMode && (props.rainyDayAvailable === false || props.availableOnRainyDay === false)) {
                         return; // Skip non-rainy-available on rainy days
                     }
-                    if (!allSpecials.find(s => s.name === name)) {
+                    // ★ Case-INSENSITIVE existence check. This camp duplicates every
+                    //   special cap/lowercase; activityProperties is keyed by the
+                    //   lowercased activity name, so a case-sensitive `s.name === name`
+                    //   never matches the proper-case config entry and injects a bogus
+                    //   lowercase TWIN ("Lake" config + "lake" props) into the pool.
+                    if (!allSpecials.find(s => isSame(s.name, name))) {
                         propsSpecials.push({ name, ...props });
                     }
                 }
@@ -482,9 +490,43 @@
             });
         });
 
-        const totalCap = available.reduce((s, a) => s + a.capacity, 0);
-        log(`  TOTAL FOR ${divisionName}: ${available.length} specials, ${totalCap} slots`);
-        return available;
+        // ★ CASE-DUP COLLAPSE — the actual fix for "plenty of specials free but
+        //   bunks get the Swim fallback". This camp stores every special TWICE,
+        //   cap + lowercase ("Lake" + "lake", "VR" + "vr", "Arts & Crafts" + "arts
+        //   & crafts"). Both survive into the pool because the two sources
+        //   (getGlobalSpecialActivities + activityProperties) merge case-sensitively.
+        //   Two pool entries for ONE physical room then:
+        //     (a) DOUBLE the apparent special capacity the pre-allocator budgets, and
+        //     (b) block each other on the shared facility claim key — a room reserved
+        //         under the lowercase twin reads "full" to the proper-case one (and to
+        //         the very division it was reserved for), so the rotation's "Special"
+        //         step finds every candidate taken and falls through to Swim while the
+        //         room sits empty. Collapsing also stops the lowercase placements that
+        //         evaded the case-sensitive cooldown/maxUsage ledger.
+        //   Collapse is by special NAME (case-insensitive) — different specials that
+        //   merely SHARE a room (e.g. "Arts & Crafts" + "Leather" → one shack) have
+        //   distinct names and are never merged. Within a case-variant group keep the
+        //   canonical (non-all-lowercase) name; tie-break on richer capacity.
+        const _canonByLcName = new Map();
+        available.forEach(a => {
+            const k = String(a.name).toLowerCase().trim();
+            const prev = _canonByLcName.get(k);
+            if (!prev) { _canonByLcName.set(k, a); return; }
+            const aUpper = a.name !== a.name.toLowerCase();
+            const pUpper = prev.name !== prev.name.toLowerCase();
+            let keep;
+            if (aUpper !== pUpper) keep = aUpper ? a : prev;          // canonical case wins
+            else keep = (a.capacity > prev.capacity) ? a : prev;       // else richer config
+            _canonByLcName.set(k, keep);
+        });
+        const deduped = [..._canonByLcName.values()];
+        if (deduped.length !== available.length) {
+            log(`  ⚖️ Collapsed ${available.length - deduped.length} case-duplicate special(s) → ${deduped.length} canonical`);
+        }
+
+        const totalCap = deduped.reduce((s, a) => s + a.capacity, 0);
+        log(`  TOTAL FOR ${divisionName}: ${deduped.length} specials, ${totalCap} slots`);
+        return deduped;
     }
 
     /**
@@ -984,6 +1026,18 @@
             const divPriority = priorityQueue[divisionName] || [];
 
             function getSpecialUsageCount(bunk) {
+                // ★ Within-division fairness = specials this bunk has had THIS PERIOD (default
+                //   this week), not lifetime — matches the cross-division need-first ordering so
+                //   a bunk well-served earlier doesn't stay deprioritized all week. Kill switch
+                //   window.__smartTileNeedFirst = false → lifetime (legacy). Period tunable via
+                //   window.__smartTileNeedPeriod (default '1week').
+                // ★ PERF: reuse the ONE memoized period count exposed by scheduler_core_main
+                //   instead of re-scanning history here. This runs inside sort comparators —
+                //   calling getPeriodActivityCount per comparator blew generation up to ~45s.
+                //   The shared memo caps it to one compute per bunk.
+                if (window.__smartTileNeedFirst !== false && typeof window.__smartTileNeedCount === 'function') {
+                    try { return window.__smartTileNeedCount(bunk); } catch (_) {}
+                }
                 let sum = 0;
                 const bunkHist = historical[bunk] || {};
                 allAvailableSpecials.forEach(s => {
@@ -1087,6 +1141,50 @@
                     bunks.forEach(b => specialWinnersA.add(b));
                 }
             }
+            // ★ PREFER-MAIN1 leftover fill (Block A / tile 1) — kill-switch
+            //   window.__smartTilePreferMain1=false. The cross-division pre-allocation can
+            //   UNDER-fill a division's special rooms (a junior division loses the special
+            //   budget under window contention), so its bunks were handed the open activity
+            //   (main2 / Swim) in tile 1 while a special room sat FREE. Recompute the
+            //   division's TRUE remaining capacity from the actual placements and upgrade any
+            //   open-activity bunk to a still-free special it can lawfully use — so nobody
+            //   gets main2/fallback in tile 1 while main1 is available. Only ever turns
+            //   open→special (never the reverse); remainingSlots (net of other divisions via
+            //   the V44.3 capacity subtraction) guarantees no over-allocation.
+            if (!effectiveA.allFallback && window.__smartTilePreferMain1 !== false) {
+                specialsBlockA.forEach(s => {
+                    const used = Object.values(block1).filter(a => isSame(a, s.name)).length;
+                    s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
+                });
+                // ★ LEAST-SERVED-FIRST: a free room goes to the bunk with the FEWEST
+                //   specials so far — yesterday's bumped-to-fallback bunks (divPriority) first,
+                //   then by cumulative special usage ascending — so the SAME bunks don't grab
+                //   the scarce special day after day. (sortedEligible already carries this order;
+                //   re-sorting here makes it explicit and robust to upstream changes.)
+                // ★ Include INELIGIBLE bunks too: STEP 3 screens eligibility against the
+                //   COMBINED block A+B slots, so a bunk whose only open special is locked in
+                //   its OTHER block (e.g. block B overlaps a senior division's special window)
+                //   is dropped from sortedEligible — even though that special is FREE in THIS
+                //   block. getUsableSpecialsForBunk re-validates against slotsA (block A only),
+                //   so a genuinely-unusable bunk is still skipped; one free here is upgraded.
+                [...sortedEligible, ...ineligibleBunks]
+                    .filter(b => !specialWinnersA.has(b) && isSame(block1[b], effectiveA.open))
+                    .sort((a, b) => {
+                        const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
+                        if (pa !== pb) return pb - pa;
+                        return getSpecialUsageCount(a) - getSpecialUsageCount(b);
+                    })
+                    .forEach(bunk => {
+                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
+                        const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                        if (chosen && chosen.remainingSlots > 0) {
+                            block1[bunk] = chosen.name;
+                            specialWinnersA.add(bunk);
+                            chosen.remainingSlots--;
+                            log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room, was ${effectiveA.open})`);
+                        }
+                    });
+            }
             // ★ V44.3: Record Block A consumption for other divisions
             Object.entries(block1).forEach(([bunk, act]) => {
                 if (!act || isSame(act, fbAct) || isSame(act, effectiveA.open)) return;
@@ -1173,6 +1271,37 @@
                         log(`\n  ★ FULL GRADE OVERRIDE (Block B): "${fullGradeActB}" → ALL ${bunks.length} bunks`);
                         bunks.forEach(bunk => { block2[bunk] = fullGradeActB; });
                     }
+                }
+                // ★ PREFER-MAIN1 leftover fill (Block B / tile 2): a loser-from-A sitting on
+                //   the fallback (Sport) takes a still-free special in tile 2 rather than
+                //   wasting the room. Winners-from-A keep their main2 (Swim) complement.
+                if (!effectiveB.allFallback && window.__smartTilePreferMain1 !== false) {
+                    specialsBlockB.forEach(s => {
+                        const used = Object.values(block2).filter(a => isSame(a, s.name)).length;
+                        s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
+                    });
+                    // ★ LEAST-SERVED-FIRST (same as Block A): free Block-B rooms go to the
+                    //   fewest-served fallback bunks so the scarce special rotates across days.
+                    // ★ Include INELIGIBLE bunks (see Block A note): screened against the
+                    //   combined A+B window, they may still take a special FREE in block B.
+                    //   getUsableSpecialsForBunk re-validates against slotsB (block B only).
+                    [...sortedEligible, ...ineligibleBunks]
+                        .filter(b => !specialWinnersA.has(b) && isSame(block2[b], fbAct))
+                        .sort((a, b) => {
+                            const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
+                            if (pa !== pb) return pb - pa;
+                            return getSpecialUsageCount(a) - getSpecialUsageCount(b);
+                        })
+                        .forEach(bunk => {
+                            const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
+                            const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                            if (chosen && chosen.remainingSlots > 0) {
+                                block2[bunk] = chosen.name;
+                                chosen.remainingSlots--;
+                                nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                                log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room in B, was ${fbAct})`);
+                            }
+                        });
                 }
                 // ★ V44.3: Record Block B consumption for other divisions
                 Object.entries(block2).forEach(([bunk, act]) => {
@@ -1283,5 +1412,5 @@
         return available;
     };
 
-    console.log("[SmartTile] V44.3 loaded (cross-division capacity tracking)");
+    console.log("[SmartTile] V44.5 loaded (need-first this-week fairness; perf: shared memoized period count)");
 })();

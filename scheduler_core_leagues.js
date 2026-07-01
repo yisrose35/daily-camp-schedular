@@ -459,6 +459,32 @@
         return history.matchupHistory[matchupKey] || 0;
     }
 
+    // ★ Meeting count derived from the date-keyed gameLog (dates ≤ asOfDate),
+    // mirroring getTeamSportHistoryByDate. The flat matchupHistory aggregate is
+    // NOT regen-safe: rollbackDayRecords can only subtract games that are IN the
+    // gameLog, so any meetings recorded before the gameLog existed (FN-54) are
+    // frozen in the aggregate forever while regenerated pairs get decremented —
+    // the counts INVERT (the most-played pair looks least-played), and the
+    // pairing optimizer then keeps re-selecting it (observed live: a 4-team
+    // league pinned to 1v2/3v4 every game). Counting straight from the gameLog
+    // is immune: a never-logged pair is simply 0, and today's in-progress games
+    // (logged incrementally before the next game is paired) are included so
+    // back-to-back games on the same day still rotate. Falls back to the flat
+    // aggregate only when the league has no gameLog at all (pure legacy data).
+    function getMatchupCountByDate(leagueName, team1, team2, history, asOfDate) {
+        const gl = history.gameLog && history.gameLog[leagueName];
+        if (!gl) return getMatchupCount(leagueName, team1, team2, history);
+        const key = getMatchupKey(team1, team2);
+        let n = 0;
+        Object.keys(gl).forEach(function (d) {
+            if (asOfDate && d > asOfDate) return;          // ignore strictly-future dates
+            (gl[d] || []).forEach(function (e) {
+                if (e && getMatchupKey(e.t1, e.t2) === key) n++;
+            });
+        });
+        return n;
+    }
+
     function recordMatchup(leagueName, team1, team2, history) {
         const matchupKey = `${leagueName}:${getMatchupKey(team1, team2)}`;
         history.matchupHistory[matchupKey] = (history.matchupHistory[matchupKey] || 0) + 1;
@@ -697,7 +723,7 @@
             for (let i = 0; i < teams.length; i++) {
                 for (let j = i + 1; j < teams.length; j++) {
                     const a = teams[i], b = teams[j];
-                    const met = getMatchupCount(leagueName, a, b, history);
+                    const met = getMatchupCountByDate(leagueName, a, b, history, dayId);
                     pairs.push({ a, b, met, w: (-met) * W_OPP + sportFresh(a, b) * W_SPORT });
                 }
             }
@@ -738,16 +764,28 @@
     // same sport, so one scarce field serves two needy teams instead of one needy
     // and one repeat.
     //
-    //   rem(a,b) = 1 if a & b have already met (this pairing would be a rematch), else 0
+    //   rem(a,b) = how many times a & b have ALREADY met, counted from the date-keyed
+    //              gameLog (getMatchupCountByDate), NOT the flat matchupHistory aggregate.
+    //              Two reasons it must be a gameLog COUNT and not a 0/1 flag on the
+    //              aggregate: (1) a binary flag goes blind once every pair has met (a
+    //              4-team league saturates in one round-robin cycle) — the -BIG term then
+    //              cancels out of every comparison and sport-need alone re-pairs the
+    //              league. (2) the flat aggregate INVERTS under regeneration: rollback can
+    //              only subtract games present in the gameLog, so pre-gameLog meetings
+    //              freeze while regenerated pairs get decremented, making the MOST-played
+    //              pair look LEAST-played — the optimizer then locks onto it (observed
+    //              live: a league stuck on 1v2/3v4 every game). The gameLog count is
+    //              immune and always prefers the genuinely LEAST-met pair.
     //   val(a,b) = sport-need concentration: 3 if some available sport is fresh for
     //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
     //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
     //
-    // Acceptance uses a single scalar  score = -BIG*Σrem + Σval  (BIG ≫ max val), so
-    // reducing a rematch ALWAYS dominates any sport gain, sport only breaks rem ties,
-    // and a swap can never raise total rematches. Monotonic (both axes bounded ints) →
-    // terminates. Falls back to the round-robin on any error or kill switch
-    // (window.__leagueDailyOptimizer === false).
+    // Acceptance uses a single scalar  score = -BIG*Σmeetings - MED*Σrecency + Σval
+    // (BIG ≫ MED ≫ max val), so reducing total meetings ALWAYS dominates; among equal
+    // meeting counts the LEAST-recently-met pairing wins (so consecutive days rotate
+    // through the distinct rounds); sport only breaks what's left. A swap can never
+    // raise total meetings. Monotonic (bounded) → terminates. Falls back to the
+    // round-robin on any error or kill switch (window.__leagueDailyOptimizer === false).
     function optimizeMatchupPairingForSport(rrMatchups, activeTeams, availablePool, leagueName, history, dayId) {
         try {
             if (typeof window !== 'undefined' && window.__leagueDailyOptimizer === false) return rrMatchups;
@@ -763,7 +801,11 @@
             }
             (activeTeams || []).forEach(function (t) { playedSet(t); });
 
-            function rem(a, b) { return getMatchupCount(leagueName, a, b, history) > 0 ? 1 : 0; }
+            // Real meeting COUNT from the date-keyed gameLog (NOT the flat aggregate,
+            // which inverts under regen — see getMatchupCountByDate). Counting (vs a
+            // 0/1 flag) also keeps the guard meaningful once every pair has met in a
+            // small league. Together: always prefers the genuinely LEAST-met pair.
+            function rem(a, b) { return getMatchupCountByDate(leagueName, a, b, history, dayId); }
             function val(a, b) {
                 const pa = playedSet(a), pb = playedSet(b);
                 let freshBoth = 0;
@@ -774,7 +816,35 @@
                 }
                 return freshBoth === 2 ? 3 : freshBoth;
             }
-            function pairScore(a, b) { return (-BIG) * rem(a, b) + val(a, b); }
+
+            // RECENCY tiebreak: in a small league every pair meets within one
+            // round-robin cycle, so meeting counts quickly TIE (all 1, all 2, …) and
+            // the count term cancels out. Without a tiebreak the pairing then repeats
+            // whatever sport-need happens to favor — which can re-stage yesterday's
+            // exact matchups (observed live: 1v4/2v3 two days running). Prefer the
+            // pairing whose teams met LONGEST AGO so consecutive days cycle through
+            // the distinct rounds. Derived from the date-keyed gameLog (regen-safe);
+            // 0 = never met (most preferred). MED ≫ val so recency breaks count ties
+            // ahead of sport, but ≪ BIG so it never overrides the meeting count.
+            const MED = 1000;
+            const _gl = (history.gameLog && history.gameLog[leagueName]) || {};
+            const _dates = Object.keys(_gl).filter(function (d) { return !dayId || d <= dayId; }).sort();
+            const _denom = _dates.length + 1;
+            const _recCache = {};
+            function recency(a, b) {
+                const key = getMatchupKey(a, b);
+                if (_recCache[key] != null) return _recCache[key];
+                let best = 0;
+                for (let i = 0; i < _dates.length; i++) {
+                    const entries = _gl[_dates[i]] || [];
+                    for (let j = 0; j < entries.length; j++) {
+                        const e = entries[j];
+                        if (e && getMatchupKey(e.t1, e.t2) === key) { best = (i + 1) / _denom; break; }
+                    }
+                }
+                return (_recCache[key] = best);
+            }
+            function pairScore(a, b) { return (-BIG) * rem(a, b) - MED * recency(a, b) + val(a, b); }
 
             // Byes stay put; only real pairings enter the swap set.
             const byes = [], m = [];
@@ -1059,6 +1129,23 @@
         // ★ Date-correct history (robust to regeneration order) — see getTeamSportHistoryByDate.
         const _teamHist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
 
+        // ★ SCARCITY: among the sports available this slot, how few fields does each
+        // have? A team that needs both football (4 fields) and basketball (15) must
+        // grab the football field — otherwise it picks the nicer basketball field and
+        // football, being scarce, keeps getting skipped game after game. We give a
+        // needed sport a bonus scaled by how scarce it is, so the scarcest fresh sport
+        // wins. Abundant sports get ~0 bonus (no contention to win).
+        const _poolFieldsBySport = (function () {
+            const m = {}, seen = {};
+            availablePool.forEach(o => {
+                seen[o.sport] = seen[o.sport] || new Set();
+                if (!seen[o.sport].has(o.field)) { seen[o.sport].add(o.field); m[o.sport] = (m[o.sport] || 0) + 1; }
+            });
+            return m;
+        })();
+        const _maxPoolFields = Math.max(1, ...Object.values(_poolFieldsBySport).concat([1]));
+        const _scarcityBonus = (sport) => ((_maxPoolFields / (_poolFieldsBySport[sport] || 1)) - 1) * 300;
+
         function getTeamSportNeed(team, sport) {
             const teamHistory = _teamHist(team);
             const sportCount = teamHistory.filter(s => s === sport).length;
@@ -1139,6 +1226,14 @@
                 const need2 = getTeamSportNeed(t2, option.sport);
                 score += need1 + need2;
 
+                // ★ SCARCITY: when a team has never played this sport, boost it by how
+                // scarce the sport is so a scarce fresh sport (football) is taken before
+                // an abundant fresh one (basketball) on a nicer field. Only for unplayed
+                // sports → a team that already played football is never pushed onto it.
+                const _svFresh1 = _teamHist(t1).indexOf(option.sport) === -1 ? 1 : 0;
+                const _svFresh2 = _teamHist(t2).indexOf(option.sport) === -1 ? 1 : 0;
+                score += (_svFresh1 + _svFresh2) * _scarcityBonus(option.sport);
+
                 // ★ Once every sport has been played at least once the per-sport
                 // need flattens (80/60/40…) and the field-quality bonus (up to
                 // +188) could otherwise pin a team to the best field's sport.
@@ -1204,13 +1299,26 @@
         // ★ Date-correct history (robust to regeneration order) — see getTeamSportHistoryByDate.
         const _teamHist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
 
+        // ★ SCARCITY (same as SportVariety): a needed scarce sport (football, few
+        // fields) must beat a needed abundant one (basketball) so it isn't skipped.
+        const _poolFieldsBySport = (function () {
+            const m = {}, seen = {};
+            availablePool.forEach(o => {
+                seen[o.sport] = seen[o.sport] || new Set();
+                if (!seen[o.sport].has(o.field)) { seen[o.sport].add(o.field); m[o.sport] = (m[o.sport] || 0) + 1; }
+            });
+            return m;
+        })();
+        const _maxPoolFields = Math.max(1, ...Object.values(_poolFieldsBySport).concat([1]));
+        const _scarcityBonus = (sport) => ((_maxPoolFields / (_poolFieldsBySport[sport] || 1)) - 1) * 300;
+
         // Sort matchups by how many times they've played (least played first)
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
         const _indoorCountsMV = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const h1 = _teamHist(t1);
             const h2 = _teamHist(t2);
-            const matchupCount = getMatchupCount(leagueName, t1, t2, history);
+            const matchupCount = getMatchupCountByDate(leagueName, t1, t2, history, dayId);
             const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
             return {
                 t1, t2, matchupCount, indoorMin,
@@ -1291,6 +1399,11 @@
                 const need1 = sportCount1 === 0 ? 1000 : Math.max(0, 100 - sportCount1 * 20);
                 const need2 = sportCount2 === 0 ? 1000 : Math.max(0, 100 - sportCount2 * 20);
                 score += need1 + need2;
+
+                // ★ SCARCITY: when a team has never played this sport, boost it by how
+                // scarce the sport is so a scarce fresh sport (football) is claimed
+                // before an abundant fresh one (basketball) on a nicer field.
+                score += ((sportCount1 === 0 ? 1 : 0) + (sportCount2 === 0 ? 1 : 0)) * _scarcityBonus(option.sport);
 
                 // ★ Hard guard against repeating a team's MOST-RECENT sport —
                 // directly kills the "same sport N days in a row" case. Big
@@ -2041,19 +2154,55 @@
                     let _seed = 0; const _ds = String(dayId || '');
                     for (let i = 0; i < _ds.length; i++) _seed = (_seed * 31 + _ds.charCodeAt(i)) & 0x7fffffff;
 
+                    // ★ NEED = how STARVED a league's teams are of a sport, measured as the
+                    // gap between how often each team has played its MOST-played sport and
+                    // how often it has played THIS sport. A team that's never played football
+                    // (while it has played other sports) contributes a big deficit; a team
+                    // that's caught up on football contributes 0. So a whole league that has
+                    // caught up on a sport has need 0 → cap 0 → it surrenders all of that
+                    // sport's fields to the league that still needs it. Date-correct history.
+                    const _teamCounts = {};   // leagueName → team → {sport: count}
+                    const _sportNeed = (l, sport) => {
+                        const lc = _teamCounts[l.name] || (_teamCounts[l.name] = {});
+                        let total = 0;
+                        (l.teams || []).forEach(t => {
+                            let counts = lc[t];
+                            if (!counts) {
+                                counts = {};
+                                getTeamSportHistoryByDate(l.name, t, history, dayId)
+                                    .forEach(s => { counts[s] = (counts[s] || 0) + 1; });
+                                lc[t] = counts;
+                            }
+                            let mostPlayed = 0;
+                            for (const s in counts) if (counts[s] > mostPlayed) mostPlayed = counts[s];
+                            total += Math.max(0, mostPlayed - (counts[sport] || 0));
+                        });
+                        return total;
+                    };
+
                     const _caps = {}; _here.forEach(l => { _caps[l.name] = {}; });
+                    const _byNeedSports = [];
                     _allSports.forEach(sport => {
                         const fc = _fieldsBySport[sport] || 0;
                         if (fc <= 0) return;
                         const parts = _here.filter(l => (l.sports || []).includes(sport));
-                        const totalW = parts.reduce((s, l) => s + _games[l.name], 0) || 1;
+                        // Weight each league by how much its teams NEED this sport. Only when
+                        // nobody has a specific need (e.g. season start, all sports even) do
+                        // we fall back to game-count weighting — that's the case where the
+                        // user's "time priority breaks the tie" applies (seniority order +
+                        // date-seeded leftover rotation below decide who gets the odd field).
+                        let weights = parts.map(l => _sportNeed(l, sport));
+                        const totalNeed = weights.reduce((s, w) => s + w, 0);
+                        const byNeed = totalNeed > 0;
+                        if (!byNeed) weights = parts.map(l => _games[l.name]);
+                        if (byNeed) _byNeedSports.push(sport);
+                        const totalW = weights.reduce((s, w) => s + w, 0) || 1;
                         // Largest-remainder apportionment of this sport's fc fields across the
-                        // leagues that play it, weighted by game count. floor() gives the base
-                        // share; the leftover field(s) go to the largest fractional shares —
-                        // this is what guarantees a junior league its slice of a 2-field sport
-                        // instead of the senior taking both.
+                        // leagues that play it. floor() gives the base share; leftover field(s)
+                        // go to the largest fractional shares — a league weighted 0 (no need)
+                        // gets base 0 + frac 0, so it never claims a leftover over a needy one.
                         const rows = parts.map((l, idx) => {
-                            const exact = fc * _games[l.name] / totalW;
+                            const exact = fc * weights[idx] / totalW;
                             const base = Math.floor(exact);
                             return { name: l.name, base, frac: exact - base, idx };
                         });
@@ -2063,7 +2212,7 @@
                         for (let i = 0; i < rows.length; i++) rows[i].base += (i < rem ? 1 : 0);
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
-                    console.log('   ⚖️ Fair-share sport caps: ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
+                    console.log('   ⚖️ Need-first sport caps' + (_byNeedSports.length ? ' (need-weighted: ' + _byNeedSports.join(', ') + ')' : ' (no specific need → by size)') + ': ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
                     return _caps;
                 } catch (_e) {
                     console.warn('[RegularLeagues] fair-share cap computation failed (continuing uncapped):', _e);
@@ -3015,5 +3164,5 @@ window._debugLeagueTimeData = timeData;
     };
 
     window.SchedulerCoreLeagues = Leagues;
-    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v7');
+    console.log('[RegularLeagues] Module loaded with Chronological Date Ordering + Cloud Persistence v9 (gameLog matchup count + recency tiebreak)');
 })();

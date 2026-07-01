@@ -15,21 +15,42 @@ const LG = 'L';
 const BIG = 1e6;
 
 function getMatchupCount(h, a, b) { return (h.matchupHistory || {})[LG + ':' + [a, b].sort().join('|')] || 0; }
+// Regen-safe meeting count from the date-keyed gameLog (mirrors getMatchupCountByDate
+// in scheduler_core_leagues.js). asOf=null → count all logged dates.
+function getMatchupCountByDate(h, a, b, asOf) {
+  const gl = (h.gameLog || {})[LG]; if (!gl) return getMatchupCount(h, a, b);
+  const key = [a, b].sort().join('|'); let n = 0;
+  Object.keys(gl).forEach(d => { if (asOf && d > asOf) return;
+    (gl[d] || []).forEach(e => { if (e && [e.t1, e.t2].sort().join('|') === key) n++; }); });
+  return n;
+}
 function playedSports(h, t) {
   const gl = (h.gameLog || {})[LG] || {}, out = new Set();
   Object.keys(gl).forEach(d => (gl[d] || []).forEach(e => { if (e.sport && (e.t1 === t || e.t2 === t)) out.add(e.sport); }));
   return out;
 }
 
-function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h) {
+function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h, asOf) {
   const played = {}; teams.forEach(t => played[t] = playedSports(h, t));
-  function rem(a, b) { return getMatchupCount(h, a, b) > 0 ? 1 : 0; }
+  // Real meeting COUNT from the date-keyed gameLog (not a 0/1 flag, not the flat
+  // aggregate which inverts under regen). Mirrors the source fix.
+  function rem(a, b) { return getMatchupCountByDate(h, a, b, asOf); }
   function val(a, b) {
     const pa = played[a], pb = played[b]; let freshBoth = 0;
     for (const s of availSports) { const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1); if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; } }
     return freshBoth === 2 ? 3 : freshBoth;
   }
-  function pairScore(a, b) { return (-BIG) * rem(a, b) + val(a, b); }
+  // RECENCY tiebreak (mirrors source): once counts tie, prefer the pair met longest ago.
+  const MED = 1000;
+  const _gl = (h.gameLog || {})[LG] || {};
+  const _dates = Object.keys(_gl).filter(d => !asOf || d <= asOf).sort();
+  const _denom = _dates.length + 1;
+  function recency(a, b) {
+    const key = [a, b].sort().join('|'); let best = 0;
+    _dates.forEach((d, i) => (_gl[d] || []).forEach(e => { if (e && [e.t1, e.t2].sort().join('|') === key) best = (i + 1) / _denom; }));
+    return best;
+  }
+  function pairScore(a, b) { return (-BIG) * rem(a, b) - MED * recency(a, b) + val(a, b); }
   const m = rrMatchups.map(p => [p[0], p[1]]);
   let improved = true, guard = 0;
   while (improved && guard < 300) {
@@ -119,6 +140,63 @@ function keys(m) { return m.map(p => p.slice().sort().join('v')); }
     'sport gain must NOT override an opponent repeat: ' + k.join(','));
   assert.strictEqual(countRematches(h, out), 0, 'output keeps zero rematches: ' + k.join(','));
   console.log('TEST 4 PASS — refused the rematch despite the sport bait: ' + k.join(', '));
+})();
+
+// ---- TEST 5: regen-INVERTED aggregate — gameLog count keeps rotating opponents ----
+// The live bug: a 4-team league stuck on 1v2/3v4 every game. The flat matchupHistory
+// aggregate had INVERTED: pre-gameLog meetings for 1v3/1v4/2v3/2v4 froze at 2 (rollback
+// can't subtract what isn't in the gameLog), while the actually-overplayed 1v2/3v4 got
+// decremented to 1 on each regen — so the aggregate said 1v2/3v4 were the LEAST-met and
+// the optimizer kept re-selecting them. Counting from the gameLog (truth) fixes it.
+(function () {
+  const h = H();
+  // gameLog TRUTH: only 1v2 and 3v4 have ever actually been logged (the collapse).
+  addGame(h, '2026-06-29', '1', '2', 'Dodgeball');
+  addGame(h, '2026-06-29', '3', '4', 'Kickball');
+  // flat aggregate is INVERTED (phantom pre-gameLog counts the rollback never cleared):
+  h.matchupHistory = { 'L:1|2': 1, 'L:1|3': 2, 'L:1|4': 2, 'L:2|3': 2, 'L:2|4': 2, 'L:3|4': 1 };
+
+  // Sanity: the OLD flat-aggregate guard would pick the WRONG (overplayed) pairs.
+  const remFlat = (a, b) => getMatchupCount(h, a, b);
+  assert(remFlat('1', '2') < remFlat('1', '3'),
+    'precondition: flat aggregate is inverted (1v2 looks rarer than 1v3)');
+
+  // gameLog-derived optimizer must AVOID the truly-overplayed 1v2/3v4.
+  const meetings = m => m.reduce((n, p) => n + getMatchupCountByDate(h, p[0], p[1], '2026-06-30'), 0);
+  const rr = [['1', '2'], ['3', '4']];                 // the round-robin round that lands today
+  const out = optimizeMatchupPairingForSport(rr, ['1', '2', '3', '4'], ['Kickball', 'Dodgeball'], h, '2026-06-30');
+  const k = keys(out);
+  assert(!(k.includes('1v2') && k.includes('3v4')),
+    'must NOT stay stuck on the truly-overplayed 1v2/3v4: ' + k.join(','));
+  assert(meetings(out) < meetings(rr),
+    'must move to genuinely less-met opponents (per gameLog): ' + k.join(','));
+  console.log('TEST 5 PASS — gameLog count beats the inverted aggregate, rotates to: ' + k.join(', '));
+})();
+
+// ---- TEST 6: recency tiebreak — after a full cycle, don't repeat yesterday ----
+// 4 teams play a full round-robin over two days (06-29: 1v2/3v4, 06-30: 1v3/2v4 then
+// 1v4/2v3). Now every pair has met exactly once → counts all tie. The next day must
+// pick the round played LONGEST ago (1v2/3v4 from 06-29), NOT repeat 06-30's 1v4/2v3.
+(function () {
+  const h = H();
+  addGame(h, '2026-06-29', '1', '2', 'Kickball');
+  addGame(h, '2026-06-29', '3', '4', 'Dodgeball');
+  addGame(h, '2026-06-30', '1', '3', 'Kickball');
+  addGame(h, '2026-06-30', '2', '4', 'Dodgeball');
+  addGame(h, '2026-06-30', '1', '4', 'Kickball');
+  addGame(h, '2026-06-30', '2', '3', 'Dodgeball');
+  // every pair met exactly once → counts tie
+  ['1|2', '1|3', '1|4', '2|3', '2|4', '3|4'].forEach(k =>
+    assert.strictEqual(getMatchupCountByDate(h, k.split('|')[0], k.split('|')[1], '2026-07-01'), 1, 'precondition: all pairs met once'));
+  // round-robin hands today the most-recent round; recency must rotate away from it.
+  const rr = [['1', '4'], ['2', '3']];
+  const out = optimizeMatchupPairingForSport(rr, ['1', '2', '3', '4'], ['Kickball', 'Dodgeball'], h, '2026-07-01');
+  const k = keys(out);
+  assert(!(k.includes('1v4') && k.includes('2v3')),
+    'must NOT repeat yesterday (06-30) 1v4/2v3: ' + k.join(','));
+  assert(k.includes('1v2') && k.includes('3v4'),
+    'should pick the round played longest ago (06-29) 1v2/3v4: ' + k.join(','));
+  console.log('TEST 6 PASS — recency rotates to the oldest round instead of repeating: ' + k.join(', '));
 })();
 
 console.log('\n✅ ALL MATCHUP-SPORTOPT (option 3) TESTS PASS');

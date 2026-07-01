@@ -1065,6 +1065,19 @@
             catch (_eGate) { return false; }
         };
 
+        // ★ Would ANY bunk in this division actually be allowed to take this special
+        //   right now? (bunk-level access + the rotation fairness gate: cooldown /
+        //   maxUsage / availableDays / multiPart / cohort.) Used so the seniority
+        //   RESERVE never pre-claims a room the whole division is barred from — a dead
+        //   reservation wastes the room AND its claim blocks every other (overlapping)
+        //   division from it, which is exactly how a free Lake/VR ends up empty while
+        //   bunks fall through to the Swim fallback.
+        const _divCanUseSpecial = (divName, specialName) =>
+            (divisions[divName]?.bunks || []).some(b =>
+                (typeof window.isSpecialAvailableForBunk !== 'function'
+                    || window.isSpecialAvailableForBunk(specialName, divName, b, window.loadGlobalSettings?.()))
+                && !_specialGateBlocks(b, divName, specialName));
+
         // ★ FIELD-LESS DIRECT-FILL CAPACITY (e.g. Pickleball).
         //   A rotation/tile option that is NOT a configured field, special, or hosted
         //   sport is placed as its own label — exactly like Swim (the "direct fill"
@@ -1343,10 +1356,21 @@
                     if (denom > 0) q += cap * j.demand / denom;
                     if (sharers > 1) contended = true;
                 });
-                // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
-                // byte-for-byte no-op for the common case.
-                _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
-                if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
+                // ★ PREFER-MAIN1 = GREEDY SENIORITY (default ON; kill-switch
+                //   window.__smartTilePreferMain1=false): NO fair-share cap. Rotation tiles are
+                //   processed oldest→youngest, and _canClaim already prevents double-booking, so
+                //   removing the cap lets the SENIOR grade claim as many special rooms as it can
+                //   FIRST; junior overlapping tiles get only what's left. This is what makes an
+                //   older grade fill specials before a younger one (e.g. div 9 was capped at 1).
+                //   The demand-split fair-share below only applies when prefer-main1 is OFF.
+                if (window.__smartTilePreferMain1 !== false) {
+                    _rotSpecialQuota[j.key] = Infinity;
+                } else {
+                    // No contention on ANY accessible room → leave uncapped (Infinity) so this is a
+                    // byte-for-byte no-op for the common case.
+                    _rotSpecialQuota[j.key] = contended ? Math.max(1, Math.floor(q + 1e-9)) : Infinity;
+                    if (contended) console.log(`[SmartTile FAIR-SPECIAL] ${j.div} @${j.s}-${j.e}: quota ${_rotSpecialQuota[j.key]} (fair share of ${j.facs.size} accessible room(s))`);
+                }
             });
         })();
 
@@ -1356,7 +1380,101 @@
         //   quota) reserve — uncontended is a strict no-op. The rotation placement loop
         //   later CONSUMES these reservations (they are already claimed for the division).
         const _rotReserved = {}; // `${div}|${start}|${end}` -> [specialName,...] pre-claimed rooms
+        // ★ NEED-FIRST allocation (shared-window specials) — kill switch
+        //   window.__smartTileNeedFirst = false restores pure seniority. When ON, a deprived
+        //   bunk in a YOUNGER grade can win a scarce special over a well-served bunk in an
+        //   OLDER grade: rank by need (fewest specials so far, then longest since any special)
+        //   with SENIORITY as the TIEBREAK — so oldest still goes first when need is equal, and
+        //   the deprived catch up over the week. Applies WITHIN the rotation reservation (cross
+        //   rotation-division) and WITHIN the budget pre-allocation (cross budget-division).
+        const _needFirst = (window.__smartTileNeedFirst !== false);
+        const _scCache = {};
+        // ★ "Need" = how many specials the bunk has had THIS PERIOD (default this week), NOT
+        //   lifetime — so each period everyone starts ~even and a bunk that's gone days without
+        //   a special rises to the top and catches up. (A lifetime count let a bunk that was
+        //   well-served earlier sit at 0 for a whole week despite being eligible.) Falls back to
+        //   lifetime counts only if the period-count helper isn't loaded. Tunable:
+        //   window.__smartTileNeedPeriod ('1week' | 'half' | …); default '1week'. The unreliable
+        //   getDaysSinceActivity tiebreak was dropped (it reported "1 day ago" for never-done
+        //   specials, which mis-ranked need).
+        const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+        const _needPeriod = window.__smartTileNeedPeriod || '1week';
+        const _bunkSpecialCount = (bunk) => {
+            if (bunk in _scCache) return _scCache[bunk];
+            let c = 0;
+            if (typeof _gpc === 'function') {
+                for (const n of _allSpecialNames) { try { c += _gpc(bunk, n, _needPeriod) || 0; } catch (_) {} }
+            } else {
+                const h = historicalCounts[bunk] || {};
+                for (const n of _allSpecialNames) c += (h[n] || 0);
+            }
+            return (_scCache[bunk] = c);
+        };
+        // ★ PERF: expose the MEMOIZED period count so the adapter (a separate module) reuses ONE
+        //   computed value per bunk. The adapter's getSpecialUsageCount runs inside sort
+        //   comparators; calling getPeriodActivityCount there per-comparator re-scanned history
+        //   tens of thousands of times and blew generation up to ~45s (the call is cheap when the
+        //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
+        //   memo caps it to one compute per bunk (~bunks×specials total).
+        window.__smartTileNeedCount = _bunkSpecialCount;
+        // neediest first (fewest specials THIS PERIOD); seniority breaks ties.
+        const _needSenCmp = (bunkA, divA, bunkB, divB) =>
+            (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||
+            (_senOf(divA) - _senOf(divB)) ||
+            (Math.random() - 0.5);
+
         (function _reserveRotationSpecials() {
+            if (_needFirst) {
+                // ★ NEED-FIRST ACROSS GRADES: group rotation-special tiles by shared window;
+                //   rank ALL bunks across the window's divisions by need (seniority tiebreak);
+                //   reserve one usable room per bunk in that order until the window's rooms run
+                //   out. Neediest bunks (any grade) lock rooms first, so the per-division reserved
+                //   COUNT reflects need, not seniority. The consume loop is need-sorted too, so
+                //   within a division the neediest bunks claim the reserved rooms. Eligibility
+                //   mirrors the consume (access + gate + _canClaim) so a reserved room is one the
+                //   bunk can actually take.
+                const _rotSpecialJobs = filteredJobs.filter(job => {
+                    const opts = _rotationOptions(job);
+                    if (!opts || !job.blockA) return false;
+                    return opts.some(o => normalizeCategoryLabel(o) === 'special'
+                        || knownSpecialNames.has(String(o).toLowerCase().trim()));
+                });
+                const _byWin = {};
+                _rotSpecialJobs.forEach(job => {
+                    const k = `${job.blockA.startMin}|${job.blockA.endMin}`;
+                    (_byWin[k] = _byWin[k] || []).push(job);
+                });
+                Object.keys(_byWin).forEach(k => {
+                    const [sMin, eMin] = k.split('|').map(Number);
+                    const jobs = _byWin[k];
+                    const availByDiv = {};
+                    jobs.forEach(job => {
+                        availByDiv[job.division] = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                            sMin, eMin, job.division, activityProperties, dailyFieldAvailability) || [];
+                    });
+                    const _entries = [];
+                    jobs.forEach(job => (divisions[job.division]?.bunks || []).forEach(bunk => _entries.push({ bunk, divName: job.division })));
+                    _entries.sort((a, b) => _needSenCmp(a.bunk, a.divName, b.bunk, b.divName));
+                    _entries.forEach(({ bunk, divName }) => {
+                        const wQ = `${divName}|${sMin}|${eMin}`;
+                        for (const sp of (availByDiv[divName] || [])) {
+                            if (typeof window.isSpecialAvailableForBunk === 'function'
+                                && !window.isSpecialAvailableForBunk(sp.name, divName, bunk, window.loadGlobalSettings?.())) continue;
+                            if (_specialGateBlocks(bunk, divName, sp.name)) continue;
+                            if (!_canClaim(sp.name, sMin, eMin, sp.capacity || 1, divName)) continue;
+                            _registerClaim(sp.name, sMin, eMin, divName);
+                            (_rotReserved[wQ] = _rotReserved[wQ] || []).push(sp.name);
+                            break;
+                        }
+                    });
+                    jobs.forEach(job => {
+                        const wQ = `${job.division}|${sMin}|${eMin}`;
+                        if (_rotReserved[wQ] && _rotReserved[wQ].length)
+                            console.log(`[SmartTile NEED-RESERVE] ${job.division} @${sMin}-${eMin}: reserved ${_rotReserved[wQ].length} room(s) [${_rotReserved[wQ].join(', ')}] (need-first, seniority tiebreak)`);
+                    });
+                });
+                return;
+            }
             filteredJobs.forEach(job => {
                 const opts = _rotationOptions(job);
                 if (!opts || !job.blockA) return;
@@ -1366,13 +1484,30 @@
                 const b = job.blockA;
                 const wQ = `${divName}|${b.startMin}|${b.endMin}`;
                 const quota = _rotSpecialQuota[wQ];
-                if (quota === undefined || quota === Infinity) return; // only contended windows
-                let toReserve = Math.min(quota, (divisions[divName]?.bunks || []).length);
+                const _bunkN = (divisions[divName]?.bunks || []).length;
+                let toReserve;
+                if (window.__smartTilePreferMain1 !== false) {
+                    // ★ GREEDY SENIORITY: reserve up to ALL of this (senior) division's bunks'
+                    //   worth of special rooms NOW — this pass runs BEFORE the junior budget
+                    //   tiles' pre-claim, and filteredJobs is seniority-ordered (9 → 8 → 7 …),
+                    //   so an older grade locks the shared rooms first and a younger grade gets
+                    //   only what's left. _canClaim caps it to rooms physically free;
+                    //   _divCanUseSpecial skips rooms no bunk in the division can use. Without
+                    //   this, prefer-main1 set the quota to Infinity → this pass used to skip,
+                    //   so 8/9 never reserved and the 7th-grade budget pre-claim took their rooms.
+                    toReserve = _bunkN;
+                } else {
+                    if (quota === undefined || quota === Infinity) return; // legacy: only contended windows
+                    toReserve = Math.min(quota, _bunkN);
+                }
                 if (toReserve <= 0) return;
                 const avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
                     b.startMin, b.endMin, divName, activityProperties, dailyFieldAvailability) || [];
                 for (const sp of avail) {
                     if (toReserve <= 0) break;
+                    // ★ Don't reserve a room no bunk in this division can actually use —
+                    //   a dead reserve sits empty and blocks other divisions from it.
+                    if (!_divCanUseSpecial(divName, sp.name)) continue;
                     if (!_canClaim(sp.name, b.startMin, b.endMin, sp.capacity || 1, divName)) continue;
                     _registerClaim(sp.name, b.startMin, b.endMin, divName);
                     (_rotReserved[wQ] = _rotReserved[wQ] || []).push(sp.name);
@@ -1442,7 +1577,8 @@
             // decides the cross-division order; fairness still rotates specials
             // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
-                (_senOf(a.divName) - _senOf(b.divName)) ||
+                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
@@ -1566,7 +1702,8 @@
             // priority list as a final tiebreak. Seniority decides the cross-division
             // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
-                (_senOf(a.divName) - _senOf(b.divName)) ||
+                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
                 (a.prioRank - b.prioRank) ||
@@ -1731,11 +1868,26 @@
                 //   in the group so each bunk gets a DIFFERENT option per connected tile
                 //   (→ all options across the group); _usedOpts blocks any repeat.
                 const _grp = job.pairGroup, _grpOff = job.groupIndex || 0;
-                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${_rotOpts.join(' → ')}], offset ${(_dayNum + _grpOff) % _rotOpts.length}`);
+                // ★ PREFER-MAIN1 (default ON; kill-switch window.__smartTilePreferMain1=false):
+                //   every bunk attempts the special (main1) FIRST, then main2, then the fallback —
+                //   so a bunk only ever lands on main2/fallback when main1 was genuinely unplaceable
+                //   (special capacity exhausted, cooldown/maxUsage/access gate, or already had today).
+                //   This replaces the legacy day+bunk offset that SPREAD the division across the three
+                //   options for variety. Capacity (_canClaim), the fair-share quota, seniority reserve,
+                //   per-bunk gates and the connected-group no-repeat (_usedOpts) all still apply.
+                const _preferMain1 = (window.__smartTilePreferMain1 !== false);
+                //   Fixed priority order: special → sport(main2) → fallback. main1 is always _rotOpts[0];
+                //   build [main1, main2, fallback] from the job so main2 precedes the fallback regardless
+                //   of how _rotOpts ordered them.
+                const _preferOrder = [job.main1, job.main2, job.fallbackActivity].filter(o => o != null && String(o) !== '');
+                console.log(`[SmartTile] ROTATION MODE ${divName}${_grp ? ' (group ' + _grp + ' #' + _grpOff + ')' : ''}: [${(_preferMain1 ? _preferOrder : _rotOpts).join(' → ')}]${_preferMain1 ? ' (prefer-main1: specials filled first)' : ', offset ' + ((_dayNum + _grpOff) % _rotOpts.length)}`);
                 // ★ Scarce capped labels (Pickleball) are owned by the CAMP-WIDE queue computed
                 //   once before this loop (_cappedWinners / _winnerLabel / _mayTakeCapped). Winners
                 //   for THIS division are placed up front below; non-winners skip the label.
-                bunkList.forEach((bunk, _bIdx) => {
+                // ★ need-first: process bunks neediest-first so within a division the
+                //   reserved rooms go to the bunks who've gone longest without a special
+                //   (seniority tiebreak). Kill switch → original roster order.
+                (_needFirst ? [...bunkList].sort((a, b) => _needSenCmp(a, divName, b, divName)) : bunkList).forEach((bunk, _bIdx) => {
                     const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
                     if (_rEx && _rEx._bunkOverride) return;
                     const _usedOpts = _grp ? ((_groupOptsUsed[_grp] = _groupOptsUsed[_grp] || {})[bunk] = _groupOptsUsed[_grp][bunk] || new Set()) : null;
@@ -1748,15 +1900,23 @@
                     //   this is the path proven to persist + be counted next day; the solver-restricted
                     //   "real court" route silently dropped placements under cross-division contention,
                     //   which froze a starved division's counts at 0).
-                    const _wonRaw = _winnerLabel[bunk];
+                    //   ★ Prefer-main1: do NOT pre-empt with the camp-wide capped-label (Pickleball)
+                    //   queue — that would hand a bunk main2 before it ever tries the special. The cap
+                    //   is still enforced inside the option loop via _mayTakeCapped, so winners still
+                    //   get the scarce label when they DON'T get a special first.
+                    const _wonRaw = _preferMain1 ? null : _winnerLabel[bunk];
                     if (_wonRaw && _canClaimDirectFill(_wonRaw, _rStart, _rEnd)) {
                         _registerDirectFillClaim(_wonRaw, _rStart, _rEnd);
                         console.log(`[SmartTile] ${bunk} -> ROTATION QUEUE (least-recent, camp-wide): ${_wonRaw}`);
                         window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: _wonRaw, sport: null, _fixed: true, _activity: _wonRaw, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                         _placed = true; _placedOpt = String(_wonRaw).toLowerCase().trim();
                     }
-                    for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
-                        const opt = _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
+                    const _optCount = _preferMain1 ? _preferOrder.length : _rotOpts.length;
+                    for (let _o = 0; _o < _optCount && !_placed; _o++) {
+                        const opt = _preferMain1
+                            ? _preferOrder[_o]
+                            : _rotOpts[(_dayNum + _bIdx + _grpOff + _o) % _rotOpts.length];
+                        if (!opt) continue;
                         const optNorm = opt.toLowerCase().trim();
                         if (_usedOpts && _usedOpts.has(optNorm)) continue; // already got this option in the group
                         _placedOpt = optNorm;
@@ -1876,6 +2036,19 @@
                                 // sport like Pickleball never lands here — it's handled by the queue.)
                                 _registerDirectFillClaim(opt, _rStart, _rEnd);
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (no open field → placed as field-less label)`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
+                            } else if (_directFillCap(opt) !== Infinity && _mayTakeCapped(opt, optNorm, bunk) && _canClaimDirectFill(opt, _rStart, _rEnd)) {
+                                // ★ CAPPED sport (e.g. Pickleball = 2 nets) whose hosting court can't fit
+                                //   here (time-ruled / locked) — but this bunk IS one of the camp-wide
+                                //   queue's least-recent winners. The nets don't need the court field, so
+                                //   place it as its OWN field-less label. The legacy queue did this UP
+                                //   FRONT; prefer-main1 disabled that up-front placement (so the special is
+                                //   tried first), which left a capped winner with no open court stranded on
+                                //   Swim. Net cap stays enforced via _canClaimDirectFill / the winner set,
+                                //   so still ≤ cap and only the chosen winners — never floods every bunk.
+                                _registerDirectFillClaim(opt, _rStart, _rEnd);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific sport "${opt}" (capped winner, no open court → field-less net)`);
                                 window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt, _noRoomCap: true }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                                 _placed = true;
                             } else {
