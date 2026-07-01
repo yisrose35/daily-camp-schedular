@@ -6644,11 +6644,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1, 'main activity': 1 };
                 const _evResolve = window.getLocationForActivity || getLocationForActivity;
                 const _evSA = window.scheduleAssignments || {};
+                // ★ Partial (per-tile) regen: this sweep normally protects a pin by
+                //   demoting a PRESERVED out-of-scope placement. But a per-tile regen must
+                //   NOT alter preserved data — only the user-selected regen slots may
+                //   change. So restrict the sweep to regenerated slots of in-scope bunks;
+                //   never blank a background bunk or a kept slot the user didn't select.
+                const _rss79 = window.__regenSlotScope || null;
+                const _rssBunks79 = _rss79 ? new Set(Object.keys(_rss79)) : null;
                 let _evicted = 0;
                 Object.keys(_evSA).forEach(bunk => {
                     const arr = _evSA[bunk];
                     if (!Array.isArray(arr)) return;
+                    if (_rss79 && !_rssBunks79.has(bunk)) return; // background bunk — preserve
+                    const _scRegen79 = _rss79 && _rss79[bunk] ? _rss79[bunk].regen : null;
                     arr.forEach((e, idx) => {
+                        // Per-tile regen: only sweep the slots the user actually selected.
+                        if (_rss79 && (!_scRegen79 || !_scRegen79.has(idx))) return;
                         // Never touch: a pin's own fill, a continuation, an explicit user
                         // override, a league block (teams≠bunks; those live in the lock
                         // registry and already yield), or a non-facility pseudo-activity.
@@ -6679,9 +6690,19 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         // Belt-and-suspenders: if this entry IS the reservation's own
                         // pinned event (edge: pin fill not flagged _pinned), leave it.
                         if (String(act || '').toLowerCase().trim() === String(hit.resv.event || '').toLowerCase().trim()) return;
-                        console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
-                            ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" (' + hit.resv.division + ') → Free');
-                        arr[idx] = { field: 'Free', _activity: 'Free', _startMin: sM, _endMin: eM, _pinnedFacilityEvicted: true };
+                        // Per-tile regen: prefer restoring the slot's ORIGINAL pre-regen
+                        //   activity (which respected pins) over leaving it Free — unless
+                        //   the original sat on the SAME reserved facility.
+                        const _o79 = (_rss79 && _rss79[bunk] && _rss79[bunk].orig) ? _rss79[bunk].orig[idx] : null;
+                        if (_o79 && _o79.field && String(_o79.field).toLowerCase().trim() !== String(hit.field).toLowerCase().trim()) {
+                            console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
+                                ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" → restored original "' + (_o79._activity || _o79.field) + '"');
+                            arr[idx] = Object.assign({}, _o79, { _fixed: true, _regenOriginalRestored: true, continuation: false });
+                        } else {
+                            console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
+                                ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" (' + hit.resv.division + ') → Free');
+                            arr[idx] = { field: 'Free', _activity: 'Free', _startMin: sM, _endMin: eM, _pinnedFacilityEvicted: true };
+                        }
                         _evicted++;
                     });
                 });

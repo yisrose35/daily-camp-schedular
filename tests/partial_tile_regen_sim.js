@@ -245,6 +245,30 @@ test('no-blank net: leaves Free when the original field is now occupied (no new 
   assert.strictEqual(sa.A[0]._activity, 'Free', 'stays Free rather than double-book');
 });
 
+// STEP 7.9 pinned-facility evict sweep, per-tile-regen scoping: during a per-tile regen
+// it must only consider REGEN slots of IN-SCOPE bunks — never background bunks or kept
+// slots. Mirrors the production skip predicate.
+function step79ShouldSweep(regenScope, bunk, idx) {
+  if (!regenScope) return true;                       // full gen — sweep everything
+  const sc = regenScope[bunk];
+  if (!sc) return false;                              // background bunk — preserve
+  return !!(sc.regen && sc.regen.has(idx));           // only user-selected slots
+}
+
+test('STEP 7.9 evict sweep only touches regenerated slots during a per-tile regen', () => {
+  const regenScope = {
+    A: { regen: new Set([2]), keep: {}, orig: {} },   // in-scope, slot 2 selected
+  };
+  // Background bunk B (not in scope) — never swept, even on a "conflict".
+  assert.strictEqual(step79ShouldSweep(regenScope, 'B', 0), false);
+  assert.strictEqual(step79ShouldSweep(regenScope, 'B', 2), false);
+  // In-scope bunk A: only the selected slot 2 is swept; kept slots preserved.
+  assert.strictEqual(step79ShouldSweep(regenScope, 'A', 0), false);
+  assert.strictEqual(step79ShouldSweep(regenScope, 'A', 2), true);
+  // Full gen (no scope): sweep everything.
+  assert.strictEqual(step79ShouldSweep(null, 'B', 0), true);
+});
+
 test('multi-period selection expands to the whole block', () => {
   const divisions = { Div1: { bunks: ['A'] } };
   // A 60-min Cooking spanning slots 1 & 2 (continuation), same _blockStart.
