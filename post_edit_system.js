@@ -768,6 +768,28 @@
         }
     }
 
+    // Normalize a checkLocationConflict result into a report availability entry.
+    // Status is derived from usage vs capacity (NOT hasConflict) so a sharable
+    // field with room left reads as 'partial', not falsely 'free'. `users` holds
+    // the occupying bunk/activity when the field is full (conflicts populated).
+    function _reportAvailEntry(check) {
+        const usage = Math.max(0, check.currentUsage || 0);
+        const max = Math.max(1, check.maxCapacity || 1);
+        const status = usage <= 0 ? 'free' : (usage < max ? 'partial' : 'busy');
+        const seen = new Set();
+        const users = [];
+        (check.conflicts || []).forEach(c => {
+            const key = (c.bunk || '') + '|' + (c.activity || '');
+            if (seen.has(key)) return;
+            seen.add(key);
+            users.push({ bunk: c.bunk, activity: c.activity });
+        });
+        return { status, usage, max, users };
+    }
+
+    // Expose so the unified editor can normalize with identical semantics.
+    window.PostEditReportAvail = _reportAvailEntry;
+
     // Build the location + availability context the report needs for the
     // "Open fields at this time" section. Self-contained so the report can be
     // rendered from any modal (including the unified_schedule_system editor)
@@ -779,14 +801,9 @@
         const locationAvailMap = {};
         for (const loc of locations) {
             try {
-                const check = checkLocationConflict(loc.name, slots, bunk);
-                locationAvailMap[loc.name] = {
-                    status: check.hasConflict ? (check.canShare ? 'partial' : 'busy') : 'free',
-                    usage: check.currentUsage,
-                    max: check.maxCapacity
-                };
+                locationAvailMap[loc.name] = _reportAvailEntry(checkLocationConflict(loc.name, slots, bunk));
             } catch (_) {
-                locationAvailMap[loc.name] = { status: 'free' };
+                locationAvailMap[loc.name] = { status: 'free', usage: 0, max: 1, users: [] };
             }
         }
         return { locations, locationAvailMap };
@@ -840,11 +857,17 @@
             done.sort((a, b) => (b.count - a.count) || a.act.localeCompare(b.act));
             never.sort((a, b) => a.act.localeCompare(b.act));
 
-            // --- 3) Fields / specials open at THIS time slot ---
-            const openFields = (locations || []).filter(l => {
-                const st = (locationAvailMap[l.name] || {}).status;
-                return st === 'free' || st === 'partial';
+            // --- 3) Field status at THIS time slot (fields + facility-hosted
+            //        general activities; specials are activities, not courts) ---
+            const fieldLocs = (locations || []).filter(l => l.type === 'field' || l.type === 'general');
+            const openF = [], busyF = [];
+            fieldLocs.forEach(l => {
+                const av = locationAvailMap[l.name] || { status: 'free', usage: 0, max: 1, users: [] };
+                (av.status === 'busy' ? busyF : openF).push({ l, av });
             });
+            // Open ones first (free before partial), then busy alphabetical.
+            openF.sort((a, b) => (a.av.status === b.av.status ? a.l.name.localeCompare(b.l.name) : (a.av.status === 'free' ? -1 : 1)));
+            busyF.sort((a, b) => a.l.name.localeCompare(b.l.name));
 
             const recencyLabel = (d) => {
                 if (d === 0) return 'today';
@@ -931,14 +954,22 @@
                 : empty('Every accessible activity has been done');
 
             // --- Open fields now ---
-            const openHtml = openFields.length
-                ? openFields.map(l => {
-                    const av = locationAvailMap[l.name] || { status: 'free' };
+            const openHtml = openF.length
+                ? openF.map(({ l, av }) => {
                     const partial = av.status === 'partial';
                     const ex = partial ? `<span style="opacity:0.7;font-weight:400;margin-left:5px;">${av.usage}/${av.max}</span>` : '';
                     return chip(escHtml(l.name), partial ? '#fef9c3' : '#dcfce7', partial ? '#854d0e' : '#166534', ex);
                 }).join('')
                 : empty('No open fields at this time');
+
+            // --- In-use fields (with what's occupying them) ---
+            const usedHtml = busyF.length
+                ? busyF.map(({ l, av }) => {
+                    const who = [...new Set((av.users || []).map(u => u.activity || u.bunk).filter(Boolean))];
+                    const lbl = who.length ? `<span style="opacity:0.75;font-weight:400;margin-left:5px;">${escHtml(who.slice(0, 2).join(', '))}${who.length > 2 ? ` +${who.length - 2}` : ''}</span>` : '';
+                    return chip(escHtml(l.name), '#fee2e2', '#991b1b', lbl);
+                }).join('')
+                : empty('No fields in use at this time');
 
             return `
                 ${noteHtml}
@@ -949,8 +980,10 @@
                 <div style="max-height:168px;overflow-y:auto;margin:0 -2px;">${doneRows}</div>
                 ${sectionTitle('Not yet done', never.length || null)}
                 <div>${neverHtml}</div>
-                ${sectionTitle('Open fields now', openFields.length || null)}
-                <div>${openHtml}</div>`;
+                ${sectionTitle('Open fields now', openF.length || null)}
+                <div>${openHtml}</div>
+                ${sectionTitle('In use now', busyF.length || null)}
+                <div>${usedHtml}</div>`;
         } catch (e) {
             debugLog('renderBunkReportBody error', e);
             return '';

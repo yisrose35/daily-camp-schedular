@@ -5442,11 +5442,13 @@ if (bypassStatus.highlight) {
         // and would over-report open fields in auto per-bunk mode).
         const _reportCtx = (() => {
             const map = {};
+            const norm = window.PostEditReportAvail;
             for (const loc of locations) {
                 try {
                     const c = checkLocationConflict(loc.name, slots, bunk);
-                    map[loc.name] = { status: c.hasConflict ? (c.canShare ? 'partial' : 'busy') : 'free', usage: c.currentUsage, max: c.maxCapacity };
-                } catch (_) { map[loc.name] = { status: 'free' }; }
+                    map[loc.name] = norm ? norm(c)
+                        : { status: c.hasConflict ? (c.canShare ? 'partial' : 'busy') : 'free', usage: c.currentUsage, max: c.maxCapacity, users: [] };
+                } catch (_) { map[loc.name] = { status: 'free', usage: 0, max: 1, users: [] }; }
             }
             return { locations, locationAvailMap: map };
         })();
