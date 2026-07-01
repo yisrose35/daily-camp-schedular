@@ -768,6 +768,30 @@
         }
     }
 
+    // Build the location + availability context the report needs for the
+    // "Open fields at this time" section. Self-contained so the report can be
+    // rendered from any modal (including the unified_schedule_system editor)
+    // without the caller precomputing anything.
+    function _reportBuildContext(bunk, startMin, endMin) {
+        const locations = getAllLocations();
+        const unifiedTimes = window.unifiedTimes || [];
+        const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
+        const locationAvailMap = {};
+        for (const loc of locations) {
+            try {
+                const check = checkLocationConflict(loc.name, slots, bunk);
+                locationAvailMap[loc.name] = {
+                    status: check.hasConflict ? (check.canShare ? 'partial' : 'busy') : 'free',
+                    usage: check.currentUsage,
+                    max: check.maxCapacity
+                };
+            } catch (_) {
+                locationAvailMap[loc.name] = { status: 'free' };
+            }
+        }
+        return { locations, locationAvailMap };
+    }
+
     // Re-renderable inner body of the report. `selectedActivity` is the value
     // currently in the modal's activity field, used for live highlighting/flags.
     function renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity) {
@@ -2772,6 +2796,31 @@
     // =========================================================================
 
     window.initPostEditSystem = initPostEditSystem;
+
+    // Bunk activity report — exposed so any edit modal (including the active
+    // one in unified_schedule_system.js) can render the same panel. Builds its
+    // own location/availability context from the time range.
+    window.PostEditReport = {
+        panelHtml(bunk, divName, startMin, endMin, selectedActivity) {
+            try {
+                divName = divName || peiGetDivForBunk(bunk);
+                const { locations, locationAvailMap } = _reportBuildContext(bunk, startMin, endMin);
+                return `
+            <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
+                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;outline:none;">${escHtml(bunk)} — Activity Report</summary>
+                <div id="post-edit-report-body">${renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity || '')}</div>
+            </details>`;
+            } catch (e) { debugLog('PostEditReport.panelHtml error', e); return ''; }
+        },
+        bodyHtml(bunk, divName, startMin, endMin, selectedActivity) {
+            try {
+                divName = divName || peiGetDivForBunk(bunk);
+                const { locations, locationAvailMap } = _reportBuildContext(bunk, startMin, endMin);
+                return renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity || '');
+            } catch (e) { debugLog('PostEditReport.bodyHtml error', e); return ''; }
+        }
+    };
+
     if (!window.UnifiedScheduleSystem) {
         window.enhancedEditCell = enhancedEditCell;
         window.checkLocationConflict = checkLocationConflict;

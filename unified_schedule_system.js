@@ -5449,6 +5449,7 @@ if (bypassStatus.highlight) {
                 <span style="font-weight:600;color:#374151;">${escapeHtml(bunk)}</span>
                 <span style="color:#6b7280;margin-left:8px;">${minutesToTimeLabel(startMin)} – ${minutesToTimeLabel(endMin)}</span>
             </div>
+            ${window.PostEditReport?.panelHtml?.(bunk, divName, startMin, endMin, currentActivity) || ''}
             <div style="display:flex;flex-direction:column;gap:14px;">
                 <div>
                     <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">What activity?</label>
@@ -5620,6 +5621,14 @@ if (bypassStatus.highlight) {
         //  after the first use; a real dropdown opens every time.)
         actInput.addEventListener('change', runActivitySearch);
         locationSelect.addEventListener('change', () => renderConflictArea(locationSelect.value));
+
+        // Live-refresh the bunk activity report to reflect the selected activity.
+        function refreshBunkReport() {
+            const body = document.getElementById('post-edit-report-body');
+            if (!body || !window.PostEditReport?.bodyHtml) return;
+            body.innerHTML = window.PostEditReport.bodyHtml(bunk, divName, startMin, endMin, actInput.value);
+        }
+        actInput.addEventListener('change', refreshBunkReport);
 
         // Run search on open if there's already an activity set
         if (currentActivity && currentActivity.toLowerCase() !== 'free') {
