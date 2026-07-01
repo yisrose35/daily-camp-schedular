@@ -6144,6 +6144,73 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             });
             if (_shared65 + _backfilled65 > 0) console.log('[STEP 7.65] no-repeat fill: seated ' + _shared65 + ' by sharing + ' + _backfilled65 + ' fresh-room backfill(s)');
             else console.log('[STEP 7.65] no-repeat fill: nothing fillable without a repeat');
+
+            // ─────────────────────────────────────────────────────────────
+            // STEP 7.66: min-bunks anti-blank (last resort). A slot that the
+            // min-bunks pass (STEP 7.63) freed can still be Free here if a
+            // packed schedule left it nothing to take WITHOUT a repeat (7.65
+            // refuses repeats). A blank period is worse than a repeat, so this
+            // final pass seats any still-Free `special_min_bunks` slot by
+            // JOINING a same-grade / paired bunk on a sharable, under-capacity
+            // sport field at the same window — allowing a repeat as the absolute
+            // last resort, and respecting the sport's combined max (+2 grace).
+            // Scoped strictly to slots THIS feature freed → cannot touch any
+            // other placement; a full no-op when nothing was dropped.
+            // ─────────────────────────────────────────────────────────────
+            try {
+                const _blanks66 = [];
+                Object.keys(_sa76).forEach(b => {
+                    if (_allowed76 && !_allowed76.has(String(b))) return;
+                    const g = _b2g76[String(b)] || '?';
+                    (_sa76[b] || []).forEach((e, idx) => {
+                        if (!e || e.continuation || e._demotedReason !== 'special_min_bunks') return;
+                        const a = String(e._activity || e.field || '').toLowerCase().trim();
+                        if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return; // already refilled
+                        const t = (e._startMin != null && e._endMin != null) ? { s: e._startMin, e: e._endMin } : _stime76(b, g, idx, e);
+                        if (!t || t.s == null) return;
+                        _blanks66.push({ bunk: b, idx: idx, grade: g, s: t.s, e: t.e });
+                    });
+                });
+                if (_blanks66.length) {
+                    const _fcfg66 = {};
+                    _sportFields76.forEach(f => { const sw = f.sharableWith || {}; const ty = sw.type || 'not_sharable'; _fcfg66[String(f.name).toLowerCase().trim()] = { name: f.name, type: ty, cap: ty === 'not_sharable' ? 1 : (parseInt(sw.capacity) || 2), pairs: sw.allowedPairs || {} }; });
+                    // Occupancy of sport fields per window: fieldLC|s|e → group.
+                    const _occG66 = {};
+                    Object.keys(_sa76).forEach(b => {
+                        const g = _b2g76[String(b)] || '?';
+                        (_sa76[b] || []).forEach((e, idx) => {
+                            if (!e || e.continuation || !e.sport) return;
+                            const fl = String(e.field || '').toLowerCase().trim();
+                            if (!_fcfg66[fl]) return;
+                            const t = (e._startMin != null && e._endMin != null) ? { s: e._startMin, e: e._endMin } : _stime76(b, g, idx, e);
+                            if (!t || t.s == null) return;
+                            const kk = fl + '|' + t.s + '|' + t.e;
+                            const grp = (_occG66[kk] = _occG66[kk] || { count: 0, act: e._activity || e.sport, name: _fcfg66[fl].name, grades: [], campers: 0 });
+                            grp.count++; grp.grades.push(g); grp.campers += _bunkSize65(b);
+                        });
+                    });
+                    let _antiBlank66 = 0;
+                    _blanks66.forEach(bl => {
+                        const g = bl.grade, mySize = _bunkSize65(bl.bunk);
+                        for (const kk in _occG66) {
+                            const p = kk.split('|'); if (+p[1] !== bl.s || +p[2] !== bl.e) continue;
+                            const cfg = _fcfg66[p[0]]; const grp = _occG66[kk];
+                            if (!cfg || cfg.type === 'not_sharable' || grp.count >= cfg.cap) continue;
+                            let ok = true;
+                            if (cfg.type === 'same_division') ok = grp.grades.every(og => og === g);
+                            else if (cfg.type === 'cross_division') ok = grp.grades.every(og => cfg.pairs[[og, g].sort().join('|')] === true);
+                            if (!ok) continue;
+                            const _mx = _sportMax65(grp.act);
+                            if (_mx > 0 && (grp.campers + mySize) > _mx + 2) continue; // respect combined max (+2 grace)
+                            _sa76[bl.bunk][bl.idx] = { field: grp.name, sport: grp.act, _activity: grp.act, _startMin: bl.s, _endMin: bl.e, _fixed: true, _freeFilled: true, _antiBlankFilled: true, continuation: false };
+                            grp.count++; grp.grades.push(g); grp.campers += mySize;
+                            _antiBlank66++; break;
+                        }
+                    });
+                    if (_antiBlank66 > 0) console.log('[STEP 7.66] min-bunks anti-blank: seated ' + _antiBlank66 + ' dropped bunk(s) by sharing (last resort, repeat allowed) — no blank left');
+                    else if (_blanks66.length) console.log('[STEP 7.66] min-bunks anti-blank: ' + _blanks66.length + ' dropped slot(s) still Free — no shareable field at that time');
+                }
+            } catch (_e66) { console.warn('[STEP 7.66] min-bunks anti-blank failed:', _e66); }
         } catch (_e76) {
             console.warn('[STEP 7.6] Empty-field free-fill failed:', _e76);
         }

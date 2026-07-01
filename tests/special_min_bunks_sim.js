@@ -548,4 +548,84 @@ const LAKEF = (extra) => ({ name: 'Lake', forcePlacement: true, sharableWith: Ob
     ok('T20 nothing seeded when force is off', st.seeded === 0 && st.failed === 0 && sa.A1[0]._activity === 'Kickball');
 }
 
+// =============================================================================
+// STEP 7.66 anti-blank — ported logic
+//   A slot the min-bunks pass freed (special_min_bunks) that is STILL Free gets
+//   seated by joining a same-grade bunk on a sharable, under-capacity sport field
+//   (repeat allowed, respecting combined max). Guarantees no blank.
+// =============================================================================
+function antiBlank(sa, b2g, fields, sizeOf, sportMax) {
+    sizeOf = sizeOf || (() => 0); sportMax = sportMax || (() => 0);
+    const fcfg = {};
+    fields.forEach(f => { const sw = f.sharableWith || {}; const ty = sw.type || 'not_sharable'; fcfg[String(f.name).toLowerCase().trim()] = { name: f.name, type: ty, cap: ty === 'not_sharable' ? 1 : (parseInt(sw.capacity) || 2), pairs: sw.allowedPairs || {} }; });
+    const blanks = [];
+    Object.keys(sa).forEach(b => (sa[b] || []).forEach((e, idx) => {
+        if (!e || e.continuation || e._demotedReason !== 'special_min_bunks') return;
+        const a = String(e._activity || e.field || '').toLowerCase().trim();
+        if (!(a === '' || a === 'free')) return;
+        blanks.push({ bunk: b, idx, grade: b2g[b] || '?', s: e._startMin, e: e._endMin });
+    }));
+    const occ = {};
+    Object.keys(sa).forEach(b => (sa[b] || []).forEach(e => {
+        if (!e || e.continuation || !e.sport) return;
+        const fl = String(e.field || '').toLowerCase().trim(); if (!fcfg[fl]) return;
+        const kk = fl + '|' + e._startMin + '|' + e._endMin;
+        const g = b2g[b] || '?';
+        const grp = (occ[kk] = occ[kk] || { count: 0, act: e._activity || e.sport, name: fcfg[fl].name, grades: [], campers: 0 });
+        grp.count++; grp.grades.push(g); grp.campers += sizeOf(b);
+    }));
+    let seated = 0;
+    blanks.forEach(bl => {
+        const g = bl.grade, mySize = sizeOf(bl.bunk);
+        for (const kk in occ) {
+            const p = kk.split('|'); if (+p[1] !== bl.s || +p[2] !== bl.e) continue;
+            const cfg = fcfg[p[0]], grp = occ[kk];
+            if (!cfg || cfg.type === 'not_sharable' || grp.count >= cfg.cap) continue;
+            let ok = true;
+            if (cfg.type === 'same_division') ok = grp.grades.every(og => og === g);
+            else if (cfg.type === 'cross_division') ok = grp.grades.every(og => cfg.pairs[[og, g].sort().join('|')] === true);
+            if (!ok) continue;
+            const mx = sportMax(grp.act); if (mx > 0 && (grp.campers + mySize) > mx + 2) continue;
+            sa[bl.bunk][bl.idx] = { field: grp.name, sport: grp.act, _activity: grp.act, _startMin: bl.s, _endMin: bl.e, _antiBlankFilled: true, continuation: false };
+            grp.count++; grp.grades.push(g); grp.campers += mySize;
+            seated++; break;
+        }
+    });
+    return { seated, remaining: blanks.length - seated };
+}
+
+const dropped = (s, e) => ({ field: 'Free', _activity: 'Free', _startMin: s != null ? s : 600, _endMin: e != null ? e : 640, _demotedReason: 'special_min_bunks', continuation: false });
+const FIELD = (name, cap) => ({ name, sharableWith: { type: 'same_division', capacity: cap || 3, allowedPairs: {} } });
+
+// TEST 21 — anti-blank seats a dropped bunk by sharing a same-grade under-cap field
+{
+    // A1 dropped (Free from min-bunks), A2 doing Kickball on Court 1 (cap 3, room to share)
+    const sa = { A1: [dropped()], A2: [{ field: 'Court 1', sport: 'Kickball', _activity: 'Kickball', _startMin: 600, _endMin: 640, continuation: false }] };
+    const r = antiBlank(sa, { A1: 'A', A2: 'A' }, [FIELD('Court 1', 3)]);
+    ok('T21 seated the dropped bunk (no blank left)', r.seated === 1 && r.remaining === 0);
+    ok('T21 A1 joined the share, flagged _antiBlankFilled', sa.A1[0]._activity === 'Kickball' && sa.A1[0]._antiBlankFilled === true);
+}
+
+// TEST 22 — anti-blank respects capacity (no room → stays Free, reported)
+{
+    const sa = { A1: [dropped()], A2: [{ field: 'Court 1', sport: 'Kickball', _activity: 'Kickball', _startMin: 600, _endMin: 640, continuation: false }] };
+    const r = antiBlank(sa, { A1: 'A', A2: 'A' }, [FIELD('Court 1', 1)]); // cap 1, already full
+    ok('T22 not seated when no capacity', r.seated === 0 && r.remaining === 1 && sa.A1[0]._activity === 'Free');
+}
+
+// TEST 23 — anti-blank respects combined sport max (+2 grace)
+{
+    const sa = { A1: [dropped()], A2: [{ field: 'Court 1', sport: 'Kickball', _activity: 'Kickball', _startMin: 600, _endMin: 640, continuation: false }] };
+    // A2 already 20 campers, Kickball max 20, A1 is 10 → 30 > 22 → must NOT seat
+    const r = antiBlank(sa, { A1: 'A', A2: 'A' }, [FIELD('Court 1', 3)], (b) => ({ A1: 10, A2: 20 }[b]), () => 20);
+    ok('T23 blocked by combined max', r.seated === 0 && sa.A1[0]._activity === 'Free');
+}
+
+// TEST 24 — anti-blank only touches special_min_bunks slots (never other Free)
+{
+    const sa = { A1: [{ field: 'Free', _activity: 'Free', _startMin: 600, _endMin: 640, continuation: false }], A2: [{ field: 'Court 1', sport: 'Kickball', _activity: 'Kickball', _startMin: 600, _endMin: 640, continuation: false }] };
+    const r = antiBlank(sa, { A1: 'A', A2: 'A' }, [FIELD('Court 1', 3)]);
+    ok('T24 a plain Free (not our drop) is left alone', r.seated === 0 && sa.A1[0]._activity === 'Free');
+}
+
 console.log('\n[special_min_bunks_sim] ' + pass + '/' + pass + ' assertions passed ✅');

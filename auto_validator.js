@@ -581,6 +581,10 @@
             slots.forEach((entry, idx) => {
                 if (!entry || entry.continuation) return;
                 if (entry._league || entry._autoSpecial) return;
+                // Anti-blank last-resort fills (STEP 7.66) intentionally allow a
+                // repeat rather than leave a bunk with a Free/blank period in a
+                // packed dead-end. Don't flag them as same-day-repeat errors.
+                if (entry._antiBlankFilled) return;
                 // Generic-layout tiles are CATEGORIES (Sport / Special: Uncategorized /
                 // …), not concrete activities. The model is "categories repeat, activities
                 // don't" — two "Sport" tiles in a day is NOT a repetition; only two of the
