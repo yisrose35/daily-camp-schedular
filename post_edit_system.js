@@ -709,6 +709,111 @@
         document.getElementById(OVERLAY_ID)?.remove();
     }
 
+    // =========================================================================
+    // BUNK MINI REPORT — inline "what has this bunk done" panel for post-edit
+    // Surfaces rotation history + today's schedule + open fields so the user
+    // doesn't have to leave the edit modal and open the reports page.
+    // =========================================================================
+    function renderBunkMiniReport(bunk, divName, locations, locationAvailMap) {
+        try {
+            const RE = window.RotationEngine;
+            const _skip = (name) => {
+                const low = (name || '').toLowerCase().trim();
+                return !low || low === 'free' || low === 'free play'
+                    || low.indexOf('transition') !== -1 || low.indexOf('lunch') !== -1
+                    || low.indexOf('buffer') !== -1 || low.indexOf('regroup') !== -1;
+            };
+
+            // --- 1) What this bunk already has scheduled TODAY ---
+            const todayActs = [];
+            const todayLower = new Set();
+            (peiBunkActivities(bunk, divName) || []).forEach(a => {
+                const name = a.entry && a.entry._activity;
+                if (_skip(name)) return;
+                todayActs.push({ name, startMin: a.startMin });
+                todayLower.add(name.toLowerCase().trim());
+            });
+            todayActs.sort((a, b) => a.startMin - b.startMin);
+
+            // --- 2) Rotation totals: what they've done and how many times ---
+            const allActs = (RE && RE.getAllActivityNames) ? RE.getAllActivityNames() : [];
+            const done = [];
+            const never = [];
+            allActs.forEach(act => {
+                const key = (act || '').toLowerCase().trim();
+                const count = (RE && RE.getActivityCount) ? (RE.getActivityCount(bunk, act) || 0) : 0;
+                let daysSince = (RE && RE.getDaysSinceActivity) ? RE.getDaysSinceActivity(bunk, act) : null;
+                const isToday = todayLower.has(key);
+                if (count > 0 || isToday) {
+                    done.push({ act, count, daysSince, isToday });
+                } else {
+                    never.push(act);
+                }
+            });
+            done.sort((a, b) => (b.count - a.count) || a.act.localeCompare(b.act));
+            never.sort((a, b) => a.act.localeCompare(b.act));
+
+            // --- 3) Fields / specials open at THIS time slot ---
+            const openFields = (locations || []).filter(l => {
+                const st = (locationAvailMap[l.name] || {}).status;
+                return st === 'free' || st === 'partial';
+            });
+
+            const recencyLabel = (d) => {
+                if (d === 0) return 'today';
+                if (d === 1) return 'yesterday';
+                if (d && d > 1) return d + 'd ago';
+                return null;
+            };
+
+            // --- Build HTML ---
+            const todayHtml = todayActs.length
+                ? todayActs.map(a => `<span style="display:inline-block;background:#dbeafe;color:#1e40af;border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(a.name)}</span>`).join('')
+                : `<span style="color:#9ca3af;font-size:0.75rem;">Nothing scheduled yet today</span>`;
+
+            const doneRows = done.length
+                ? done.map(d => {
+                    const rec = recencyLabel(d.daysSince);
+                    const recTxt = d.isToday ? 'today' : (rec || '');
+                    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-size:0.76rem;">
+                        <span style="color:#374151;">${escHtml(d.act)}</span>
+                        <span style="color:#6b7280;white-space:nowrap;">${d.count}×${recTxt ? ` · <span style="color:#9ca3af;">${recTxt}</span>` : ''}</span>
+                    </div>`;
+                }).join('')
+                : `<div style="color:#9ca3af;font-size:0.75rem;">No prior activity history</div>`;
+
+            const neverHtml = never.length
+                ? never.map(a => `<span style="display:inline-block;background:#fef3c7;color:#92400e;border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(a)}</span>`).join('')
+                : `<span style="color:#9ca3af;font-size:0.75rem;">None — every activity has been done</span>`;
+
+            const openHtml = openFields.length
+                ? openFields.map(l => {
+                    const av = locationAvailMap[l.name] || { status: 'free' };
+                    const partial = av.status === 'partial';
+                    return `<span style="display:inline-block;background:${partial ? '#fef9c3' : '#dcfce7'};color:${partial ? '#854d0e' : '#166534'};border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(l.name)}${partial ? ` (${av.usage}/${av.max})` : ''}</span>`;
+                }).join('')
+                : `<span style="color:#9ca3af;font-size:0.75rem;">No open fields at this time</span>`;
+
+            const sectionTitle = (t) => `<div style="font-weight:600;color:#374151;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.03em;margin:12px 0 5px 0;">${t}</div>`;
+
+            return `
+            <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
+                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;list-style:none;outline:none;">📊 ${escHtml(bunk)} — Activity Report</summary>
+                ${sectionTitle('Scheduled today')}
+                <div>${todayHtml}</div>
+                ${sectionTitle('Done so far (count · last done)')}
+                <div style="max-height:150px;overflow-y:auto;padding-right:4px;">${doneRows}</div>
+                ${sectionTitle('Not yet done')}
+                <div>${neverHtml}</div>
+                ${sectionTitle('Open fields at this time')}
+                <div>${openHtml}</div>
+            </details>`;
+        } catch (e) {
+            debugLog('renderBunkMiniReport error', e);
+            return '';
+        }
+    }
+
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
         const modal = createModal();
         const locations = getAllLocations();
@@ -781,10 +886,11 @@
                 <h2 style="margin:0;font-size:1.25rem;color:#1f2937;">Edit Schedule Cell</h2>
                 <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button>
             </div>
-            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;">
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:16px;">
                 <div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div>
                 <div style="font-size:0.875rem;color:#6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div>
             </div>
+            ${renderBunkMiniReport(bunk, divName_, locations, locationAvailMap)}
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label>
