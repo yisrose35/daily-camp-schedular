@@ -713,10 +713,71 @@
     // BUNK MINI REPORT — inline "what has this bunk done" panel for post-edit
     // Surfaces rotation history + today's schedule + open fields so the user
     // doesn't have to leave the edit modal and open the reports page.
+    //   • Access-filtered: only activities this bunk is actually allowed to do.
+    //   • Shows each activity's configured max usage / limit.
+    //   • Live: highlights the activity you're typing/picking and flags repeats
+    //     or limit breaches (re-rendered via renderBunkReportBody on input).
     // =========================================================================
-    function renderBunkMiniReport(bunk, divName, locations, locationAvailMap) {
+
+    // Configured max-usage per activity (specials carry maxUsage/maxUsagePeriod;
+    // sports have no rotation cap → unlimited). Returns { max, period } | null.
+    function _reportActivityLimit(activityName, specialsCfg) {
+        const key = (activityName || '').toLowerCase().trim();
+        for (const s of specialsCfg) {
+            if (!s || !s.name || s.name.toLowerCase().trim() !== key) continue;
+            const mx = parseInt(s.maxUsage, 10);
+            if (mx > 0) return { max: mx, period: s.maxUsagePeriod || null };
+        }
+        return null;
+    }
+
+    // Whether this bunk is allowed to do the activity (honors accessRestrictions).
+    // Specials use the exposed duplicate-safe check; sports are allowed if any
+    // hosting field is open to the bunk's division. Fails OPEN so a lookup bug
+    // never wrongly hides a legitimate option.
+    function _reportBunkCanAccess(activityName, bunk, divName, gs) {
         try {
             const RE = window.RotationEngine;
+            if (RE && RE.isSpecialActivity && RE.isSpecialActivity(activityName)) {
+                if (typeof window.isSpecialAvailableForBunk === 'function') {
+                    return window.isSpecialAvailableForBunk(activityName, divName, bunk, gs);
+                }
+                return true;
+            }
+            const key = (activityName || '').toLowerCase().trim();
+            const fields = ((gs && gs.app1) || {}).fields || [];
+            const hosts = fields.filter(f => (f.activities || [])
+                .some(a => String(a).toLowerCase().trim() === key));
+            if (!hosts.length) return true; // unknown mapping — don't hide
+            for (const f of hosts) {
+                const ar = f.accessRestrictions;
+                if (!ar || !ar.enabled) return true;            // an open field hosts it
+                const divs = ar.divisions || {};
+                if (!Object.keys(divs).length) return true;     // toggled on, no grades = misconfig → open
+                const dk = (String(divName) in divs) ? String(divName)
+                    : ((divName in divs) ? divName : null);
+                if (dk === null) continue;                       // this field blocks the division
+                const bunkList = divs[dk];
+                if (!Array.isArray(bunkList) || bunkList.length === 0) return true; // all bunks in div
+                const bunkStr = String(bunk), bunkNum = parseInt(bunk, 10);
+                if (bunkList.some(b => String(b) === bunkStr || parseInt(b, 10) === bunkNum)) return true;
+            }
+            return false;
+        } catch (e) {
+            return true; // fail open
+        }
+    }
+
+    // Re-renderable inner body of the report. `selectedActivity` is the value
+    // currently in the modal's activity field, used for live highlighting/flags.
+    function renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity) {
+        try {
+            const RE = window.RotationEngine;
+            const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const app1 = gs.app1 || {};
+            const specialsCfg = (window.getGlobalSpecialActivities && window.getGlobalSpecialActivities())
+                || app1.specialActivities || [];
+            const selKey = (selectedActivity || '').toLowerCase().trim();
             const _skip = (name) => {
                 const low = (name || '').toLowerCase().trim();
                 return !low || low === 'free' || low === 'free play'
@@ -735,20 +796,22 @@
             });
             todayActs.sort((a, b) => a.startMin - b.startMin);
 
-            // --- 2) Rotation totals: what they've done and how many times ---
-            const allActs = (RE && RE.getAllActivityNames) ? RE.getAllActivityNames() : [];
+            // --- 2) Rotation totals: what they've done, how many times, vs limit ---
+            //        (access-filtered to only what this bunk may do) ---
+            const masterActs = (RE && RE.getAllActivityNames) ? RE.getAllActivityNames() : [];
+            const masterSet = new Set(masterActs.map(a => (a || '').toLowerCase().trim()));
+            const allActs = masterActs.filter(act => _reportBunkCanAccess(act, bunk, divName, gs));
+            const accessibleSet = new Set(allActs.map(a => (a || '').toLowerCase().trim()));
             const done = [];
             const never = [];
             allActs.forEach(act => {
                 const key = (act || '').toLowerCase().trim();
                 const count = (RE && RE.getActivityCount) ? (RE.getActivityCount(bunk, act) || 0) : 0;
-                let daysSince = (RE && RE.getDaysSinceActivity) ? RE.getDaysSinceActivity(bunk, act) : null;
+                const daysSince = (RE && RE.getDaysSinceActivity) ? RE.getDaysSinceActivity(bunk, act) : null;
                 const isToday = todayLower.has(key);
-                if (count > 0 || isToday) {
-                    done.push({ act, count, daysSince, isToday });
-                } else {
-                    never.push(act);
-                }
+                const limit = _reportActivityLimit(act, specialsCfg);
+                const rec = { act, count, daysSince, isToday, limit, sel: key === selKey };
+                if (count > 0 || isToday) done.push(rec); else never.push(rec);
             });
             done.sort((a, b) => (b.count - a.count) || a.act.localeCompare(b.act));
             never.sort((a, b) => a.act.localeCompare(b.act));
@@ -765,8 +828,33 @@
                 if (d && d > 1) return d + 'd ago';
                 return null;
             };
+            const periodLabel = (p) => p === 'half' ? '/half' : p === 'week' ? '/wk' : p === 'month' ? '/mo' : '';
+            const limitTxt = (lim) => lim ? ` / ${lim.max}${periodLabel(lim.period)} max` : '';
 
-            // --- Build HTML ---
+            // --- Live note for the activity currently being entered ---
+            let noteHtml = '';
+            if (selKey) {
+                const inDone = done.find(d => d.sel);
+                const inNever = never.find(d => d.sel);
+                const known = inDone || inNever;
+                if (known) {
+                    if (todayLower.has(selKey)) {
+                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">⚠️ ${escHtml(known.act)} is already scheduled for this bunk today.</div>`;
+                    } else if (inDone && inDone.limit && inDone.count >= inDone.limit.max) {
+                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">⚠️ ${escHtml(known.act)} is at its limit (${inDone.count}/${inDone.limit.max}${periodLabel(inDone.limit.period)}).</div>`;
+                    } else if (inNever) {
+                        noteHtml = `<div style="background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">✨ First time — this bunk hasn't done ${escHtml(known.act)} yet.</div>`;
+                    } else {
+                        const rec = recencyLabel(inDone.daysSince);
+                        noteHtml = `<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">ℹ️ ${escHtml(inDone.act)}: done ${inDone.count}×${inDone.limit ? ` (max ${inDone.limit.max}${periodLabel(inDone.limit.period)})` : ''}${rec ? `, last ${rec}` : ''}.</div>`;
+                    }
+                } else if (masterSet.has(selKey) && !accessibleSet.has(selKey)) {
+                    // A real configured activity, but restricted for this bunk.
+                    noteHtml = `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">🚫 “${escHtml(selectedActivity.trim())}” is restricted — this bunk isn't allowed to do it.</div>`;
+                }
+            }
+
+            // --- Section HTML ---
             const todayHtml = todayActs.length
                 ? todayActs.map(a => `<span style="display:inline-block;background:#dbeafe;color:#1e40af;border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(a.name)}</span>`).join('')
                 : `<span style="color:#9ca3af;font-size:0.75rem;">Nothing scheduled yet today</span>`;
@@ -775,15 +863,20 @@
                 ? done.map(d => {
                     const rec = recencyLabel(d.daysSince);
                     const recTxt = d.isToday ? 'today' : (rec || '');
-                    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 0;font-size:0.76rem;">
-                        <span style="color:#374151;">${escHtml(d.act)}</span>
-                        <span style="color:#6b7280;white-space:nowrap;">${d.count}×${recTxt ? ` · <span style="color:#9ca3af;">${recTxt}</span>` : ''}</span>
+                    const atLimit = d.limit && d.count >= d.limit.max;
+                    const rowBg = d.sel ? 'background:#eef2ff;border-radius:5px;' : '';
+                    return `<div style="display:flex;justify-content:space-between;gap:8px;padding:2px 5px;font-size:0.76rem;${rowBg}">
+                        <span style="color:#374151;${d.sel ? 'font-weight:600;' : ''}">${escHtml(d.act)}</span>
+                        <span style="white-space:nowrap;color:${atLimit ? '#dc2626' : '#6b7280'};">${d.count}×<span style="color:${atLimit ? '#dc2626' : '#9ca3af'};">${limitTxt(d.limit)}</span>${recTxt ? ` · <span style="color:#9ca3af;">${recTxt}</span>` : ''}</span>
                     </div>`;
                 }).join('')
                 : `<div style="color:#9ca3af;font-size:0.75rem;">No prior activity history</div>`;
 
             const neverHtml = never.length
-                ? never.map(a => `<span style="display:inline-block;background:#fef3c7;color:#92400e;border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(a)}</span>`).join('')
+                ? never.map(d => {
+                    const selStyle = d.sel ? 'background:#c7d2fe;color:#3730a3;font-weight:600;' : 'background:#fef3c7;color:#92400e;';
+                    return `<span style="display:inline-block;${selStyle}border-radius:12px;padding:2px 9px;font-size:0.72rem;margin:2px 3px 2px 0;">${escHtml(d.act)}${d.limit ? ` <span style="opacity:0.7;">(max ${d.limit.max}${periodLabel(d.limit.period)})</span>` : ''}</span>`;
+                }).join('')
                 : `<span style="color:#9ca3af;font-size:0.75rem;">None — every activity has been done</span>`;
 
             const openHtml = openFields.length
@@ -797,16 +890,27 @@
             const sectionTitle = (t) => `<div style="font-weight:600;color:#374151;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.03em;margin:12px 0 5px 0;">${t}</div>`;
 
             return `
-            <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
-                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;list-style:none;outline:none;">📊 ${escHtml(bunk)} — Activity Report</summary>
+                ${noteHtml}
                 ${sectionTitle('Scheduled today')}
                 <div>${todayHtml}</div>
-                ${sectionTitle('Done so far (count · last done)')}
+                ${sectionTitle('Done so far (count · limit · last done)')}
                 <div style="max-height:150px;overflow-y:auto;padding-right:4px;">${doneRows}</div>
                 ${sectionTitle('Not yet done')}
                 <div>${neverHtml}</div>
                 ${sectionTitle('Open fields at this time')}
-                <div>${openHtml}</div>
+                <div>${openHtml}</div>`;
+        } catch (e) {
+            debugLog('renderBunkReportBody error', e);
+            return '';
+        }
+    }
+
+    function renderBunkMiniReport(bunk, divName, locations, locationAvailMap) {
+        try {
+            return `
+            <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
+                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;outline:none;">📊 ${escHtml(bunk)} — Activity Report</summary>
+                <div id="post-edit-report-body">${renderBunkReportBody(bunk, divName, locations, locationAvailMap, '')}</div>
             </details>`;
         } catch (e) {
             debugLog('renderBunkMiniReport error', e);
@@ -921,6 +1025,19 @@
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
 
+        // Live-refresh the report body to reflect the activity being typed/picked.
+        let _reportRaf = null;
+        function refreshReport() {
+            const body = document.getElementById('post-edit-report-body');
+            if (!body) return;
+            if (_reportRaf) cancelAnimationFrame(_reportRaf);
+            _reportRaf = requestAnimationFrame(() => {
+                const sel = (document.getElementById('post-edit-activity')?.value || '');
+                body.innerHTML = renderBunkReportBody(bunk, divName_, locations, locationAvailMap, sel);
+            });
+        }
+        document.getElementById('post-edit-activity').addEventListener('input', refreshReport);
+
         document.getElementById('post-edit-autofill').onclick = () => {
             const pick = quickCandidates[0] || peiAutoFill(bunk, divName_, startMin, endMin);
             if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
@@ -954,6 +1071,7 @@
                 modal.querySelectorAll('.pe-quick-btn').forEach(b => { b.style.background = '#fff'; b.style.borderColor = '#d1d5db'; });
                 btn.style.background = '#dbeafe'; btn.style.borderColor = '#3b82f6';
                 checkAndShowConflicts();
+                refreshReport();
             };
         });
 
