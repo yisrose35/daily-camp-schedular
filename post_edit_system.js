@@ -839,18 +839,18 @@
                 const known = inDone || inNever;
                 if (known) {
                     if (todayLower.has(selKey)) {
-                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">⚠️ ${escHtml(known.act)} is already scheduled for this bunk today.</div>`;
+                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">${escHtml(known.act)} is already scheduled for this bunk today.</div>`;
                     } else if (inDone && inDone.limit && inDone.count >= inDone.limit.max) {
-                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">⚠️ ${escHtml(known.act)} is at its limit (${inDone.count}/${inDone.limit.max}${periodLabel(inDone.limit.period)}).</div>`;
+                        noteHtml = `<div style="background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">${escHtml(known.act)} is at its limit (${inDone.count}/${inDone.limit.max}${periodLabel(inDone.limit.period)}).</div>`;
                     } else if (inNever) {
-                        noteHtml = `<div style="background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">✨ First time — this bunk hasn't done ${escHtml(known.act)} yet.</div>`;
+                        noteHtml = `<div style="background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">First time — this bunk hasn't done ${escHtml(known.act)} yet.</div>`;
                     } else {
                         const rec = recencyLabel(inDone.daysSince);
-                        noteHtml = `<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">ℹ️ ${escHtml(inDone.act)}: done ${inDone.count}×${inDone.limit ? ` (max ${inDone.limit.max}${periodLabel(inDone.limit.period)})` : ''}${rec ? `, last ${rec}` : ''}.</div>`;
+                        noteHtml = `<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">${escHtml(inDone.act)}: done ${inDone.count}×${inDone.limit ? ` (max ${inDone.limit.max}${periodLabel(inDone.limit.period)})` : ''}${rec ? `, last ${rec}` : ''}.</div>`;
                     }
                 } else if (masterSet.has(selKey) && !accessibleSet.has(selKey)) {
                     // A real configured activity, but restricted for this bunk.
-                    noteHtml = `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">🚫 “${escHtml(selectedActivity.trim())}” is restricted — this bunk isn't allowed to do it.</div>`;
+                    noteHtml = `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:6px;padding:6px 9px;font-size:0.76rem;margin-bottom:4px;">“${escHtml(selectedActivity.trim())}” is restricted — this bunk isn't allowed to do it.</div>`;
                 }
             }
 
@@ -909,7 +909,7 @@
         try {
             return `
             <details id="post-edit-bunk-report" open style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px;margin-bottom:16px;">
-                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;outline:none;">📊 ${escHtml(bunk)} — Activity Report</summary>
+                <summary style="cursor:pointer;font-weight:600;color:#1f2937;font-size:0.9rem;outline:none;">${escHtml(bunk)} — Activity Report</summary>
                 <div id="post-edit-report-body">${renderBunkReportBody(bunk, divName, locations, locationAvailMap, '')}</div>
             </details>`;
         } catch (e) {
