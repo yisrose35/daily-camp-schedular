@@ -173,6 +173,31 @@ test('preserved fields are registered so the empty slot cannot double-book them'
   assert.strictEqual(fieldUsageBySlot[3]['Art Room'], 1);
 });
 
+// scheduler_core_main.js STEP 3 — a league block is preserved (skipped, not re-rolled)
+// unless the user selected that league period's slot. Mirrors the production predicate.
+function leagueBlockTargeted(regenScope, divBunks, leagueSlot) {
+  return leagueSlot != null && divBunks.some(b =>
+    regenScope[b] && regenScope[b].regen && regenScope[b].regen.has(leagueSlot));
+}
+
+test('league is preserved when its period is NOT selected, re-rolled when it IS', () => {
+  const divisions = { Div1: { bunks: ['A', 'B'] } };
+  // Div1: slot0=Swim, slot1=League, slot2=Special/Sports.
+  const scheduleAssignments = {
+    A: [{ _activity: 'Swim', field: 'Pool', _startMin: 600, _blockStart: 600 }, null,
+        { _activity: 'Art', field: 'Art Room', _startMin: 720, _blockStart: 720 }],
+    B: [{ _activity: 'Swim', field: 'Pool', _startMin: 600, _blockStart: 600 }, null,
+        { _activity: 'Soccer', field: 'Field 1', _startMin: 720, _blockStart: 720 }],
+  };
+  // Case 1: user selects the Special/Sports tile (slot 2) — league (slot 1) untouched.
+  const scope1 = buildRegenScope(divisions, scheduleAssignments, [{ bunk: 'A', slot: 2 }, { bunk: 'B', slot: 2 }]);
+  assert.strictEqual(leagueBlockTargeted(scope1, ['A', 'B'], 1), false, 'league preserved');
+
+  // Case 2: user selects the League tile (slot 1) — should re-roll.
+  const scope2 = buildRegenScope(divisions, scheduleAssignments, [{ bunk: 'A', slot: 1 }, { bunk: 'B', slot: 1 }]);
+  assert.strictEqual(leagueBlockTargeted(scope2, ['A', 'B'], 1), true, 'league re-rolled');
+});
+
 test('multi-period selection expands to the whole block', () => {
   const divisions = { Div1: { bunks: ['A'] } };
   // A 60-min Cooking spanning slots 1 & 2 (continuation), same _blockStart.

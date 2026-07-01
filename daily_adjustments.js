@@ -7503,9 +7503,11 @@ async function _daPartialRegenerate(selections) {
     _generationScope = new Set(affectedDivs);
     _generationBunkScope = scopeBunks;
     window.__regenSlotScope = regenScope;   // consumed by scheduler_core_main STEP 1
+    delete window.__regenLeaguePreservedDivs; // fresh per run (populated by STEP 3)
     await runOptimizer();                    // reuses date guards, save, and grid re-render
   } finally {
     delete window.__regenSlotScope;
+    delete window.__regenLeaguePreservedDivs;
     _generationScope = _savedScope;
     _generationBunkScope = _savedBunkScope;
   }

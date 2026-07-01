@@ -4705,6 +4705,24 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             // Check if it's a regular league block
             if (normalizedLeague || item.type === 'league') {
+               // ★ Partial (per-tile) regen: a division's league must NOT be re-rolled
+               //   unless the user actually selected the league period. Leagues live in
+               //   window.leagueAssignments (not the per-bunk scheduleAssignments snapshot),
+               //   so STEP 5 would otherwise reshuffle matchups/fields on every regen.
+               //   Skip the block (engine won't touch it) when this slot isn't targeted;
+               //   the division is restored from the pre-run snapshot after STEP 5.
+               if (window.__regenSlotScope) {
+                   const _rs = window.__regenSlotScope;
+                   const _slot0 = (slots && slots.length) ? slots[0] : null;
+                   const _divBunks = (window.divisions?.[divName]?.bunks) || [];
+                   const _leagueTargeted = _slot0 != null && _divBunks.some(b =>
+                       _rs[b] && _rs[b].regen && _rs[b].regen.has(_slot0));
+                   if (!_leagueTargeted) {
+                       if (!window.__regenLeaguePreservedDivs) window.__regenLeaguePreservedDivs = new Set();
+                       window.__regenLeaguePreservedDivs.add(String(divName));
+                       return; // preserve existing league — do not re-roll
+                   }
+               }
                leagueBlocks.push({
                     divName,
                     event: eventName,
@@ -4917,6 +4935,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         leagueContext.schedulableSlotBlocks = leagueBlocks;
         if (window.SchedulerCoreLeagues?.processRegularLeagues) {
             window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
+        }
+
+        // ★ Partial (per-tile) regen: restore league matchups for the divisions whose
+        //   league period the user did NOT select (block was skipped above). Belt-and-
+        //   suspenders on top of the skip — guarantees the pre-run matchups/fields carry
+        //   through the save untouched.
+        if (window.__regenLeaguePreservedDivs && _preservedLeagueAssignments) {
+            if (!window.leagueAssignments || typeof window.leagueAssignments !== 'object') window.leagueAssignments = {};
+            let _rlp = 0;
+            window.__regenLeaguePreservedDivs.forEach(dv => {
+                if (_preservedLeagueAssignments[dv] !== undefined) {
+                    window.leagueAssignments[dv] = _preservedLeagueAssignments[dv];
+                    _rlp++;
+                }
+            });
+            if (_rlp > 0) console.log(`[STEP 5] ★ Per-tile regen: preserved league matchups for ${_rlp} non-selected division(s)`);
         }
 
         // ★★★ CHINUCH (manual mode) — matchup-display level, NOT per-bunk ★★★

@@ -3227,8 +3227,35 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         //   is always driven by its own skeleton, never by auto geometry. buildFromSkeleton is
         //   idempotent for a manual skeleton, and this is gated to manual mode (the auto branch
         //   returned above), so auto rendering is untouched.
+        //
+        // ★ PAST-DATE FIX (previous schedules render with missing/shifted activities):
+        //   The rebuild above MUST only run when THIS date genuinely has its own skeleton.
+        //   When you go back to a PAST date, its schedule + the grid it was saved against
+        //   (window.divisionTimes) load correctly from the cloud — but that date's skeleton is
+        //   usually NOT in this browser's localStorage. getSkeleton() then falls back to ANOTHER
+        //   date's window.manualSkeleton (or a day-of-week template), so buildFromSkeleton()
+        //   produces a grid whose slot INDICES no longer line up with the saved per-bunk
+        //   scheduleAssignments arrays. Cells look up entries by slot index (renderBunkCell →
+        //   getEntry(bunk, slotIdx)), so the mismatch makes some activities land in the wrong
+        //   column and others disappear entirely ("some come back, some don't"). Detect whether
+        //   the date owns its skeleton; if not, trust the cloud-saved grid as-is (only stripping
+        //   the auto per-bunk geometry the double-lunch fix targets) instead of rebuilding from a
+        //   stale fallback skeleton.
+        var _dateOwnsSkeleton = false;
         try {
-            if (skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+            var _rawDateSk = localStorage.getItem('campManualSkeleton_' + dateKey);
+            if (_rawDateSk) { var _pDateSk = JSON.parse(_rawDateSk); _dateOwnsSkeleton = Array.isArray(_pDateSk) && _pDateSk.length > 0; }
+        } catch (_eDateSk) {}
+        if (!_dateOwnsSkeleton) {
+            try {
+                var _ddSk = (loadDailyData()[dateKey]) || {};
+                if ((_ddSk.manualSkeleton && _ddSk.manualSkeleton.length) || (_ddSk.skeleton && _ddSk.skeleton.length)) _dateOwnsSkeleton = true;
+            } catch (_eDdSk) {}
+        }
+        var _haveHydratedDivTimes = window.divisionTimes && Object.keys(window.divisionTimes).length > 0;
+        try {
+            if (_dateOwnsSkeleton && skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+                // Active build/edit date: rebuild clean div-level geometry from its own skeleton.
                 var _miRebuilt = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
                 if (_miRebuilt && Object.keys(_miRebuilt).length) {
                     Object.keys(_miRebuilt).forEach(function (g) {
@@ -3236,6 +3263,23 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                     });
                     divisionTimes = _miRebuilt;
                     window.divisionTimes = _miRebuilt;
+                }
+            } else if (_haveHydratedDivTimes) {
+                // Loaded (e.g. PAST) date with no local skeleton of its own: the cloud-saved grid
+                // IS the authoritative geometry for the saved assignments. Use it as-is, only
+                // stripping any leaked auto per-bunk geometry (keeps the double-lunch protection).
+                Object.keys(divisionTimes).forEach(function (g) {
+                    if (divisionTimes[g]) { delete divisionTimes[g]._isPerBunk; delete divisionTimes[g]._perBunkSlots; }
+                });
+            } else if (skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+                // Last resort — no date skeleton AND no hydrated grid: rebuild from whatever we have.
+                var _miFallback = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
+                if (_miFallback && Object.keys(_miFallback).length) {
+                    Object.keys(_miFallback).forEach(function (g) {
+                        if (_miFallback[g]) { delete _miFallback[g]._isPerBunk; delete _miFallback[g]._perBunkSlots; }
+                    });
+                    divisionTimes = _miFallback;
+                    window.divisionTimes = _miFallback;
                 }
             }
         } catch (_eMIR) { /* non-fatal — fall back to the existing divisionTimes */ }
