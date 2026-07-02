@@ -2525,6 +2525,71 @@
     }
 
     // =========================================================================
+    // ★★★ LEAGUE TILE TIME MISMATCH (pre-generation warning) ★★★
+    // Reads league tiles straight off the skeleton and flags any two grades in
+    // the same league whose tiles OVERLAP in time (clearly meant to be one
+    // shared game) but whose start/end don't match exactly. Returns a list of
+    // short human-readable strings; empty when everything lines up.
+    // =========================================================================
+    function detectLeagueTileTimeMismatch(manualSkeleton) {
+        const warnings = [];
+        if (!Array.isArray(manualSkeleton) || manualSkeleton.length === 0) return warnings;
+
+        const Utils = window.SchedulerCoreUtils;
+        const parse = (t) => (typeof t === 'number') ? t : (Utils?.parseTimeToMinutes?.(t) ?? null);
+        const fmt = (m) => (Utils?.minutesToTime ? Utils.minutesToTime(m) : String(m));
+
+        // Resolve the leagues config (name → league object with .divisions).
+        let leaguesCfg = window.masterLeagues || window.leaguesByName ||
+            window.loadGlobalSettings?.()?.app1?.leagues || [];
+        const leagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
+        if (!leagues.length) return warnings;
+
+        // Every league tile in the skeleton, with its parsed time span.
+        const leagueTiles = manualSkeleton
+            .filter(it => it && (it.type === 'league' ||
+                (typeof normalizeLeague === 'function' && normalizeLeague(it.event || ''))))
+            .map(it => ({
+                div: String(it.division),
+                leagueName: it.leagueName || null,
+                startMin: parse(it.startTime),
+                endMin: parse(it.endTime)
+            }))
+            .filter(t => t.startMin != null && t.endMin != null && t.endMin > t.startMin);
+        if (!leagueTiles.length) return warnings;
+
+        leagues.forEach(league => {
+            if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
+            const divSet = new Set(league.divisions.map(String));
+            // Tiles for THIS league: in one of its divisions, and either unnamed
+            // (auto-bound) or explicitly naming this league.
+            const tiles = leagueTiles.filter(t =>
+                divSet.has(t.div) && (!t.leagueName || t.leagueName === league.name));
+
+            const seen = new Set();
+            for (let i = 0; i < tiles.length; i++) {
+                for (let j = i + 1; j < tiles.length; j++) {
+                    const a = tiles[i], b = tiles[j];
+                    if (a.div === b.div) continue;
+                    const overlap = a.startMin < b.endMin && b.startMin < a.endMin;
+                    if (!overlap) continue;                          // separate games — fine
+                    if (a.startMin === b.startMin && a.endMin === b.endMin) continue; // aligned — fine
+                    const key = [a.div, b.div].sort().join('|') + '@' + Math.min(a.startMin, b.startMin);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    warnings.push(
+                        `${league.name}: ${a.div} (${fmt(a.startMin)}-${fmt(a.endMin)}) & ` +
+                        `${b.div} (${fmt(b.startMin)}-${fmt(b.endMin)})`
+                    );
+                }
+            }
+        });
+
+        return warnings;
+    }
+    window._detectLeagueTileTimeMismatch = detectLeagueTileTimeMismatch;
+
+    // =========================================================================
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
@@ -3076,6 +3141,33 @@
         window.leagueAssignments = {};
 
         if (!manualSkeleton || manualSkeleton.length === 0) return false;
+
+        // =========================================================================
+        // ★★★ PRE-GEN CHECK: LEAGUE TILE TIME MISMATCH ★★★
+        // The instant the user hits Generate, warn if two grades that play a
+        // league game together have league tiles with different start/end times.
+        // Read straight off the skeleton (leagueAssignments isn't built yet).
+        // Two grades are "together" for a league when their tiles OVERLAP in time;
+        // if the spans don't match exactly it isn't one shared game (the solver
+        // groups league blocks by start time, and a differing end leaves the
+        // tiles spanning different windows / holding different field-lock spans).
+        // We only warn — auto-snapping a tile could collide with its neighbours.
+        // =========================================================================
+        try {
+            const _ltm = detectLeagueTileTimeMismatch(manualSkeleton);
+            if (_ltm.length > 0) {
+                console.warn(`[Leagues] ⚠️ ${_ltm.length} league tile time mismatch(es) — grades that play together have different start/end times:`);
+                _ltm.forEach(w => console.warn('   ' + w));
+                if (window.showToast) {
+                    window.showToast(
+                        `⚠️ League time mismatch: grades that play together have different tile times — ` +
+                        _ltm.join('; ') +
+                        `. Set matching start/end times so they share one game.`,
+                        'warning'
+                    );
+                }
+            }
+        } catch (_eLtm) { console.warn('[Leagues] pre-gen league time mismatch check failed:', _eLtm); }
 
         // =========================================================================
         // ★★★ STEP 0: INITIALIZE GLOBAL FIELD LOCKS ★★★
@@ -6795,26 +6887,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.debugPrintLocks();
         }
-
-        // ★★★ LEAGUE TIME MISMATCH WARNING ★★★
-        // When two grades play a league game together, their league game tiles
-        // must share the same start AND end time — otherwise it isn't one shared
-        // game. We don't auto-snap (extending a tile can collide with its
-        // neighbours), so warn the user to fix it. Full details are also listed
-        // in the Validate modal (ScheduleValidator.checkLeagueTimeMismatch).
-        try {
-            const _ltm = window.ScheduleValidator?.checkLeagueTimeMismatch?.() || [];
-            if (_ltm.length > 0) {
-                console.warn(`[Leagues] ⚠️ ${_ltm.length} league time mismatch(es) — grades that play together have different tile times:`);
-                _ltm.forEach(w => console.warn('   ' + w.replace(/<[^>]+>/g, '')));
-                if (window.showToast) {
-                    window.showToast(
-                        `${_ltm.length} league game${_ltm.length > 1 ? 's have' : ' has'} grades with mismatched tile times — click Validate for details.`,
-                        'warning'
-                    );
-                }
-            }
-        } catch (_eLtm) { console.warn('[Leagues] league time mismatch check failed:', _eLtm); }
 
         return true;
     };
