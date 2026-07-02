@@ -3158,38 +3158,12 @@
 
         if (!manualSkeleton || manualSkeleton.length === 0) return false;
 
-        // =========================================================================
-        // ★★★ PRE-GEN CHECK: LEAGUE TILE TIME MISMATCH ★★★
-        // The instant the user hits Generate, warn if grades that play a league
-        // game together have league tiles with different start/end times. Read
-        // straight off the skeleton (leagueAssignments isn't built yet). Grades
-        // in the same league are meant to play their game together, so their
-        // league tiles must share the same time; otherwise the solver (which
-        // groups league blocks by start time) won't combine them into one game.
-        // We only warn (blocking modal, then continue) — auto-snapping a tile
-        // could collide with its neighbours.
-        // =========================================================================
-        try {
-            const _ltm = detectLeagueTileTimeMismatch(manualSkeleton);
-            if (_ltm.length > 0) {
-                console.warn(`[Leagues] ⚠️ ${_ltm.length} league time mismatch(es) — grades that play together have different tile times:`);
-                _ltm.forEach(w => console.warn('   ' + w));
-                const _msg =
-                    '⚠️ <strong>League game time mismatch</strong><br><br>' +
-                    'These grades share a league but their league game tiles have different ' +
-                    'start/end times, so they will not play as one combined game:<br><br>' +
-                    _ltm.map(w => '• ' + w).join('<br>') +
-                    '<br><br>Set each league\'s grades to the same start and end time, then generate again.';
-                // showAlert is the app's real modal (returns a Promise); await it
-                // so the user sees the warning the instant they hit Generate,
-                // before the schedule builds. Fall back to native alert.
-                if (typeof window.showAlert === 'function') {
-                    await window.showAlert(_msg);
-                } else if (typeof window.alert === 'function') {
-                    window.alert(_msg.replace(/<[^>]+>/g, ''));
-                }
-            }
-        } catch (_eLtm) { console.warn('[Leagues] pre-gen league time mismatch check failed:', _eLtm); }
+        // NOTE: the LEAGUE TILE TIME MISMATCH warning (grades that play together
+        // but have different league tile times) is surfaced by the caller
+        // (runOptimizer in daily_adjustments.js) BEFORE the pre-generation wipe,
+        // as a two-button "Generate anyway / Dismiss" modal — dismissing there
+        // aborts before anything is wiped. Detection lives in
+        // detectLeagueTileTimeMismatch (exported as window._detectLeagueTileTimeMismatch).
 
         // =========================================================================
         // ★★★ STEP 0: INITIALIZE GLOBAL FIELD LOCKS ★★★

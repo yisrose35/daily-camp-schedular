@@ -5548,6 +5548,31 @@ async function runOptimizer() {
    
     
 
+  // ★★★ LEAGUE TILE TIME MISMATCH — warn BEFORE the wipe (manual path) ★★★
+  // Grades in the same league are meant to play their league game together, so
+  // their league tiles must share the same start/end time; otherwise the solver
+  // (which groups league blocks by start time) won't combine them into one game.
+  // We can't safely auto-snap times, so we ask: "Generate anyway" continues,
+  // "Dismiss" cancels the whole run — and because this is BEFORE the wipe below,
+  // dismissing leaves the current schedule untouched.
+  try {
+    const _ltm = window._detectLeagueTileTimeMismatch?.(dailyOverrideSkeleton) || [];
+    if (_ltm.length > 0) {
+      console.warn('[Optimizer] ⚠️ league time mismatch(es):', _ltm);
+      const _msg =
+        '⚠️ <strong>League game times don\'t match</strong><br><br>' +
+        'These grades play in the same league but their league tiles are set to ' +
+        'different times, so they won\'t play together:<br><br>' +
+        _ltm.map(function (w) { return '&nbsp;&nbsp;• ' + _escHtml(w); }).join('<br>') +
+        '<br><br>Give them the same start and end time so they share one game.';
+      const _go = await daShowConfirm(_msg, { confirmText: 'Generate anyway', cancelText: 'Dismiss', danger: true });
+      if (!_go) {
+        console.log('[Optimizer] League time mismatch — user chose Dismiss, generation cancelled.');
+        return; // finally{} releases _daOptimizerRunning; nothing has been wiped yet
+      }
+    }
+  } catch (_eLtm) { console.warn('[Optimizer] league time mismatch check failed (continuing):', _eLtm); }
+
     // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   // ★★★ CB-46: use the ROLE-CLAMPED _effScope (matches the auto branch), not the
