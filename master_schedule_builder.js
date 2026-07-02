@@ -435,7 +435,14 @@ function showModal(config) {
     
     overlay.querySelector('.ms-modal-close').onclick = () => close(null);
     overlay.querySelector('.ms-modal-cancel').onclick = () => close(null);
-    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    // Backdrop click closes — but only when the click GENUINELY started on the
+    // backdrop. Without the mousedown guard, highlighting text in an input and
+    // releasing the mouse over the backdrop fires a click whose target is the
+    // overlay (the common ancestor of the down/up points) → the modal would
+    // close mid-selection.
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) close(null); };
     
     overlay.querySelector('.ms-modal-confirm').onclick = () => {
       const result = {};
@@ -612,7 +619,9 @@ function showConfirm(message) {
     
     overlay.querySelector('.ms-modal-cancel').onclick = () => { overlay.remove(); resolve(false); };
     overlay.querySelector('.ms-modal-confirm-btn').onclick = () => { overlay.remove(); resolve(true); };
-    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) { overlay.remove(); resolve(false); } };
   });
 }
 
@@ -636,7 +645,9 @@ function showAlert(message) {
     
     document.body.appendChild(overlay);
     overlay.querySelector('.ms-modal-ok').onclick = () => { overlay.remove(); resolve(); };
-    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(); } };
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) { overlay.remove(); resolve(); } };
   });
 }
 
@@ -753,7 +764,9 @@ function showCopyGradeModal(skeleton, onApply) {
   renderTargets();
 
   modal.querySelector('#cg-cancel').onclick = () => overlay.remove();
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  let _downOnOverlay = false;
+  overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+  overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) overlay.remove(); };
 
   applyBtn.onclick = () => {
     const sourceDiv = fromSelect.value;
@@ -3484,7 +3497,9 @@ function openAutoBunkOverridesPanel(grade) {
     // Build overlay
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) overlay.remove(); };
     const panel = document.createElement('div');
     panel.style.cssText = 'background:#fff;border-radius:14px;width:100%;max-width:1500px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 40px rgba(0,0,0,0.3);overflow:hidden;';
     overlay.appendChild(panel);
