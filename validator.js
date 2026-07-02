@@ -318,14 +318,14 @@
      * When two (or more) grades play a league game *together*, the league game
      * tile MUST have the same start AND end time in every participating grade —
      * otherwise it isn't one shared game (the solver groups league blocks by
-     * start time, and a differing end leaves the grades' tiles spanning
-     * different windows / holding different field-lock spans).
+     * start time, and a differing time leaves the grades in different game
+     * groups / spanning different windows).
      *
      * We can't safely auto-snap the times (extending one grade's tile can
-     * collide with its neighbouring tiles), so this only WARNS: for each league,
-     * we compare the league-tile time spans across its divisions and flag any
-     * pair whose spans OVERLAP (i.e. clearly meant to be the same game) but do
-     * not match exactly. Non-overlapping tiles are separate games and are fine.
+     * collide with its neighbouring tiles), so this only WARNS. In this app a
+     * "division" IS a grade, so for each league we compare each grade's SET of
+     * league-tile time spans; if they aren't all identical, that league is
+     * flagged. (Post-generation view: spans come from the division time grid.)
      */
     function checkLeagueTimeMismatch(divisionTimes) {
         const warnings = [];
@@ -339,9 +339,8 @@
         leagues.forEach(league => {
             if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
 
-            // Collect every league tile belonging to THIS league, with its real
-            // time span read from the division's time grid.
-            const tiles = []; // { div, startMin, endMin }
+            // Group each grade's league-tile time spans (read from its time grid).
+            const byGrade = {}; // grade → Set("startMin-endMin")
             league.divisions.forEach(divName => {
                 const slots = leagueAssignments[divName];
                 if (!slots) return;
@@ -353,31 +352,32 @@
                     if (entry.leagueName && entry.leagueName !== league.name) return;
                     const slot = divSlots[Number(slotIdxStr)];
                     if (!slot || slot.startMin == null || slot.endMin == null) return;
-                    tiles.push({ div: divName, startMin: slot.startMin, endMin: slot.endMin });
+                    (byGrade[divName] = byGrade[divName] || new Set()).add(slot.startMin + '-' + slot.endMin);
                 });
             });
 
-            // Flag overlapping-but-mismatched pairs across different divisions.
-            const seen = new Set();
-            for (let i = 0; i < tiles.length; i++) {
-                for (let j = i + 1; j < tiles.length; j++) {
-                    const a = tiles[i], b = tiles[j];
-                    if (a.div === b.div) continue;
-                    const overlap = a.startMin < b.endMin && b.startMin < a.endMin;
-                    if (!overlap) continue;                         // separate games — fine
-                    if (a.startMin === b.startMin && a.endMin === b.endMin) continue; // aligned — fine
-                    const key = [a.div, b.div].sort().join('|') + '@' + Math.min(a.startMin, b.startMin);
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    warnings.push(
-                        `<strong>League Time Mismatch:</strong> In league <u>${league.name}</u>, ` +
-                        `<u>${a.div}</u> (${formatTime(a.startMin)} - ${formatTime(a.endMin)}) and ` +
-                        `<u>${b.div}</u> (${formatTime(b.startMin)} - ${formatTime(b.endMin)}) play together, ` +
-                        `but their league game tiles have different times. Set both tiles to the same ` +
-                        `start and end time so they share one game.`
-                    );
-                }
-            }
+            const grades = Object.keys(byGrade);
+            if (grades.length < 2) return; // need 2+ grades to be "together"
+
+            // Aligned when every grade has the identical set of time spans.
+            const refKey = [...byGrade[grades[0]]].sort().join('|');
+            if (grades.every(g => [...byGrade[g]].sort().join('|') === refKey)) return;
+
+            const spanLabel = (k) => {
+                const [s, e] = k.split('-').map(Number);
+                return `${formatTime(s)} - ${formatTime(e)}`;
+            };
+            const parts = grades.sort().map(g => {
+                const spans = [...byGrade[g]]
+                    .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
+                    .map(spanLabel);
+                return `<u>${g}</u> (${spans.join(', ')})`;
+            });
+            warnings.push(
+                `<strong>League Time Mismatch:</strong> In league <u>${league.name}</u>, ` +
+                `grades that play together have different league game times: ${parts.join(' vs ')}. ` +
+                `Set them to the same start and end time so they share one game.`
+            );
         });
 
         return warnings;

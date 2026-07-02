@@ -2526,10 +2526,14 @@
 
     // =========================================================================
     // ★★★ LEAGUE TILE TIME MISMATCH (pre-generation warning) ★★★
-    // Reads league tiles straight off the skeleton and flags any two grades in
-    // the same league whose tiles OVERLAP in time (clearly meant to be one
-    // shared game) but whose start/end don't match exactly. Returns a list of
-    // short human-readable strings; empty when everything lines up.
+    // Reads league tiles straight off the skeleton and flags leagues whose
+    // grades don't share the same league game time(s). Two (or more) grades in
+    // the same league are meant to play their league game TOGETHER, so their
+    // league tiles must have the SAME start AND end time — otherwise the solver
+    // (which groups league blocks by start time) won't combine them into one
+    // game. We compare each grade's SET of league-tile time spans; if they're
+    // not all identical, that league is flagged. Catches both differing-end and
+    // completely-different-time mistakes. Returns short human-readable strings.
     // =========================================================================
     function detectLeagueTileTimeMismatch(manualSkeleton) {
         const warnings = [];
@@ -2545,7 +2549,8 @@
         const leagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
         if (!leagues.length) return warnings;
 
-        // Every league tile in the skeleton, with its parsed time span.
+        // Every league tile in the skeleton, with its parsed time span. (In this
+        // app "division" IS the grade — window.divisions is grade-keyed.)
         const leagueTiles = manualSkeleton
             .filter(it => it && (it.type === 'league' ||
                 (typeof normalizeLeague === 'function' && normalizeLeague(it.event || ''))))
@@ -2558,31 +2563,42 @@
             .filter(t => t.startMin != null && t.endMin != null && t.endMin > t.startMin);
         if (!leagueTiles.length) return warnings;
 
+        const spanKey = (t) => `${t.startMin}-${t.endMin}`;
+        const spanLabel = (k) => {
+            const [s, e] = k.split('-').map(Number);
+            return `${fmt(s)}-${fmt(e)}`;
+        };
+
         leagues.forEach(league => {
             if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
             const divSet = new Set(league.divisions.map(String));
-            // Tiles for THIS league: in one of its divisions, and either unnamed
+            // Tiles for THIS league: in one of its grades, and either unnamed
             // (auto-bound) or explicitly naming this league.
             const tiles = leagueTiles.filter(t =>
                 divSet.has(t.div) && (!t.leagueName || t.leagueName === league.name));
 
-            const seen = new Set();
-            for (let i = 0; i < tiles.length; i++) {
-                for (let j = i + 1; j < tiles.length; j++) {
-                    const a = tiles[i], b = tiles[j];
-                    if (a.div === b.div) continue;
-                    const overlap = a.startMin < b.endMin && b.startMin < a.endMin;
-                    if (!overlap) continue;                          // separate games — fine
-                    if (a.startMin === b.startMin && a.endMin === b.endMin) continue; // aligned — fine
-                    const key = [a.div, b.div].sort().join('|') + '@' + Math.min(a.startMin, b.startMin);
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    warnings.push(
-                        `${league.name}: ${a.div} (${fmt(a.startMin)}-${fmt(a.endMin)}) & ` +
-                        `${b.div} (${fmt(b.startMin)}-${fmt(b.endMin)})`
-                    );
-                }
-            }
+            // Group each grade's tile time-spans.
+            const byGrade = {}; // grade → Set(spanKey)
+            tiles.forEach(t => { (byGrade[t.div] = byGrade[t.div] || new Set()).add(spanKey(t)); });
+
+            const grades = Object.keys(byGrade);
+            if (grades.length < 2) return; // need 2+ grades to be "together"
+
+            // Aligned when every grade has the identical set of time spans.
+            const refKey = [...byGrade[grades[0]]].sort().join('|');
+            const allAligned = grades.every(g => [...byGrade[g]].sort().join('|') === refKey);
+            if (allAligned) return;
+
+            // Build "Grade (10:00am-10:45am) vs Grade (10:00am-11:00am)".
+            const parts = grades
+                .sort()
+                .map(g => {
+                    const spans = [...byGrade[g]]
+                        .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
+                        .map(spanLabel);
+                    return `${g} (${spans.join(', ')})`;
+                });
+            warnings.push(`${league.name}: ${parts.join(' vs ')}`);
         });
 
         return warnings;
@@ -3144,27 +3160,33 @@
 
         // =========================================================================
         // ★★★ PRE-GEN CHECK: LEAGUE TILE TIME MISMATCH ★★★
-        // The instant the user hits Generate, warn if two grades that play a
-        // league game together have league tiles with different start/end times.
-        // Read straight off the skeleton (leagueAssignments isn't built yet).
-        // Two grades are "together" for a league when their tiles OVERLAP in time;
-        // if the spans don't match exactly it isn't one shared game (the solver
-        // groups league blocks by start time, and a differing end leaves the
-        // tiles spanning different windows / holding different field-lock spans).
-        // We only warn — auto-snapping a tile could collide with its neighbours.
+        // The instant the user hits Generate, warn if grades that play a league
+        // game together have league tiles with different start/end times. Read
+        // straight off the skeleton (leagueAssignments isn't built yet). Grades
+        // in the same league are meant to play their game together, so their
+        // league tiles must share the same time; otherwise the solver (which
+        // groups league blocks by start time) won't combine them into one game.
+        // We only warn (blocking modal, then continue) — auto-snapping a tile
+        // could collide with its neighbours.
         // =========================================================================
         try {
             const _ltm = detectLeagueTileTimeMismatch(manualSkeleton);
             if (_ltm.length > 0) {
-                console.warn(`[Leagues] ⚠️ ${_ltm.length} league tile time mismatch(es) — grades that play together have different start/end times:`);
+                console.warn(`[Leagues] ⚠️ ${_ltm.length} league time mismatch(es) — grades that play together have different tile times:`);
                 _ltm.forEach(w => console.warn('   ' + w));
-                if (window.showToast) {
-                    window.showToast(
-                        `⚠️ League time mismatch: grades that play together have different tile times — ` +
-                        _ltm.join('; ') +
-                        `. Set matching start/end times so they share one game.`,
-                        'warning'
-                    );
+                const _msg =
+                    '⚠️ <strong>League game time mismatch</strong><br><br>' +
+                    'These grades share a league but their league game tiles have different ' +
+                    'start/end times, so they will not play as one combined game:<br><br>' +
+                    _ltm.map(w => '• ' + w).join('<br>') +
+                    '<br><br>Set each league\'s grades to the same start and end time, then generate again.';
+                // showAlert is the app's real modal (returns a Promise); await it
+                // so the user sees the warning the instant they hit Generate,
+                // before the schedule builds. Fall back to native alert.
+                if (typeof window.showAlert === 'function') {
+                    await window.showAlert(_msg);
+                } else if (typeof window.alert === 'function') {
+                    window.alert(_msg.replace(/<[^>]+>/g, ''));
                 }
             }
         } catch (_eLtm) { console.warn('[Leagues] pre-gen league time mismatch check failed:', _eLtm); }
