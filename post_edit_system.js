@@ -849,8 +849,50 @@
                 locationAvailMap[loc.name] = { status: 'free', usage: 0, max: 1, users: [] };
             }
         }
-        return { locations, locationAvailMap };
+        return _reportAugmentFields(bunk, startMin, endMin, locations, locationAvailMap);
     }
+
+    // checkLocationConflict only sees normal entry.field usage. League games live
+    // in window.leagueAssignments matchup strings and pinned/custom tiles reserve
+    // their real facility via entry._reservedFields — both invisible to it. Fold
+    // those in (from the unified helpers) so the report's field sections include
+    // league venues + custom pinned fields and mark them busy. Works on copies so
+    // the caller's dropdown data is untouched. Returns { locations, locationAvailMap }.
+    function _titleCaseField(s) {
+        return String(s || '').replace(/\b\w/g, c => c.toUpperCase());
+    }
+    function _reportAugmentFields(bunk, startMin, endMin, locations, locationAvailMap) {
+        const outLocs = (locations || []).slice();
+        const outMap = Object.assign({}, locationAvailMap || {});
+        try {
+            const lg = (typeof window.getLeagueFieldsInTimeRange === 'function')
+                ? window.getLeagueFieldsInTimeRange(startMin, endMin) : null;
+            const pn = (typeof window.getPinnedReservedFieldsInTimeRange === 'function')
+                ? window.getPinnedReservedFieldsInTimeRange(startMin, endMin, bunk) : null;
+            const known = new Map(outLocs.map(l => [String(l.name).toLowerCase().trim(), l]));
+            const mark = (set, label) => {
+                if (!set || typeof set.forEach !== 'function') return;
+                set.forEach(nl => {
+                    const key = String(nl).toLowerCase().trim();
+                    if (!key) return;
+                    let loc = known.get(key);
+                    if (!loc) {
+                        loc = { name: _titleCaseField(key), type: 'field', capacity: 1, activities: [] };
+                        known.set(key, loc);
+                        outLocs.push(loc);
+                    }
+                    const prev = outMap[loc.name] || { status: 'free', usage: 0, max: 1, users: [] };
+                    const users = (prev.users && prev.users.length) ? prev.users : [{ activity: label, bunk: '' }];
+                    outMap[loc.name] = { status: 'busy', usage: Math.max(1, prev.usage || 0), max: prev.max || 1, users };
+                });
+            };
+            mark(lg, 'League game');
+            mark(pn, 'Reserved (pinned)');
+        } catch (e) { debugLog('reportAugmentFields error', e); }
+        return { locations: outLocs, locationAvailMap: outMap };
+    }
+    // Expose so the unified editor's context builder folds in the same fields.
+    window.PostEditReportAugment = _reportAugmentFields;
 
     // Re-renderable inner body of the report. `selectedActivity` is the value
     // currently in the modal's activity field, used for live highlighting/flags.
@@ -1148,6 +1190,9 @@
         for (const loc of locations) {
             locationAvailMap[loc.name] = _reportAvailEntry(checkLocationConflict(loc.name, slots, bunk));
         }
+        // Report context: original availability + league/pinned fields folded in.
+        // Kept separate from the dropdown's `locations` so the picker is unchanged.
+        const _reportRC = _reportAugmentFields(bunk, startMin, endMin, locations, locationAvailMap);
         const _avOrd = { free: 0, partial: 1, busy: 2 };
         const fieldLocsSorted = [...locations.filter(l => l.type === 'field')].sort((a, b) =>
             (_avOrd[(locationAvailMap[a.name] || {}).status] ?? 0) -
@@ -1196,7 +1241,7 @@
                 <div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div>
                 <div style="font-size:0.875rem;color:#6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div>
             </div>
-            ${renderBunkMiniReport(bunk, divName_, locations, locationAvailMap, startMin, endMin)}
+            ${renderBunkMiniReport(bunk, divName_, _reportRC.locations, _reportRC.locationAvailMap, startMin, endMin)}
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label>
@@ -1235,7 +1280,7 @@
             if (_reportRaf) cancelAnimationFrame(_reportRaf);
             _reportRaf = requestAnimationFrame(() => {
                 const sel = (document.getElementById('post-edit-activity')?.value || '');
-                body.innerHTML = renderBunkReportBody(bunk, divName_, locations, locationAvailMap, sel, startMin, endMin);
+                body.innerHTML = renderBunkReportBody(bunk, divName_, _reportRC.locations, _reportRC.locationAvailMap, sel, startMin, endMin);
             });
         }
         document.getElementById('post-edit-activity').addEventListener('input', refreshReport);

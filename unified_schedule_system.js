@@ -5450,7 +5450,11 @@ if (bypassStatus.highlight) {
                         : { status: c.hasConflict ? (c.canShare ? 'partial' : 'busy') : 'free', usage: c.currentUsage, max: c.maxCapacity, users: [] };
                 } catch (_) { map[loc.name] = { status: 'free', usage: 0, max: 1, users: [] }; }
             }
-            return { locations, locationAvailMap: map };
+            // Fold in league venues + custom pinned fields (invisible to
+            // checkLocationConflict). Shared with the post_edit report builder.
+            return (typeof window.PostEditReportAugment === 'function')
+                ? window.PostEditReportAugment(bunk, startMin, endMin, locations, map)
+                : { locations, locationAvailMap: map };
         })();
 
         // Auto Change runs the module-level computeAutoChangeCandidate (shared
@@ -8150,6 +8154,12 @@ window.submitMultiBunkEdit = submitMultiBunkEdit;
     // (hosts-the-sport → grade access → league-lock + capacity/time) so the
     // post-edit field picker offers exactly the fields the solver would allow.
     window.findFieldsForActivity = findFieldsForActivity;
+
+    // League/pinned field usage (invisible to checkLocationConflict, which only
+    // scans normal entry.field). The bunk activity report uses these to include
+    // league venues + custom pinned facilities in its Open/In-use sections.
+    window.getLeagueFieldsInTimeRange = _getLeagueFieldsInTimeRange;
+    window.getPinnedReservedFieldsInTimeRange = _getPinnedReservedFieldsInTimeRange;
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
