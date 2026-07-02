@@ -886,7 +886,7 @@
     // ★★★ FIELD AVAILABILITY - WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
 
-    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey, slots, blockEndMin) {
+    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey, slots, blockEndMin, awayZoneName) {
         const pool = [];
         const { fields, disabledFields, activityProperties } = context;
 
@@ -969,6 +969,21 @@
             if (_leagueSpecialRooms.has(String(field.name).toLowerCase().trim())) {
                 console.log(`[RegularLeagues] ⚠️ Field "${field.name}" is a special-activity room — reserved for specials, not available to leagues`);
                 continue;
+            }
+
+            // ★★★ OFF-CAMPUS RESERVATION: a field in an OFF-CAMPUS zone is playable
+            //   ONLY by a game explicitly going Away to THAT zone (awayZoneName). Every
+            //   other (on-campus / non-away) league excludes it. Without this, on-campus
+            //   leagues — processed in seniority order BEFORE the away league — consume
+            //   the off-campus venue's courts, so the away game finds its own zone empty
+            //   and silently falls back on campus ("...no available fields; keeping full
+            //   pool"). Non-off-campus fields (getZoneForField → null / isOffCampus:false)
+            //   are unaffected, so camps with no off-campus zones see no change.
+            if (typeof window.getZoneForField === 'function') {
+                const _fldZone = window.getZoneForField(field.name);
+                if (_fldZone && _fldZone.isOffCampus === true && _fldZone.name !== awayZoneName) {
+                    continue;
+                }
             }
 
            // ★★★ CHECK GLOBAL LOCKS FIRST (TIME-BASED to avoid cross-division false positives) ★★★
@@ -2004,8 +2019,10 @@
                 var _oc1End = blocksByTime[timeKey1].allBlocks[0]?.endTime;
                 var _oc2End = blocksByTime[timeKey2].allBlocks[0]?.endTime;
                 var zoneF = window.getFieldsInZone?.(league.offCampus.zone) || [];
-                var fp1 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey1, s1, _oc1End);
-                var fp2 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey2, s2, _oc2End);
+                // ★ Pass the off-campus zone so this double-header's own zone fields are
+                //   admitted to the pool (they're reserved from every non-away league).
+                var fp1 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey1, s1, _oc1End, league.offCampus.zone);
+                var fp2 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey2, s2, _oc2End, league.offCampus.zone);
 
                 var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority);
                 var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority);
@@ -2367,38 +2384,45 @@
                 const todayGameIndex = leagueGameCounters[league.name];
                 const gameNumber = baseGameNumber + todayGameIndex + 1;
                 
-                // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
-                // ★ FN-57: built BEFORE matchup selection so sport_variety
-                // pairing can see which sports are actually available today.
                 const leagueSports = league.sports || ["General Sport"];
-                var availablePool = buildAvailableFieldSportPool(
-                    leagueSports,
-                    context,
-                    leagueDivisions,
-                    timeKey,
-                    slots,
-                    sampleBlock?.endTime
-                );
-                // ★ Away (off-campus) league tile: if this league's block(s) for this
-                //   period are marked Away, restrict the field pool to the chosen
-                //   zone's fields. Travel is stamped per-block in fillBlock.
-                //   Only the 'exclusive' mode restricts the pool; 'mixed' leaves the
-                //   full pool so some games can stay on campus (travel still shows
-                //   per-field for whichever land off-campus).
+                // ★ Away (off-campus) league tile: resolve the chosen zone + mode BEFORE
+                //   the pool is built. Off-campus fields are reserved (excluded from every
+                //   non-away league) inside buildAvailableFieldSportPool, so the away zone
+                //   must be passed in for THIS league to see its own zone's fields at all.
+                //   Resolve for BOTH modes: 'exclusive' (all away) later intersects the
+                //   pool down to just the zone; 'mixed' (either/or) leaves the pool as
+                //   on-campus + this zone's off-campus fields so games can land either way.
                 var _awayZoneForPeriod = null;
+                var _awayModeForPeriod = null;
                 filteredLeagueDivisions.forEach(function (divName) {
                     (timeData.byDivision[divName] || []).forEach(function (b) {
                         if (!b || b._isAway !== true || !b._awayZone) return;
-                        if (b._awayMode === 'mixed') return;
                         if (b.leagueName && b.leagueName !== league.name) return;
                         var _bk = (typeof b.startTime === 'number')
                             ? b.startTime
                             : (window.SchedulerCoreUtils?.parseTimeToMinutes?.(b.startTime) ?? b.startTime);
                         if (Number(_bk) !== Number(timeKey)) return;
                         _awayZoneForPeriod = b._awayZone;
+                        _awayModeForPeriod = (b._awayMode === 'mixed') ? 'mixed' : 'exclusive';
                     });
                 });
-                if (_awayZoneForPeriod && typeof window.getFieldsInZone === 'function') {
+
+                // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
+                // ★ FN-57: built BEFORE matchup selection so sport_variety
+                // pairing can see which sports are actually available today.
+                var availablePool = buildAvailableFieldSportPool(
+                    leagueSports,
+                    context,
+                    leagueDivisions,
+                    timeKey,
+                    slots,
+                    sampleBlock?.endTime,
+                    _awayZoneForPeriod   // admit this away zone's off-campus fields (null → none)
+                );
+                // Exclusive away = only the zone's fields (travel is stamped per-block in
+                // fillBlock). Mixed already has the zone's fields admitted alongside the
+                // on-campus pool, so it needs no intersection.
+                if (_awayZoneForPeriod && _awayModeForPeriod === 'exclusive' && typeof window.getFieldsInZone === 'function') {
                     var _azSet = new Set(window.getFieldsInZone(_awayZoneForPeriod) || []);
                     var _filteredPool = availablePool.filter(function (p) { return _azSet.has(p.field); });
                     if (_filteredPool.length > 0) {
