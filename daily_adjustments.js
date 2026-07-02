@@ -5148,7 +5148,16 @@ function _boToggleView() {
 // split tiles, swim+elective, full-grade, fallback via fillBlock). AUTO ran
 // this inline; MANUAL had NO equivalent, so a smart/split tile could sit in
 // an Unavailable window. Extracted here so BOTH builder modes run it.
-function _applyDailyTimeRuleIronGate() {
+//
+// _includeSetup: when true, ALSO enforce the setup-level Facilities time
+//   windows (field.timeRules, e.g. "Available 10-12") — a DIFFERENT source
+//   from the per-date DA windows and NOT in the DA blob. Auto enforces those
+//   via its own pass (_fn24bFinalTimeRuleScrub) inside runAutoScheduler, so
+//   the auto call leaves this false (behavior unchanged). Manual has no such
+//   pass and its direct fills skip canBlockFit, so the manual call passes true
+//   to close the gap. DA windows OVERRIDE setup windows for the same field
+//   (parity with canBlockFit / the activityProperties merge).
+function _applyDailyTimeRuleIronGate(_includeSetup) {
     try {
         const _dk = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
         let _rules = null;
@@ -5166,7 +5175,26 @@ function _applyDailyTimeRuleIronGate() {
                 if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
             } catch (_e) {}
         }
-        if (_rules) {
+        const _da = _rules || {};
+        // Durable setup-level Facilities windows (manual parity with auto's
+        // _fn24bFinalTimeRuleScrub). Read from config, not fragile activityProperties.
+        const _setup = {};
+        if (_includeSetup) {
+            try {
+                const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const _gsApp = ((window.loadGlobalSettings && window.loadGlobalSettings()) || {}).app1 || {};
+                (_gsApp.fields || []).forEach(f => {
+                    if (!f || !f.name || !Array.isArray(f.timeRules) || f.timeRules.length === 0) return;
+                    _setup[f.name] = f.timeRules.map(r => ({
+                        type: r.type, available: r.available,
+                        startMin: (r.startMin != null) ? r.startMin : (_parseTM ? _parseTM(r.start || r.startTime) : null),
+                        endMin: (r.endMin != null) ? r.endMin : (_parseTM ? _parseTM(r.end || r.endTime) : null),
+                        divisions: Array.isArray(r.divisions) ? r.divisions : []
+                    }));
+                });
+            } catch (_eS) {}
+        }
+        {
             const _sa = window.scheduleAssignments || {};
             const _divs = window.divisions || {};
             let _cleared = 0;
@@ -5183,7 +5211,8 @@ function _applyDailyTimeRuleIronGate() {
                     if (!_field || _field === 'Free') continue;
                     const _sM = _s._startMin, _eM = _s._endMin;
                     if (_sM == null || _eM == null) continue;
-                    const _rs = _rules[_field];
+                    // DA windows override setup windows for the same field.
+                    const _rs = (Array.isArray(_da[_field]) && _da[_field].length) ? _da[_field] : _setup[_field];
                     if (!Array.isArray(_rs) || _rs.length === 0) continue;
                     let _bad = false, _hasAvail = false, _inside = false;
                     for (const _r of _rs) {
@@ -5199,7 +5228,7 @@ function _applyDailyTimeRuleIronGate() {
                     }
                     if (!_bad && _hasAvail && !_inside) _bad = true;
                     if (_bad) {
-                        _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'DA time rule on ' + _field, continuation: false };
+                        _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'time rule on ' + _field, continuation: false };
                         _cleared++;
                     }
                 }
@@ -5689,8 +5718,11 @@ if (success) {
       //   manual schedule is saved. The manual solver's direct-fill paths
       //   (smart/split/swim+elective via fillBlock) don't reach canBlockFit, and
       //   unlike auto there was no post-gen scrub here — so a tile could sit in a
-      //   facility's Unavailable window. Same helper the auto branch runs.
-      _applyDailyTimeRuleIronGate();
+      //   facility's Unavailable window. Same helper the auto branch runs, plus
+      //   _includeSetup=true so the setup-level Facilities windows (field.timeRules,
+      //   e.g. "Available 10-12") are enforced here too — auto has its own pass
+      //   for those (_fn24bFinalTimeRuleScrub); manual did not.
+      _applyDailyTimeRuleIronGate(true);
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
