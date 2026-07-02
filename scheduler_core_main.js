@@ -6796,6 +6796,26 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             window.GlobalFieldLocks.debugPrintLocks();
         }
 
+        // ★★★ LEAGUE TIME MISMATCH WARNING ★★★
+        // When two grades play a league game together, their league game tiles
+        // must share the same start AND end time — otherwise it isn't one shared
+        // game. We don't auto-snap (extending a tile can collide with its
+        // neighbours), so warn the user to fix it. Full details are also listed
+        // in the Validate modal (ScheduleValidator.checkLeagueTimeMismatch).
+        try {
+            const _ltm = window.ScheduleValidator?.checkLeagueTimeMismatch?.() || [];
+            if (_ltm.length > 0) {
+                console.warn(`[Leagues] ⚠️ ${_ltm.length} league time mismatch(es) — grades that play together have different tile times:`);
+                _ltm.forEach(w => console.warn('   ' + w.replace(/<[^>]+>/g, '')));
+                if (window.showToast) {
+                    window.showToast(
+                        `${_ltm.length} league game${_ltm.length > 1 ? 's have' : ' has'} grades with mismatched tile times — click Validate for details.`,
+                        'warning'
+                    );
+                }
+            }
+        } catch (_eLtm) { console.warn('[Leagues] league time mismatch check failed:', _eLtm); }
+
         return true;
     };
 
