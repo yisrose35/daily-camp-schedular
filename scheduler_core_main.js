@@ -4243,7 +4243,20 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             manualSkeleton.forEach(item => {
                 if (!item || item.type !== 'pinned') return;
                 const _divName = item.division;
-                if (allowedDivisionsSet && !allowedDivisionsSet.has(String(_divName))) return;
+                // ★ Pinned facilities lock UNCONDITIONALLY — a pin reserves its facility
+                //   for its whole [startMin,endMin] window no matter whose regen this is.
+                //   Do NOT filter by allowedDivisionsSet here. In a PARTIAL regen the
+                //   pinned tile's OWN division is often out of scope (its schedule is
+                //   preserved via STEP 1.5, not re-solved). The solver's sport path is
+                //   still protected in that case (window.fieldReservations is built from
+                //   the FULL skeleton, so canBlockFit blocks any sport globally) — but
+                //   SmartTile specials and the free-fill passes gate on
+                //   GlobalFieldLocks.isFieldLockedByTime, NOT fieldReservations. If we
+                //   skipped the out-of-scope pin's lock, an in-scope division's special
+                //   could land on the reserved facility. Registering the lock for every
+                //   pin regardless of scope keeps the facility locked start→end for
+                //   EVERYONE, in full AND partial gens. (Full gen: allowedDivisionsSet is
+                //   null, so this was already unconditional — behavior there is unchanged.)
                 if (!((divisions[_divName] && divisions[_divName].bunks) || []).length) return;
                 const _sMin = Utils.parseTimeToMinutes(item.startTime);
                 const _eMin = Utils.parseTimeToMinutes(item.endTime);
