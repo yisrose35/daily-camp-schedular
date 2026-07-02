@@ -3030,6 +3030,19 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         if (!m) return '';
         return '<div style="display:inline-block;margin:0 0 6px;background:#FEF3C7;color:#92400E;border:1px solid #F59E0B;border-radius:4px;padding:1px 8px;font-size:0.72rem;font-weight:700;white-space:nowrap;">🚐 ' + m + ' min travel each way' + (ct.zone ? ' — ' + escapeHtml(String(ct.zone)) : '') + '</div>';
     }
+    // Pull a field name out of a rendered matchup line ("Team A vs Team B @ Field
+    // (Sport)") — a fallback for when the matchup is an object whose field lives only
+    // in its display text (no structured .field), so travel lookup still resolves.
+    function _usFieldFromLine(text) {
+        if (!text) return '';
+        var seg = String(text).split(' @ ')[1];
+        if (!seg) return '';
+        seg = seg.trim();
+        // Strip the trailing "(Sport)" — the LAST parenthesized group — WITHOUT
+        // eating parens inside the field name itself (e.g. "TABC bball (ng2)").
+        var pm = seg.match(/^(.*)\([^()]*\)\s*$/);
+        return (pm ? pm[1] : seg).trim();
+    }
     // Insert the travel badge right after a cell's title (the first </div>).
     function _usInjectTravelLabel(html, ct) {
         var label = _usTravelLabel(ct);
@@ -3092,7 +3105,11 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 } else {
                     line = JSON.stringify(m);
                 }
-                if (_mField) _tFields.push(_mField);
+                // Travel field: prefer the authoritative object field, else parse the
+                // field out of the string/display line (handles fields with parens).
+                var _tf = (m && typeof m === 'object' && m.field) ? m.field
+                        : _usFieldFromLine(typeof m === 'string' ? m : line);
+                if (_tf) _tFields.push(_tf);
                 html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
             });
             html += '</div>';
@@ -3876,7 +3893,11 @@ divBlocks.forEach((block, blockIdx) => {
                     _mField = field;
                     matchText = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}${sport || field ? ' - ' : ''}${sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : ''}${field ? ' (' + field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m)));
                 }
-                if (_mField) _tFields.push(_mField);
+                // Travel field: prefer the authoritative object field, else parse the
+                // field out of the string/display line (handles fields with parens).
+                const _tf = (m && typeof m === 'object' && m.field) ? m.field
+                          : _usFieldFromLine(typeof m === 'string' ? m : matchText);
+                if (_tf) _tFields.push(_tf);
                 html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
