@@ -3018,11 +3018,11 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     function _usTravelStrip(ct, side, widthCss) {
         var m = side === 'pre' ? ct.pre : ct.post;
         if (!m) return '';
-        var edge = side === 'pre' ? 'left:0;border-right:1px solid #B45309;' : 'right:0;border-left:1px solid #B45309;';
+        var edge = side === 'pre' ? 'left:0;border-right:1px solid #FCD34D;' : 'right:0;border-left:1px solid #FCD34D;';
         return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" '
             + 'style="position:absolute;top:0;bottom:0;' + edge + 'width:' + widthCss + ';'
-            + 'background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 5px,#FCD34D 5px,#FCD34D 10px);'
-            + 'display:flex;align-items:center;justify-content:center;color:#78350F;font-size:10px;font-weight:700;white-space:nowrap;pointer-events:none;">'
+            + 'background:linear-gradient(180deg,#FEF3C7 0%,#FDE68A 100%);'
+            + 'display:flex;align-items:center;justify-content:center;color:#B45309;font-size:10px;font-weight:700;white-space:nowrap;pointer-events:none;">'
             + '<span style="writing-mode:vertical-rl;text-orientation:mixed;">🚐 ' + m + 'm</span></div>';
     }
     // Pull a field name out of a rendered matchup line ("Team A vs Team B @ Field
