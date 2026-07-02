@@ -1240,6 +1240,67 @@
         return fresh;
     }
 
+    // ★ HARD STREAK CAP: a team may play the same sport on two CONSECUTIVE
+    // game days, NEVER a third. The soft recent-sport penalty (-1500) usually
+    // prevents even two in a row, but it is a preference — in a constrained
+    // slot (few open fields, pair caveat narrowing the pool) a repeat can
+    // still win, and because the penalty doesn't escalate with streak length,
+    // nothing stopped a THIRD day. This filter makes day 3 impossible: any
+    // sport equal to BOTH of a team's last two games is excluded outright.
+    // Soft fallback: if every remaining option is streak-blocked (pathological
+    // — e.g. a single-sport league), keep the pool so the matchup still gets
+    // a game rather than being dropped.
+    function _applyStreakCapFilter(pool, t1, t2, hist1, hist2) {
+        if (!pool.length) return pool;
+        const blocked = new Set();
+        [hist1, hist2].forEach(function (hist) {
+            const n = hist.length;
+            if (n >= 2 && hist[n - 1] === hist[n - 2]) blocked.add(hist[n - 1]);
+        });
+        if (!blocked.size) return pool;
+        const ok = pool.filter(function (o) { return !blocked.has(o.sport); });
+        if (ok.length) return ok;
+        console.log(`   ⚠️ ${t1} vs ${t2}: streak cap would empty the pool — allowing (single-sport league?)`);
+        return pool;
+    }
+
+    // ★ CYCLE RESCUE: a team stuck ≥2 plays behind on a sport (its count for
+    // that sport trails its most-played available sport by ≥2) gets that
+    // sport as a HARD preference for its matchup. Without this, a team can be
+    // starved of one sport indefinitely: its daily partner keeps carrying the
+    // -1500 recent-sport guard for exactly that sport, so the pair never
+    // takes it (observed in the multi-league sim: a matchup_variety team
+    // finished 12 days at BK1/SC5/VB6 because every day's opponent had played
+    // basketball the day before). A partner playing 2-in-a-row is the lesser
+    // evil; the HARD 3-in-a-row cap still applies because this runs on the
+    // streak-filtered pool. Runs AFTER the fair-share cap (rescue stays
+    // within the league's share) and BEFORE the pair caveat (rescue wins).
+    // Assignments born from a rescue are flagged so the swap pass won't
+    // trade the rescued sport away again.
+    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2) {
+        if (pool.length < 2) return { pool: pool, rescued: false };
+        const poolSports = Array.from(new Set(pool.map(function (o) { return o.sport; })));
+        if (poolSports.length < 2) return { pool: pool, rescued: false };
+        function counts(hist) { const c = {}; hist.forEach(function (s) { c[s] = (c[s] || 0) + 1; }); return c; }
+        const c1 = counts(hist1), c2 = counts(hist2);
+        function deficit(c, s) {
+            let max = 0;
+            poolSports.forEach(function (sp) { const v = c[sp] || 0; if (v > max) max = v; });
+            return max - (c[s] || 0);
+        }
+        let best = null, bestD = 0;
+        poolSports.forEach(function (s) {
+            const d1 = deficit(c1, s), d2 = deficit(c2, s);
+            const d = (d1 >= 2 ? d1 : 0) + (d2 >= 2 ? d2 : 0);
+            if (d > bestD) { bestD = d; best = s; }
+        });
+        if (!best) return { pool: pool, rescued: false };
+        const rescuedPool = pool.filter(function (o) { return o.sport === best; });
+        if (!rescuedPool.length) return { pool: pool, rescued: false };
+        console.log(`   🆘 ${t1} vs ${t2}: cycle rescue → ${best} (a team is ${bestD} play(s) behind on it)`);
+        return { pool: rescuedPool, rescued: true };
+    }
+
     // =========================================================================
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
@@ -1331,15 +1392,22 @@
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
             let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
-            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
-            // pair has played together the FEWEST times — never a replay while an
-            // unplayed one exists, least-replayed once the pair exhausted them all.
-            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
+            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row.
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
 
             // ★ FAIR-SHARE CAP: prefer sports this league hasn't used up its per-slot
             // share of, so it leaves scarce fields for the other grades playing at the
             // same time. Falls back to the full pool when every remaining option is at
             // cap (a matchup is never dropped for fairness).
+            // ★ ORDER MATTERS: the cap must run BEFORE the pair-sport caveat. The
+            // caveat can narrow the pool to a single sport (the one this pair hasn't
+            // replayed), and the cap's fallback would then let the league exceed its
+            // share of exactly that sport — starving a junior league whose only
+            // sports those fields are (observed in the multi-league sim: Minis got
+            // ZERO games while Seniors took a second football field for pair
+            // freshness). A repeated pair sport is a far smaller cost than another
+            // league's dropped game, so fairness filters first and the caveat
+            // refines within the league's share.
             if (sportCaps) {
                 const _underCap = _pool.filter(function (o) {
                     const c = sportCaps[o.sport];
@@ -1347,6 +1415,16 @@
                 });
                 if (_underCap.length > 0) _pool = _underCap;
             }
+
+            // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
+            // as a hard preference (see _applyCycleRescueFilter).
+            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            _pool = _rescue.pool;
+
+            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
+            // pair has played together the FEWEST times — never a replay while an
+            // unplayed one exists, least-replayed once the pair exhausted them all.
+            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
             for (const option of _pool) {
                 let score = 0;
@@ -1406,6 +1484,7 @@
                     sport: bestOption.sport
                 });
 
+                if (_rescue.rescued) assignments[assignments.length - 1]._rescued = true;
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
@@ -1495,14 +1574,14 @@
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
             let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
-            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
-            // pair has played together the FEWEST times — never a replay while an
-            // unplayed one exists, least-replayed once the pair exhausted them all.
-            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
+            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row.
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
 
             // ★ FAIR-SHARE CAP: same as SportVariety — don't let this league claim
             // more than its share of a scarce sport's fields, leaving the rest for the
             // other grades. Soft: falls back to the full pool if all options are capped.
+            // Runs BEFORE the pair caveat (see SportVariety) so pair-sport freshness
+            // can never push the league past its share and starve a junior league.
             if (sportCaps) {
                 const _underCap = _pool.filter(function (o) {
                     const c = sportCaps[o.sport];
@@ -1510,6 +1589,16 @@
                 });
                 if (_underCap.length > 0) _pool = _underCap;
             }
+
+            // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
+            // as a hard preference (see _applyCycleRescueFilter).
+            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            _pool = _rescue.pool;
+
+            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
+            // pair has played together the FEWEST times — never a replay while an
+            // unplayed one exists, least-replayed once the pair exhausted them all.
+            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
             for (const option of _pool) {
                 let score = 0;
@@ -1573,6 +1662,7 @@
                     sport: bestOption.sport
                 });
 
+                if (_rescue.rescued) assignments[assignments.length - 1]._rescued = true;
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
@@ -1586,6 +1676,71 @@
     }
 
     // =========================================================================
+    // ★ WITHIN-SLOT SWAP PASS — fix need-stranding between matchups
+    // =========================================================================
+    // The per-matchup greedy can strand needs: two matchups both need the
+    // single volleyball court; the one processed second eats basketball AGAIN
+    // even when the first matchup didn't especially need volleyball (observed
+    // in the multi-league sim: one team finished 12 days at BK6/SC4/VB2 while
+    // its league-mates sat at 4/4/4). After all matchups are assigned, try
+    // trading the (sport, field) choices of every pair of assignments; accept
+    // when the summed cycle-need score improves and no team lands a
+    // 3-days-in-a-row streak. A swap moves whole options between matchups, so
+    // per-slot sport usage, field locks, and fair-share caps all stay valid.
+    function _swapReoptimizeAssignments(assignments, leagueName, history, dayId) {
+        try {
+            if (!Array.isArray(assignments) || assignments.length < 2) return assignments;
+            const sportsInPlay = Array.from(new Set(assignments.map(function (a) { return a.sport; })));
+            const teams = Array.from(new Set(assignments.reduce(function (acc, a) { acc.push(a.team1, a.team2); return acc; }, [])));
+            const cycles = makeSportCycles(leagueName, teams, sportsInPlay, history, dayId);
+            const hists = {};
+            teams.forEach(function (t) { hists[t] = getTeamSportHistoryByDate(leagueName, t, history, dayId); });
+            function teamScore(t, s) {
+                const g = cycles.gap(t, s);
+                let sc = g <= 0 ? 1000 : Math.max(0, 100 - g * 20);
+                const h = hists[t];
+                if (h.length && h[h.length - 1] === s) sc -= 1500;
+                return sc;
+            }
+            function illegal(t, s) {   // would create a 3-days-in-a-row streak
+                const h = hists[t];
+                return h.length >= 2 && h[h.length - 1] === s && h[h.length - 2] === s;
+            }
+            function assnScore(a, s) {
+                const pairC = getPairSports(leagueName, a.team1, a.team2, history)
+                    .filter(function (x) { return x === s; }).length;
+                return teamScore(a.team1, s) + teamScore(a.team2, s) - pairC * 400;
+            }
+            let improved = true, guard = 0;
+            while (improved && guard++ < 100) {
+                improved = false;
+                for (let i = 0; i < assignments.length && !improved; i++) {
+                    for (let j = i + 1; j < assignments.length; j++) {
+                        const A = assignments[i], B = assignments[j];
+                        if (A.sport === B.sport) continue;
+                        if (A._rescued || B._rescued) continue;   // never trade a cycle-rescued sport away
+                        if (illegal(A.team1, B.sport) || illegal(A.team2, B.sport)) continue;
+                        if (illegal(B.team1, A.sport) || illegal(B.team2, A.sport)) continue;
+                        const base = assnScore(A, A.sport) + assnScore(B, B.sport);
+                        const swapped = assnScore(A, B.sport) + assnScore(B, A.sport);
+                        if (swapped > base) {
+                            const tmp = { field: A.field, sport: A.sport };
+                            A.field = B.field; A.sport = B.sport;
+                            B.field = tmp.field; B.sport = tmp.sport;
+                            console.log('   ★ [SlotSwap] ' + (A.matchup || A.team1 + ' vs ' + A.team2) + ' ⇄ ' + (B.matchup || B.team1 + ' vs ' + B.team2) + ' traded sport/field for cycle need');
+                            improved = true; break;
+                        }
+                    }
+                }
+            }
+            return assignments;
+        } catch (e) {
+            console.warn('[RegularLeagues] slot swap pass failed — keeping greedy assignments:', e);
+            return assignments;
+        }
+    }
+
+    // =========================================================================
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
@@ -1594,11 +1749,17 @@
 
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
-        if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
-        } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
+        const assignments = (mode === 'matchup_variety')
+            ? assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId)
+            : assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
+
+        // ★ Within-slot swap pass (see _swapReoptimizeAssignments). Skipped when an
+        // indoor requirement is active — swaps trade fields between matchups and
+        // could hand an indoor field away from a team still below its floor.
+        if (leagueRules && leagueRules.indoorRequirement && leagueRules.indoorRequirement.enabled) {
+            return assignments;
         }
+        return _swapReoptimizeAssignments(assignments, leagueName, history, dayId);
     }
 
     // =========================================================================
@@ -2360,6 +2521,52 @@
                         for (let i = 0; i < rows.length; i++) rows[i].base += (i < rem ? 1 : 0);
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
+
+                    // ★ PARTICIPATION FLOOR — every league must be able to SEAT its
+                    // games. Need-weighted apportionment can hand a league ZERO caps
+                    // on every one of its sports: a perfectly caught-up league has
+                    // deficit 0 everywhere while any other league still shows need,
+                    // so all its weights are 0. With every option at cap 0, the
+                    // seniors (processed first) take the extra fields and the junior
+                    // league's matchups find nothing (observed in the multi-league
+                    // sim: a 2-sport league dropped to 1 of 2 games — and the field
+                    // squeeze then forced a 3-days-in-a-row sport on its teams —
+                    // while two hockey fields sat unused). While some league's total
+                    // cap across its sports can't seat its game count, transfer one
+                    // cap unit per round from the most-surplus league on a shared
+                    // sport, preferring the sport where the starved league currently
+                    // holds the least (spreads its floor across its sports).
+                    const _capTotal = (l) => (l.sports || []).reduce((s, sp) => s + (_caps[l.name][sp] || 0), 0);
+                    const _maxSeats = (l) => (l.sports || []).reduce((s, sp) => s + (_fieldsBySport[sp] || 0), 0);
+                    let _floorGuard = 0;
+                    while (_floorGuard++ < 64) {
+                        let _moved = false;
+                        for (const l of _here) {
+                            const _wanted = Math.min(_games[l.name], _maxSeats(l));
+                            if (_capTotal(l) >= _wanted) continue;
+                            let best = null;
+                            for (const sp of (l.sports || [])) {
+                                const _lcap = _caps[l.name][sp] || 0;
+                                if (_lcap >= (_fieldsBySport[sp] || 0)) continue;   // sport already saturated for this league
+                                for (const d of _here) {
+                                    if (d === l || !(d.sports || []).includes(sp)) continue;
+                                    if ((_caps[d.name][sp] || 0) <= 0) continue;
+                                    const _surplus = _capTotal(d) - _games[d.name];
+                                    if (_surplus <= 0) continue;
+                                    if (!best || _lcap < best.lcap || (_lcap === best.lcap && _surplus > best.surplus)) {
+                                        best = { donor: d, sp, surplus: _surplus, lcap: _lcap };
+                                    }
+                                }
+                            }
+                            if (!best) continue;
+                            _caps[best.donor.name][best.sp]--;
+                            _caps[l.name][best.sp] = (_caps[l.name][best.sp] || 0) + 1;
+                            console.log('   ⚖️ Participation floor: 1 ' + best.sp + ' cap ' + best.donor.name + ' → ' + l.name + ' (seat its games)');
+                            _moved = true;
+                        }
+                        if (!_moved) break;
+                    }
+
                     console.log('   ⚖️ Need-first sport caps' + (_byNeedSports.length ? ' (need-weighted: ' + _byNeedSports.join(', ') + ')' : ' (no specific need → by size)') + ': ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
                     return _caps;
                 } catch (_e) {
