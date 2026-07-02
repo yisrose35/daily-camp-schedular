@@ -3011,24 +3011,19 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         var border = pos === 'pre' ? 'border-bottom:1px solid #F59E0B;' : 'border-top:1px solid #F59E0B;';
         return '<div title="Travel ' + (pos === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:700;' + border + 'text-align:center;white-space:nowrap;">🚐 Travel ' + m + 'm</div>';
     }
-    // Vertical "Travel" strip on the LEFT/RIGHT of a cell (transposed / time-horizontal
-    //   view — time runs left→right so travel sits beside the activity).
-    function _usTravelStripLR(ct, side) {
-        if (!ct) return '';
+    // A full-height "Travel" strip on the LEFT/RIGHT edge of a transposed cell. Width
+    //   is proportional to the travel time's share of the period (passed as widthCss),
+    //   so it visibly consumes that slice of the timeline. Absolutely positioned →
+    //   spans the WHOLE cell height (top→bottom), not just the content.
+    function _usTravelStrip(ct, side, widthCss) {
         var m = side === 'pre' ? ct.pre : ct.post;
         if (!m) return '';
-        var border = side === 'pre' ? 'border-right:1px solid #F59E0B;' : 'border-left:1px solid #F59E0B;';
-        return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="flex:0 0 auto;background:#FEF3C7;color:#92400E;' + border + 'display:flex;align-items:center;justify-content:center;padding:2px;writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;font-weight:700;white-space:nowrap;">🚐 ' + m + 'm</div>';
-    }
-    // An explicit inline travel badge — shown INSIDE the cell (under the title) so
-    // travel is obvious regardless of view. The thin edge strips are easy to miss
-    // in the horizontal (transposed) timeline, where they render as slim vertical
-    // bars at the cell's left/right; this badge makes travel legible everywhere.
-    function _usTravelLabel(ct) {
-        if (!ct) return '';
-        var m = Math.max(ct.pre || 0, ct.post || 0);
-        if (!m) return '';
-        return '<div style="display:inline-block;margin:0 0 6px;background:#FEF3C7;color:#92400E;border:1px solid #F59E0B;border-radius:4px;padding:1px 8px;font-size:0.72rem;font-weight:700;white-space:nowrap;">🚐 ' + m + ' min travel each way' + (ct.zone ? ' — ' + escapeHtml(String(ct.zone)) : '') + '</div>';
+        var edge = side === 'pre' ? 'left:0;border-right:1px solid #B45309;' : 'right:0;border-left:1px solid #B45309;';
+        return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" '
+            + 'style="position:absolute;top:0;bottom:0;' + edge + 'width:' + widthCss + ';'
+            + 'background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 5px,#FCD34D 5px,#FCD34D 10px);'
+            + 'display:flex;align-items:center;justify-content:center;color:#78350F;font-size:10px;font-weight:700;white-space:nowrap;pointer-events:none;">'
+            + '<span style="writing-mode:vertical-rl;text-orientation:mixed;">🚐 ' + m + 'm</span></div>';
     }
     // Pull a field name out of a rendered matchup line ("Team A vs Team B @ Field
     // (Sport)") — a fallback for when the matchup is an object whose field lives only
@@ -3043,23 +3038,25 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         var pm = seg.match(/^(.*)\([^()]*\)\s*$/);
         return (pm ? pm[1] : seg).trim();
     }
-    // Insert the travel badge right after a cell's title (the first </div>).
-    function _usInjectTravelLabel(html, ct) {
-        var label = _usTravelLabel(ct);
-        if (!label) return html;
-        var i = html.indexOf('</div>');
-        return i < 0 ? (label + html) : (html.slice(0, i + 6) + label + html.slice(i + 6));
-    }
     // Wrap a cell's inner HTML with travel layers in the correct orientation.
+    //   horizontal (transposed): full-height edge strips sized to the travel time's
+    //     share of the period (ct.spanMin); content inset by matching margins.
+    //   vertical (standard table): thin bands above/below (swim-Change style).
     function _usApplyTravel(td, innerHtml, ct, pad, horizontal) {
         if (!ct) { td.innerHTML = innerHtml; return; }
         td.style.padding = '0';
         if (horizontal) {
-            td.innerHTML = '<div style="display:flex;align-items:stretch;min-height:100%;height:100%;">'
-                + _usTravelStripLR(ct, 'pre')
-                + '<div style="flex:1 1 auto;padding:' + pad + ';display:flex;flex-direction:column;justify-content:center;">' + innerHtml + '</div>'
-                + _usTravelStripLR(ct, 'post')
-                + '</div>';
+            td.style.position = 'relative';
+            var sp = ct.spanMin || 0;
+            var preW = (sp && ct.pre > 0) ? (ct.pre / sp) * 100 : 0;
+            var postW = (sp && ct.post > 0) ? (ct.post / sp) * 100 : 0;
+            // Keep the game a visible sliver even when travel dominates the period.
+            if (preW + postW > 80) { var k = 80 / (preW + postW); preW *= k; postW *= k; }
+            var preCss = ct.pre > 0 ? (preW ? preW.toFixed(2) + '%' : '16px') : '0';
+            var postCss = ct.post > 0 ? (postW ? postW.toFixed(2) + '%' : '16px') : '0';
+            td.innerHTML = _usTravelStrip(ct, 'pre', preCss)
+                + _usTravelStrip(ct, 'post', postCss)
+                + '<div style="padding:' + pad + ';margin-left:' + preCss + ';margin-right:' + postCss + ';min-height:100%;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;">' + innerHtml + '</div>';
         } else {
             td.innerHTML = _usTravelBand(ct, 'pre') + '<div style="padding:' + pad + ';">' + innerHtml + '</div>' + _usTravelBand(ct, 'post');
         }
@@ -3120,7 +3117,9 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell. Plus an
         //   inline badge under the title so travel is legible (edge strips are subtle).
         var _ctT = _usCellTravel(_tFields);
-        _usApplyTravel(td, _usInjectTravelLabel(html, _ctT), _ctT, '8px 10px', true);
+        // Period length → sizes the travel strips to their share of the timeline.
+        if (_ctT) _ctT.spanMin = (block && block.endMin > block.startMin) ? (block.endMin - block.startMin) : 0;
+        _usApplyTravel(td, html, _ctT, '8px 10px', true);
         // ★ Make the transposed-view league/specialty cell clickable → field-change
         //   modal (this renderer previously wired NO onclick, so leagues couldn't be
         //   post-edited in the transposed unified view at all).
@@ -3909,7 +3908,7 @@ divBlocks.forEach((block, blockIdx) => {
         //   runs top→bottom, so the bands sit ABOVE/BELOW the cell. Plus an inline
         //   badge under the title so travel is legible even when bands are missed.
         const _ctS = _usCellTravel(_tFields);
-        _usApplyTravel(td, _usInjectTravelLabel(html, _ctS), _ctS, '12px 16px', false);
+        _usApplyTravel(td, html, _ctS, '12px 16px', false);
         
         if (isEditable && bunks.length > 0) {
             _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, bunks[0], isEditable);
