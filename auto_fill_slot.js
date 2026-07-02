@@ -78,8 +78,20 @@
         if (window.activityProperties && Object.keys(window.activityProperties).length) {
             return window.activityProperties;
         }
-        // Build from global settings
+        // Build from global settings (fallback used when window.activityProperties
+        // wasn't populated by a generation this session — e.g. Auto Fill right
+        // after a page reload). Must carry field time windows so Auto Fill honors
+        // them the way canBlockFit does; the previous fallback omitted timeRules
+        // entirely, so BOTH setup ("Available 10-12") and daily windows went
+        // unchecked in this path.
         const gs = getGlobalSettings();
+        const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        const _parseRules = (arr) => Array.isArray(arr) ? arr.map(r => ({
+            type: r.type, available: r.available,
+            startMin: (r.startMin != null) ? r.startMin : (_parseTM ? _parseTM(r.start || r.startTime) : null),
+            endMin: (r.endMin != null) ? r.endMin : (_parseTM ? _parseTM(r.end || r.endTime) : null),
+            divisions: Array.isArray(r.divisions) ? r.divisions : []
+        })) : [];
         const map = {};
         (gs.app1?.fields || []).forEach(f => {
             map[f.name] = {
@@ -90,6 +102,7 @@
                 maxUsage: f.maxUsage || 0,
                 exactFrequency: f.exactFrequency || 0,
                 exactFrequencyPeriod: f.exactFrequencyPeriod || '1week',
+                timeRules: _parseRules(f.timeRules),
             };
         });
         (gs.app1?.specialActivities || []).forEach(s => {
@@ -104,6 +117,26 @@
                 exactFrequencyPeriod: s.exactFrequencyPeriod || '1week',
             };
         });
+        // Merge per-date Daily-Adjustments windows — they OVERRIDE the setup
+        // windows for the same field (parity with the activityProperties merge
+        // canBlockFit uses), keyed to the active gen/schedule date.
+        try {
+            const _dk = window._activeGenDate || window.currentScheduleDate || '';
+            let _dfa = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+            if ((!_dfa || !Object.keys(_dfa).length) && _dk) {
+                const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability) _dfa = _p.dailyFieldAvailability; }
+            }
+            if (_dfa) {
+                Object.keys(_dfa).forEach(fn => {
+                    const rules = _dfa[fn];
+                    if (Array.isArray(rules) && rules.length) {
+                        map[fn] = map[fn] || { name: fn, type: 'field', activities: [] };
+                        map[fn].timeRules = _parseRules(rules);
+                    }
+                });
+            }
+        } catch (_e) {}
         return map;
     }
 
