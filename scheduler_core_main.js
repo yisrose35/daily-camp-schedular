@@ -2541,7 +2541,15 @@
 
         const Utils = window.SchedulerCoreUtils;
         const parse = (t) => (typeof t === 'number') ? t : (Utils?.parseTimeToMinutes?.(t) ?? null);
-        const fmt = (m) => (Utils?.minutesToTime ? Utils.minutesToTime(m) : String(m));
+        // Format minutes-since-midnight as a clock time (e.g. 805 → "1:25 PM").
+        const fmt = (m) => {
+            if (Utils?.minutesToTimeLabel) return Utils.minutesToTimeLabel(m);
+            if (Utils?.minutesToTimeString) return Utils.minutesToTimeString(m);
+            const h24 = Math.floor(m / 60), mm = m % 60;
+            const ap = h24 >= 12 ? 'PM' : 'AM';
+            const h12 = h24 % 12 || 12;
+            return `${h12}:${String(mm).padStart(2, '0')} ${ap}`;
+        };
 
         // Resolve the leagues config (name → league object with .divisions).
         let leaguesCfg = window.masterLeagues || window.leaguesByName ||
