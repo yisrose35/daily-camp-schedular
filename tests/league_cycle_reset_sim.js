@@ -53,64 +53,34 @@ function makePairRecency(h) {
     return best;
   };
 }
-// mirrors chooseDailyMatchups (greedy max-weight matching + 2-opt)
+function perfectMatchings(teams) {
+  const arr = teams.slice();
+  if (arr.length % 2 === 1) arr.push('__BYE__');
+  const out = [];
+  (function rec(rem, cur) {
+    if (rem.length === 0) { out.push(cur.slice()); return; }
+    const a = rem[0];
+    for (let i = 1; i < rem.length; i++) { cur.push([a, rem[i]]); rec(rem.slice(1, i).concat(rem.slice(i + 1)), cur); cur.pop(); }
+  })(arr, []);
+  return out;
+}
+// mirrors chooseDailyMatchups — the matchup creator for BOTH modes: exact search
+// over every possible pairing (≤12 teams; all tests here are small), no
+// predetermined round-robin anywhere.
 function chooseDailyMatchups(teams, availSports, h, mode) {
   const cycles = makeSportCycles(h, teams, availSports);
   const recency = makePairRecency(h);
   function sportFresh(a, b) { let best = 0; for (const s of availSports) { const f = (cycles.isFresh(a, s) ? 1 : 0) + (cycles.isFresh(b, s) ? 1 : 0); if (f > best) { best = f; if (best === 2) break; } } return best; }
   const isM = mode === 'matchup_variety', W_OPP = isM ? 1000 : 25, W_SPORT = isM ? 8 : 300, W_REC = isM ? 100 : 10;
   const pairWeight = (a, b) => (-met(h, a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC;
-  const pairs = [];
-  for (let i = 0; i < teams.length; i++) for (let j = i + 1; j < teams.length; j++) {
-    pairs.push({ a: teams[i], b: teams[j], met: met(h, teams[i], teams[j]), w: pairWeight(teams[i], teams[j]) });
+  const matchings = perfectMatchings(teams);
+  let best = null, bestW = -Infinity, bestMet = Infinity;
+  for (const m of matchings) {
+    let tw = 0, tm = 0;
+    for (const p of m) { if (p[0] === '__BYE__' || p[1] === '__BYE__') continue; tw += pairWeight(p[0], p[1]); tm += met(h, p[0], p[1]); }
+    if (tw > bestW || (tw === bestW && tm < bestMet)) { best = m; bestW = tw; bestMet = tm; }
   }
-  pairs.sort((x, y) => (y.w - x.w) || (x.met - y.met));
-  const used = new Set(), m = [];
-  for (const p of pairs) { if (used.has(p.a) || used.has(p.b)) continue; m.push([p.a, p.b]); used.add(p.a); used.add(p.b); }
-  let improved = true, guard = 0;
-  while (improved && guard < 300) {
-    improved = false; guard++;
-    for (let i = 0; i < m.length && !improved; i++) {
-      for (let j = i + 1; j < m.length; j++) {
-        const a = m[i][0], b = m[i][1], c = m[j][0], d = m[j][1];
-        const base = pairWeight(a, b) + pairWeight(c, d);
-        const s1 = pairWeight(a, c) + pairWeight(b, d);
-        const s2 = pairWeight(a, d) + pairWeight(b, c);
-        if (s1 > base && s1 >= s2) { m[i] = [a, c]; m[j] = [b, d]; improved = true; break; }
-        if (s2 > base) { m[i] = [a, d]; m[j] = [b, c]; improved = true; break; }
-      }
-    }
-  }
-  return m;
-}
-// mirrors optimizeMatchupPairingForSport (matchup_variety pairing: RR + 2-opt
-// that never worsens meetings; recency then sport-need break ties)
-function optimizeMatchupPairingForSport(rr, teams, availSports, h) {
-  const BIG = 1e6, MED = 1000;
-  const cycles = makeSportCycles(h, teams, availSports);
-  const recency = makePairRecency(h);
-  function val(a, b) {
-    let fb = 0;
-    for (const s of availSports) { const f = (cycles.isFresh(a, s) ? 1 : 0) + (cycles.isFresh(b, s) ? 1 : 0); if (f > fb) { fb = f; if (fb === 2) break; } }
-    return fb === 2 ? 3 : fb;
-  }
-  const pairScore = (a, b) => (-BIG) * met(h, a, b) - MED * recency(a, b) + val(a, b);
-  const m = rr.map(p => [p[0], p[1]]);
-  let improved = true, guard = 0;
-  while (improved && guard < 300) {
-    improved = false; guard++;
-    for (let i = 0; i < m.length && !improved; i++) {
-      for (let j = i + 1; j < m.length; j++) {
-        const a = m[i][0], b = m[i][1], c = m[j][0], d = m[j][1];
-        const base = pairScore(a, b) + pairScore(c, d);
-        const s1 = pairScore(a, c) + pairScore(b, d);
-        const s2 = pairScore(a, d) + pairScore(b, c);
-        if (s1 > base && s1 >= s2) { m[i] = [a, c]; m[j] = [b, d]; improved = true; break; }
-        if (s2 > base) { m[i] = [a, d]; m[j] = [b, c]; improved = true; break; }
-      }
-    }
-  }
-  return m;
+  return best.filter(p => p[0] !== '__BYE__' && p[1] !== '__BYE__').map(p => [p[0], p[1]]);
 }
 const keys = m => m.map(p => p.slice().sort().join('v')).sort();
 
@@ -145,9 +115,9 @@ const keys = m => m.map(p => p.slice().sort().join('v')).sort();
   const sv = chooseDailyMatchups(['1', '2', '3', '4'], ['M', 'J'], h, 'sport_variety');
   assert.deepStrictEqual(keys(sv), ['1v2', '3v4'],
     'sport_variety must prefer a fresh sport over a fresh opponent: ' + keys(sv).join(','));
-  // matchup_variety → the NEW OPPONENT wins: keep the fresh pairing even though
+  // matchup_variety → the NEW OPPONENT wins: pick a fresh pairing even though
   // someone must repeat a sport.
-  const mv = optimizeMatchupPairingForSport([['1', '3'], ['2', '4']], ['1', '2', '3', '4'], ['M', 'J'], h);
+  const mv = chooseDailyMatchups(['1', '2', '3', '4'], ['M', 'J'], h, 'matchup_variety');
   const mvk = keys(mv);
   assert(!mvk.includes('1v2') && !mvk.includes('3v4'),
     'matchup_variety must prefer a fresh opponent over a fresh sport: ' + mvk.join(','));
@@ -189,14 +159,8 @@ const keys = m => m.map(p => p.slice().sort().join('v')).sort();
     const teams = ['1', '2', '3', '4'], sports = ['M', 'J', 'K'];
     for (let day = 1; day <= 12; day++) {
       const date = '2026-07-' + String(day).padStart(2, '0');
-      let matchups;
-      if (mode === 'sport_variety') {
-        matchups = chooseDailyMatchups(teams, sports, h, mode);
-      } else {
-        // matchup_variety: round-robin walk + sport-aware 2-opt (as in source)
-        const rrRounds = [[['1', '2'], ['3', '4']], [['1', '3'], ['2', '4']], [['1', '4'], ['2', '3']]];
-        matchups = optimizeMatchupPairingForSport(rrRounds[(day - 1) % 3], teams, sports, h);
-      }
+      // BOTH modes: matchups computed fresh from history each day — no wheel.
+      const matchups = chooseDailyMatchups(teams, sports, h, mode);
       // simplified assigner: one field per sport; most-starved matchup picks first;
       // per matchup: cycle need + recent-sport guard (mirrors the scorer's core).
       const cycles = makeSportCycles(h, teams, sports);

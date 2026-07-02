@@ -1,14 +1,32 @@
-/* Daily pairing optimizer — chooses today's matchups ANEW from history (opponents
- * met + sports NEEDED this cycle) via a greedy max-weight matching + 2-opt
- * refinement that scales to ANY league size (the old enumerator bailed to
- * round-robin past 12 teams). Mirrors chooseDailyMatchups + makeSportCycles +
- * makePairRecency in scheduler_core_leagues.js.
+/* Daily pairing optimizer — the matchup creator for BOTH modes: every game's
+ * matchups are computed FRESH from history (opponents met + sports NEEDED this
+ * cycle), never a predetermined round-robin. Exact search over every possible
+ * pairing for ≤12 teams; greedy max-weight matching + 2-opt refinement beyond.
+ * Mirrors chooseDailyMatchups + makeSportCycles + makePairRecency in
+ * scheduler_core_leagues.js.
  */
 'use strict';
 const assert = require('assert');
 const LG = 'L';
 
-function getMatchupCount(h, a, b) { return (h.matchupHistory || {})[LG + ':' + [a, b].sort().join('|')] || 0; }
+// meeting count from the date-keyed gameLog (mirrors getMatchupCountByDate)
+function getMatchupCount(h, a, b) {
+  const gl = (h.gameLog || {})[LG]; const key = [a, b].sort().join('|'); let n = 0;
+  if (!gl) return (h.matchupHistory || {})[LG + ':' + key] || 0;
+  Object.keys(gl).forEach(d => (gl[d] || []).forEach(e => { if (e && [e.t1, e.t2].sort().join('|') === key) n++; }));
+  return n;
+}
+function perfectMatchings(teams) {
+  const arr = teams.slice();
+  if (arr.length % 2 === 1) arr.push('__BYE__');
+  const out = [];
+  (function rec(rem, cur) {
+    if (rem.length === 0) { out.push(cur.slice()); return; }
+    const a = rem[0];
+    for (let i = 1; i < rem.length; i++) { cur.push([a, rem[i]]); rec(rem.slice(1, i).concat(rem.slice(i + 1)), cur); cur.pop(); }
+  })(arr, []);
+  return out;
+}
 function sportCounts(h, t) {
   const gl = (h.gameLog || {})[LG] || {}, out = {};
   Object.keys(gl).forEach(d => (gl[d] || []).forEach(e => { if (e.sport && (e.t1 === t || e.t2 === t)) out[e.sport] = (out[e.sport] || 0) + 1; }));
@@ -39,6 +57,19 @@ function chooseDailyMatchups(teams, availSports, h, mode) {
   function sportFresh(a, b) { let best = 0; for (const s of availSports) { const f = (cycles.isFresh(a, s) ? 1 : 0) + (cycles.isFresh(b, s) ? 1 : 0); if (f > best) { best = f; if (best === 2) break; } } return best; }
   const isM = mode === 'matchup_variety', W_OPP = isM ? 1000 : 25, W_SPORT = isM ? 8 : 300, W_REC = isM ? 100 : 10;
   const pairWeight = (a, b) => (-getMatchupCount(h, a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC;
+  if (teams.length <= 12) {
+    // EXACT: enumerate every possible pairing, best total weight wins;
+    // fewest total meetings breaks exact weight ties (new matchups first).
+    const matchings = perfectMatchings(teams);
+    let best = null, bestW = -Infinity, bestMet = Infinity;
+    for (const m of matchings) {
+      let tw = 0, tm = 0;
+      for (const p of m) { if (p[0] === '__BYE__' || p[1] === '__BYE__') continue; tw += pairWeight(p[0], p[1]); tm += getMatchupCount(h, p[0], p[1]); }
+      if (tw > bestW || (tw === bestW && tm < bestMet)) { best = m; bestW = tw; bestMet = tm; }
+    }
+    return best.filter(p => p[0] !== '__BYE__' && p[1] !== '__BYE__').map(p => [p[0], p[1]]);
+  }
+  // >12 teams: greedy max-weight matching + 2-opt refinement.
   const pairs = [];
   for (let i = 0; i < teams.length; i++) for (let j = i + 1; j < teams.length; j++) {
     const a = teams[i], b = teams[j];
@@ -103,15 +134,14 @@ function addGame(h, date, t1, t2, sport) {
   console.log('TEST 3 PASS — sport_variety pairs the two needy teams (A vs B) so one Football field makes both fresh');
 })();
 
-// ---- TEST 4: 2-opt rescues a greedy strand — best-first pick can't ruin the rest ----
+// ---- TEST 4: the best single pair can't strand the rest (whole-pairing scoring) ----
 (function () {
   // sport_variety, sports M & J. A and B both need J; C and D both need M.
-  // A vs B is the top greedy pick (fresh 2, never met). But C & D HAVE met twice,
-  // so greedy's leftover CvD is poor (-50 + 600). The alternative split
-  // AvC/BvD (never met) maxes fresh at 1 each. Totals: {AvB 600, CvD 550} = 1150
-  // vs {AvC 300, BvD 300} = 600 → AvB/CvD is genuinely best here; now make CvD
-  // impossible-ish: raise their meetings to 30 (-750+600=-150 → total 450 < 600).
-  // Greedy still grabs AvB first and gets stuck with CvD; 2-opt must re-split.
+  // A vs B is the best single pair (fresh 2, never met) — but C & D have met 30
+  // times, so the AvB/CvD split totals 600 + (-150) = 450, while AvC/BvD (never
+  // met, fresh-to-one each) totals 300 + 300 = 600. A best-pair-first greedy
+  // would grab AvB and get stuck with CvD; whole-pairing optimization (exact
+  // search ≤12 teams, 2-opt beyond) must pick the better overall split.
   const h = H();
   addGame(h, '2026-06-20', 'A', 'p', 'M');
   addGame(h, '2026-06-20', 'B', 'q', 'M');

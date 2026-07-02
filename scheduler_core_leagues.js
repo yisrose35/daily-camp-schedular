@@ -754,16 +754,21 @@
     }
 
     // =========================================================================
-    // ★★★ DAILY PAIRING OPTIMIZER — scales to ANY league size ★★★
+    // ★★★ DAILY PAIRING OPTIMIZER — the matchup creator (BOTH modes) ★★★
     // =========================================================================
-    // Each day, chosen ANEW from history (opponents met + sports played), instead
-    // of walking a predestined round-robin. The old choosePairingsForSportVariety
-    // brute-force-enumerated every perfect matching, so it bailed to round-robin for
-    // >12-team leagues (e.g. a 16-team grade) — meaning big leagues NEVER got
-    // history-aware pairings and their sports were jammed onto fixed matchups.
+    // NO PREDETERMINED ROUND-ROBIN: every game's matchups are computed FRESH from
+    // history (opponents met + sports needed). The round-robin round the caller
+    // hands in is used ONLY as an error/kill-switch fallback, never as the plan.
     //
-    // This uses a greedy max-weight matching + 2-opt refinement that runs in O(n²)
-    // for any size. Each candidate PAIR is weighted by:
+    // The rule both modes share: ALWAYS TRY FOR NEW MATCHUPS FIRST. Meetings
+    // enter every pair's weight, so among pairings of equal sport value the one
+    // with fewer rematches always wins. The MODE only decides the impossible
+    // situation — when a new matchup and a new sport can't both happen.
+    //
+    // Search: EXACT for leagues of ≤12 teams (every possible pairing of the
+    // league is enumerated and scored — a zero-rematch pairing can never be
+    // missed); greedy max-weight matching + 2-opt refinement (O(n²)) beyond
+    // that. Each candidate PAIR is weighted by:
     //   • opponent freshness  (-prior meetings) — keeps opponents rotating
     //   • sport freshness     (can this pair BOTH get a sport they still NEED in
     //                          their current cycle? 2 = both, 1 = one) — so a single
@@ -831,43 +836,85 @@
                 return (-met(a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC;
             }
 
-            const pairs = [];
-            for (let i = 0; i < teams.length; i++) {
-                for (let j = i + 1; j < teams.length; j++) {
-                    const a = teams[i], b = teams[j];
-                    pairs.push({ a, b, met: met(a, b), w: pairWeight(a, b) });
+            let matching;
+            if (teams.length <= 12) {
+                // ★ EXACT SEARCH (≤12 teams — the common case): enumerate EVERY way
+                //   to pair up the league (12 teams → 10,395 matchings) and take the
+                //   best-scoring one. This makes "always try for new matchups first"
+                //   a hard guarantee: because meetings carry the dominant weight in
+                //   matchup mode (and break sport ties in sport mode), a pairing with
+                //   fewer rematches ALWAYS outranks one with more — if a zero-rematch
+                //   pairing exists, it is found, never missed by a greedy heuristic.
+                //   Odd team counts get a bye pair; the benched team is the one whose
+                //   sitting out best serves the rotations (self-correcting: a team
+                //   left out keeps its meeting counts low, which raises its pair
+                //   weights until it plays).
+                const cachedW = {};
+                function w(a, b) {
+                    const key = getMatchupKey(a, b);
+                    if (cachedW[key] == null) cachedW[key] = pairWeight(a, b);
+                    return cachedW[key];
                 }
-            }
-            // Greedy max-weight matching: best pair first, fewest meetings breaks ties.
-            pairs.sort(function (x, y) { return (y.w - x.w) || (x.met - y.met); });
-            const used = new Set(), matching = [];
-            for (let k = 0; k < pairs.length; k++) {
-                const p = pairs[k];
-                if (used.has(p.a) || used.has(p.b)) continue;
-                matching.push([p.a, p.b]); used.add(p.a); used.add(p.b);
-            }
-            if (!matching.length) return fallbackMatchups;   // (odd team left over = bye, handled by caller)
+                const matchings = generatePerfectMatchings(teams);
+                let best = null, bestW = -Infinity, bestMet = Infinity;
+                for (const m of matchings) {
+                    let totalW = 0, totalMet = 0;
+                    for (const p of m) {
+                        if (p[0] === '__BYE__' || p[1] === '__BYE__') continue;
+                        totalW += w(p[0], p[1]);
+                        totalMet += met(p[0], p[1]);
+                    }
+                    // Fewest total meetings breaks exact weight ties → new matchups
+                    // win even when the weighted scores come out equal.
+                    if (totalW > bestW || (totalW === bestW && totalMet < bestMet)) {
+                        best = m; bestW = totalW; bestMet = totalMet;
+                    }
+                }
+                if (!best) return fallbackMatchups;
+                matching = best
+                    .filter(function (p) { return p[0] !== '__BYE__' && p[1] !== '__BYE__'; })
+                    .map(function (p) { return [p[0], p[1]]; });
+            } else {
+                // ★ LARGE LEAGUES (>12 teams): greedy max-weight matching + 2-opt
+                //   refinement — near-optimal in O(n²), scales to any size.
+                const pairs = [];
+                for (let i = 0; i < teams.length; i++) {
+                    for (let j = i + 1; j < teams.length; j++) {
+                        const a = teams[i], b = teams[j];
+                        pairs.push({ a, b, met: met(a, b), w: pairWeight(a, b) });
+                    }
+                }
+                // Best pair first, fewest meetings breaks ties.
+                pairs.sort(function (x, y) { return (y.w - x.w) || (x.met - y.met); });
+                const used = new Set();
+                matching = [];
+                for (let k = 0; k < pairs.length; k++) {
+                    const p = pairs[k];
+                    if (used.has(p.a) || used.has(p.b)) continue;
+                    matching.push([p.a, p.b]); used.add(p.a); used.add(p.b);
+                }
 
-            // ★ 2-OPT REFINEMENT: greedy matching can strand weight — the best
-            //   single pair can force two bad leftover pairs when a slightly
-            //   worse first pick would let BOTH remaining pairs be good. Swap
-            //   partners between pairs while total weight improves (monotonic,
-            //   bounded → terminates). O(n²) per sweep, same loop shape as
-            //   optimizeMatchupPairingForSport.
-            let improved = true, guard = 0;
-            while (improved && guard < 300) {
-                improved = false; guard++;
-                for (let i = 0; i < matching.length && !improved; i++) {
-                    for (let j = i + 1; j < matching.length; j++) {
-                        const a = matching[i][0], b = matching[i][1], c = matching[j][0], d = matching[j][1];
-                        const base = pairWeight(a, b) + pairWeight(c, d);
-                        const s1 = pairWeight(a, c) + pairWeight(b, d);   // [a,c] [b,d]
-                        const s2 = pairWeight(a, d) + pairWeight(b, c);   // [a,d] [b,c]
-                        if (s1 > base && s1 >= s2) { matching[i] = [a, c]; matching[j] = [b, d]; improved = true; break; }
-                        if (s2 > base) { matching[i] = [a, d]; matching[j] = [b, c]; improved = true; break; }
+                // ★ 2-OPT REFINEMENT: greedy matching can strand weight — the best
+                //   single pair can force two bad leftover pairs when a slightly
+                //   worse first pick would let BOTH remaining pairs be good. Swap
+                //   partners between pairs while total weight improves (monotonic,
+                //   bounded → terminates). O(n²) per sweep.
+                let improved = true, guard = 0;
+                while (improved && guard < 300) {
+                    improved = false; guard++;
+                    for (let i = 0; i < matching.length && !improved; i++) {
+                        for (let j = i + 1; j < matching.length; j++) {
+                            const a = matching[i][0], b = matching[i][1], c = matching[j][0], d = matching[j][1];
+                            const base = pairWeight(a, b) + pairWeight(c, d);
+                            const s1 = pairWeight(a, c) + pairWeight(b, d);   // [a,c] [b,d]
+                            const s2 = pairWeight(a, d) + pairWeight(b, c);   // [a,d] [b,c]
+                            if (s1 > base && s1 >= s2) { matching[i] = [a, c]; matching[j] = [b, d]; improved = true; break; }
+                            if (s2 > base) { matching[i] = [a, d]; matching[j] = [b, c]; improved = true; break; }
+                        }
                     }
                 }
             }
+            if (!matching || !matching.length) return fallbackMatchups;   // (odd team left over = bye, handled by caller)
 
             const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
             if (_key(matching) !== _key(fallbackMatchups)) {
@@ -878,129 +925,6 @@
         } catch (e) {
             console.warn('[RegularLeagues] daily matchup optimizer failed — using round-robin:', e);
             return fallbackMatchups;
-        }
-    }
-
-    // =========================================================================
-    // ★★★ MATCHUP-MODE SPORT-AWARE PAIRING (option 3) ★★★
-    // =========================================================================
-    // matchup_variety's defining guarantee is PERFECT opponent rotation, which
-    // the round-robin walk provides. But for any given day there are MANY pairings
-    // that share the round-robin's opponent freshness — the round-robin fixes who
-    // each team meets across the season, not which specific pairing lands on which
-    // day. We exploit that freedom: starting FROM the round-robin matchups, run
-    // 2-opt swaps that NEVER increase the number of rematches (so opponent rotation
-    // is never worse than plain round-robin — and rematches that creep in from
-    // earlier days' swaps are actively REDUCED when an alternative exists) AND that
-    // concentrate shared sport needs — pairing two teams that both still need the
-    // same sport, so one scarce field serves two needy teams instead of one needy
-    // and one repeat.
-    //
-    //   rem(a,b) = how many times a & b have ALREADY met, counted from the date-keyed
-    //              gameLog (getMatchupCountByDate), NOT the flat matchupHistory aggregate.
-    //              Two reasons it must be a gameLog COUNT and not a 0/1 flag on the
-    //              aggregate: (1) a binary flag goes blind once every pair has met (a
-    //              4-team league saturates in one round-robin cycle) — the -BIG term then
-    //              cancels out of every comparison and sport-need alone re-pairs the
-    //              league. (2) the flat aggregate INVERTS under regeneration: rollback can
-    //              only subtract games present in the gameLog, so pre-gameLog meetings
-    //              freeze while regenerated pairs get decremented, making the MOST-played
-    //              pair look LEAST-played — the optimizer then locks onto it (observed
-    //              live: a league stuck on 1v2/3v4 every game). The gameLog count is
-    //              immune and always prefers the genuinely LEAST-met pair.
-    //   val(a,b) = sport-need concentration: 3 if some available sport is fresh for
-    //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
-    //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
-    //
-    // Acceptance uses a single scalar  score = -BIG*Σmeetings - MED*Σrecency + Σval
-    // (BIG ≫ MED ≫ max val), so reducing total meetings ALWAYS dominates; among equal
-    // meeting counts the LEAST-recently-met pairing wins (so consecutive days rotate
-    // through the distinct rounds); sport only breaks what's left. A swap can never
-    // raise total meetings. Monotonic (bounded) → terminates. Falls back to the
-    // round-robin on any error or kill switch (window.__leagueDailyOptimizer === false).
-    function optimizeMatchupPairingForSport(rrMatchups, activeTeams, availablePool, leagueName, history, dayId) {
-        try {
-            if (typeof window !== 'undefined' && window.__leagueDailyOptimizer === false) return rrMatchups;
-            if (!Array.isArray(rrMatchups) || rrMatchups.length < 2) return rrMatchups;
-            if (!Array.isArray(availablePool) || availablePool.length === 0) return rrMatchups;
-
-            const BIG = 1e6;
-            const availSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
-            // ★ CYCLE-AWARE freshness (see makeSportCycles): "fresh" = the team still
-            //   needs the sport in its CURRENT cycle, not "never played it". Binary
-            //   played-ever sets went blind after every team's first full pass
-            //   through the sports — val() then canceled out of every comparison and
-            //   the sport tiebreak died for the rest of the season. Cycle gaps keep
-            //   it alive: a completed cycle resets the team's needs.
-            const _cycleTeams = new Set(activeTeams || []);
-            rrMatchups.forEach(function (p) {
-                if (!Array.isArray(p)) return;
-                if (p[0] && p[0] !== '__BYE__') _cycleTeams.add(p[0]);
-                if (p[1] && p[1] !== '__BYE__') _cycleTeams.add(p[1]);
-            });
-            const cycles = makeSportCycles(leagueName, Array.from(_cycleTeams), availSports, history, dayId);
-
-            // Real meeting COUNT from the date-keyed gameLog (NOT the flat aggregate,
-            // which inverts under regen — see getMatchupCountByDate). Counting (vs a
-            // 0/1 flag) also keeps the guard meaningful once every pair has met in a
-            // small league. Together: always prefers the genuinely LEAST-met pair.
-            function rem(a, b) { return getMatchupCountByDate(leagueName, a, b, history, dayId); }
-            function val(a, b) {
-                let freshBoth = 0;
-                for (let k = 0; k < availSports.length; k++) {
-                    const s = availSports[k];
-                    const f = (cycles.isFresh(a, s) ? 1 : 0) + (cycles.isFresh(b, s) ? 1 : 0);
-                    if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; }
-                }
-                return freshBoth === 2 ? 3 : freshBoth;
-            }
-
-            // RECENCY tiebreak: in a small league every pair meets within one
-            // round-robin cycle, so meeting counts quickly TIE (all 1, all 2, …) and
-            // the count term cancels out. Without a tiebreak the pairing then repeats
-            // whatever sport-need happens to favor — which can re-stage yesterday's
-            // exact matchups (observed live: 1v4/2v3 two days running). Prefer the
-            // pairing whose teams met LONGEST AGO so consecutive days cycle through
-            // the distinct rounds. Derived from the date-keyed gameLog (regen-safe);
-            // 0 = never met (most preferred). MED ≫ val so recency breaks count ties
-            // ahead of sport, but ≪ BIG so it never overrides the meeting count.
-            const MED = 1000;
-            const recency = makePairRecency(leagueName, history, dayId);
-            function pairScore(a, b) { return (-BIG) * rem(a, b) - MED * recency(a, b) + val(a, b); }
-
-            // Byes stay put; only real pairings enter the swap set.
-            const byes = [], m = [];
-            rrMatchups.forEach(function (p) {
-                if (!Array.isArray(p) || p[0] === '__BYE__' || p[1] === '__BYE__' || p[1] == null) { byes.push(p); return; }
-                m.push([p[0], p[1]]);
-            });
-            if (m.length < 2) return rrMatchups;
-
-            let improved = true, guard = 0;
-            while (improved && guard < 300) {
-                improved = false; guard++;
-                for (let i = 0; i < m.length && !improved; i++) {
-                    for (let j = i + 1; j < m.length; j++) {
-                        const a = m[i][0], b = m[i][1], c = m[j][0], d = m[j][1];
-                        const base = pairScore(a, b) + pairScore(c, d);
-                        const s1 = pairScore(a, c) + pairScore(b, d);   // [a,c] [b,d]
-                        const s2 = pairScore(a, d) + pairScore(b, c);   // [a,d] [b,c]
-                        if (s1 > base && s1 >= s2) { m[i] = [a, c]; m[j] = [b, d]; improved = true; break; }
-                        if (s2 > base) { m[i] = [a, d]; m[j] = [b, c]; improved = true; break; }
-                    }
-                }
-            }
-
-            const result = m.concat(byes);
-            const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
-            if (_key(result) !== _key(rrMatchups)) {
-                console.log('   ★ [MatchupSportOpt] round-robin re-paired for sport coverage (opponents not worsened): '
-                    + m.map(function (p) { return p[0] + ' vs ' + p[1]; }).join(', '));
-            }
-            return result;
-        } catch (e) {
-            console.warn('[RegularLeagues] matchup sport-opt failed — using round-robin:', e);
-            return rrMatchups;
         }
     }
 
@@ -2165,13 +2089,19 @@
 
                 var baseGN = calculateStartingGameNumber(league.name, dayId, history);
                 var gameNum = baseGN + leagueGameCounters[league.name] + 1;
+                var lSports = league.sports || ['General Sport'];
+                var priority = league.schedulingPriority || 'sport_variety';
+                // ★ NO PREDETERMINED ROUND-ROBIN: game-1 matchups are computed fresh
+                //   from history (meetings + sport needs), same as the main path. The
+                //   round-robin round is only the error/kill-switch fallback inside
+                //   chooseDailyMatchups. (The league-wide sport list stands in for the
+                //   field pool here — the real pools are built per time key below.)
                 var fullSched = generateRoundRobinSchedule(leagueTeams);
-                var g1Matchups = fullSched[(gameNum - 1) % fullSched.length] || [];
+                var rrFallback = fullSched[(gameNum - 1) % fullSched.length] || [];
+                var g1Matchups = chooseDailyMatchups(leagueTeams, lSports.map(function (s) { return { sport: s }; }), league.name, history, rrFallback, dayId, priority);
                 if (g1Matchups.length === 0) continue;
 
-                var lSports = league.sports || ['General Sport'];
                 var zoneSports = ocGetZoneSports(league.offCampus.zone, lSports, context);
-                var priority = league.schedulingPriority || 'sport_variety';
                 var dh = ocSelectGroups(g1Matchups, league.offCampus.teamsPerDay, history, league.name, priority, zoneSports);
                 if (!dh) continue;
 
@@ -2687,29 +2617,23 @@
                         continue;
                     }
                 } else {
+                    // ★ NO PREDETERMINED ROUND-ROBIN: every game's matchups are
+                    //   computed FRESH from history — how many times teams have met
+                    //   + which sports each team still needs this cycle — via
+                    //   chooseDailyMatchups (exact search for ≤12 teams, greedy +
+                    //   2-opt beyond). BOTH modes always try for new matchups first;
+                    //   the mode decides only the impossible situation where a new
+                    //   matchup and a new sport can't both happen:
+                    //   • matchup_variety → the new opponent wins (a sport may repeat)
+                    //   • sport_variety   → the new sport wins (a matchup may repeat)
+                    //   The round-robin round below is computed ONLY as the error/
+                    //   kill-switch fallback inside chooseDailyMatchups — it is
+                    //   never the plan.
                     const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     const _rrMatchups = fullSchedule[roundIndex] || [];
-                    // ★ PAIRING by mode (both modes pursue BOTH rotations; mode is the
-                    //   tie-breaker when they conflict — opponents win in matchup_variety,
-                    //   sports win in sport_variety):
-                    //   • matchup_variety → ROUND-ROBIN, then SPORT-AWARE 2-OPT
-                    //     (optimizeMatchupPairingForSport). The round-robin keeps opponent
-                    //     rotation perfect; the 2-opt re-pairs ONLY among arrangements that
-                    //     never add a rematch, choosing the one that concentrates shared
-                    //     sport needs so a scarce field serves two needy teams. Opponents
-                    //     are never worse than plain round-robin; sports get the extra help
-                    //     the field-pick scoring (coverage-gap + stuck + fair-share) alone
-                    //     can't give when pairings are fixed.
-                    //   • sport_variety → DAILY OPTIMIZER. Here trading an opponent repeat for
-                    //     a fresh sport is the whole point, so the history-driven greedy
-                    //     matching (scales past 12 teams) is exactly right.
                     const _prioMode = league.schedulingPriority || 'sport_variety';
-                    if (_prioMode === 'sport_variety') {
-                        matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
-                    } else {
-                        matchups = optimizeMatchupPairingForSport(_rrMatchups, activeTeams, availablePool, league.name, history, dayId);
-                    }
+                    matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
