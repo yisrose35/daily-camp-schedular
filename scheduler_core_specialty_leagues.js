@@ -677,6 +677,42 @@
             }
         } catch (_eReg) { /* fail open — keep availableFields as-is */ }
 
+        // ★ Per-field sport shut-off (DA Resources → uncheck a sport on a court,
+        //   stored in dailyDisabledSportsByField). A specialty league plays one
+        //   fixed sport (league.sport); drop any court where that sport is turned
+        //   off today, mirroring the RegularLeagues pool filter. Keyed to the
+        //   authoritative gen-date; fail-open on read error.
+        try {
+            const _spSport = league && league.sport;
+            if (_spSport) {
+                let _dsbf = null;
+                try {
+                    const _dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : null;
+                    if (_dd && _dd.dailyDisabledSportsByField && Object.keys(_dd.dailyDisabledSportsByField).length) _dsbf = _dd.dailyDisabledSportsByField;
+                } catch (_e) {}
+                if (!_dsbf) {
+                    const _dk = window._activeGenDate || window.currentScheduleDate || '';
+                    if (_dk) {
+                        const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_s) { const _p = JSON.parse(_s); if (_p && _p.dailyDisabledSportsByField) _dsbf = _p.dailyDisabledSportsByField; }
+                    }
+                }
+                if (_dsbf) {
+                    availableFields = availableFields.filter(fName => {
+                        const _blk = _dsbf[fName];
+                        const _hit = _blk && (Array.isArray(_blk)
+                            ? _blk.includes(_spSport)
+                            : (typeof _blk.has === 'function' && _blk.has(_spSport)));
+                        if (_hit) {
+                            console.log(`[SpecialtyLeagues] ⚠️ Sport "${_spSport}" disabled on court "${fName}" today — not offered to specialty league "${league.name}"`);
+                            return false;
+                        }
+                        return true;
+                    });
+                }
+            }
+        } catch (_eSport) { /* fail open */ }
+
         if (availableFields.length === 0) {
             console.error(`[SpecialtyLeagues] ❌ NO COURTS AVAILABLE for "${league.name}" — its configured courts are locked, blocked by time rules, or don't exist in your facilities. Add real courts to the league.`);
             return [];
