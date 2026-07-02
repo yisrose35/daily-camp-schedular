@@ -1036,9 +1036,9 @@
         const priorityNote = document.createElement('p');
         priorityNote.className = 'league-priority-note';
         if (league.schedulingPriority === 'sport_variety') {
-            priorityNote.textContent = 'Teams will rotate through all available sports. Team matchups may repeat if needed to ensure sport variety.';
+            priorityNote.textContent = 'Matchups are chosen from how often teams have met AND which sports each team still needs. Once a team has played every sport, its rotation resets and a new cycle begins. When a new opponent and a new sport can’t both happen, the new sport wins — a matchup may repeat so both teams get a sport they still need.';
         } else {
-            priorityNote.textContent = 'Teams will play all opponents before rematches. Sports may repeat if needed to ensure matchup variety.';
+            priorityNote.textContent = 'Matchups are chosen from how often teams have met AND which sports each team still needs. Once a team has played every sport, its rotation resets and a new cycle begins. When a new opponent and a new sport can’t both happen, the new opponent wins — a sport may repeat to keep matchups fresh.';
         }
         priorityCard.appendChild(priorityNote);
 

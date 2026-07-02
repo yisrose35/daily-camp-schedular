@@ -24,20 +24,31 @@ function getMatchupCountByDate(h, a, b, asOf) {
     (gl[d] || []).forEach(e => { if (e && [e.t1, e.t2].sort().join('|') === key) n++; }); });
   return n;
 }
-function playedSports(h, t) {
-  const gl = (h.gameLog || {})[LG] || {}, out = new Set();
-  Object.keys(gl).forEach(d => (gl[d] || []).forEach(e => { if (e.sport && (e.t1 === t || e.t2 === t)) out.add(e.sport); }));
+function playedSportCounts(h, t, asOf) {
+  const gl = (h.gameLog || {})[LG] || {}, out = {};
+  Object.keys(gl).forEach(d => { if (asOf && d >= asOf) return;
+    (gl[d] || []).forEach(e => { if (e.sport && (e.t1 === t || e.t2 === t)) out[e.sport] = (out[e.sport] || 0) + 1; }); });
   return out;
+}
+// mirrors makeSportCycles: "fresh" = the team still NEEDS the sport in its
+// current cycle (count at the team's minimum across today's available sports),
+// so the sport tiebreak stays alive after every team's first full pass.
+function makeSportCycles(h, teams, cycleSports, asOf) {
+  const counts = {}; teams.forEach(t => counts[t] = playedSportCounts(h, t, asOf));
+  const mins = {};
+  teams.forEach(t => { let m = Infinity; cycleSports.forEach(s => { const c = counts[t][s] || 0; if (c < m) m = c; }); mins[t] = m === Infinity ? 0 : m; });
+  const gap = (t, s) => ((counts[t] || {})[s] || 0) - (mins[t] || 0);
+  return { gap, isFresh: (t, s) => gap(t, s) === 0 };
 }
 
 function optimizeMatchupPairingForSport(rrMatchups, teams, availSports, h, asOf) {
-  const played = {}; teams.forEach(t => played[t] = playedSports(h, t));
+  const cycles = makeSportCycles(h, teams, availSports, asOf);
   // Real meeting COUNT from the date-keyed gameLog (not a 0/1 flag, not the flat
   // aggregate which inverts under regen). Mirrors the source fix.
   function rem(a, b) { return getMatchupCountByDate(h, a, b, asOf); }
   function val(a, b) {
-    const pa = played[a], pb = played[b]; let freshBoth = 0;
-    for (const s of availSports) { const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1); if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; } }
+    let freshBoth = 0;
+    for (const s of availSports) { const f = (cycles.isFresh(a, s) ? 1 : 0) + (cycles.isFresh(b, s) ? 1 : 0); if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; } }
     return freshBoth === 2 ? 3 : freshBoth;
   }
   // RECENCY tiebreak (mirrors source): once counts tie, prefer the pair met longest ago.
@@ -199,4 +210,37 @@ function keys(m) { return m.map(p => p.slice().sort().join('v')); }
   console.log('TEST 6 PASS — recency rotates to the oldest round instead of repeating: ' + k.join(', '));
 })();
 
+// ---- TEST 7: CYCLE 2 — sport tiebreak stays ALIVE after everyone played everything ----
+// With the old binary played-ever freshness, once every team had played both sports
+// val() returned 0 for every pairing — the sport term canceled out and matchup mode
+// lost its sport tiebreak for the REST OF THE SEASON. Cycle-aware freshness keeps it:
+// A & B are one Kickball AHEAD (K2, Dg1 → they need Dodgeball this cycle); C & D are
+// one Dodgeball ahead (K1, Dg2 → they need Kickball). All history is vs phantom
+// teams, so no real pair has met (meetings/recency all tie at 0) — only the sport
+// need can decide. The 2-opt must re-pair AvC/BvD → AvB (both need Dg) + CvD (both
+// need K), which the dead binary signal could never do.
+(function () {
+  const h = H();
+  addGame(h, '2026-06-25', 'A', 'p1', 'Kickball');
+  addGame(h, '2026-06-25', 'B', 'p2', 'Kickball');
+  addGame(h, '2026-06-25', 'C', 'p3', 'Kickball');
+  addGame(h, '2026-06-25', 'D', 'p4', 'Kickball');
+  addGame(h, '2026-06-26', 'A', 'p1', 'Dodgeball');
+  addGame(h, '2026-06-26', 'B', 'p2', 'Dodgeball');
+  addGame(h, '2026-06-26', 'C', 'p3', 'Dodgeball');
+  addGame(h, '2026-06-26', 'D', 'p4', 'Dodgeball');
+  // cycle 2 begins, unevenly:
+  addGame(h, '2026-06-27', 'A', 'p1', 'Kickball');   // A: K2 Dg1 → needs Dodgeball
+  addGame(h, '2026-06-27', 'B', 'p2', 'Kickball');   // B: K2 Dg1 → needs Dodgeball
+  addGame(h, '2026-06-27', 'C', 'p3', 'Dodgeball');  // C: K1 Dg2 → needs Kickball
+  addGame(h, '2026-06-27', 'D', 'p4', 'Dodgeball');  // D: K1 Dg2 → needs Kickball
+  const rr = [['A', 'C'], ['B', 'D']];
+  const out = optimizeMatchupPairingForSport(rr, ['A', 'B', 'C', 'D'], ['Kickball', 'Dodgeball'], h, '2026-06-28');
+  const k = keys(out);
+  assert(k.includes('AvB') && k.includes('CvD'),
+    'cycle-2 needs must still concentrate (AvB need Dg, CvD need K): ' + k.join(','));
+  console.log('TEST 7 PASS — sport tiebreak alive in cycle 2 (AvB + CvD): ' + k.join(', '));
+})();
+
 console.log('\n✅ ALL MATCHUP-SPORTOPT (option 3) TESTS PASS');
+

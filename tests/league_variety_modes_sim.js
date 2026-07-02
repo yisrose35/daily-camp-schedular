@@ -41,13 +41,23 @@ function generatePerfectMatchings(teams) {
     })(arr, []);
     return out;
 }
+// mirrors makeSportCycles: "fresh" = the team still NEEDS the sport in its
+// current cycle (count at the team's minimum across today's available sports).
+function makeSportCycles(lg, teams, cycleSports, h) {
+    const counts = {};
+    teams.forEach(t => { const c = {}; getTeamSportHistory(lg, t, h).forEach(s => { c[s] = (c[s] || 0) + 1; }); counts[t] = c; });
+    const mins = {};
+    teams.forEach(t => { let m = Infinity; cycleSports.forEach(s => { const c = counts[t][s] || 0; if (c < m) m = c; }); mins[t] = m === Infinity ? 0 : m; });
+    const gap = (t, s) => ((counts[t] || {})[s] || 0) - (mins[t] || 0);
+    return { gap, isFresh: (t, s) => gap(t, s) === 0 };
+}
 function choosePairingsForSportVariety(activeTeams, availablePool, lg, h, fallbackMatchups) {
     if (!Array.isArray(activeTeams) || activeTeams.length < 2 || activeTeams.length > 12) return fallbackMatchups;
     if (!Array.isArray(availablePool) || availablePool.length === 0) return fallbackMatchups;
     const matchings = generatePerfectMatchings(activeTeams);
     if (matchings.length <= 1) return fallbackMatchups;
-    const histSets = {};
-    activeTeams.forEach(t => { histSets[t] = new Set(getTeamSportHistory(lg, t, h)); });
+    const availSports = [...new Set(availablePool.map(o => o.sport))];
+    const cycles = makeSportCycles(lg, activeTeams, availSports, h);
     let best = null, bestFresh = -1, bestMeet = Infinity;
     for (const m of matchings) {
         let fresh = 0, meet = 0;
@@ -56,7 +66,7 @@ function choosePairingsForSportVariety(activeTeams, availablePool, lg, h, fallba
             meet += getMatchupCount(lg, pair[0], pair[1], h);
             let bestPair = 0;
             for (const o of availablePool) {
-                const s = (histSets[pair[0]].has(o.sport) ? 0 : 1) + (histSets[pair[1]].has(o.sport) ? 0 : 1);
+                const s = (cycles.isFresh(pair[0], o.sport) ? 1 : 0) + (cycles.isFresh(pair[1], o.sport) ? 1 : 0);
                 if (s > bestPair) { bestPair = s; if (bestPair === 2) break; }
             }
             fresh += bestPair;
@@ -111,24 +121,38 @@ const pairKey = ms => ms.map(p => p.slice().sort().join('v')).sort().join(',');
     console.log('TEST 3 PASS — scarce sports → pairing deviates from round-robin (the mode difference)');
 }
 
-// ---- Test 4: caveat — rematch never replays the pair sport (with fallback) ----
+// ---- Test 4: caveat — rematch prefers the pair's LEAST-played sport (cycles) ----
+// Mirrors _filterPoolByPairSportCycle: keep only options whose pair play count is
+// the minimum. Cycle 1 behaves like the old binary filter (never replay while an
+// unplayed sport exists); once the pair exhausted everything, a new pair cycle
+// starts at the least-replayed sport instead of "anything goes".
 {
+    function filterPoolByPairSportCycle(pool, lg, t1, t2, h) {
+        const pairCounts = {};
+        getPairSports(lg, t1, t2, h).forEach(s => { pairCounts[s] = (pairCounts[s] || 0) + 1; });
+        if (Object.keys(pairCounts).length === 0 || pool.length === 0) return pool;
+        let minPair = Infinity;
+        pool.forEach(o => { const c = pairCounts[o.sport] || 0; if (c < minPair) minPair = c; });
+        const fresh = pool.filter(o => (pairCounts[o.sport] || 0) === minPair);
+        return fresh.length ? fresh : pool;
+    }
     const h = {
         teamSports: { 'L|1': ['M'], 'L|4': ['M'] },
         matchupHistory: { 'L:1|4': 1 },
         gameLog: { L: { 'd1': [{ t1: '1', t2: '4', sport: 'M' }] } }
     };
-    const pairSports = new Set(getPairSports('L', '1', '4', h));
-    assert.deepStrictEqual([...pairSports], ['M']);
-    // filter logic as written in both assigners:
-    let pool = [{ sport: 'M' }, { sport: 'J' }];
-    let fresh = pool.filter(o => !pairSports.has(o.sport));
-    assert.deepStrictEqual(fresh.map(o => o.sport), ['J'], 'prior pair sport excluded while an alternative exists');
-    // exhausted: only M available → fallback allows the repeat
-    pool = [{ sport: 'M' }];
-    fresh = pool.filter(o => !pairSports.has(o.sport));
-    assert.strictEqual(fresh.length, 0, 'fallback path engages when the pair exhausted everything');
-    console.log('TEST 4 PASS — rematch-sport caveat + best-effort fallback');
+    // cycle 1: prior pair sport excluded while an unplayed alternative exists
+    let out = filterPoolByPairSportCycle([{ sport: 'M' }, { sport: 'J' }], 'L', '1', '4', h);
+    assert.deepStrictEqual(out.map(o => o.sport), ['J'], 'prior pair sport excluded while an alternative exists');
+    // exhausted (only M available) → the repeat is allowed
+    out = filterPoolByPairSportCycle([{ sport: 'M' }], 'L', '1', '4', h);
+    assert.deepStrictEqual(out.map(o => o.sport), ['M'], 'repeat allowed when the pair exhausted everything');
+    // pair CYCLE 2: pair played M twice and J once → J (least-replayed) preferred
+    h.gameLog.L['d2'] = [{ t1: '1', t2: '4', sport: 'J' }];
+    h.gameLog.L['d3'] = [{ t1: '1', t2: '4', sport: 'M' }];
+    out = filterPoolByPairSportCycle([{ sport: 'M' }, { sport: 'J' }], 'L', '1', '4', h);
+    assert.deepStrictEqual(out.map(o => o.sport), ['J'], 'new pair cycle starts at the least-replayed sport');
+    console.log('TEST 4 PASS — rematch-sport caveat cycles (least-replayed first)');
 }
 
 // ---- Test 5: rollback keeps pair history honest (regen of a rematch day) ----
