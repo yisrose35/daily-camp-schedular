@@ -775,7 +775,14 @@ window.getZoneForField = function(fieldName){
     const zones = settings.locationZones || {};
     for(const [zoneName, zone] of Object.entries(zones)){
         if (!zone || typeof zone !== 'object') continue;
+        // A facility physically in a zone may be recorded in `fields` (added as a
+        // sports facility) OR in `locations` (added as a general facility). Both
+        // mean it lives in this zone — check both, so off-campus travel and
+        // away-zone restriction resolve regardless of how it was categorized.
+        // (Bug: TABC's courts were filed under `locations`, so a fields-only scan
+        // returned null and the away league never restricted to its own zone.)
         if(Array.isArray(zone.fields) && zone.fields.includes(fieldName)) return zone;
+        if(zone.locations && Object.prototype.hasOwnProperty.call(zone.locations, fieldName)) return zone;
     }
     return null;
 };
@@ -910,7 +917,16 @@ window.getFieldsInZone = function(zoneName) {
     if (!zoneName) return [];
     const settings = window.loadGlobalSettings?.() || {};
     const zone = settings.locationZones?.[zoneName];
-    return Array.isArray(zone?.fields) ? [...zone.fields] : [];
+    if (!zone || typeof zone !== 'object') return [];
+    // Union `fields` (sports facilities) with `locations` (general facilities):
+    // a facility in either bucket physically lives in the zone. Without the
+    // locations half, a zone whose courts were added as "locations" (e.g. TABC)
+    // reads as empty and an away league can't be restricted to it. De-duped.
+    const names = new Set(Array.isArray(zone.fields) ? zone.fields : []);
+    if (zone.locations && typeof zone.locations === 'object') {
+        Object.keys(zone.locations).forEach(n => names.add(n));
+    }
+    return [...names];
 };
 
 // Get all special activities in a zone
