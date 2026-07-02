@@ -876,7 +876,9 @@
             '</div>';
         document.body.appendChild(_overlayEl);
         _overlayEl.querySelector('.ph-close').onclick = close;
-        _overlayEl.addEventListener('click', function (e) { if (e.target === _overlayEl) close(); });
+        let _mdPlayoffOverlay = false;
+        _overlayEl.addEventListener('mousedown', function (e) { _mdPlayoffOverlay = (e.target === _overlayEl); });
+        _overlayEl.addEventListener('click', function (e) { if (e.target === _overlayEl && _mdPlayoffOverlay) close(); });
         document.addEventListener('keydown', _escListener);
         _render();
     }

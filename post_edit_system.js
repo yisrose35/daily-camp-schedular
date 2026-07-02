@@ -698,7 +698,9 @@
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
         
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        let _mdModalOverlay = false;
+        overlay.addEventListener('mousedown', (e) => { _mdModalOverlay = (e.target === overlay); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay && _mdModalOverlay) closeModal(); });
         const escHandler = (e) => { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } };
         document.addEventListener('keydown', escHandler);
         
@@ -2003,7 +2005,9 @@
         document.body.appendChild(overlay);
 
         const closeAdd = () => overlay.remove();
-        overlay.addEventListener('click', e => { if (e.target === overlay) closeAdd(); });
+        let _mdAddOverlay = false;
+        overlay.addEventListener('mousedown', e => { _mdAddOverlay = (e.target === overlay); });
+        overlay.addEventListener('click', e => { if (e.target === overlay && _mdAddOverlay) closeAdd(); });
         document.getElementById('pei-add-close').onclick = closeAdd;
         document.getElementById('pei-add-cancel').onclick = closeAdd;
         document.getElementById('pei-add-time-toggle').onclick = () => { const sec = document.getElementById('pei-add-time-section'); const hidden = sec.style.display === 'none'; sec.style.display = hidden ? 'block' : 'none'; document.getElementById('pei-add-time-arrow').textContent = hidden ? '▼' : '▶'; };

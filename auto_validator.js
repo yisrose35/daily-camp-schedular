@@ -902,7 +902,9 @@
         const close = () => overlay.remove();
         document.getElementById('auto-val-close-btn').onclick = close;
         document.getElementById('auto-val-close-x').onclick = close;
-        overlay.onclick = (e) => { if (e.target === overlay) close(); };
+        let _mdOverlayAutoVal = false;
+        overlay.addEventListener('mousedown', (e) => { _mdOverlayAutoVal = (e.target === overlay); });
+        overlay.onclick = (e) => { if (e.target === overlay && _mdOverlayAutoVal) close(); };
         document.addEventListener('keydown', function esc(e) {
             if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
         });

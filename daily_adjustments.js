@@ -345,7 +345,9 @@ function daShowModal(config) {
 
     overlay.querySelector('.da-modal-close-x').onclick = function() { close(null); };
     overlay.querySelector('.da-modal-cancel-x').onclick = function() { close(null); };
-    overlay.onclick = function(e) { if (e.target === overlay) close(null); };
+    let _mdOverlayA = false;
+    overlay.addEventListener('mousedown', function(e) { _mdOverlayA = (e.target === overlay); });
+    overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayA) close(null); };
 
     overlay.querySelector('.da-modal-confirm-x').onclick = function() {
       var result = {};
@@ -473,7 +475,9 @@ function daShowConfirm(message, opts) {
     document.body.appendChild(overlay);
     overlay.querySelector('.da-confirm-no').onclick = function() { overlay.remove(); resolve(false); };
     overlay.querySelector('.da-confirm-yes').onclick = function() { overlay.remove(); resolve(true); };
-    overlay.onclick = function(e) { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    let _mdOverlayB = false;
+    overlay.addEventListener('mousedown', function(e) { _mdOverlayB = (e.target === overlay); });
+    overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayB) { overlay.remove(); resolve(false); } };
     overlay.addEventListener('keydown', function(e) {
       if (e.key === 'Enter') { overlay.remove(); resolve(true); }
       if (e.key === 'Escape') { overlay.remove(); resolve(false); }
@@ -506,7 +510,9 @@ function daShowAlert(message) {
 
     document.body.appendChild(overlay);
     overlay.querySelector('.da-alert-ok').onclick = function() { overlay.remove(); resolve(); };
-    overlay.onclick = function(e) { if (e.target === overlay) { overlay.remove(); resolve(); } };
+    let _mdOverlayC = false;
+    overlay.addEventListener('mousedown', function(e) { _mdOverlayC = (e.target === overlay); });
+    overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayC) { overlay.remove(); resolve(); } };
     overlay.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' || e.key === 'Escape') { overlay.remove(); resolve(); }
     });
@@ -626,7 +632,9 @@ function daShowCopyGradeModal(skeleton, onApply) {
   renderTargets();
 
   modal.querySelector('#da-cg-cancel').onclick = function() { overlay.remove(); };
-  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  let _mdOverlayD = false;
+  overlay.addEventListener('mousedown', function(e) { _mdOverlayD = (e.target === overlay); });
+  overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayD) overlay.remove(); };
 
   applyBtn.onclick = function() {
     var sourceDiv = fromSelect.value;
@@ -772,7 +780,9 @@ function daShowCopyAutoGradeModal(autoLayers, onApply) {
   renderTargets();
 
   modal.querySelector('#da-cga-cancel').onclick = function() { overlay.remove(); };
-  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  let _mdOverlayE = false;
+  overlay.addEventListener('mousedown', function(e) { _mdOverlayE = (e.target === overlay); });
+  overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayE) overlay.remove(); };
 
   applyBtn.onclick = function() {
     var sourceDiv = fromSelect.value;
@@ -1725,8 +1735,10 @@ function showMidDayRainModal() {
   };
   
   // Close on overlay click
+  let _mdOverlayF = false;
+  modal.addEventListener('mousedown', (e) => { _mdOverlayF = (e.target === modal); });
   modal.onclick = (e) => {
-    if (e.target === modal) modal.remove();
+    if (e.target === modal && _mdOverlayF) modal.remove();
   };
   
   // Initial preview

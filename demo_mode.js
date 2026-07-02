@@ -698,7 +698,9 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
         document.getElementById('demo-exit-confirm').addEventListener('click', tryExit);
         pwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryExit(); });
         document.getElementById('demo-exit-cancel').addEventListener('click', () => overlay.remove());
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+        let _mdDemoOverlay = false;
+        overlay.addEventListener('mousedown', (e) => { _mdDemoOverlay = (e.target === overlay); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay && _mdDemoOverlay) overlay.remove(); });
     }
 
     // =========================================================================

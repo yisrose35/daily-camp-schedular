@@ -214,8 +214,10 @@
         }
 
         // Click outside to close
+        let _mdModal = false;
+        modal.addEventListener('mousedown', (e) => { _mdModal = (e.target === modal); });
         modal.onclick = (e) => {
-            if (e.target === modal) {
+            if (e.target === modal && _mdModal) {
                 modal.remove();
                 if (onCancel) onCancel();
             }

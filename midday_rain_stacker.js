@@ -1930,7 +1930,9 @@ function showRainClearsModal() {
     
     document.getElementById('rain-clears-close').onclick = () => modal.remove();
     document.getElementById('rain-clears-cancel').onclick = () => modal.remove();
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    let _mdRainModal = false;
+    modal.addEventListener('mousedown', (e) => { _mdRainModal = (e.target === modal); });
+    modal.onclick = (e) => { if (e.target === modal && _mdRainModal) modal.remove(); };
     
     document.getElementById('rain-clears-confirm').onclick = () => {
         const timeInput = document.getElementById('rain-clears-time');

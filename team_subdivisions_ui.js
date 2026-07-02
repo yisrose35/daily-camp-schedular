@@ -269,7 +269,9 @@
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-subdivision').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        let _mdModalA = false;
+        modal.addEventListener('mousedown', e => { _mdModalA = (e.target === modal); });
+        modal.addEventListener('click', e => { if (e.target === modal && _mdModalA) closeModal(); });
 
         document.getElementById('subdivision-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -462,7 +464,9 @@
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-invite').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        let _mdModalB = false;
+        modal.addEventListener('mousedown', e => { _mdModalB = (e.target === modal); });
+        modal.addEventListener('click', e => { if (e.target === modal && _mdModalB) closeModal(); });
 
         document.getElementById('invite-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -544,7 +548,9 @@
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-edit').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        let _mdModalC = false;
+        modal.addEventListener('mousedown', e => { _mdModalC = (e.target === modal); });
+        modal.addEventListener('click', e => { if (e.target === modal && _mdModalC) closeModal(); });
 
         document.getElementById('edit-member-form').addEventListener('submit', async (e) => {
             e.preventDefault();

@@ -4664,7 +4664,9 @@ if (bypassStatus.highlight) {
         modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
         overlay.appendChild(modal); 
         document.body.appendChild(overlay);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        let _mdOverlayUnified = false;
+        overlay.addEventListener('mousedown', (e) => { _mdOverlayUnified = (e.target === overlay); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay && _mdOverlayUnified) closeModal(); });
         document.addEventListener('keydown', function escHandler(e) { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } });
         return modal;
     }

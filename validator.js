@@ -982,7 +982,9 @@
         const close = () => overlay.remove();
         document.getElementById('val-close-btn').onclick = close;
         document.getElementById('val-close-x').onclick = close;
-        overlay.onclick = (e) => { if (e.target === overlay) close(); };
+        let _mdOverlayVal = false;
+        overlay.addEventListener('mousedown', (e) => { _mdOverlayVal = (e.target === overlay); });
+        overlay.onclick = (e) => { if (e.target === overlay && _mdOverlayVal) close(); };
         
         // ESC key to close
         const escHandler = (e) => {

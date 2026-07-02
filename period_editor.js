@@ -244,7 +244,9 @@
     footer.appendChild(applyBtn);
     modal.appendChild(footer);
 
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    let _mdOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _mdOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _mdOverlay) overlay.remove(); };
     document.body.appendChild(overlay);
   }
 

@@ -3914,7 +3914,9 @@ function pcOpenSpecialtyTextModal() {
     function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
     card.querySelector('#pc3-spectext-x').addEventListener('click', close);
     card.querySelector('#pc3-spectext-close').addEventListener('click', close);
-    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    let _mdSpecText = false;
+    overlay.addEventListener('mousedown', function (e) { _mdSpecText = (e.target === overlay); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay && _mdSpecText) close(); });
 
     card.querySelector('#pc3-spectext-copy').addEventListener('click', function () {
         var btn = this;
@@ -6110,7 +6112,9 @@ function openLiveBunkPageConfig() {
     document.body.appendChild(overlay);
 
     var close = function () { overlay.remove(); };
-    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    var _mdCustomPages = false;
+    overlay.addEventListener('mousedown', function (e) { _mdCustomPages = (e.target === overlay); });
+    overlay.addEventListener('click', function (e) { if (e.target === overlay && _mdCustomPages) close(); });
     overlay.querySelector('.pc3-cp-cancel').addEventListener('click', close);
     overlay.querySelector('.pc3-cp-off').addEventListener('click', function () {
         _liveCustomPages = false;
@@ -7580,7 +7584,9 @@ window._pc3ShowShortcuts = function () {
     _shortcutsOpen = true;
     function close() { ov.remove(); _shortcutsOpen = false; document.removeEventListener('keydown', onKey); }
     function onKey(e) { if (e.key === 'Escape') close(); }
-    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    let _mdShortcuts = false;
+    ov.addEventListener('mousedown', function (e) { _mdShortcuts = (e.target === ov); });
+    ov.addEventListener('click', function (e) { if (e.target === ov && _mdShortcuts) close(); });
     document.addEventListener('keydown', onKey);
 };
 

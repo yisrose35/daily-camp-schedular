@@ -147,7 +147,9 @@
         const overlay = document.createElement('div');
         overlay.id = 'snapshotModalOverlay';
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99990;display:flex;align-items:center;justify-content:center;padding:20px;';
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        let _mdOverlaySnapshot = false;
+        overlay.addEventListener('mousedown', (e) => { _mdOverlaySnapshot = (e.target === overlay); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay && _mdOverlaySnapshot) closeModal(); });
 
         const box = document.createElement('div');
         box.style.cssText = 'background:#fff;border-radius:10px;max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3);overflow:hidden;';
