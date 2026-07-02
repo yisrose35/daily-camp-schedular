@@ -35,9 +35,11 @@ const FIELDS = [
   { name: 'TABC Hockey (old gym)', activities: ['Hockey'] },
 ];
 const LOCATION_ZONES = {
-  TABC: { name: 'TABC', isOffCampus: true, travelTimeMin: 20,
+  // ★ The reported camp's "TABC" zone is ON-campus (isOffCampus falsy) — it's used
+  //   purely as an Away destination. Reservation must NOT depend on isOffCampus.
+  TABC: { name: 'TABC', isOffCampus: false,
           fields: ['TABC Bball (NG1)', 'TABC bball (ng2)', 'TABC Hockey (old gym)'] },
-  // an on-campus zone must NOT reserve its fields (isOffCampus:false)
+  // an on-campus zone that is NOT an away target must NOT reserve its fields
   'Main Campus': { name: 'Main Campus', isOffCampus: false, fields: ['New Gym bball(1)'] },
 };
 
@@ -53,13 +55,18 @@ function getFieldsInZone(zoneName) {
   return (z && Array.isArray(z.fields)) ? [...z.fields] : [];
 }
 
+// every period here has Week 1 Leagues going Away to TABC, so TABC is reserved:
+const RESERVED_AWAY_ZONES = new Set(['TABC']);
+
 // --- mirror of buildAvailableFieldSportPool's field admission + the away block ---
-function buildPool(sports, awayZoneName) {
+function buildPool(sports, awayZoneName, reservedAwayZones) {
   const pool = [];
   for (const field of FIELDS) {
-    // the exact off-campus reservation predicate added to the pool builder:
+    // the exact reservation predicate added to the pool builder:
     const fz = getZoneForField(field.name);
-    if (fz && fz.isOffCampus === true && fz.name !== awayZoneName) continue;
+    if (fz && fz.name !== awayZoneName &&
+        (fz.isOffCampus === true ||
+         (reservedAwayZones && reservedAwayZones.has(fz.name)))) continue;
     for (const sport of sports) {
       if (field.activities.includes(sport)) pool.push({ field: field.name, sport });
     }
@@ -69,7 +76,7 @@ function buildPool(sports, awayZoneName) {
 // away resolution, mirroring the engine: build with the zone admitted, then for
 // EXCLUSIVE mode intersect down to the zone's fields; MIXED leaves the pool.
 function leagueAwayPool(sports, awayZone, awayMode) {
-  let pool = buildPool(sports, awayZone || null);
+  let pool = buildPool(sports, awayZone || null, RESERVED_AWAY_ZONES);
   if (awayZone && awayMode === 'exclusive') {
     const zset = new Set(getFieldsInZone(awayZone));
     const filtered = pool.filter(p => zset.has(p.field));
@@ -84,12 +91,12 @@ const isTABC = f => f.startsWith('TABC');
 //          field. Previously they were, so the seniors drained the zone.
 // =============================================================================
 {
-  const pool = buildPool(SPORTS, null);
+  const pool = buildPool(SPORTS, null, RESERVED_AWAY_ZONES);
   assert.ok(pool.length > 0, 'non-away league still has on-campus fields');
-  assert.ok(!pool.some(p => isTABC(p.field)), 'FIX: non-away league sees ZERO off-campus TABC fields');
+  assert.ok(!pool.some(p => isTABC(p.field)), 'FIX: non-away league sees ZERO TABC (away-target) fields');
   assert.ok(pool.some(p => p.field === 'New Gym bball(1)'), 'on-campus fields unaffected');
 }
-console.log('TEST 1 PASS — non-away leagues cannot poach the off-campus zone (the confirmed bug)');
+console.log('TEST 1 PASS — non-away leagues cannot poach an away-target zone even when it is on-campus (the confirmed bug)');
 
 // =============================================================================
 // TEST 2 — the away league (exclusive "all away") gets ONLY the TABC zone fields
@@ -118,11 +125,15 @@ console.log('TEST 3 PASS — mixed away league can play either off-campus or hom
 //          and camps with no off-campus zone are entirely unaffected.
 // =============================================================================
 {
-  const pool = buildPool(SPORTS, null);
-  // New Gym bball(1) is in an on-campus zone → must remain freely available.
+  const pool = buildPool(SPORTS, null, RESERVED_AWAY_ZONES);
+  // New Gym bball(1) is in an on-campus, non-away-target zone → freely available.
   assert.ok(pool.some(p => p.field === 'New Gym bball(1)'),
-    'on-campus-zone field is NOT reserved away from normal leagues');
+    'on-campus, non-away-target zone field is NOT reserved from normal leagues');
+  // and a camp with NO away games (empty reserved set, no off-campus) reserves nothing:
+  const noAway = buildPool(SPORTS, null, new Set());
+  assert.ok(noAway.some(p => isTABC(p.field)),
+    'no away games → TABC (on-campus) fields stay in the normal pool (zero behavior change)');
 }
-console.log('TEST 4 PASS — on-campus zones never reserve; non-off-campus camps unchanged');
+console.log('TEST 4 PASS — only away-target/off-campus zones reserve; camps without away games unchanged');
 
 console.log('\nALL 4 LEAGUE-AWAY-OFFCAMPUS-RESERVE TESTS PASS');

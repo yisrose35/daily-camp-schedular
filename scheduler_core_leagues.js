@@ -886,7 +886,7 @@
     // ★★★ FIELD AVAILABILITY - WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
 
-    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey, slots, blockEndMin, awayZoneName) {
+    function buildAvailableFieldSportPool(leagueSports, context, divisionNames, timeKey, slots, blockEndMin, awayZoneName, reservedAwayZones) {
         const pool = [];
         const { fields, disabledFields, activityProperties } = context;
 
@@ -971,17 +971,21 @@
                 continue;
             }
 
-            // ★★★ OFF-CAMPUS RESERVATION: a field in an OFF-CAMPUS zone is playable
-            //   ONLY by a game explicitly going Away to THAT zone (awayZoneName). Every
-            //   other (on-campus / non-away) league excludes it. Without this, on-campus
-            //   leagues — processed in seniority order BEFORE the away league — consume
-            //   the off-campus venue's courts, so the away game finds its own zone empty
-            //   and silently falls back on campus ("...no available fields; keeping full
-            //   pool"). Non-off-campus fields (getZoneForField → null / isOffCampus:false)
-            //   are unaffected, so camps with no off-campus zones see no change.
+            // ★★★ AWAY-ZONE RESERVATION: a field is reserved for Away games when its
+            //   zone is EITHER off-campus OR an away destination this period
+            //   (reservedAwayZones). It's admitted ONLY to the league going Away to THAT
+            //   zone (awayZoneName); every other league excludes it. Without this, the
+            //   non-away leagues — processed in seniority order BEFORE the away league —
+            //   consume the zone's courts, so the away game finds its own zone locked and
+            //   silently falls back on campus ("...no available fields; keeping full
+            //   pool"). Keyed on the away FLAG, not isOffCampus alone, because an Away
+            //   zone need not be marked off-campus. Fields in no zone (getZoneForField →
+            //   null) are unaffected, so camps without zones/away games see no change.
             if (typeof window.getZoneForField === 'function') {
                 const _fldZone = window.getZoneForField(field.name);
-                if (_fldZone && _fldZone.isOffCampus === true && _fldZone.name !== awayZoneName) {
+                if (_fldZone && _fldZone.name !== awayZoneName &&
+                    (_fldZone.isOffCampus === true ||
+                     (reservedAwayZones && reservedAwayZones.has && reservedAwayZones.has(_fldZone.name)))) {
                     continue;
                 }
             }
@@ -2407,6 +2411,25 @@
                     });
                 });
 
+                // ★ Reserve EVERY zone that is an away destination THIS period (any
+                //   league's away block, across all divisions present), so one league's
+                //   away-zone fields can't be poached by another league sharing the
+                //   period. Keyed on the away FLAG, NOT the zone's isOffCampus setting —
+                //   an "Away" zone need not be marked off-campus (the reported camp's
+                //   "TABC" zone is on-campus), which is why the earlier isOffCampus-only
+                //   guard didn't fire and the seniors kept draining the zone.
+                var _reservedAwayZonesThisPeriod = new Set();
+                Object.keys(timeData.byDivision || {}).forEach(function (divName) {
+                    (timeData.byDivision[divName] || []).forEach(function (b) {
+                        if (!b || b._isAway !== true || !b._awayZone) return;
+                        var _bk = (typeof b.startTime === 'number')
+                            ? b.startTime
+                            : (window.SchedulerCoreUtils?.parseTimeToMinutes?.(b.startTime) ?? b.startTime);
+                        if (Number(_bk) !== Number(timeKey)) return;
+                        _reservedAwayZonesThisPeriod.add(b._awayZone);
+                    });
+                });
+
                 // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
                 // ★ FN-57: built BEFORE matchup selection so sport_variety
                 // pairing can see which sports are actually available today.
@@ -2417,7 +2440,8 @@
                     timeKey,
                     slots,
                     sampleBlock?.endTime,
-                    _awayZoneForPeriod   // admit this away zone's off-campus fields (null → none)
+                    _awayZoneForPeriod,             // admit THIS league's away zone fields (null → none)
+                    _reservedAwayZonesThisPeriod    // exclude OTHER leagues' away-zone fields
                 );
                 // Exclusive away = only the zone's fields (travel is stamped per-block in
                 // fillBlock). Mixed already has the zone's fields admitted alongside the
