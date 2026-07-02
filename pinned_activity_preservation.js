@@ -244,6 +244,15 @@
                     if (ds && actName && (ds.has?.(actName) || (Array.isArray(ds) && ds.includes(actName)))) return false;
                 }
 
+                // Bunk-Only Access (DA Resources → "only available for these bunk(s)
+                // today"). Drop a pin whose (facility, activity) is reserved for OTHER
+                // bunks today — the same restriction canBlockFit and the STEP 7.55
+                // sweep honor. The sweep EXEMPTS pinned slots, so without this a pin
+                // set before the restriction would resurrect the violation every regen.
+                if (actName && window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, actName, fieldName, _bunkGrade)) {
+                    return false;
+                }
+
                 // 4. Slice 4 audit fix — also check cooldown / FieldCombos
                 // rules. Earlier the gate stopped at access + timeRules +
                 // disabledFields/Sports. A pin could survive even if a
