@@ -5643,6 +5643,8 @@ if (bypassStatus.highlight) {
             const body = document.getElementById('post-edit-report-body');
             if (!body || !window.PostEditReport?.bodyHtml) return;
             body.innerHTML = window.PostEditReport.bodyHtml(bunk, divName, startMin, endMin, actInput.value, _reportCtx);
+            // panelHtml scheduled the async cloud load on open; a plain re-render
+            // here (on activity change) reuses whatever cloud snapshot is cached.
         }
         actInput.addEventListener('change', refreshBunkReport);
 

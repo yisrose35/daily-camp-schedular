@@ -790,6 +790,49 @@
     // Expose so the unified editor can normalize with identical semantics.
     window.PostEditReportAvail = _reportAvailEntry;
 
+    // ── Cloud rotation counts ──────────────────────────────────────────────
+    // The authoritative per-bunk/activity usage lives in the cloud
+    // (rotation_counts, synced from camp state), NOT local historicalCounts
+    // which can be stale after another scheduler generates. RotationCloud.load()
+    // is async (30s-cached), so the report renders immediately with the local
+    // count, then re-renders once the cloud snapshot resolves.
+    let _reportCloudCache = null;
+    function _ciGet(obj, key) {
+        if (!obj) return undefined;
+        if (obj[key] != null) return obj[key];
+        const lk = String(key).toLowerCase().trim();
+        for (const k in obj) if (k.toLowerCase().trim() === lk) return obj[k];
+        return undefined;
+    }
+    function _cloudDaysSince(lastDateStr) {
+        if (!lastDateStr) return null;
+        const today = window.currentScheduleDate ||
+            (typeof window.currentDate === 'string' ? window.currentDate : null);
+        if (!today) return null;
+        const a = new Date(today + 'T12:00:00'), b = new Date(lastDateStr + 'T12:00:00');
+        if (isNaN(a) || isNaN(b)) return null;
+        return Math.max(0, Math.round((a - b) / 86400000));
+    }
+    // Fire the async cloud load after the panel mounts; re-render the body with
+    // the proper counts once it resolves. Self-contained so no caller wiring.
+    function _reportScheduleCloudHydrate(bunk, divName, ctx, startMin, endMin) {
+        try {
+            if (!window.RotationCloud || typeof window.RotationCloud.load !== 'function') return;
+            setTimeout(() => {
+                if (!document.getElementById('post-edit-report-body')) return;
+                Promise.resolve(window.RotationCloud.load()).then(data => {
+                    if (!data || !data.counts) return;
+                    _reportCloudCache = data;
+                    try { window.RotationEngine?.mergeCloudData?.(data); } catch (_) { }
+                    const el = document.getElementById('post-edit-report-body');
+                    if (!el) return;
+                    const sel = document.getElementById('post-edit-activity')?.value || '';
+                    el.innerHTML = renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, sel, startMin, endMin);
+                }).catch(() => { });
+            }, 0);
+        } catch (_) { /* offline / no cloud — keep local counts */ }
+    }
+
     // Build the location + availability context the report needs for the
     // "Open fields at this time" section. Self-contained so the report can be
     // rendered from any modal (including the unified_schedule_system editor)
@@ -811,7 +854,7 @@
 
     // Re-renderable inner body of the report. `selectedActivity` is the value
     // currently in the modal's activity field, used for live highlighting/flags.
-    function renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity) {
+    function renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity, startMin, endMin) {
         try {
             const RE = window.RotationEngine;
             const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
@@ -819,6 +862,11 @@
             const specialsCfg = (window.getGlobalSpecialActivities && window.getGlobalSpecialActivities())
                 || app1.specialActivities || [];
             const selKey = (selectedActivity || '').toLowerCase().trim();
+            // Prefer the authoritative cloud snapshot when it has loaded.
+            const cloudCounts = _reportCloudCache && _reportCloudCache.counts
+                ? (_ciGet(_reportCloudCache.counts, bunk) || {}) : null;
+            const cloudLast = _reportCloudCache && _reportCloudCache.lastDone
+                ? (_ciGet(_reportCloudCache.lastDone, bunk) || {}) : null;
             const _skip = (name) => {
                 const low = (name || '').toLowerCase().trim();
                 return !low || low === 'free' || low === 'free play'
@@ -847,8 +895,14 @@
             const never = [];
             allActs.forEach(act => {
                 const key = (act || '').toLowerCase().trim();
-                const count = (RE && RE.getActivityCount) ? (RE.getActivityCount(bunk, act) || 0) : 0;
-                const daysSince = (RE && RE.getDaysSinceActivity) ? RE.getDaysSinceActivity(bunk, act) : null;
+                // Count: cloud snapshot is authoritative; fall back to local.
+                let count;
+                if (cloudCounts) count = _ciGet(cloudCounts, act) || 0;
+                else count = (RE && RE.getActivityCount) ? (RE.getActivityCount(bunk, act) || 0) : 0;
+                // Recency: derive from cloud lastDone when available.
+                let daysSince;
+                if (cloudLast) daysSince = _cloudDaysSince(_ciGet(cloudLast, act));
+                else daysSince = (RE && RE.getDaysSinceActivity) ? RE.getDaysSinceActivity(bunk, act) : null;
                 const isToday = todayLower.has(key);
                 const limit = _reportActivityLimit(act, specialsCfg);
                 const rec = { act, count, daysSince, isToday, limit, sel: key === selKey };
@@ -856,6 +910,42 @@
             });
             done.sort((a, b) => (b.count - a.count) || a.act.localeCompare(b.act));
             never.sort((a, b) => a.act.localeCompare(b.act));
+
+            // --- 2b) Suggestions: what this bunk SHOULD get next ---
+            // Primary source is the same rotation+availability scorer the auto
+            // Quick-Pick uses (open now, fair by history). If nothing is open we
+            // fall back to a pure history ranking (new first, then longest-ago).
+            const doneByKey = {};
+            done.forEach(d => { doneByKey[d.act.toLowerCase().trim()] = d; });
+            const reasonFor = (key) => {
+                const d = doneByKey[key];
+                if (!d || d.count <= 0) return 'new for this bunk';
+                if (d.daysSince && d.daysSince >= 1) return `not in ${d.daysSince}d`;
+                return `only ${d.count}× so far`;
+            };
+            const suggestions = [];
+            const sugSeen = new Set();
+            const pushSug = (activity, field, open) => {
+                const k = (activity || '').toLowerCase().trim();
+                if (!k || sugSeen.has(k) || todayLower.has(k)) return;
+                if (masterSet.has(k) && !accessibleSet.has(k)) return; // restricted
+                const d = doneByKey[k];
+                if (d && d.limit && d.count >= d.limit.max) return;    // at limit
+                sugSeen.add(k);
+                suggestions.push({ activity, field: field && field !== activity ? field : null, reason: reasonFor(k), open });
+            };
+            try {
+                const cand = (typeof peiAutoFillCandidates === 'function')
+                    ? peiAutoFillCandidates(bunk, divName, startMin, endMin) : [];
+                for (const c of cand) { pushSug(c.activity, c.field, true); if (suggestions.length >= 3) break; }
+            } catch (_) { /* scorer unavailable */ }
+            if (suggestions.length < 3) {
+                // History fallback: never-done first, then longest-since / least-played.
+                const pool = [...never.map(n => ({ act: n.act, ds: Infinity, ct: 0 })),
+                    ...done.map(d => ({ act: d.act, ds: (d.daysSince == null ? 0 : d.daysSince), ct: d.count }))]
+                    .sort((a, b) => (b.ds - a.ds) || (a.ct - b.ct) || a.act.localeCompare(b.act));
+                for (const p of pool) { pushSug(p.act, null, false); if (suggestions.length >= 3) break; }
+            }
 
             // --- 3) Field status at THIS time slot (fields + facility-hosted
             //        general activities; specials are activities, not courts) ---
@@ -920,6 +1010,21 @@
                 ${statPill(never.length, 'Not tried', '#b45309')}
             </div>`;
 
+            // --- Suggestions (clickable → fills the activity field) ---
+            const sugHtml = suggestions.length ? `
+                <div style="background:#f5f6ff;border:1px solid #e0e3fb;border-radius:10px;padding:10px 12px;margin:12px 0 2px;">
+                    <div style="font-weight:700;color:#4338ca;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:7px;">Suggested for this bunk</div>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                        ${suggestions.map(s => `<button type="button" class="pe-suggest-btn" data-activity="${escHtml(s.activity)}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;text-align:left;background:#fff;border:1px solid #d9ddf7;border-radius:8px;padding:7px 10px;cursor:pointer;font-family:inherit;">
+                            <span style="display:flex;flex-direction:column;line-height:1.2;">
+                                <span style="font-weight:600;color:#312e81;font-size:0.82rem;">${escHtml(s.activity)}${s.field ? `<span style="font-weight:400;color:#9ca3af;font-size:0.72rem;"> @ ${escHtml(s.field)}</span>` : ''}</span>
+                                <span style="color:#6366f1;font-size:0.68rem;">${escHtml(s.reason)}${s.open ? ' · open now' : ''}</span>
+                            </span>
+                            <span style="color:#6366f1;font-size:0.9rem;font-weight:700;flex:0 0 auto;">+</span>
+                        </button>`).join('')}
+                    </div>
+                </div>` : '';
+
             // --- Scheduled today ---
             const todayHtml = todayActs.length
                 ? todayActs.map(a => chip(escHtml(a.name), '#dbeafe', '#1e40af')).join('')
@@ -974,6 +1079,7 @@
             return `
                 ${noteHtml}
                 ${statHtml}
+                ${sugHtml}
                 ${sectionTitle('Scheduled today', todayActs.length || null)}
                 <div>${todayHtml}</div>
                 ${sectionTitle('Rotation balance', triedCount || null)}
@@ -1009,9 +1115,10 @@
             </details>`;
     }
 
-    function renderBunkMiniReport(bunk, divName, locations, locationAvailMap) {
+    function renderBunkMiniReport(bunk, divName, locations, locationAvailMap, startMin, endMin) {
         try {
-            return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, locations, locationAvailMap, ''));
+            _reportScheduleCloudHydrate(bunk, divName, { locations, locationAvailMap }, startMin, endMin);
+            return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, locations, locationAvailMap, '', startMin, endMin));
         } catch (e) {
             debugLog('renderBunkMiniReport error', e);
             return '';
@@ -1039,12 +1146,7 @@
         // Compute per-location availability at this time slot
         const locationAvailMap = {};
         for (const loc of locations) {
-            const check = checkLocationConflict(loc.name, slots, bunk);
-            locationAvailMap[loc.name] = {
-                status: check.hasConflict ? (check.canShare ? 'partial' : 'busy') : 'free',
-                usage: check.currentUsage,
-                max: check.maxCapacity
-            };
+            locationAvailMap[loc.name] = _reportAvailEntry(checkLocationConflict(loc.name, slots, bunk));
         }
         const _avOrd = { free: 0, partial: 1, busy: 2 };
         const fieldLocsSorted = [...locations.filter(l => l.type === 'field')].sort((a, b) =>
@@ -1094,7 +1196,7 @@
                 <div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div>
                 <div style="font-size:0.875rem;color:#6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div>
             </div>
-            ${renderBunkMiniReport(bunk, divName_, locations, locationAvailMap)}
+            ${renderBunkMiniReport(bunk, divName_, locations, locationAvailMap, startMin, endMin)}
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label>
@@ -1133,7 +1235,7 @@
             if (_reportRaf) cancelAnimationFrame(_reportRaf);
             _reportRaf = requestAnimationFrame(() => {
                 const sel = (document.getElementById('post-edit-activity')?.value || '');
-                body.innerHTML = renderBunkReportBody(bunk, divName_, locations, locationAvailMap, sel);
+                body.innerHTML = renderBunkReportBody(bunk, divName_, locations, locationAvailMap, sel, startMin, endMin);
             });
         }
         document.getElementById('post-edit-activity').addEventListener('input', refreshReport);
@@ -2884,17 +2986,42 @@
             try {
                 divName = divName || peiGetDivForBunk(bunk);
                 const ctx = (opts && opts.locationAvailMap) ? opts : _reportBuildContext(bunk, startMin, endMin);
-                return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || ''));
+                _reportScheduleCloudHydrate(bunk, divName, ctx, startMin, endMin);
+                return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || '', startMin, endMin));
             } catch (e) { debugLog('PostEditReport.panelHtml error', e); return ''; }
         },
         bodyHtml(bunk, divName, startMin, endMin, selectedActivity, opts) {
             try {
                 divName = divName || peiGetDivForBunk(bunk);
                 const ctx = (opts && opts.locationAvailMap) ? opts : _reportBuildContext(bunk, startMin, endMin);
-                return renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || '');
+                return renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || '', startMin, endMin);
             } catch (e) { debugLog('PostEditReport.bodyHtml error', e); return ''; }
         }
     };
+
+    // One-time delegation: clicking a suggestion fills the modal's activity
+    // field (works for both the <input> and the unified <select>) and fires
+    // input/change so the report + conflict UI refresh.
+    if (!window.__peSuggestWired) {
+        window.__peSuggestWired = true;
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest && e.target.closest('.pe-suggest-btn');
+            if (!btn) return;
+            e.preventDefault(); e.stopPropagation();
+            const act = btn.getAttribute('data-activity');
+            const input = document.getElementById('post-edit-activity');
+            if (!act || !input) return;
+            input.value = act;
+            if (input.tagName === 'SELECT' && input.value !== act) {
+                const opt = document.createElement('option');
+                opt.value = act; opt.textContent = act;
+                input.appendChild(opt); input.value = act;
+            }
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            try { input.focus(); } catch (_) { }
+        }, true);
+    }
 
     if (!window.UnifiedScheduleSystem) {
         window.enhancedEditCell = enhancedEditCell;
