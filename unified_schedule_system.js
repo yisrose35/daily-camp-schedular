@@ -3020,6 +3020,23 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         var border = side === 'pre' ? 'border-right:1px solid #F59E0B;' : 'border-left:1px solid #F59E0B;';
         return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="flex:0 0 auto;background:#FEF3C7;color:#92400E;' + border + 'display:flex;align-items:center;justify-content:center;padding:2px;writing-mode:vertical-rl;text-orientation:mixed;font-size:10px;font-weight:700;white-space:nowrap;">🚐 ' + m + 'm</div>';
     }
+    // An explicit inline travel badge — shown INSIDE the cell (under the title) so
+    // travel is obvious regardless of view. The thin edge strips are easy to miss
+    // in the horizontal (transposed) timeline, where they render as slim vertical
+    // bars at the cell's left/right; this badge makes travel legible everywhere.
+    function _usTravelLabel(ct) {
+        if (!ct) return '';
+        var m = Math.max(ct.pre || 0, ct.post || 0);
+        if (!m) return '';
+        return '<div style="display:inline-block;margin:0 0 6px;background:#FEF3C7;color:#92400E;border:1px solid #F59E0B;border-radius:4px;padding:1px 8px;font-size:0.72rem;font-weight:700;white-space:nowrap;">🚐 ' + m + ' min travel each way' + (ct.zone ? ' — ' + escapeHtml(String(ct.zone)) : '') + '</div>';
+    }
+    // Insert the travel badge right after a cell's title (the first </div>).
+    function _usInjectTravelLabel(html, ct) {
+        var label = _usTravelLabel(ct);
+        if (!label) return html;
+        var i = html.indexOf('</div>');
+        return i < 0 ? (label + html) : (html.slice(0, i + 6) + label + html.slice(i + 6));
+    }
     // Wrap a cell's inner HTML with travel layers in the correct orientation.
     function _usApplyTravel(td, innerHtml, ct, pad, horizontal) {
         if (!ct) { td.innerHTML = innerHtml; return; }
@@ -3083,8 +3100,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
         }
         // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
-        //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell.
-        _usApplyTravel(td, html, _usCellTravel(_tFields), '8px 10px', true);
+        //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell. Plus an
+        //   inline badge under the title so travel is legible (edge strips are subtle).
+        var _ctT = _usCellTravel(_tFields);
+        _usApplyTravel(td, _usInjectTravelLabel(html, _ctT), _ctT, '8px 10px', true);
         // ★ Make the transposed-view league/specialty cell clickable → field-change
         //   modal (this renderer previously wired NO onclick, so leagues couldn't be
         //   post-edited in the transposed unified view at all).
@@ -3866,8 +3885,10 @@ divBlocks.forEach((block, blockIdx) => {
         }
 
         // ★ Off-campus travel layer (mirrors swim Change). Standard table → time
-        //   runs top→bottom, so the bands sit ABOVE/BELOW the cell.
-        _usApplyTravel(td, html, _usCellTravel(_tFields), '12px 16px', false);
+        //   runs top→bottom, so the bands sit ABOVE/BELOW the cell. Plus an inline
+        //   badge under the title so travel is legible even when bands are missed.
+        const _ctS = _usCellTravel(_tFields);
+        _usApplyTravel(td, _usInjectTravelLabel(html, _ctS), _ctS, '12px 16px', false);
         
         if (isEditable && bunks.length > 0) {
             _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, bunks[0], isEditable);
