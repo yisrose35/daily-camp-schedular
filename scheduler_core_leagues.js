@@ -598,6 +598,89 @@
         return out;
     }
 
+    // =========================================================================
+    // ★★★ SPORT CYCLES — a team's sport "need" RESETS once it has played
+    // everything ★★★
+    // =========================================================================
+    // Sport freshness used to be a binary played-ever set (`playedSet.has(s)`),
+    // so after one full pass through the league's sports EVERY sport looked
+    // stale: the sport term canceled out of every pairing/assignment decision
+    // and the two variety modes stopped meaning anything — exactly at the point
+    // in the season where "a new opponent AND a new sport" first becomes
+    // impossible and the mode is supposed to break the tie. Cycle semantics fix
+    // that: a team works through every available sport once (cycle 1), then all
+    // sports become needed again and it works through them again (cycle 2), etc.
+    //
+    //   gap(team, sport) = plays(sport) − min plays across today's available
+    //                      sports. 0 → needed THIS cycle (fresh); 1 → would
+    //                      start the next cycle early; 2 → two cycles ahead…
+    //
+    // The min is taken over TODAY'S available sports (not the league's full
+    // configured list) so a configured-but-never-available sport can't pin the
+    // whole league at "cycle never completes". Counts come from the date-keyed
+    // history (getTeamSportHistoryByDate) so they're regeneration/delete-safe.
+    function makeSportCycles(leagueName, teams, cycleSports, history, dayId) {
+        const counts = {};
+        (teams || []).forEach(function (t) {
+            const c = {};
+            getTeamSportHistoryByDate(leagueName, t, history, dayId)
+                .forEach(function (s) { c[s] = (c[s] || 0) + 1; });
+            counts[t] = c;
+        });
+        const mins = {};
+        Object.keys(counts).forEach(function (t) {
+            let m = Infinity;
+            (cycleSports || []).forEach(function (s) {
+                const c = counts[t][s] || 0;
+                if (c < m) m = c;
+            });
+            mins[t] = (m === Infinity) ? 0 : m;
+        });
+        function gap(team, sport) {
+            return ((counts[team] || {})[sport] || 0) - (mins[team] || 0);
+        }
+        function done(team) {
+            let n = 0;
+            (cycleSports || []).forEach(function (s) { if (gap(team, s) > 0) n++; });
+            return n;
+        }
+        return {
+            gap: gap,
+            isFresh: function (team, sport) { return gap(team, sport) === 0; },
+            // Cross-team starvation rank (lower = more starved, gets first pick).
+            // Completed cycles dominate: a team still missing a sport in cycle 1
+            // (min 0) always outranks a team starting cycle 2 fresh (min 1) —
+            // "never played football" beats "played everything once". Progress
+            // within the cycle breaks ties.
+            starve: function (team) { return (mins[team] || 0) * 1000 + done(team); }
+        };
+    }
+
+    // Pair recency in [0,1): 0 = never met, higher = met more recently. Shared
+    // by the pairing optimizers — once meeting counts tie (unavoidable in a
+    // small league), the pair that met LONGEST ago should meet again first, so
+    // consecutive days rotate through the distinct rounds instead of repeating
+    // yesterday. Derived from the date-keyed gameLog (regen/delete-safe).
+    function makePairRecency(leagueName, history, dayId) {
+        const gl = (history.gameLog && history.gameLog[leagueName]) || {};
+        const dates = Object.keys(gl).filter(function (d) { return !dayId || d <= dayId; }).sort();
+        const denom = dates.length + 1;
+        const cache = {};
+        return function (a, b) {
+            const key = getMatchupKey(a, b);
+            if (cache[key] != null) return cache[key];
+            let best = 0;
+            for (let i = 0; i < dates.length; i++) {
+                const entries = gl[dates[i]] || [];
+                for (let j = 0; j < entries.length; j++) {
+                    const e = entries[j];
+                    if (e && getMatchupKey(e.t1, e.t2) === key) { best = (i + 1) / denom; break; }
+                }
+            }
+            return (cache[key] = best);
+        };
+    }
+
     // All ways to split the team list into pairs (odd counts get one bye).
     // 4 teams → 3 matchings, 8 → 105, 12 → 10395 — fine; larger leagues fall
     // back to round-robin in the chooser.
@@ -624,13 +707,16 @@
             const matchings = generatePerfectMatchings(activeTeams);
             if (matchings.length <= 1) return fallbackMatchups;
 
-            const histSets = {};
-            activeTeams.forEach(function (t) { histSets[t] = new Set(getTeamSportHistoryByDate(leagueName, t, history, dayId)); });
+            // ★ CYCLE-AWARE freshness (see makeSportCycles): a sport is fresh for a
+            //   team while its play count sits at the team's current-cycle minimum,
+            //   so needs RESET once a team has played everything.
+            const _svAvailSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
+            const cycles = makeSportCycles(leagueName, activeTeams, _svAvailSports, history, dayId);
 
             // Score each matching: fresh = how many team-slots can receive a
-            // sport that team hasn't played (per pair, the best single option:
-            // new-to-both = 2, new-to-one = 1). Maximize fresh; tie-break on
-            // fewest prior meetings (prefer fresh opponents). Cross-pair field
+            // sport that team still needs this cycle (per pair, the best single
+            // option: new-to-both = 2, new-to-one = 1). Maximize fresh; tie-break
+            // on fewest prior meetings (prefer fresh opponents). Cross-pair field
             // contention is ignored here — the assigner resolves it.
             let best = null, bestFresh = -1, bestMeet = Infinity;
             for (const m of matchings) {
@@ -640,7 +726,7 @@
                     meet += getMatchupCount(leagueName, pair[0], pair[1], history);
                     let bestPair = 0;
                     for (const o of availablePool) {
-                        const s = (histSets[pair[0]].has(o.sport) ? 0 : 1) + (histSets[pair[1]].has(o.sport) ? 0 : 1);
+                        const s = (cycles.isFresh(pair[0], o.sport) ? 1 : 0) + (cycles.isFresh(pair[1], o.sport) ? 1 : 0);
                         if (s > bestPair) { bestPair = s; if (bestPair === 2) break; }
                     }
                     fresh += bestPair;
@@ -668,21 +754,31 @@
     }
 
     // =========================================================================
-    // ★★★ DAILY PAIRING OPTIMIZER — scales to ANY league size ★★★
+    // ★★★ DAILY PAIRING OPTIMIZER — the matchup creator (BOTH modes) ★★★
     // =========================================================================
-    // Each day, chosen ANEW from history (opponents met + sports played), instead
-    // of walking a predestined round-robin. The old choosePairingsForSportVariety
-    // brute-force-enumerated every perfect matching, so it bailed to round-robin for
-    // >12-team leagues (e.g. a 16-team grade) — meaning big leagues NEVER got
-    // history-aware pairings and their sports were jammed onto fixed matchups.
+    // NO PREDETERMINED ROUND-ROBIN: every game's matchups are computed FRESH from
+    // history (opponents met + sports needed). The round-robin round the caller
+    // hands in is used ONLY as an error/kill-switch fallback, never as the plan.
     //
-    // This uses a greedy max-weight matching that runs in O(n²) for any size. Each
-    // candidate PAIR is weighted by:
+    // The rule both modes share: ALWAYS TRY FOR NEW MATCHUPS FIRST. Meetings
+    // enter every pair's weight, so among pairings of equal sport value the one
+    // with fewer rematches always wins. The MODE only decides the impossible
+    // situation — when a new matchup and a new sport can't both happen.
+    //
+    // Search: EXACT for leagues of ≤12 teams (every possible pairing of the
+    // league is enumerated and scored — a zero-rematch pairing can never be
+    // missed); greedy max-weight matching + 2-opt refinement (O(n²)) beyond
+    // that. Each candidate PAIR is weighted by:
     //   • opponent freshness  (-prior meetings) — keeps opponents rotating
-    //   • sport freshness     (can this pair BOTH get a sport neither has played
-    //                          today? 2 = both, 1 = one) — so a single scarce field
-    //                          serves two needy teams instead of one needy + a repeat
-    // The MODE only re-weights the two (per the camp's rule that BOTH rotations are
+    //   • sport freshness     (can this pair BOTH get a sport they still NEED in
+    //                          their current cycle? 2 = both, 1 = one) — so a single
+    //                          scarce field serves two needy teams instead of one
+    //                          needy + a repeat. CYCLE-AWARE: once a team has played
+    //                          every available sport, its needs reset and the next
+    //                          cycle begins (see makeSportCycles).
+    //   • pair recency        (met longest ago first) — rotates equal-met pairs so
+    //                          consecutive days don't restage yesterday's games.
+    // The MODE only re-weights these (per the camp's rule that BOTH rotations are
     // kept, and the mode decides the tiebreak when they conflict):
     //   • matchup_variety → opponents dominate (re-pair for sport only among
     //                       equally-met options; never trade an opponent repeat)
@@ -702,40 +798,123 @@
 
             const teams = activeTeams.slice();
             const availSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
-            const played = {};
-            teams.forEach(function (t) { played[t] = new Set(getTeamSportHistoryByDate(leagueName, t, history, dayId)); });
+            // ★ CYCLE-AWARE freshness (see makeSportCycles): fresh = the team still
+            //   needs this sport in its CURRENT cycle, so the sport signal stays
+            //   alive after every team has played everything once — needs reset
+            //   and the next cycle begins, instead of the sport term going dead.
+            const cycles = makeSportCycles(leagueName, teams, availSports, history, dayId);
+            const recency = makePairRecency(leagueName, history, dayId);
 
             function sportFresh(a, b) {   // 0,1,2 — best fresh-sport count for the pair today
                 let best = 0;
                 for (let k = 0; k < availSports.length; k++) {
                     const s = availSports[k];
-                    const f = (played[a].has(s) ? 0 : 1) + (played[b].has(s) ? 0 : 1);
+                    const f = (cycles.isFresh(a, s) ? 1 : 0) + (cycles.isFresh(b, s) ? 1 : 0);
                     if (f > best) { best = f; if (best === 2) break; }
                 }
                 return best;
             }
 
+            // The mode is the TIE-BREAK for the impossible situation (a fresh
+            // opponent and a fresh sport can't both happen):
+            //   matchup_variety → meetings dominate (1000/meeting), recency (≤100)
+            //     rotates equal-met pairs, sport (≤16) breaks what's left.
+            //   sport_variety → a fresh sport (300/team-slot) beats an opponent
+            //     repeat (25/meeting); recency (≤10) rotates full ties.
             const isMatchup = (mode === 'matchup_variety');
             const W_OPP = isMatchup ? 1000 : 25;
             const W_SPORT = isMatchup ? 8 : 300;
+            const W_REC = isMatchup ? 100 : 10;
 
-            const pairs = [];
-            for (let i = 0; i < teams.length; i++) {
-                for (let j = i + 1; j < teams.length; j++) {
-                    const a = teams[i], b = teams[j];
-                    const met = getMatchupCountByDate(leagueName, a, b, history, dayId);
-                    pairs.push({ a, b, met, w: (-met) * W_OPP + sportFresh(a, b) * W_SPORT });
+            const metCache = {};
+            function met(a, b) {
+                const key = getMatchupKey(a, b);
+                if (metCache[key] == null) metCache[key] = getMatchupCountByDate(leagueName, a, b, history, dayId);
+                return metCache[key];
+            }
+            function pairWeight(a, b) {
+                return (-met(a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC;
+            }
+
+            let matching;
+            if (teams.length <= 12) {
+                // ★ EXACT SEARCH (≤12 teams — the common case): enumerate EVERY way
+                //   to pair up the league (12 teams → 10,395 matchings) and take the
+                //   best-scoring one. This makes "always try for new matchups first"
+                //   a hard guarantee: because meetings carry the dominant weight in
+                //   matchup mode (and break sport ties in sport mode), a pairing with
+                //   fewer rematches ALWAYS outranks one with more — if a zero-rematch
+                //   pairing exists, it is found, never missed by a greedy heuristic.
+                //   Odd team counts get a bye pair; the benched team is the one whose
+                //   sitting out best serves the rotations (self-correcting: a team
+                //   left out keeps its meeting counts low, which raises its pair
+                //   weights until it plays).
+                const cachedW = {};
+                function w(a, b) {
+                    const key = getMatchupKey(a, b);
+                    if (cachedW[key] == null) cachedW[key] = pairWeight(a, b);
+                    return cachedW[key];
+                }
+                const matchings = generatePerfectMatchings(teams);
+                let best = null, bestW = -Infinity, bestMet = Infinity;
+                for (const m of matchings) {
+                    let totalW = 0, totalMet = 0;
+                    for (const p of m) {
+                        if (p[0] === '__BYE__' || p[1] === '__BYE__') continue;
+                        totalW += w(p[0], p[1]);
+                        totalMet += met(p[0], p[1]);
+                    }
+                    // Fewest total meetings breaks exact weight ties → new matchups
+                    // win even when the weighted scores come out equal.
+                    if (totalW > bestW || (totalW === bestW && totalMet < bestMet)) {
+                        best = m; bestW = totalW; bestMet = totalMet;
+                    }
+                }
+                if (!best) return fallbackMatchups;
+                matching = best
+                    .filter(function (p) { return p[0] !== '__BYE__' && p[1] !== '__BYE__'; })
+                    .map(function (p) { return [p[0], p[1]]; });
+            } else {
+                // ★ LARGE LEAGUES (>12 teams): greedy max-weight matching + 2-opt
+                //   refinement — near-optimal in O(n²), scales to any size.
+                const pairs = [];
+                for (let i = 0; i < teams.length; i++) {
+                    for (let j = i + 1; j < teams.length; j++) {
+                        const a = teams[i], b = teams[j];
+                        pairs.push({ a, b, met: met(a, b), w: pairWeight(a, b) });
+                    }
+                }
+                // Best pair first, fewest meetings breaks ties.
+                pairs.sort(function (x, y) { return (y.w - x.w) || (x.met - y.met); });
+                const used = new Set();
+                matching = [];
+                for (let k = 0; k < pairs.length; k++) {
+                    const p = pairs[k];
+                    if (used.has(p.a) || used.has(p.b)) continue;
+                    matching.push([p.a, p.b]); used.add(p.a); used.add(p.b);
+                }
+
+                // ★ 2-OPT REFINEMENT: greedy matching can strand weight — the best
+                //   single pair can force two bad leftover pairs when a slightly
+                //   worse first pick would let BOTH remaining pairs be good. Swap
+                //   partners between pairs while total weight improves (monotonic,
+                //   bounded → terminates). O(n²) per sweep.
+                let improved = true, guard = 0;
+                while (improved && guard < 300) {
+                    improved = false; guard++;
+                    for (let i = 0; i < matching.length && !improved; i++) {
+                        for (let j = i + 1; j < matching.length; j++) {
+                            const a = matching[i][0], b = matching[i][1], c = matching[j][0], d = matching[j][1];
+                            const base = pairWeight(a, b) + pairWeight(c, d);
+                            const s1 = pairWeight(a, c) + pairWeight(b, d);   // [a,c] [b,d]
+                            const s2 = pairWeight(a, d) + pairWeight(b, c);   // [a,d] [b,c]
+                            if (s1 > base && s1 >= s2) { matching[i] = [a, c]; matching[j] = [b, d]; improved = true; break; }
+                            if (s2 > base) { matching[i] = [a, d]; matching[j] = [b, c]; improved = true; break; }
+                        }
+                    }
                 }
             }
-            // Greedy max-weight matching: best pair first, fewest meetings breaks ties.
-            pairs.sort(function (x, y) { return (y.w - x.w) || (x.met - y.met); });
-            const used = new Set(), matching = [];
-            for (let k = 0; k < pairs.length; k++) {
-                const p = pairs[k];
-                if (used.has(p.a) || used.has(p.b)) continue;
-                matching.push([p.a, p.b]); used.add(p.a); used.add(p.b);
-            }
-            if (!matching.length) return fallbackMatchups;   // (odd team left over = bye, handled by caller)
+            if (!matching || !matching.length) return fallbackMatchups;   // (odd team left over = bye, handled by caller)
 
             const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
             if (_key(matching) !== _key(fallbackMatchups)) {
@@ -746,139 +925,6 @@
         } catch (e) {
             console.warn('[RegularLeagues] daily matchup optimizer failed — using round-robin:', e);
             return fallbackMatchups;
-        }
-    }
-
-    // =========================================================================
-    // ★★★ MATCHUP-MODE SPORT-AWARE PAIRING (option 3) ★★★
-    // =========================================================================
-    // matchup_variety's defining guarantee is PERFECT opponent rotation, which
-    // the round-robin walk provides. But for any given day there are MANY pairings
-    // that share the round-robin's opponent freshness — the round-robin fixes who
-    // each team meets across the season, not which specific pairing lands on which
-    // day. We exploit that freedom: starting FROM the round-robin matchups, run
-    // 2-opt swaps that NEVER increase the number of rematches (so opponent rotation
-    // is never worse than plain round-robin — and rematches that creep in from
-    // earlier days' swaps are actively REDUCED when an alternative exists) AND that
-    // concentrate shared sport needs — pairing two teams that both still need the
-    // same sport, so one scarce field serves two needy teams instead of one needy
-    // and one repeat.
-    //
-    //   rem(a,b) = how many times a & b have ALREADY met, counted from the date-keyed
-    //              gameLog (getMatchupCountByDate), NOT the flat matchupHistory aggregate.
-    //              Two reasons it must be a gameLog COUNT and not a 0/1 flag on the
-    //              aggregate: (1) a binary flag goes blind once every pair has met (a
-    //              4-team league saturates in one round-robin cycle) — the -BIG term then
-    //              cancels out of every comparison and sport-need alone re-pairs the
-    //              league. (2) the flat aggregate INVERTS under regeneration: rollback can
-    //              only subtract games present in the gameLog, so pre-gameLog meetings
-    //              freeze while regenerated pairs get decremented, making the MOST-played
-    //              pair look LEAST-played — the optimizer then locks onto it (observed
-    //              live: a league stuck on 1v2/3v4 every game). The gameLog count is
-    //              immune and always prefers the genuinely LEAST-met pair.
-    //   val(a,b) = sport-need concentration: 3 if some available sport is fresh for
-    //              BOTH teams, else freshBoth (0 or 1). A fresh-for-both pair (3) beats
-    //              two fresh-for-one pairs (1+1=2), so the search prefers concentrating.
-    //
-    // Acceptance uses a single scalar  score = -BIG*Σmeetings - MED*Σrecency + Σval
-    // (BIG ≫ MED ≫ max val), so reducing total meetings ALWAYS dominates; among equal
-    // meeting counts the LEAST-recently-met pairing wins (so consecutive days rotate
-    // through the distinct rounds); sport only breaks what's left. A swap can never
-    // raise total meetings. Monotonic (bounded) → terminates. Falls back to the
-    // round-robin on any error or kill switch (window.__leagueDailyOptimizer === false).
-    function optimizeMatchupPairingForSport(rrMatchups, activeTeams, availablePool, leagueName, history, dayId) {
-        try {
-            if (typeof window !== 'undefined' && window.__leagueDailyOptimizer === false) return rrMatchups;
-            if (!Array.isArray(rrMatchups) || rrMatchups.length < 2) return rrMatchups;
-            if (!Array.isArray(availablePool) || availablePool.length === 0) return rrMatchups;
-
-            const BIG = 1e6;
-            const availSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
-            const played = {};
-            function playedSet(t) {
-                if (!played[t]) played[t] = new Set(getTeamSportHistoryByDate(leagueName, t, history, dayId));
-                return played[t];
-            }
-            (activeTeams || []).forEach(function (t) { playedSet(t); });
-
-            // Real meeting COUNT from the date-keyed gameLog (NOT the flat aggregate,
-            // which inverts under regen — see getMatchupCountByDate). Counting (vs a
-            // 0/1 flag) also keeps the guard meaningful once every pair has met in a
-            // small league. Together: always prefers the genuinely LEAST-met pair.
-            function rem(a, b) { return getMatchupCountByDate(leagueName, a, b, history, dayId); }
-            function val(a, b) {
-                const pa = playedSet(a), pb = playedSet(b);
-                let freshBoth = 0;
-                for (let k = 0; k < availSports.length; k++) {
-                    const s = availSports[k];
-                    const f = (pa.has(s) ? 0 : 1) + (pb.has(s) ? 0 : 1);
-                    if (f > freshBoth) { freshBoth = f; if (freshBoth === 2) break; }
-                }
-                return freshBoth === 2 ? 3 : freshBoth;
-            }
-
-            // RECENCY tiebreak: in a small league every pair meets within one
-            // round-robin cycle, so meeting counts quickly TIE (all 1, all 2, …) and
-            // the count term cancels out. Without a tiebreak the pairing then repeats
-            // whatever sport-need happens to favor — which can re-stage yesterday's
-            // exact matchups (observed live: 1v4/2v3 two days running). Prefer the
-            // pairing whose teams met LONGEST AGO so consecutive days cycle through
-            // the distinct rounds. Derived from the date-keyed gameLog (regen-safe);
-            // 0 = never met (most preferred). MED ≫ val so recency breaks count ties
-            // ahead of sport, but ≪ BIG so it never overrides the meeting count.
-            const MED = 1000;
-            const _gl = (history.gameLog && history.gameLog[leagueName]) || {};
-            const _dates = Object.keys(_gl).filter(function (d) { return !dayId || d <= dayId; }).sort();
-            const _denom = _dates.length + 1;
-            const _recCache = {};
-            function recency(a, b) {
-                const key = getMatchupKey(a, b);
-                if (_recCache[key] != null) return _recCache[key];
-                let best = 0;
-                for (let i = 0; i < _dates.length; i++) {
-                    const entries = _gl[_dates[i]] || [];
-                    for (let j = 0; j < entries.length; j++) {
-                        const e = entries[j];
-                        if (e && getMatchupKey(e.t1, e.t2) === key) { best = (i + 1) / _denom; break; }
-                    }
-                }
-                return (_recCache[key] = best);
-            }
-            function pairScore(a, b) { return (-BIG) * rem(a, b) - MED * recency(a, b) + val(a, b); }
-
-            // Byes stay put; only real pairings enter the swap set.
-            const byes = [], m = [];
-            rrMatchups.forEach(function (p) {
-                if (!Array.isArray(p) || p[0] === '__BYE__' || p[1] === '__BYE__' || p[1] == null) { byes.push(p); return; }
-                m.push([p[0], p[1]]);
-            });
-            if (m.length < 2) return rrMatchups;
-
-            let improved = true, guard = 0;
-            while (improved && guard < 300) {
-                improved = false; guard++;
-                for (let i = 0; i < m.length && !improved; i++) {
-                    for (let j = i + 1; j < m.length; j++) {
-                        const a = m[i][0], b = m[i][1], c = m[j][0], d = m[j][1];
-                        const base = pairScore(a, b) + pairScore(c, d);
-                        const s1 = pairScore(a, c) + pairScore(b, d);   // [a,c] [b,d]
-                        const s2 = pairScore(a, d) + pairScore(b, c);   // [a,d] [b,c]
-                        if (s1 > base && s1 >= s2) { m[i] = [a, c]; m[j] = [b, d]; improved = true; break; }
-                        if (s2 > base) { m[i] = [a, d]; m[j] = [b, c]; improved = true; break; }
-                    }
-                }
-            }
-
-            const result = m.concat(byes);
-            const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
-            if (_key(result) !== _key(rrMatchups)) {
-                console.log('   ★ [MatchupSportOpt] round-robin re-paired for sport coverage (opponents not worsened): '
-                    + m.map(function (p) { return p[0] + ' vs ' + p[1]; }).join(', '));
-            }
-            return result;
-        } catch (e) {
-            console.warn('[RegularLeagues] matchup sport-opt failed — using round-robin:', e);
-            return rrMatchups;
         }
     }
 
@@ -1170,6 +1216,91 @@
         return n;
     }
 
+    // ★ FN-57 caveat, CYCLE-AWARE: when a pair meets again, prefer the sport(s)
+    // this pair has played TOGETHER the fewest times. Cycle 1 behaves like the
+    // old binary filter (never replay a pair sport while an unplayed one
+    // exists); once the pair has played every available sport together, the
+    // filter used to give up entirely ("allowing a repeat" from the whole
+    // pool) — now the pair starts a new cycle: least-replayed sports first.
+    function _filterPoolByPairSportCycle(pool, leagueName, t1, t2, history) {
+        const pairCounts = {};
+        getPairSports(leagueName, t1, t2, history)
+            .forEach(function (s) { pairCounts[s] = (pairCounts[s] || 0) + 1; });
+        if (Object.keys(pairCounts).length === 0 || pool.length === 0) return pool;
+        let minPair = Infinity;
+        pool.forEach(function (o) {
+            const c = pairCounts[o.sport] || 0;
+            if (c < minPair) minPair = c;
+        });
+        const fresh = pool.filter(function (o) { return (pairCounts[o.sport] || 0) === minPair; });
+        if (!fresh.length) return pool;
+        if (minPair > 0) {
+            console.log(`   ⚠️ ${t1} vs ${t2}: pair has played every available sport together — starting a new pair cycle (least-replayed first)`);
+        }
+        return fresh;
+    }
+
+    // ★ HARD STREAK CAP: a team may play the same sport on two CONSECUTIVE
+    // game days, NEVER a third. The soft recent-sport penalty (-1500) usually
+    // prevents even two in a row, but it is a preference — in a constrained
+    // slot (few open fields, pair caveat narrowing the pool) a repeat can
+    // still win, and because the penalty doesn't escalate with streak length,
+    // nothing stopped a THIRD day. This filter makes day 3 impossible: any
+    // sport equal to BOTH of a team's last two games is excluded outright.
+    // Soft fallback: if every remaining option is streak-blocked (pathological
+    // — e.g. a single-sport league), keep the pool so the matchup still gets
+    // a game rather than being dropped.
+    function _applyStreakCapFilter(pool, t1, t2, hist1, hist2) {
+        if (!pool.length) return pool;
+        const blocked = new Set();
+        [hist1, hist2].forEach(function (hist) {
+            const n = hist.length;
+            if (n >= 2 && hist[n - 1] === hist[n - 2]) blocked.add(hist[n - 1]);
+        });
+        if (!blocked.size) return pool;
+        const ok = pool.filter(function (o) { return !blocked.has(o.sport); });
+        if (ok.length) return ok;
+        console.log(`   ⚠️ ${t1} vs ${t2}: streak cap would empty the pool — allowing (single-sport league?)`);
+        return pool;
+    }
+
+    // ★ CYCLE RESCUE: a team stuck ≥2 plays behind on a sport (its count for
+    // that sport trails its most-played available sport by ≥2) gets that
+    // sport as a HARD preference for its matchup. Without this, a team can be
+    // starved of one sport indefinitely: its daily partner keeps carrying the
+    // -1500 recent-sport guard for exactly that sport, so the pair never
+    // takes it (observed in the multi-league sim: a matchup_variety team
+    // finished 12 days at BK1/SC5/VB6 because every day's opponent had played
+    // basketball the day before). A partner playing 2-in-a-row is the lesser
+    // evil; the HARD 3-in-a-row cap still applies because this runs on the
+    // streak-filtered pool. Runs AFTER the fair-share cap (rescue stays
+    // within the league's share) and BEFORE the pair caveat (rescue wins).
+    // Assignments born from a rescue are flagged so the swap pass won't
+    // trade the rescued sport away again.
+    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2) {
+        if (pool.length < 2) return { pool: pool, rescued: false };
+        const poolSports = Array.from(new Set(pool.map(function (o) { return o.sport; })));
+        if (poolSports.length < 2) return { pool: pool, rescued: false };
+        function counts(hist) { const c = {}; hist.forEach(function (s) { c[s] = (c[s] || 0) + 1; }); return c; }
+        const c1 = counts(hist1), c2 = counts(hist2);
+        function deficit(c, s) {
+            let max = 0;
+            poolSports.forEach(function (sp) { const v = c[sp] || 0; if (v > max) max = v; });
+            return max - (c[s] || 0);
+        }
+        let best = null, bestD = 0;
+        poolSports.forEach(function (s) {
+            const d1 = deficit(c1, s), d2 = deficit(c2, s);
+            const d = (d1 >= 2 ? d1 : 0) + (d2 >= 2 ? d2 : 0);
+            if (d > bestD) { bestD = d; best = s; }
+        });
+        if (!best) return { pool: pool, rescued: false };
+        const rescuedPool = pool.filter(function (o) { return o.sport === best; });
+        if (!rescuedPool.length) return { pool: pool, rescued: false };
+        console.log(`   🆘 ${t1} vs ${t2}: cycle rescue → ${best} (a team is ${bestD} play(s) behind on it)`);
+        return { pool: rescuedPool, rescued: true };
+    }
+
     // =========================================================================
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
@@ -1181,6 +1312,14 @@
         const usedSportsThisSlot = {};
         // ★ Date-correct history (robust to regeneration order) — see getTeamSportHistoryByDate.
         const _teamHist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
+        // ★ CYCLE-AWARE need (see makeSportCycles): a sport is "needed" while its
+        //   play count sits at the team's current-cycle minimum. Once a team has
+        //   played every available sport, its needs RESET and the next cycle
+        //   begins — instead of every need flattening to 0 for the rest of the
+        //   season (which left field quality + randomness picking the sport).
+        const _cycleTeams = Array.from(new Set(matchups.flat()));
+        const _cycleSports = Array.from(new Set(availablePool.map(o => o.sport)));
+        const _cycles = makeSportCycles(leagueName, _cycleTeams, _cycleSports, history, dayId);
 
         // ★ SCARCITY: among the sports available this slot, how few fields does each
         // have? A team that needs both football (4 fields) and basketball (15) must
@@ -1200,11 +1339,12 @@
         const _scarcityBonus = (sport) => ((_maxPoolFields / (_poolFieldsBySport[sport] || 1)) - 1) * 300;
 
         function getTeamSportNeed(team, sport) {
-            const teamHistory = _teamHist(team);
-            const sportCount = teamHistory.filter(s => s === sport).length;
-
-            if (sportCount === 0) return 1000;
-            return Math.max(0, 100 - sportCount * 20);
+            // gap 0 → the team still needs this sport in its current cycle (which
+            // includes "never played it" AND "starting a fresh cycle") → max need.
+            // Each cycle a sport runs ahead of the team's minimum costs 20.
+            const gap = _cycles.gap(team, sport);
+            if (gap <= 0) return 1000;
+            return Math.max(0, 100 - gap * 20);
         }
 
         // Sort matchups so teams with less sport variety get processed first.
@@ -1215,25 +1355,27 @@
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const h1 = _teamHist(t1);
             const h2 = _teamHist(t2);
-            const uniqueSports1 = new Set(h1).size;
-            const uniqueSports2 = new Set(h2).size;
+            const starve1 = _cycles.starve(t1);
+            const starve2 = _cycles.starve(t2);
             const ic1 = _indoorCounts[t1] || 0;
             const ic2 = _indoorCounts[t2] || 0;
             return {
                 t1, t2,
-                varietyScore: uniqueSports1 + uniqueSports2,
-                coverMin: Math.min(uniqueSports1, uniqueSports2),
+                varietyScore: starve1 + starve2,
+                coverMin: Math.min(starve1, starve2),
                 stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
                 indoorMin: Math.min(ic1, ic2)
             };
         });
 
         // Field-pick order. PRIMARY: the most sport-STARVED matchup first — the one
-        // whose neediest team has played the FEWEST distinct sports (coverMin). A team
-        // that has never played a sport must get first claim on that scarce sport's
-        // field before a team that already played it, so each sport spreads across all
-        // teams before any repeats. SECONDARY: break active same-sport STREAKS. Then
-        // total coverage. Indoor need stays primary when an indoor requirement is set.
+        // whose neediest team is furthest behind in the sport cycle (starve rank:
+        // completed cycles dominate, then progress within the cycle — so "never
+        // played football" beats "starting cycle 2 fresh"). A team that still needs
+        // a sport must get first claim on that scarce sport's field before a team
+        // that already played it, so each sport spreads across all teams before any
+        // repeats. SECONDARY: break active same-sport STREAKS. Then total starvation.
+        // Indoor need stays primary when an indoor requirement is set.
         if (_indoorReq && _indoorReq.enabled) {
             matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         } else {
@@ -1250,19 +1392,22 @@
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
             let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
-            // ★ FN-57 caveat: a rematch never replays a sport this pair has
-            // already played together — unless nothing else is available.
-            const _pairSports = new Set(getPairSports(leagueName, t1, t2, history));
-            if (_pairSports.size > 0) {
-                const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
-                if (_freshPool.length > 0) _pool = _freshPool;
-                else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
-            }
+            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row.
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
 
             // ★ FAIR-SHARE CAP: prefer sports this league hasn't used up its per-slot
             // share of, so it leaves scarce fields for the other grades playing at the
             // same time. Falls back to the full pool when every remaining option is at
             // cap (a matchup is never dropped for fairness).
+            // ★ ORDER MATTERS: the cap must run BEFORE the pair-sport caveat. The
+            // caveat can narrow the pool to a single sport (the one this pair hasn't
+            // replayed), and the cap's fallback would then let the league exceed its
+            // share of exactly that sport — starving a junior league whose only
+            // sports those fields are (observed in the multi-league sim: Minis got
+            // ZERO games while Seniors took a second football field for pair
+            // freshness). A repeated pair sport is a far smaller cost than another
+            // league's dropped game, so fairness filters first and the caveat
+            // refines within the league's share.
             if (sportCaps) {
                 const _underCap = _pool.filter(function (o) {
                     const c = sportCaps[o.sport];
@@ -1270,6 +1415,16 @@
                 });
                 if (_underCap.length > 0) _pool = _underCap;
             }
+
+            // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
+            // as a hard preference (see _applyCycleRescueFilter).
+            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            _pool = _rescue.pool;
+
+            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
+            // pair has played together the FEWEST times — never a replay while an
+            // unplayed one exists, least-replayed once the pair exhausted them all.
+            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
             for (const option of _pool) {
                 let score = 0;
@@ -1279,18 +1434,19 @@
                 const need2 = getTeamSportNeed(t2, option.sport);
                 score += need1 + need2;
 
-                // ★ SCARCITY: when a team has never played this sport, boost it by how
-                // scarce the sport is so a scarce fresh sport (football) is taken before
-                // an abundant fresh one (basketball) on a nicer field. Only for unplayed
-                // sports → a team that already played football is never pushed onto it.
-                const _svFresh1 = _teamHist(t1).indexOf(option.sport) === -1 ? 1 : 0;
-                const _svFresh2 = _teamHist(t2).indexOf(option.sport) === -1 ? 1 : 0;
+                // ★ SCARCITY: when a team still NEEDS this sport this cycle, boost it
+                // by how scarce the sport is so a scarce fresh sport (football) is
+                // taken before an abundant fresh one (basketball) on a nicer field.
+                // Only for needed sports → a team that's ahead on football is never
+                // pushed onto it. Cycle-aware: fresh again after a completed cycle.
+                const _svFresh1 = _cycles.isFresh(t1, option.sport) ? 1 : 0;
+                const _svFresh2 = _cycles.isFresh(t2, option.sport) ? 1 : 0;
                 score += (_svFresh1 + _svFresh2) * _scarcityBonus(option.sport);
 
-                // ★ Once every sport has been played at least once the per-sport
-                // need flattens (80/60/40…) and the field-quality bonus (up to
-                // +188) could otherwise pin a team to the best field's sport.
-                // Explicitly forbid repeating a team's most-recent sport.
+                // ★ Even with cycle-aware need, the start of a new cycle makes every
+                // sport max-need at once and the field-quality bonus (up to +188)
+                // could otherwise pin a team to the best field's sport. Explicitly
+                // forbid repeating a team's most-recent sport.
                 const _svH1 = _teamHist(t1);
                 const _svH2 = _teamHist(t2);
                 const _svR1 = _svH1.length && _svH1[_svH1.length - 1] === option.sport ? 1 : 0;
@@ -1328,6 +1484,7 @@
                     sport: bestOption.sport
                 });
 
+                if (_rescue.rescued) assignments[assignments.length - 1]._rescued = true;
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
@@ -1351,6 +1508,12 @@
         const _fqRank = _buildFieldQualityRankMap();
         // ★ Date-correct history (robust to regeneration order) — see getTeamSportHistoryByDate.
         const _teamHist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
+        // ★ CYCLE-AWARE need (same as SportVariety — see makeSportCycles): needs
+        //   reset once a team has played every available sport, so per-team sport
+        //   rotation keeps working deep into the season instead of flattening.
+        const _cycleTeams = Array.from(new Set(matchups.flat()));
+        const _cycleSports = Array.from(new Set(availablePool.map(o => o.sport)));
+        const _cycles = makeSportCycles(leagueName, _cycleTeams, _cycleSports, history, dayId);
 
         // ★ SCARCITY (same as SportVariety): a needed scarce sport (football, few
         // fields) must beat a needed abundant one (basketball) so it isn't skipped.
@@ -1373,21 +1536,24 @@
             const h2 = _teamHist(t2);
             const matchupCount = getMatchupCountByDate(leagueName, t1, t2, history, dayId);
             const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
+            const starve1 = _cycles.starve(t1);
+            const starve2 = _cycles.starve(t2);
             return {
                 t1, t2, matchupCount, indoorMin,
-                coverMin: Math.min(new Set(h1).size, new Set(h2).size),
+                coverMin: Math.min(starve1, starve2),
                 stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
-                variety: new Set(h1).size + new Set(h2).size
+                variety: starve1 + starve2
             };
         });
 
         // Field-pick order ONLY — this does NOT change who plays whom (the pairing is
         // fixed by the round-robin upstream, which is matchup variety's guarantee).
-        // PRIMARY: the most sport-STARVED matchup first — whose neediest team has
-        // played the FEWEST distinct sports (coverMin) — so a team that's never played
-        // a sport gets first claim on that scarce field before a team that already has,
+        // PRIMARY: the most sport-STARVED matchup first — whose neediest team is
+        // furthest behind in the sport cycle (starve rank: completed cycles dominate,
+        // then progress within the cycle) — so a team that still needs a sport gets
+        // first claim on that scarce field before a team that already played it,
         // spreading each sport across all teams. SECONDARY: break active same-sport
-        // STREAKS; then total coverage; then fewest prior meetings (the original
+        // STREAKS; then total starvation; then fewest prior meetings (the original
         // order). Indoor need stays primary when required.
         if (_indoorReqMV && _indoorReqMV.enabled) {
             matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
@@ -1408,18 +1574,14 @@
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
             let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
-            // ★ FN-57 caveat: a rematch never replays a sport this pair has
-            // already played together — unless nothing else is available.
-            const _pairSports = new Set(getPairSports(leagueName, t1, t2, history));
-            if (_pairSports.size > 0) {
-                const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
-                if (_freshPool.length > 0) _pool = _freshPool;
-                else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
-            }
+            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row.
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
 
             // ★ FAIR-SHARE CAP: same as SportVariety — don't let this league claim
             // more than its share of a scarce sport's fields, leaving the rest for the
             // other grades. Soft: falls back to the full pool if all options are capped.
+            // Runs BEFORE the pair caveat (see SportVariety) so pair-sport freshness
+            // can never push the league past its share and starve a junior league.
             if (sportCaps) {
                 const _underCap = _pool.filter(function (o) {
                     const c = sportCaps[o.sport];
@@ -1427,6 +1589,16 @@
                 });
                 if (_underCap.length > 0) _pool = _underCap;
             }
+
+            // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
+            // as a hard preference (see _applyCycleRescueFilter).
+            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            _pool = _rescue.pool;
+
+            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
+            // pair has played together the FEWEST times — never a replay while an
+            // unplayed one exists, least-replayed once the pair exhausted them all.
+            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
             for (const option of _pool) {
                 let score = 0;
@@ -1443,20 +1615,21 @@
                 // sport_variety so per-team rotation actually wins.
                 const h1 = _teamHist(t1);
                 const h2 = _teamHist(t2);
-                const sportCount1 = h1.filter(s => s === option.sport).length;
-                const sportCount2 = h2.filter(s => s === option.sport).length;
 
-                // Strong per-team need: an unplayed sport hugely outweighs a
-                // repeat; field quality / randomness now act only as tie-breakers
-                // among sports of equal freshness.
-                const need1 = sportCount1 === 0 ? 1000 : Math.max(0, 100 - sportCount1 * 20);
-                const need2 = sportCount2 === 0 ? 1000 : Math.max(0, 100 - sportCount2 * 20);
+                // Strong per-team CYCLE need: a still-needed-this-cycle sport
+                // hugely outweighs a repeat; field quality / randomness act only
+                // as tie-breakers among sports of equal freshness. Needs reset
+                // when a team completes a cycle (see makeSportCycles).
+                const gap1 = _cycles.gap(t1, option.sport);
+                const gap2 = _cycles.gap(t2, option.sport);
+                const need1 = gap1 <= 0 ? 1000 : Math.max(0, 100 - gap1 * 20);
+                const need2 = gap2 <= 0 ? 1000 : Math.max(0, 100 - gap2 * 20);
                 score += need1 + need2;
 
-                // ★ SCARCITY: when a team has never played this sport, boost it by how
-                // scarce the sport is so a scarce fresh sport (football) is claimed
-                // before an abundant fresh one (basketball) on a nicer field.
-                score += ((sportCount1 === 0 ? 1 : 0) + (sportCount2 === 0 ? 1 : 0)) * _scarcityBonus(option.sport);
+                // ★ SCARCITY: when a team still needs this sport this cycle, boost it
+                // by how scarce the sport is so a scarce fresh sport (football) is
+                // claimed before an abundant fresh one (basketball) on a nicer field.
+                score += ((gap1 <= 0 ? 1 : 0) + (gap2 <= 0 ? 1 : 0)) * _scarcityBonus(option.sport);
 
                 // ★ Hard guard against repeating a team's MOST-RECENT sport —
                 // directly kills the "same sport N days in a row" case. Big
@@ -1489,6 +1662,7 @@
                     sport: bestOption.sport
                 });
 
+                if (_rescue.rescued) assignments[assignments.length - 1]._rescued = true;
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
@@ -1502,6 +1676,71 @@
     }
 
     // =========================================================================
+    // ★ WITHIN-SLOT SWAP PASS — fix need-stranding between matchups
+    // =========================================================================
+    // The per-matchup greedy can strand needs: two matchups both need the
+    // single volleyball court; the one processed second eats basketball AGAIN
+    // even when the first matchup didn't especially need volleyball (observed
+    // in the multi-league sim: one team finished 12 days at BK6/SC4/VB2 while
+    // its league-mates sat at 4/4/4). After all matchups are assigned, try
+    // trading the (sport, field) choices of every pair of assignments; accept
+    // when the summed cycle-need score improves and no team lands a
+    // 3-days-in-a-row streak. A swap moves whole options between matchups, so
+    // per-slot sport usage, field locks, and fair-share caps all stay valid.
+    function _swapReoptimizeAssignments(assignments, leagueName, history, dayId) {
+        try {
+            if (!Array.isArray(assignments) || assignments.length < 2) return assignments;
+            const sportsInPlay = Array.from(new Set(assignments.map(function (a) { return a.sport; })));
+            const teams = Array.from(new Set(assignments.reduce(function (acc, a) { acc.push(a.team1, a.team2); return acc; }, [])));
+            const cycles = makeSportCycles(leagueName, teams, sportsInPlay, history, dayId);
+            const hists = {};
+            teams.forEach(function (t) { hists[t] = getTeamSportHistoryByDate(leagueName, t, history, dayId); });
+            function teamScore(t, s) {
+                const g = cycles.gap(t, s);
+                let sc = g <= 0 ? 1000 : Math.max(0, 100 - g * 20);
+                const h = hists[t];
+                if (h.length && h[h.length - 1] === s) sc -= 1500;
+                return sc;
+            }
+            function illegal(t, s) {   // would create a 3-days-in-a-row streak
+                const h = hists[t];
+                return h.length >= 2 && h[h.length - 1] === s && h[h.length - 2] === s;
+            }
+            function assnScore(a, s) {
+                const pairC = getPairSports(leagueName, a.team1, a.team2, history)
+                    .filter(function (x) { return x === s; }).length;
+                return teamScore(a.team1, s) + teamScore(a.team2, s) - pairC * 400;
+            }
+            let improved = true, guard = 0;
+            while (improved && guard++ < 100) {
+                improved = false;
+                for (let i = 0; i < assignments.length && !improved; i++) {
+                    for (let j = i + 1; j < assignments.length; j++) {
+                        const A = assignments[i], B = assignments[j];
+                        if (A.sport === B.sport) continue;
+                        if (A._rescued || B._rescued) continue;   // never trade a cycle-rescued sport away
+                        if (illegal(A.team1, B.sport) || illegal(A.team2, B.sport)) continue;
+                        if (illegal(B.team1, A.sport) || illegal(B.team2, A.sport)) continue;
+                        const base = assnScore(A, A.sport) + assnScore(B, B.sport);
+                        const swapped = assnScore(A, B.sport) + assnScore(B, A.sport);
+                        if (swapped > base) {
+                            const tmp = { field: A.field, sport: A.sport };
+                            A.field = B.field; A.sport = B.sport;
+                            B.field = tmp.field; B.sport = tmp.sport;
+                            console.log('   ★ [SlotSwap] ' + (A.matchup || A.team1 + ' vs ' + A.team2) + ' ⇄ ' + (B.matchup || B.team1 + ' vs ' + B.team2) + ' traded sport/field for cycle need');
+                            improved = true; break;
+                        }
+                    }
+                }
+            }
+            return assignments;
+        } catch (e) {
+            console.warn('[RegularLeagues] slot swap pass failed — keeping greedy assignments:', e);
+            return assignments;
+        }
+    }
+
+    // =========================================================================
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
@@ -1510,11 +1749,17 @@
 
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
-        if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
-        } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
+        const assignments = (mode === 'matchup_variety')
+            ? assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId)
+            : assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules, sportCaps, dayId);
+
+        // ★ Within-slot swap pass (see _swapReoptimizeAssignments). Skipped when an
+        // indoor requirement is active — swaps trade fields between matchups and
+        // could hand an indoor field away from a team still below its floor.
+        if (leagueRules && leagueRules.indoorRequirement && leagueRules.indoorRequirement.enabled) {
+            return assignments;
         }
+        return _swapReoptimizeAssignments(assignments, leagueName, history, dayId);
     }
 
     // =========================================================================
@@ -2005,13 +2250,19 @@
 
                 var baseGN = calculateStartingGameNumber(league.name, dayId, history);
                 var gameNum = baseGN + leagueGameCounters[league.name] + 1;
+                var lSports = league.sports || ['General Sport'];
+                var priority = league.schedulingPriority || 'sport_variety';
+                // ★ NO PREDETERMINED ROUND-ROBIN: game-1 matchups are computed fresh
+                //   from history (meetings + sport needs), same as the main path. The
+                //   round-robin round is only the error/kill-switch fallback inside
+                //   chooseDailyMatchups. (The league-wide sport list stands in for the
+                //   field pool here — the real pools are built per time key below.)
                 var fullSched = generateRoundRobinSchedule(leagueTeams);
-                var g1Matchups = fullSched[(gameNum - 1) % fullSched.length] || [];
+                var rrFallback = fullSched[(gameNum - 1) % fullSched.length] || [];
+                var g1Matchups = chooseDailyMatchups(leagueTeams, lSports.map(function (s) { return { sport: s }; }), league.name, history, rrFallback, dayId, priority);
                 if (g1Matchups.length === 0) continue;
 
-                var lSports = league.sports || ['General Sport'];
                 var zoneSports = ocGetZoneSports(league.offCampus.zone, lSports, context);
-                var priority = league.schedulingPriority || 'sport_variety';
                 var dh = ocSelectGroups(g1Matchups, league.offCampus.teamsPerDay, history, league.name, priority, zoneSports);
                 if (!dh) continue;
 
@@ -2028,10 +2279,13 @@
                 var fp1 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey1, s1, _oc1End, league.offCampus.zone);
                 var fp2 = buildAvailableFieldSportPool(lSports, context, ocDivs, timeKey2, s2, _oc2End, league.offCampus.zone);
 
-                var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority);
-                var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority);
-                var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority);
-                var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority);
+                // ★ Pass dayId so the assigners read date-correct history (without it
+                //   they fell back to the full teamSports/gameLog including future
+                //   dates — wrong needs when regenerating a middle date).
+                var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
+                var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
+                var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
+                var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
                 var g1All = g1Off.concat(g1On), g2All = g2Off.concat(g2On);
                 var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
 
@@ -2267,6 +2521,52 @@
                         for (let i = 0; i < rows.length; i++) rows[i].base += (i < rem ? 1 : 0);
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
+
+                    // ★ PARTICIPATION FLOOR — every league must be able to SEAT its
+                    // games. Need-weighted apportionment can hand a league ZERO caps
+                    // on every one of its sports: a perfectly caught-up league has
+                    // deficit 0 everywhere while any other league still shows need,
+                    // so all its weights are 0. With every option at cap 0, the
+                    // seniors (processed first) take the extra fields and the junior
+                    // league's matchups find nothing (observed in the multi-league
+                    // sim: a 2-sport league dropped to 1 of 2 games — and the field
+                    // squeeze then forced a 3-days-in-a-row sport on its teams —
+                    // while two hockey fields sat unused). While some league's total
+                    // cap across its sports can't seat its game count, transfer one
+                    // cap unit per round from the most-surplus league on a shared
+                    // sport, preferring the sport where the starved league currently
+                    // holds the least (spreads its floor across its sports).
+                    const _capTotal = (l) => (l.sports || []).reduce((s, sp) => s + (_caps[l.name][sp] || 0), 0);
+                    const _maxSeats = (l) => (l.sports || []).reduce((s, sp) => s + (_fieldsBySport[sp] || 0), 0);
+                    let _floorGuard = 0;
+                    while (_floorGuard++ < 64) {
+                        let _moved = false;
+                        for (const l of _here) {
+                            const _wanted = Math.min(_games[l.name], _maxSeats(l));
+                            if (_capTotal(l) >= _wanted) continue;
+                            let best = null;
+                            for (const sp of (l.sports || [])) {
+                                const _lcap = _caps[l.name][sp] || 0;
+                                if (_lcap >= (_fieldsBySport[sp] || 0)) continue;   // sport already saturated for this league
+                                for (const d of _here) {
+                                    if (d === l || !(d.sports || []).includes(sp)) continue;
+                                    if ((_caps[d.name][sp] || 0) <= 0) continue;
+                                    const _surplus = _capTotal(d) - _games[d.name];
+                                    if (_surplus <= 0) continue;
+                                    if (!best || _lcap < best.lcap || (_lcap === best.lcap && _surplus > best.surplus)) {
+                                        best = { donor: d, sp, surplus: _surplus, lcap: _lcap };
+                                    }
+                                }
+                            }
+                            if (!best) continue;
+                            _caps[best.donor.name][best.sp]--;
+                            _caps[l.name][best.sp] = (_caps[l.name][best.sp] || 0) + 1;
+                            console.log('   ⚖️ Participation floor: 1 ' + best.sp + ' cap ' + best.donor.name + ' → ' + l.name + ' (seat its games)');
+                            _moved = true;
+                        }
+                        if (!_moved) break;
+                    }
+
                     console.log('   ⚖️ Need-first sport caps' + (_byNeedSports.length ? ' (need-weighted: ' + _byNeedSports.join(', ') + ')' : ' (no specific need → by size)') + ': ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
                     return _caps;
                 } catch (_e) {
@@ -2524,29 +2824,23 @@
                         continue;
                     }
                 } else {
+                    // ★ NO PREDETERMINED ROUND-ROBIN: every game's matchups are
+                    //   computed FRESH from history — how many times teams have met
+                    //   + which sports each team still needs this cycle — via
+                    //   chooseDailyMatchups (exact search for ≤12 teams, greedy +
+                    //   2-opt beyond). BOTH modes always try for new matchups first;
+                    //   the mode decides only the impossible situation where a new
+                    //   matchup and a new sport can't both happen:
+                    //   • matchup_variety → the new opponent wins (a sport may repeat)
+                    //   • sport_variety   → the new sport wins (a matchup may repeat)
+                    //   The round-robin round below is computed ONLY as the error/
+                    //   kill-switch fallback inside chooseDailyMatchups — it is
+                    //   never the plan.
                     const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     const _rrMatchups = fullSchedule[roundIndex] || [];
-                    // ★ PAIRING by mode (both modes pursue BOTH rotations; mode is the
-                    //   tie-breaker when they conflict — opponents win in matchup_variety,
-                    //   sports win in sport_variety):
-                    //   • matchup_variety → ROUND-ROBIN, then SPORT-AWARE 2-OPT
-                    //     (optimizeMatchupPairingForSport). The round-robin keeps opponent
-                    //     rotation perfect; the 2-opt re-pairs ONLY among arrangements that
-                    //     never add a rematch, choosing the one that concentrates shared
-                    //     sport needs so a scarce field serves two needy teams. Opponents
-                    //     are never worse than plain round-robin; sports get the extra help
-                    //     the field-pick scoring (coverage-gap + stuck + fair-share) alone
-                    //     can't give when pairings are fixed.
-                    //   • sport_variety → DAILY OPTIMIZER. Here trading an opponent repeat for
-                    //     a fresh sport is the whole point, so the history-driven greedy
-                    //     matching (scales past 12 teams) is exactly right.
                     const _prioMode = league.schedulingPriority || 'sport_variety';
-                    if (_prioMode === 'sport_variety') {
-                        matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
-                    } else {
-                        matchups = optimizeMatchupPairingForSport(_rrMatchups, activeTeams, availablePool, league.name, history, dayId);
-                    }
+                    matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
