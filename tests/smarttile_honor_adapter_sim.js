@@ -134,14 +134,16 @@ function check(name, cond, detail) {
     check('T3 gated bunk still demotes', env.placed.length === 0 && env.queued.length === 1);
 }
 
-// TEST 4 — bunk already had this special today → demotes (no doubling)
+// TEST 4 — had-today → DEFERRED (the budget pass poisons had-today for rooms it
+// assigned but never placed; settle un-poisons on release and re-checks)
 {
     const env = makeEnv({
         budget: { '7|b1|930|1010': false },
         specialsToday: { b1: new Set(['sushi making']) },
     });
     env.route('b1', 'Sushi Making', { startMin: 930, endMin: 1010 });
-    check('T4 had-today still demotes', env.placed.length === 0 && env.queued.length === 1);
+    check('T4 had-today defers to settle (possible budget poisoning)',
+        env.placed.length === 0 && env.queued.length === 0 && env.deferred.length === 1);
 }
 
 // TEST 5 — kill switch restores legacy demote

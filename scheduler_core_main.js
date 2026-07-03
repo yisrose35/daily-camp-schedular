@@ -2307,23 +2307,26 @@
                     //   demote only when the room is genuinely unclaimable.
                     if (window.__smartTileHonorAdapterSpecials !== false
                         && activityLabel && knownSpecialNames.has(_lblNorm)
-                        && !(_bunkSpecialsToday[bunk] && _bunkSpecialsToday[bunk].has(_lblNorm))
                         && !_specialGateBlocks(bunk, divName, activityLabel)) {
+                        const _haHad = _bunkSpecialsToday[bunk] && _bunkSpecialsToday[bunk].has(_lblNorm);
                         const _haSw = _getSharableWith(activityLabel);
                         const _haCap = (_haSw && _haSw.capacity) || 1;
-                        if (_canClaim(activityLabel, startMin, endMin, _haCap, divName)) {
+                        if (!_haHad && _canClaim(activityLabel, startMin, endMin, _haCap, divName)) {
                             _registerClaim(activityLabel, startMin, endMin, divName);
                             (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_lblNorm);
                             console.log(`[SmartTile V44.6] ${bunk} -> HONORED adapter special (budget said no, room free): ${activityLabel}`);
                             window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                             return;
                         }
-                        // Room claim-blocked right now — but the blocker may be a STRANDED
-                        // budget claim (assigned to a bunk the adapter routed elsewhere).
+                        // Room claim-blocked or had-today right now — but the blocker may be
+                        // a STRANDED budget claim (a room the budget assigned to a bunk the
+                        // adapter routed elsewhere ALSO poisons that bunk's had-today set).
                         // Defer: after all jobs run, the settle pass releases unconsumed
-                        // budget claims and retries; only then does this bunk demote.
+                        // budget claims (un-poisoning had-today) and retries — the exact
+                        // adapter label first, then any still-free special in the bunk's
+                        // pool; only a bunk with no free room left demotes.
                         _noBudgetDeferred.push({ divName, bunk, activityLabel, startMin, endMin, slots, fbAct: _fbAct, pairGroup: job.pairGroup });
-                        console.log(`[SmartTile V44.6] ${bunk} -> adapter special "${activityLabel}" claim-blocked → deferred to settle pass`);
+                        console.log(`[SmartTile V44.6] ${bunk} -> adapter special "${activityLabel}" ${_haHad ? 'had-today (possibly budget-poisoned)' : 'claim-blocked'} → deferred to settle pass`);
                         return;
                     }
                     if (_fbAct && needsGeneration(_fbAct)) {
@@ -2622,19 +2625,32 @@
                 return true;
             };
             _noBudgetDeferred.forEach(d => {
-                const dl = String(d.activityLabel).toLowerCase().trim();
-                const _dSw = _getSharableWith(d.activityLabel);
-                const _dCap = (_dSw && _dSw.capacity) || 1;
-                if (!(_bunkSpecialsToday[d.bunk] && _bunkSpecialsToday[d.bunk].has(dl))
-                    && !_specialGateBlocks(d.bunk, d.divName, d.activityLabel)
-                    && _canClaim(d.activityLabel, d.startMin, d.endMin, _dCap, d.divName)) {
-                    _registerClaim(d.activityLabel, d.startMin, d.endMin, d.divName);
-                    (_bunkSpecialsToday[d.bunk] = _bunkSpecialsToday[d.bunk] || new Set()).add(dl);
-                    console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> HONORED adapter special (stranded claim released): ${d.activityLabel}`);
-                    window.fillBlock({ divName: d.divName, bunk: d.bunk, startTime: d.startMin, endTime: d.endMin, slots: d.slots }, { field: d.activityLabel, sport: null, _fixed: true, _activity: d.activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                // Try the adapter's exact label first, then every other still-free
+                // special in the bunk's pool (least-done first) — a taken room must
+                // not strand the bunk on Sports while a DIFFERENT room sits idle.
+                const _pool = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(
+                    d.startMin, d.endMin, d.divName, activityProperties, dailyFieldAvailability) || [];
+                const _dHist = historicalCounts[d.bunk] || {};
+                const _cands = [d.activityLabel,
+                    ..._pool.map(s => s.name)
+                        .filter(n => n.toLowerCase().trim() !== String(d.activityLabel).toLowerCase().trim())
+                        .sort((a, b) => (_dHist[a] || 0) - (_dHist[b] || 0))];
+                for (const _cand of _cands) {
+                    const cl = String(_cand).toLowerCase().trim();
+                    const _dSw = _getSharableWith(_cand);
+                    const _dCap = (_dSw && _dSw.capacity) || 1;
+                    if (_bunkSpecialsToday[d.bunk] && _bunkSpecialsToday[d.bunk].has(cl)) continue;
+                    if (typeof window.isSpecialAvailableForBunk === 'function'
+                        && !window.isSpecialAvailableForBunk(_cand, d.divName, d.bunk, window.loadGlobalSettings?.())) continue;
+                    if (_specialGateBlocks(d.bunk, d.divName, _cand)) continue;
+                    if (!_canClaim(_cand, d.startMin, d.endMin, _dCap, d.divName)) continue;
+                    _registerClaim(_cand, d.startMin, d.endMin, d.divName);
+                    (_bunkSpecialsToday[d.bunk] = _bunkSpecialsToday[d.bunk] || new Set()).add(cl);
+                    console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> HONORED ${cl === String(d.activityLabel).toLowerCase().trim() ? 'adapter special' : `free-room alternative (adapter said ${d.activityLabel})`}: ${_cand}`);
+                    window.fillBlock({ divName: d.divName, bunk: d.bunk, startTime: d.startMin, endTime: d.endMin, slots: d.slots }, { field: _cand, sport: null, _fixed: true, _activity: _cand }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     return;
                 }
-                // Room genuinely unavailable → the legacy NO-BUDGET demote.
+                // No free room left for this bunk → the legacy NO-BUDGET demote.
                 if (d.fbAct && _ngen(d.fbAct)) {
                     const fbSlotType = d.fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                     console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> room still unavailable → ${fbSlotType}`);
