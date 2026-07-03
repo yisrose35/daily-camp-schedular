@@ -265,6 +265,12 @@
                         for (const lockedFieldKey in slotLocks) {
                             if (!exSet.has(lockedFieldKey)) continue;
                             const lock = slotLocks[lockedFieldKey];
+                            // ★ COMBO-MARKER FIX (see isFieldLockedByTime): a marker
+                            //   propagated onto the combined field by a sibling sub
+                            //   must not block the OTHER sub — subs never block each
+                            //   other. Kill switch: window.__comboSiblingUnblock = false.
+                            if (lock._fromComboPropagation === true &&
+                                window.__comboSiblingUnblock !== false) continue;
                             if (lock.lockType === 'division' && lock.allowedDivision &&
                                 divisionContext && divisionContext === lock.allowedDivision) continue;
                             let lStart = lock.startMin, lEnd = lock.endMin;
@@ -410,6 +416,17 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
                 for (const lockedFieldKey in slotLocks) {
                     if (!exSet.has(lockedFieldKey)) continue;
                     const lock = slotLocks[lockedFieldKey];
+                    // ★ COMBO-MARKER FIX: a lock PROPAGATED onto the combined field
+                    //   by lockComboPartners when a SIBLING sub was locked only means
+                    //   "some sub is busy" — it blocks the combined field itself
+                    //   (direct-hit scan above) but must NOT block the OTHER sub:
+                    //   subs never block each other. Without this skip, using
+                    //   New Gym 1 froze New Gym 2 for the whole camp (live: NG2
+                    //   idle all day while worse courts filled). Only a REAL lock
+                    //   on the counterpart (someone actually using/pinning it)
+                    //   blocks. Kill switch: window.__comboSiblingUnblock = false.
+                    if (lock._fromComboPropagation === true &&
+                        window.__comboSiblingUnblock !== false) continue;
                     // Skip division locks the caller is allowed for
                     if (lock.lockType === 'division' && lock.allowedDivision &&
                         divisionContext && divisionContext === lock.allowedDivision) continue;
