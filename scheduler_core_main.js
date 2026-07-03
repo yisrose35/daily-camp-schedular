@@ -1484,9 +1484,39 @@
         //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
         //   memo caps it to one compute per bunk (~bunks×specials total).
         window.__smartTileNeedCount = _bunkSpecialCount;
-        // neediest first (fewest specials THIS PERIOD); seniority breaks ties.
+        // ★ RECENCY TIEBREAK (kill switch window.__smartTileRecencyTiebreak = false):
+        //   days since the bunk's LAST special of any kind — with equal week-counts the
+        //   bunk that's gone longest without a special wins the room. Without this,
+        //   seniority decided every tie, and with few rooms shared by many bunks the
+        //   counts tie CONSTANTLY — so the senior division won a room nearly every day
+        //   (9th grade got specials daily, never Swim/Pickleball; 8th got squeezed out).
+        //   Recency makes bunks CYCLE through special → pickleball/swim across days,
+        //   like a head counselor would rotate them. Safe against the old phantom-
+        //   daysSince bug: a special only counts toward recency when the bunk has
+        //   ACTUALLY done it (schedule-derived getActivityCount > 0); a bunk that has
+        //   never had any special ranks neediest (gap 99999).
+        const _dsCache = {};
+        const _bunkLastSpecialGap = (bunk) => {
+            if (bunk in _dsCache) return _dsCache[bunk];
+            const RE = window.RotationEngine;
+            let gap = 99999;
+            if (RE && typeof RE.getDaysSinceActivity === 'function' && typeof RE.getActivityCount === 'function') {
+                for (const n of _allSpecialNames) {
+                    try {
+                        if ((RE.getActivityCount(bunk, n) || 0) <= 0) continue;
+                        const d = RE.getDaysSinceActivity(bunk, n);
+                        if (typeof d === 'number' && d >= 0 && d < gap) gap = d;
+                    } catch (_) {}
+                }
+            }
+            return (_dsCache[bunk] = gap);
+        };
+        const _recencyTiebreak = (window.__smartTileRecencyTiebreak !== false);
+        // neediest first (fewest specials THIS PERIOD), then longest-since-any-special,
+        // then seniority.
         const _needSenCmp = (bunkA, divA, bunkB, divB) =>
             (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||
+            (_recencyTiebreak ? (_bunkLastSpecialGap(bunkB) - _bunkLastSpecialGap(bunkA)) : 0) ||
             (_senOf(divA) - _senOf(divB)) ||
             (Math.random() - 0.5);
 
@@ -1645,6 +1675,7 @@
             // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
                 (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(b.bunk) - _bunkLastSpecialGap(a.bunk)) : 0) ||  // ★ longest-since-any-special next (cycles bunks day to day)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
                 (a.usage - b.usage) ||
@@ -1770,6 +1801,7 @@
             // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
                 (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(b.bunk) - _bunkLastSpecialGap(a.bunk)) : 0) ||  // ★ longest-since-any-special next (cycles bunks day to day)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (a.usage - b.usage) ||
                 _gradePriorityCmp(a.divName, b.divName) ||
