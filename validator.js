@@ -1,7 +1,7 @@
 // =================================================================
-// validator.js v3.0 — COMPREHENSIVE SCHEDULE VALIDATOR
+// validator.js v3.1 — COMPREHENSIVE SCHEDULE VALIDATOR
 // =================================================================
-// 
+//
 // CHECKS FOR:
 // ✅ Cross-division conflicts (same_division, custom, not_sharable enforcement)
 // ✅ Per-division capacity violations (too many same-div bunks on one field)
@@ -23,6 +23,20 @@
 // - ★★★ Unassigned/empty bunk detection ★★★
 // - ★★★ Split tile awareness in repetition checks ★★★
 // - ★★★ Improved modal with collapsible sections + counts ★★★
+//
+// v3.1 CHANGES (resource-rule + league/event-aware checks):
+// - ★★★ Special access violations (accessRestrictions grade/bunk gate) ★★★
+// - ★★★ Disabled (turned-OFF) specials & fields placed anyway ★★★
+// - ★★★ Per-date Bunk-Only Access rule violations ★★★
+// - ★★★ League/event-aware facility timeline conflicts — closes the
+//        long-standing blind spot where league games (leagueAssignments)
+//        and pinned-event reservations (_reservedFields) were invisible
+//        to the per-bunk field-conflict check. Pin-vs-pin overlaps are
+//        exempt (user-placed, by design). ★★★
+// - ★★★ Field-quality audit (warnings): a graded placement while a
+//        better-ranked field in the same quality group was free, ON,
+//        not a special-host room, open by time rules and usable by that
+//        grade — plus junior-vs-senior quality inversions among bunks. ★★★
 //
 // =================================================================
 
@@ -50,7 +64,7 @@
     // =========================================================================
 
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.0...');
+        console.log('🛡️ Running comprehensive schedule validation v3.1...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -155,6 +169,33 @@
         // =====================================================================
         const leagueTimeWarnings = checkLeagueTimeMismatch(divisionTimes);
         leagueTimeWarnings.forEach(w => warnings.push(w));
+
+        // =====================================================================
+        // 9. ★★★ v3.1: SPECIAL ACCESS RESTRICTIONS ★★★
+        // =====================================================================
+        try { checkSpecialAccess(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ special-access check failed:', e); }
+
+        // =====================================================================
+        // 10. ★★★ v3.1: DISABLED (TURNED-OFF) SPECIALS & FIELDS ★★★
+        // =====================================================================
+        try { checkDisabledResources(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ disabled-resource check failed:', e); }
+
+        // =====================================================================
+        // 11. ★★★ v3.1: PER-DATE BUNK-ONLY ACCESS RULES ★★★
+        // =====================================================================
+        try { checkBunkOnlyAccess(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ bunk-only check failed:', e); }
+
+        // =====================================================================
+        // 12+13. ★★★ v3.1: LEAGUE/EVENT-AWARE TIMELINE + FIELD QUALITY ★★★
+        // =====================================================================
+        try {
+            const timedUsages = collectTimedUsages(assignments, divisions, divisionTimes, bunkDivMap);
+            checkLeagueFieldConflicts(timedUsages).forEach(e => errors.push(e));
+            checkFieldQuality(timedUsages).forEach(w => warnings.push(w));
+        } catch (e) { console.warn('🛡️ v3.1 timeline checks failed:', e); }
 
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
@@ -835,6 +876,455 @@
     }
 
     // =========================================================================
+    // v3.1 — RESOURCE-RULE + LEAGUE/EVENT-AWARE CHECKS
+    // =========================================================================
+
+    const _lc = (v) => String(v == null ? '' : v).toLowerCase().trim();
+
+    function getFieldsConfig() {
+        const gs = window.loadGlobalSettings?.() || {};
+        const arr = gs.app1?.fields || gs.fields || [];
+        const list = Array.isArray(arr) ? arr : Object.values(arr || {});
+        return list.filter(f => f && f.name);
+    }
+
+    function getSpecialsConfig() {
+        let list = [];
+        try { list = window.getAllSpecialActivities?.() || []; } catch (e) { /* fall through */ }
+        if (!list || !list.length) {
+            const gs = window.loadGlobalSettings?.() || {};
+            list = gs.app1?.specialActivities || gs.specialActivities || [];
+        }
+        const arr = Array.isArray(list) ? list : Object.values(list || {});
+        return arr.filter(s => s && s.name);
+    }
+
+    /**
+     * ★ v3.1: Collect EVERY timed facility usage on the loaded day:
+     *   kind 'bunk'   — a bunk placed on a real field (scheduleAssignments)
+     *   kind 'event'  — a pinned tile / special reserving real facilities
+     *                   (_reservedFields / _location; deduped per division+event)
+     *   kind 'league' — a league game's field (leagueAssignments — the store
+     *                   the per-bunk checks can't see)
+     * Times prefer the entry's own _startMin/_endMin (regen-accurate), falling
+     * back to the division time grid; continuation slots extend the end.
+     */
+    function collectTimedUsages(assignments, divisions, divisionTimes, bunkDivMap) {
+        const usages = [];
+        const realFields = new Set(getFieldsConfig().map(f => _lc(f.name)));
+        const anyReal = realFields.size > 0;
+        const evtSeen = new Set();
+
+        const entryTimes = (slots, idx, divSlots) => {
+            const entry = slots[idx];
+            let s = entry._startMin, e = entry._endMin;
+            const si = divSlots[idx];
+            if (s == null && si) s = si.startMin;
+            if (e == null && si) e = si.endMin;
+            for (let j = idx + 1; j < slots.length; j++) {
+                const nx = slots[j];
+                if (!nx || !nx.continuation) break;
+                if (nx._endMin != null) e = nx._endMin;
+                else if (divSlots[j] && divSlots[j].endMin != null) e = divSlots[j].endMin;
+            }
+            return [s, e];
+        };
+
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
+                const [s, e] = entryTimes(slots, idx, divSlots);
+                if (s == null || e == null || isNaN(s) || isNaN(e)) return;
+                const activity = entry._activity || entry.sport || '';
+                const fName = normalizeFieldName(entry.field);
+                const isRealField = !!fName && (!anyReal || realFields.has(fName));
+                const reserved = [];
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(x => { if (x) reserved.push(x); });
+                if (typeof entry._location === 'string' && entry._location.trim()) reserved.push(entry._location);
+
+                if (fName && isRealField && !IGNORED_FIELDS.includes(fName)) {
+                    usages.push({
+                        fkey: fName,
+                        facility: (typeof entry.field === 'string' ? entry.field : entry.field?.name) || fName,
+                        divName, bunk, owner: 'Bunk ' + bunk, kind: 'bunk',
+                        startMin: s, endMin: e, activity
+                    });
+                }
+                // Pinned tiles / specials: event name in entry.field, real
+                // facilities in _reservedFields/_location. Dedupe per
+                // division+event (whole-division pins repeat on every bunk).
+                if (!isRealField && reserved.length) {
+                    reserved.forEach(raw => {
+                        const rName = normalizeFieldName(raw);
+                        if (!rName || IGNORED_FIELDS.includes(rName)) return;
+                        if (anyReal && !realFields.has(rName)) return;
+                        const key = divName + '|' + _lc(activity || fName || '') + '|' + rName + '|' + s;
+                        if (evtSeen.has(key)) return;
+                        evtSeen.add(key);
+                        usages.push({
+                            fkey: rName, facility: String(raw), divName, bunk,
+                            owner: divName + ' — ' + (activity || (typeof entry.field === 'string' ? entry.field : '') || 'pinned event'),
+                            kind: 'event', startMin: s, endMin: e,
+                            activity: activity || String(entry.field || '')
+                        });
+                    });
+                }
+            });
+        });
+
+        // League games — stored in leagueAssignments, NOT in the per-bunk grid
+        const leagueAssignments = window.leagueAssignments || {};
+        const parseMatchup = (m) => {
+            if (m && typeof m === 'object') {
+                return {
+                    field: m.field || m.location || m.fieldName || '',
+                    label: [m.teamA || m.team1, m.teamB || m.team2].filter(Boolean).join(' vs ')
+                };
+            }
+            const str = String(m || '');
+            const at = str.split(' @ ');
+            let field = (at[1] || '').trim();
+            const pm = field.match(/^(.+?)\s*\((.+?)\)\s*$/);
+            if (pm) field = pm[1].trim();
+            return { field, label: (at[0] || '').trim() };
+        };
+        Object.entries(leagueAssignments).forEach(([divName, slotsObj]) => {
+            if (!slotsObj || typeof slotsObj !== 'object') return;
+            const divSlots = divisionTimes[divName] || [];
+            Object.entries(slotsObj).forEach(([slotKey, entry]) => {
+                if (!entry) return;
+                const mus = entry.matchups || entry._allMatchups;
+                if (!Array.isArray(mus) || !mus.length) return;
+                let s = entry.startMin ?? entry._startMin;
+                let e = entry.endMin ?? entry._endMin;
+                const kNum = parseInt(slotKey, 10);
+                if (s == null) {
+                    const byStart = divSlots.find(sl => sl && sl.startMin === kNum);
+                    const si = byStart || divSlots[kNum];
+                    if (si) { s = si.startMin; if (e == null) e = si.endMin; }
+                }
+                if (s == null && kNum > 100) {
+                    s = kNum;
+                    const cont = divSlots.find(sl => sl && sl.startMin <= kNum && kNum < sl.endMin);
+                    e = cont ? cont.endMin : kNum + 45;
+                }
+                if (s == null || isNaN(s)) return;
+                if (e == null || isNaN(e)) e = s + 45;
+                const lgName = entry.leagueName || entry._leagueName || entry.gameLabel || 'League';
+                mus.forEach(m => {
+                    const pm = parseMatchup(m);
+                    const fk = normalizeFieldName(pm.field);
+                    if (!fk || IGNORED_FIELDS.includes(fk)) return;
+                    if (anyReal && !realFields.has(fk)) return;
+                    usages.push({
+                        fkey: fk, facility: pm.field, divName, bunk: null,
+                        owner: 'League "' + lgName + '" — ' + (pm.label || 'game'),
+                        kind: 'league', startMin: s, endMin: e, activity: lgName
+                    });
+                });
+            });
+        });
+
+        return usages;
+    }
+
+    /**
+     * ★ v3.1 CHECK 9: every placed special must pass the access gate for its
+     * grade/bunk (accessRestrictions + per-date bunk-only rules — the exact
+     * gate the schedulers use: window.isSpecialAvailableForBunk).
+     */
+    function checkSpecialAccess(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        if (typeof window.isSpecialAvailableForBunk !== 'function') return errors;
+        const specials = getSpecialsConfig();
+        if (!specials.length) return errors;
+        const specialSet = new Set(specials.map(s => _lc(s.name)));
+        const gs = window.loadGlobalSettings?.() || {};
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
+                const act = entry._activity || entry.sport || entry.field;
+                const actName = typeof act === 'string' ? act : act?.name;
+                if (!actName || !specialSet.has(_lc(actName))) return;
+                let allowed = true;
+                try { allowed = window.isSpecialAvailableForBunk(actName, divName, bunk, gs) !== false; } catch (e) { /* fail open */ }
+                if (allowed) return;
+                const si = divSlots[idx];
+                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                errors.push(
+                    `<strong>Special Access Violation:</strong> <u>${bunk}</u> (Div ${divName}) received ` +
+                    `<strong>${actName}</strong> at ${when}, but this special is not allowed for this grade/bunk ` +
+                    `(access restriction or per-date bunk-only rule)`
+                );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ v3.1 CHECK 10: specials/fields toggled OFF in Facilities
+     * (available === false) must never appear in the generated schedule.
+     */
+    function checkDisabledResources(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const offSpecials = new Map();
+        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), s.name); });
+        const offFields = new Map();
+        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), f.name); });
+        if (!offSpecials.size && !offFields.size) return errors;
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)] || '?';
+            if (!Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry)) return;
+                const actName = entry._activity || entry.sport;
+                const fName = normalizeFieldName(entry.field);
+                const si = divSlots[idx];
+                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                if (actName && offSpecials.has(_lc(actName))) {
+                    errors.push(
+                        `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
+                        `<strong>${offSpecials.get(_lc(actName))}</strong> at ${when}, but that special is turned OFF in Facilities`
+                    );
+                }
+                if (fName && offFields.has(fName)) {
+                    errors.push(
+                        `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is placed on ` +
+                        `<strong>${offFields.get(fName)}</strong> at ${when}, but that field is turned OFF in Facilities`
+                    );
+                }
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ v3.1 CHECK 11: per-date Bunk-Only Access rules (Resources → facility →
+     * "🔒 Bunk-Only Access"). Specials are already covered by CHECK 9 (the
+     * special gate folds the bunk-only rule in), so this only inspects
+     * field/sport placements. Skips silently when no rules exist today.
+     */
+    function checkBunkOnlyAccess(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const U = window.SchedulerCoreUtils;
+        if (!U || typeof U.isBunkRestrictedFromTarget !== 'function') return errors;
+        let rules = null;
+        try { rules = (window.loadCurrentDailyData?.() || {}).dailyActivityBunkRestrictions; } catch (e) { /* fall through */ }
+        if (!Array.isArray(rules) || !rules.length) {
+            try {
+                const raw = localStorage.getItem('campResourceOverrides_' + (window.currentScheduleDate || ''));
+                if (raw) {
+                    const p = JSON.parse(raw);
+                    if (Array.isArray(p?.dailyActivityBunkRestrictions)) rules = p.dailyActivityBunkRestrictions;
+                }
+            } catch (e) { /* no fallback */ }
+        }
+        if (!Array.isArray(rules) || !rules.length) return errors;
+        const specialSet = new Set(getSpecialsConfig().map(s => _lc(s.name)));
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
+                const actName = entry._activity || entry.sport || null;
+                if (actName && specialSet.has(_lc(actName))) return; // covered by CHECK 9
+                const rawField = (typeof entry.field === 'object') ? entry.field?.name : entry.field;
+                if (!actName && !rawField) return;
+                let blocked = false;
+                try { blocked = U.isBunkRestrictedFromTarget(bunk, actName, rawField || null, divName) === true; } catch (e) { /* fail open */ }
+                if (!blocked) return;
+                const si = divSlots[idx];
+                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                const target = actName && rawField && _lc(actName) !== _lc(rawField)
+                    ? `${actName} on <u>${rawField}</u>` : (actName || rawField);
+                errors.push(
+                    `<strong>Bunk-Only Violation:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
+                    `<strong>${target}</strong> at ${when}, but today's Bunk-Only Access rule reserves it for other bunk(s)`
+                );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ v3.1 CHECK 12: league/event-aware facility conflicts. The per-bunk
+     * conflict check (CHECK 1) cannot see league games or pinned-event
+     * reservations; this one can. Pure bunk-vs-bunk groups are skipped
+     * (CHECK 1 territory) and pin-vs-pin overlaps are exempt — overlapping
+     * pinned tiles are user-placed and intentional.
+     */
+    function checkLeagueFieldConflicts(usages) {
+        const errors = [];
+        const byF = {};
+        usages.forEach(u => { (byF[u.fkey] = byF[u.fkey] || []).push(u); });
+        const seen = new Set();
+        Object.values(byF).forEach(list => {
+            if (list.length < 2) return;
+            buildOverlapGroups(list).forEach(group => {
+                if (group.length < 2) return;
+                const kinds = new Set(group.map(g => g.kind));
+                if (kinds.size === 1 && kinds.has('bunk')) return;   // CHECK 1 covers it
+                if (kinds.size === 1 && kinds.has('event')) return;  // pinned-vs-pinned: by design
+                const owners = [...new Set(group.map(g => g.owner))];
+                if (owners.length < 2) return;
+                const sig = group[0].fkey + '|' + owners.sort().join(',') + '|' + Math.min(...group.map(g => g.startMin));
+                if (seen.has(sig)) return;
+                seen.add(sig);
+                const timeLabel = formatTime(Math.min(...group.map(g => g.startMin))) + ' - ' +
+                                  formatTime(Math.max(...group.map(g => g.endMin)));
+                const occ = group.map(g => `${g.owner} [${g.kind}] ${formatTime(g.startMin)}-${formatTime(g.endMin)}`).join(' · ');
+                errors.push(
+                    `<strong>League/Event Field Conflict:</strong> <u>${group[0].facility}</u> is double-booked during ${timeLabel}<br>` +
+                    `<small style="color:#666;">${occ}</small>`
+                );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ v3.1 CHECK 13 (warnings): field-quality audit against the Facilities
+     * quality groups (fieldGroup + qualityRank, 1 = best).
+     *  (a) a placement sat on rank N while a better-ranked group member was
+     *      simultaneously free, ON, not a special-host room, open per time
+     *      rules and accessible to that grade — a genuine missed upgrade.
+     *  (b) seniority inversion among BUNK placements: a junior division holds
+     *      a better-ranked field than a senior division in the same group at
+     *      an overlapping time. (League fixtures are placed first by design,
+     *      so league-vs-bunk precedence is intentionally NOT flagged.)
+     */
+    function checkFieldQuality(usages) {
+        const warnings = [];
+        const fieldsCfg = getFieldsConfig();
+        const groups = {};
+        fieldsCfg.forEach(f => {
+            if (!f.fieldGroup || !f.qualityRank) return;
+            (groups[f.fieldGroup] = groups[f.fieldGroup] || []).push({
+                name: f.name, key: _lc(f.name), rank: parseInt(f.qualityRank) || 999, props: f
+            });
+        });
+        const groupNames = Object.keys(groups);
+        if (!groupNames.length) return warnings;
+        groupNames.forEach(g => groups[g].sort((a, b) => a.rank - b.rank));
+        const keyInfo = {};
+        groupNames.forEach(g => groups[g].forEach(m => { keyInfo[m.key] = { group: g, rank: m.rank, name: m.name }; }));
+
+        // Seniority (oldest first) — same source the solver uses
+        let order = [];
+        try { order = window.getDivisionAgeOrder?.(Object.keys(window.divisions || {})) || []; } catch (e) { /* off */ }
+        const sen = {};
+        order.forEach((d, i) => { sen[d] = i; });
+
+        // Special-host rooms are never free-for-sports candidates (e.g. a
+        // basketball court that hosts a clinic is reserved for specials).
+        const specialHosts = new Set();
+        getSpecialsConfig().forEach(sp => {
+            specialHosts.add(_lc(sp.name));
+            try {
+                const host = window.getLocationForActivity?.(sp.name);
+                if (host) specialHosts.add(_lc(typeof host === 'object' ? host?.name : host));
+            } catch (e) { /* skip */ }
+        });
+
+        const byF = {};
+        usages.forEach(u => { (byF[u.fkey] = byF[u.fkey] || []).push(u); });
+        const isBusy = (key, s, e) => (byF[key] || []).some(u => u.startMin < e && u.endMin > s);
+
+        const parseMin = (v) => {
+            if (v == null) return null;
+            if (typeof v === 'number') return isNaN(v) ? null : v;
+            const m = window.SchedulerCoreUtils?.parseTimeToMinutes?.(v);
+            return (typeof m === 'number' && !isNaN(m)) ? m : null;
+        };
+        const isOpenFor = (member, s, e, divName) => {
+            const f = member.props;
+            if (f.available === false) return false;
+            if (specialHosts.has(member.key)) return false;
+            const ar = f.accessRestrictions;
+            if (ar && ar.enabled && ar.divisions && typeof ar.divisions === 'object' &&
+                Object.keys(ar.divisions).length > 0 && !(divName in ar.divisions)) return false;
+            const tr = f.timeRules;
+            if (Array.isArray(tr) && tr.length) {
+                let availWins = null;
+                for (const r of tr) {
+                    if (!r) continue;
+                    let rs = r.startMin, re = r.endMin;
+                    if (rs == null) rs = parseMin(r.start || r.startTime);
+                    if (re == null) re = parseMin(r.end || r.endTime);
+                    if (rs == null || re == null) continue;
+                    if (Array.isArray(r.divisions) && r.divisions.length && !r.divisions.includes(divName)) continue;
+                    const type = _lc(r.type);
+                    if (type === 'unavailable' || r.available === false) {
+                        if (rs < e && re > s) return false;
+                    } else if (type === 'available' || r.available === true) {
+                        (availWins = availWins || []).push([rs, re]);
+                    }
+                }
+                if (availWins && !availWins.some(w => w[0] <= s && e <= w[1])) return false;
+            }
+            return true;
+        };
+
+        // (a) missed upgrades
+        const seenMiss = new Set();
+        usages.forEach(u => {
+            if (u.kind === 'event') return; // pins reserve exactly what the user chose
+            const info = keyInfo[u.fkey];
+            if (!info) return;
+            for (const m of groups[info.group]) {
+                if (m.rank >= info.rank) break;
+                if (!isOpenFor(m, u.startMin, u.endMin, u.divName)) continue;
+                if (isBusy(m.key, u.startMin, u.endMin)) continue;
+                const sig = u.owner + '|' + u.fkey + '|' + u.startMin;
+                if (seenMiss.has(sig)) break;
+                seenMiss.add(sig);
+                warnings.push(
+                    `<strong>Field Quality:</strong> ${u.owner} (Div ${u.divName}) is on #${info.rank} <u>${info.name}</u> at ` +
+                    `${formatTime(u.startMin)} - ${formatTime(u.endMin)} while better-ranked <u>${m.name}</u> (#${m.rank}) ` +
+                    `appears free, enabled and usable by this grade`
+                );
+                break;
+            }
+        });
+
+        // (b) seniority inversions among bunk placements
+        const seenInv = new Set();
+        const byGroup = {};
+        usages.forEach(u => {
+            const i = keyInfo[u.fkey];
+            if (i && u.kind === 'bunk') (byGroup[i.group] = byGroup[i.group] || []).push(u);
+        });
+        Object.values(byGroup).forEach(list => {
+            for (const a of list) for (const b of list) {
+                if (a === b) continue;
+                if (!(a.startMin < b.endMin && b.startMin < a.endMin)) continue;
+                const sa = sen[a.divName], sb = sen[b.divName];
+                if (sa == null || sb == null || sa >= sb) continue; // a must be strictly senior
+                const ra = keyInfo[a.fkey].rank, rb = keyInfo[b.fkey].rank;
+                if (ra <= rb) continue; // senior already equal or better
+                const sig = a.owner + '|' + b.owner + '|' + a.fkey + '|' + b.fkey + '|' + Math.max(a.startMin, b.startMin);
+                if (seenInv.has(sig)) continue;
+                seenInv.add(sig);
+                warnings.push(
+                    `<strong>Field Quality:</strong> seniority inversion — senior Div ${a.divName} (${a.owner}) is on ` +
+                    `#${ra} <u>${keyInfo[a.fkey].name}</u> while junior Div ${b.divName} (${b.owner}) holds better-ranked ` +
+                    `#${rb} <u>${keyInfo[b.fkey].name}</u> at the same time (${formatTime(Math.max(a.startMin, b.startMin))})`
+                );
+            }
+        });
+
+        return warnings;
+    }
+
+    // =========================================================================
     // SHOW VALIDATION MODAL (★★★ v3.0: Collapsible sections + counts ★★★)
     // =========================================================================
 
@@ -857,7 +1347,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
                     <h2 style="margin:0; color:#333; display:flex; align-items:center; gap:8px;">
                         🛡️ Schedule Validator
-                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.0</span>
+                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.1</span>
                     </h2>
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#888; padding:0 8px;">&times;</button>
                 </div>
@@ -892,9 +1382,14 @@
                 const capacityErrors = errors.filter(e => e.includes('Capacity Exceeded'));
                 const repetitionErrors = errors.filter(e => e.includes('Same-Day Repetition'));
                 const comboErrors = errors.filter(e => e.includes('Combined Field Conflict'));
-                const otherErrors = errors.filter(e => 
-                    !e.includes('Cross-Division') && !e.includes('Capacity Exceeded') && 
-                    !e.includes('Same-Day Repetition') && !e.includes('Combined Field Conflict')
+                const accessErrors = errors.filter(e =>
+                    e.includes('Special Access Violation') || e.includes('Disabled Resource') || e.includes('Bunk-Only Violation'));
+                const leagueFieldErrors = errors.filter(e => e.includes('League/Event Field Conflict'));
+                const otherErrors = errors.filter(e =>
+                    !e.includes('Cross-Division') && !e.includes('Capacity Exceeded') &&
+                    !e.includes('Same-Day Repetition') && !e.includes('Combined Field Conflict') &&
+                    !e.includes('Special Access Violation') && !e.includes('Disabled Resource') &&
+                    !e.includes('Bunk-Only Violation') && !e.includes('League/Event Field Conflict')
                 );
 
                 content += `<div style="margin-bottom:15px;">
@@ -914,6 +1409,12 @@
                 if (comboErrors.length > 0) {
                     content += buildCategorySection('Combined Field Conflicts', comboErrors, '#FFCDD2', '#C62828', '#EF5350');
                 }
+                if (accessErrors.length > 0) {
+                    content += buildCategorySection('Access & Resource Rules', accessErrors, '#FFCDD2', '#C62828', '#EF5350');
+                }
+                if (leagueFieldErrors.length > 0) {
+                    content += buildCategorySection('League/Event Field Conflicts', leagueFieldErrors, '#FFCDD2', '#C62828', '#EF5350');
+                }
                 if (otherErrors.length > 0) {
                     content += buildCategorySection('Other Errors', otherErrors, '#FFCDD2', '#C62828', '#EF5350');
                 }
@@ -925,9 +1426,11 @@
                 const fieldReuseWarnings = warnings.filter(w => w.includes('Field Reuse'));
                 const missingWarnings = warnings.filter(w => w.includes('Missing Activity'));
                 const emptyWarnings = warnings.filter(w => w.includes('Empty Slot') || w.includes('Empty Bunk') || w.includes('Unassigned Bunk'));
-                const otherWarnings = warnings.filter(w => 
-                    !w.includes('Field Reuse') && !w.includes('Missing Activity') && 
-                    !w.includes('Empty Slot') && !w.includes('Empty Bunk') && !w.includes('Unassigned Bunk')
+                const fieldQualityWarnings = warnings.filter(w => w.includes('Field Quality'));
+                const otherWarnings = warnings.filter(w =>
+                    !w.includes('Field Reuse') && !w.includes('Missing Activity') &&
+                    !w.includes('Empty Slot') && !w.includes('Empty Bunk') && !w.includes('Unassigned Bunk') &&
+                    !w.includes('Field Quality')
                 );
                 
                 content += `<div style="margin-bottom:15px;">
@@ -943,6 +1446,9 @@
                 }
                 if (emptyWarnings.length > 0) {
                     content += buildCategorySection('Empty / Unassigned', emptyWarnings, '#FFF3E0', '#E65100', '#FF9800');
+                }
+                if (fieldQualityWarnings.length > 0) {
+                    content += buildCategorySection('Field Quality', fieldQualityWarnings, '#FFF3E0', '#E65100', '#FF9800');
                 }
                 if (otherWarnings.length > 0) {
                     content += buildCategorySection('Other Warnings', otherWarnings, '#FFF3E0', '#E65100', '#FF9800');
@@ -1065,9 +1571,18 @@
         getSharingRules: getSharingRules,
         // Standalone league-time-mismatch check so the generator can warn the
         // user immediately after a manual build (without popping the full modal).
-        checkLeagueTimeMismatch: () => checkLeagueTimeMismatch(window.divisionTimes || {})
+        checkLeagueTimeMismatch: () => checkLeagueTimeMismatch(window.divisionTimes || {}),
+        // ★ v3.1 checks exposed individually (console use + node sims)
+        _v31: {
+            collectTimedUsages,
+            checkSpecialAccess,
+            checkDisabledResources,
+            checkBunkOnlyAccess,
+            checkLeagueFieldConflicts,
+            checkFieldQuality
+        }
     };
 
-    console.log('🛡️ Validator v3.0 loaded — comprehensive field conflict + capacity + repetition + empty bunk detection');
+    console.log('🛡️ Validator v3.1 loaded — field conflict + capacity + repetition + access rules + league/event timeline + field quality');
 
 })();
