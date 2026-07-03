@@ -5515,6 +5515,45 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         } // ★★★ END: Skip leagues on rainy day ★★★
 
+        // ★ STEP 5.6 — Partial regen: TIME-LOCK ALL LEAGUE GAME FIELDS. When STEP 3
+        //   skips a PRESERVED division's league block, the league engine never re-creates
+        //   that game's field locks — so a Smart-Tile / solver / fallback fill can poach a
+        //   field a preserved league game holds (observed: a regenerated bunk placed on
+        //   "Powerplay"/"The Hatrick" already used by a preserved league, a cross-time
+        //   boundary overlap). Now that leagueAssignments is fully consolidated, lock every
+        //   league game's field for its own time window (time-aware) so overlapping regen
+        //   slots route around it. Re-locking an already-locked (re-rolled) league field is
+        //   a harmless no-op.
+        if (window.__regenSlotScope && window.GlobalFieldLocks &&
+            typeof window.GlobalFieldLocks.lockField === 'function') {
+            const _la56 = window.leagueAssignments || {};
+            let _lgLocked56 = 0;
+            for (const _dv56 in _la56) {
+                const _arr56 = _la56[_dv56];
+                if (!Array.isArray(_arr56)) continue;
+                const _dts56 = (window.divisionTimes && window.divisionTimes[_dv56]) || [];
+                for (let _si56 = 0; _si56 < _arr56.length; _si56++) {
+                    const _cell56 = _arr56[_si56];
+                    const _ms56 = _cell56 && _cell56.matchups;
+                    if (!Array.isArray(_ms56) || !_ms56.length) continue;
+                    const _slot56 = _dts56[_si56] || {};
+                    let _sM56 = _slot56.startMin, _eM56 = _slot56.endMin;
+                    if (_sM56 == null) { const _m0 = _ms56.find(m => m && m._startMin != null); if (_m0) { _sM56 = _m0._startMin; _eM56 = _m0._endMin; } }
+                    const _fields56 = [...new Set(_ms56.map(m => m && m.field).filter(Boolean))];
+                    _fields56.forEach(_f56 => {
+                        try {
+                            window.GlobalFieldLocks.lockField(_f56, [_si56], {
+                                lockedBy: 'regen_preserved_league', division: _dv56,
+                                activity: 'Preserved league game', startMin: _sM56, endMin: _eM56
+                            });
+                            _lgLocked56++;
+                        } catch (_e56) { /* non-fatal */ }
+                    });
+                }
+            }
+            if (_lgLocked56 > 0) console.log('[STEP 5.6] ★ Per-tile regen: time-locked ' + _lgLocked56 + ' league game field(s) so regen bunks route around them');
+        }
+
         // =========================================================================
         // STEP 6: PROCESS SMART TILES
         // =========================================================================
