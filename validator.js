@@ -1,5 +1,5 @@
 // =================================================================
-// validator.js v3.1 — COMPREHENSIVE SCHEDULE VALIDATOR
+// validator.js v3.2 — COMPREHENSIVE SCHEDULE VALIDATOR
 // =================================================================
 //
 // CHECKS FOR:
@@ -23,6 +23,15 @@
 // - ★★★ Unassigned/empty bunk detection ★★★
 // - ★★★ Split tile awareness in repetition checks ★★★
 // - ★★★ Improved modal with collapsible sections + counts ★★★
+//
+// v3.2 CHANGES (sports rules):
+// - ★★★ Spacing/cooldown rule check: every placed block re-judged through
+//        the REAL rules engine (SchedulingRules.checkCandidateDetailed)
+//        against the bunk's other blocks. Pins/leagues participate as
+//        context but are not judged themselves. ★★★
+// - ★★★ Sport player counts (Rules tab sportMetaData): shared-field
+//        combined campers > maxPlayers + 2 (the engine's own grace) =
+//        error; group under minPlayers = warning. ★★★
 //
 // v3.1 CHANGES (resource-rule + league/event-aware checks):
 // - ★★★ Special access violations (accessRestrictions grade/bunk gate) ★★★
@@ -64,7 +73,7 @@
     // =========================================================================
 
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.1...');
+        console.log('🛡️ Running comprehensive schedule validation v3.2...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -190,12 +199,22 @@
 
         // =====================================================================
         // 12+13. ★★★ v3.1: LEAGUE/EVENT-AWARE TIMELINE + FIELD QUALITY ★★★
+        // 15.    ★★★ v3.2: SPORT PLAYER COUNTS (min/max players) ★★★
         // =====================================================================
         try {
             const timedUsages = collectTimedUsages(assignments, divisions, divisionTimes, bunkDivMap);
             checkLeagueFieldConflicts(timedUsages).forEach(e => errors.push(e));
             checkFieldQuality(timedUsages).forEach(w => warnings.push(w));
-        } catch (e) { console.warn('🛡️ v3.1 timeline checks failed:', e); }
+            const sportRules = checkSportPlayerRules(timedUsages);
+            sportRules.errors.forEach(e => errors.push(e));
+            sportRules.warnings.forEach(w => warnings.push(w));
+        } catch (e) { console.warn('🛡️ v3.1/v3.2 timeline checks failed:', e); }
+
+        // =====================================================================
+        // 14. ★★★ v3.2: SPACING / COOLDOWN RULES ★★★
+        // =====================================================================
+        try { checkCooldownRules(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ spacing-rule check failed:', e); }
 
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
@@ -1381,6 +1400,139 @@
     }
 
     // =========================================================================
+    // v3.2 — SPORTS RULES CHECKS
+    // =========================================================================
+
+    /**
+     * ★ v3.2 CHECK 14: cooldown/spacing rules ("Don't place X within N min of
+     * Y" — the Rules tab). Re-judges every placed block through the REAL rules
+     * engine (window.SchedulingRules.checkCandidateDetailed) against the
+     * bunk's other blocks. Pinned/league blocks participate as CONTEXT (rules
+     * commonly reference Lunch/League/Swim) but are not judged themselves —
+     * they are user-placed or fixtures.
+     */
+    function checkCooldownRules(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const SR = window.SchedulingRules;
+        if (!SR || typeof SR.checkCandidateDetailed !== 'function') return errors;
+        const rules = (typeof SR.getCooldownRules === 'function') ? (SR.getCooldownRules() || []) : [];
+        if (!rules.length) return errors;
+        const mode = (window._daBuilderMode === 'auto') ? 'auto' : 'manual';
+        const inferType = (typeof SR.inferTypeFromActivity === 'function') ? SR.inferTypeFromActivity : (() => 'activity');
+        const describe = (typeof SR.describeRule === 'function') ? SR.describeRule : (() => 'a configured spacing rule');
+
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            const blocks = [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry)) return;
+                let s = entry._startMin, e = entry._endMin;
+                const si = divSlots[idx];
+                if (s == null && si) s = si.startMin;
+                if (e == null && si) e = si.endMin;
+                for (let j = idx + 1; j < slots.length; j++) {
+                    const nx = slots[j];
+                    if (!nx || !nx.continuation) break;
+                    if (nx._endMin != null) e = nx._endMin;
+                    else if (divSlots[j] && divSlots[j].endMin != null) e = divSlots[j].endMin;
+                }
+                if (s == null || e == null || isNaN(s) || isNaN(e)) return;
+                const act = entry._activity || entry.sport ||
+                    (typeof entry.field === 'string' ? entry.field : '') || '';
+                const isLg = isLeagueEntry(entry);
+                blocks.push({
+                    startMin: s, endMin: e,
+                    type: isLg ? 'league' : inferType(act),
+                    event: act,
+                    field: (typeof entry.field === 'object') ? entry.field?.name : entry.field,
+                    _assignedSpecial: entry._assignedSpecial || null,
+                    _specialLocation: entry._specialLocation || entry._location || null,
+                    _judge: !isLg && entry._pinned !== true,
+                });
+            });
+            blocks.forEach(cand => {
+                if (!cand._judge) return;
+                const template = blocks.filter(b => b !== cand);
+                let res = { allowed: true, violated: [] };
+                try { res = SR.checkCandidateDetailed(cand, template, { mode }); } catch (e2) { return; }
+                (res.violated || []).forEach(rule => {
+                    errors.push(
+                        `<strong>Spacing Rule Violation:</strong> <u>${bunk}</u> (Div ${divName}) has ` +
+                        `<strong>${cand.event || cand.field}</strong> at ${formatTime(cand.startMin)} in violation of: ` +
+                        `${describe(rule)}`
+                    );
+                });
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ v3.2 CHECK 15: Sports Rules player counts (Rules tab sportMetaData).
+     * For every group of bunks sharing a field for the same sport at
+     * overlapping times:
+     *   - combined campers > maxPlayers + 2 (the engine's own grace) → ERROR
+     *   - combined campers < minPlayers → WARNING (engine treats min as a
+     *     matching preference, not a hard gate)
+     * Only judged when every bunk in the group has a known size — the engine
+     * cannot count unknown sizes either.
+     */
+    function checkSportPlayerRules(usages) {
+        const errors = [], warnings = [];
+        const gs = window.loadGlobalSettings?.() || {};
+        const sportMeta = (window.getSportMetaData?.() || gs.app1?.sportMetaData || {});
+        const metaByKey = {};
+        Object.keys(sportMeta || {}).forEach(k => { metaByKey[_lc(k)] = sportMeta[k] || {}; });
+        if (!Object.keys(metaByKey).length) return { errors, warnings };
+        const bunkMeta = (window.getBunkMetaData?.() || gs.app1?.bunkMetaData || {});
+        const sizeOf = (b) => {
+            const m = bunkMeta[b] || bunkMeta[String(b)];
+            const v = m && parseInt(m.size);
+            return (v && v > 0) ? v : null;
+        };
+
+        const byF = {};
+        usages.forEach(u => { if (u.kind === 'bunk' && u.activity) (byF[u.fkey] = byF[u.fkey] || []).push(u); });
+        const seen = new Set();
+        Object.values(byF).forEach(list => {
+            buildOverlapGroups(list).forEach(group => {
+                const bySport = {};
+                group.forEach(u => {
+                    const k = _lc(u.activity);
+                    if (metaByKey[k]) (bySport[k] = bySport[k] || []).push(u);
+                });
+                Object.entries(bySport).forEach(([sportKey, us]) => {
+                    const meta = metaByKey[sportKey];
+                    const sizes = us.map(u => sizeOf(u.bunk));
+                    if (sizes.some(sz => sz == null)) return;
+                    const total = sizes.reduce((a, b) => a + b, 0);
+                    const t0 = Math.min(...us.map(u => u.startMin));
+                    const sig = us[0].fkey + '|' + sportKey + '|' + us.map(u => u.bunk).sort().join(',') + '|' + t0;
+                    if (seen.has(sig)) return;
+                    seen.add(sig);
+                    const bunksLabel = us.map((u, i) => `${u.bunk} (${sizes[i]})`).join(', ');
+                    const max = parseInt(meta.maxPlayers) || 0;
+                    const min = parseInt(meta.minPlayers) || 0;
+                    if (max > 0 && total > max + 2) {
+                        errors.push(
+                            `<strong>Sport Player Cap:</strong> <u>${us[0].facility}</u> at ${formatTime(t0)}: ` +
+                            `<strong>${us[0].activity}</strong> has ${total} campers (${bunksLabel}) — sport max is ${max} (+2 grace)`
+                        );
+                    } else if (min > 0 && total < min) {
+                        warnings.push(
+                            `<strong>Sport Under Min:</strong> <u>${us[0].facility}</u> at ${formatTime(t0)}: ` +
+                            `<strong>${us[0].activity}</strong> has only ${total} campers (${bunksLabel}) — sport min is ${min}`
+                        );
+                    }
+                });
+            });
+        });
+        return { errors, warnings };
+    }
+
+    // =========================================================================
     // SHOW VALIDATION MODAL (★★★ v3.0: Collapsible sections + counts ★★★)
     // =========================================================================
 
@@ -1403,7 +1555,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
                     <h2 style="margin:0; color:#333; display:flex; align-items:center; gap:8px;">
                         🛡️ Schedule Validator
-                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.1</span>
+                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.2</span>
                     </h2>
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#888; padding:0 8px;">&times;</button>
                 </div>
@@ -1441,11 +1593,14 @@
                 const accessErrors = errors.filter(e =>
                     e.includes('Special Access Violation') || e.includes('Disabled Resource') || e.includes('Bunk-Only Violation'));
                 const leagueFieldErrors = errors.filter(e => e.includes('League/Event Field Conflict'));
+                const sportsRuleErrors = errors.filter(e =>
+                    e.includes('Spacing Rule Violation') || e.includes('Sport Player Cap'));
                 const otherErrors = errors.filter(e =>
                     !e.includes('Cross-Division') && !e.includes('Capacity Exceeded') &&
                     !e.includes('Same-Day Repetition') && !e.includes('Combined Field Conflict') &&
                     !e.includes('Special Access Violation') && !e.includes('Disabled Resource') &&
-                    !e.includes('Bunk-Only Violation') && !e.includes('League/Event Field Conflict')
+                    !e.includes('Bunk-Only Violation') && !e.includes('League/Event Field Conflict') &&
+                    !e.includes('Spacing Rule Violation') && !e.includes('Sport Player Cap')
                 );
 
                 content += `<div style="margin-bottom:15px;">
@@ -1471,6 +1626,9 @@
                 if (leagueFieldErrors.length > 0) {
                     content += buildCategorySection('League/Event Field Conflicts', leagueFieldErrors, '#FFCDD2', '#C62828', '#EF5350');
                 }
+                if (sportsRuleErrors.length > 0) {
+                    content += buildCategorySection('Sports & Spacing Rules', sportsRuleErrors, '#FFCDD2', '#C62828', '#EF5350');
+                }
                 if (otherErrors.length > 0) {
                     content += buildCategorySection('Other Errors', otherErrors, '#FFCDD2', '#C62828', '#EF5350');
                 }
@@ -1483,10 +1641,11 @@
                 const missingWarnings = warnings.filter(w => w.includes('Missing Activity'));
                 const emptyWarnings = warnings.filter(w => w.includes('Empty Slot') || w.includes('Empty Bunk') || w.includes('Unassigned Bunk'));
                 const fieldQualityWarnings = warnings.filter(w => w.includes('Field Quality'));
+                const sportsRuleWarnings = warnings.filter(w => w.includes('Sport Under Min'));
                 const otherWarnings = warnings.filter(w =>
                     !w.includes('Field Reuse') && !w.includes('Missing Activity') &&
                     !w.includes('Empty Slot') && !w.includes('Empty Bunk') && !w.includes('Unassigned Bunk') &&
-                    !w.includes('Field Quality')
+                    !w.includes('Field Quality') && !w.includes('Sport Under Min')
                 );
                 
                 content += `<div style="margin-bottom:15px;">
@@ -1505,6 +1664,9 @@
                 }
                 if (fieldQualityWarnings.length > 0) {
                     content += buildCategorySection('Field Quality', fieldQualityWarnings, '#FFF3E0', '#E65100', '#FF9800');
+                }
+                if (sportsRuleWarnings.length > 0) {
+                    content += buildCategorySection('Sports Rules', sportsRuleWarnings, '#FFF3E0', '#E65100', '#FF9800');
                 }
                 if (otherWarnings.length > 0) {
                     content += buildCategorySection('Other Warnings', otherWarnings, '#FFF3E0', '#E65100', '#FF9800');
@@ -1640,10 +1802,13 @@
             checkFieldConflicts,
             checkSameDayRepetitions,
             checkSameDayFieldRepetitions,
-            isPinnedEventEntry
+            isPinnedEventEntry,
+            // v3.2: sports rules
+            checkCooldownRules,
+            checkSportPlayerRules
         }
     };
 
-    console.log('🛡️ Validator v3.1 loaded — field conflict + capacity + repetition + access rules + league/event timeline + field quality');
+    console.log('🛡️ Validator v3.2 loaded — conflicts + capacity + access rules + league/event timeline + field quality + sports/spacing rules');
 
 })();

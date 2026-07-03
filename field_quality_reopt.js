@@ -228,9 +228,14 @@
             if (n === 0) return true;
             if (!(ok && n < (capMap[field] || 2))) return false;
             // sport maxPlayers combined-headcount guard.
-            var sm = (window.sportMetaData || {})[myAct];
+            // ★ v3.2 fix: window.sportMetaData is hydrated only by AUTO runs
+            //   (scheduler_core_auto FN-38) — in MANUAL mode it is usually
+            //   undefined and this guard silently no-oped. Read through the
+            //   getter first (same source total_solver uses) so the cap holds
+            //   in both builders.
+            var sm = (window.getSportMetaData?.() || window.sportMetaData || {})[myAct];
             if (sm && sm.maxPlayers) {
-                var bm = window.bunkMetaData || {};
+                var bm = window.getBunkMetaData?.() || window.bunkMetaData || {};
                 var tot = (bm[exclBunk] && bm[exclBunk].size) || 0;
                 for (var j = 0; j < coBunks.length; j++) tot += (bm[coBunks[j]] && bm[coBunks[j]].size) || 0;
                 if (tot > sm.maxPlayers + 2) return false;
@@ -306,7 +311,7 @@
             }
             // verify every resulting share's combined headcount respects maxPlayers.
             if (anyChange && ok) {
-                var bm = window.bunkMetaData || {};
+                var bm = window.getBunkMetaData?.() || window.bunkMetaData || {};
                 var byTgt = {};
                 for (var i2 = 0; i2 < bySen.length; i2++) {
                     (byTgt[fieldsByRank[i2]] = byTgt[fieldsByRank[i2]] || []).push(bySen[i2]);
@@ -320,7 +325,9 @@
                     //   validator later has to repair by dropping a placement. Reject
                     //   any re-pair that would co-locate different grades.
                     for (var gck = 1; gck < grp.length; gck++) { if (grp[gck].grade !== grp[0].grade) { ok = false; return; } }
-                    var sm = (window.sportMetaData || {})[grp[0].s._activity];
+                    // ★ v3.2 fix: read through the getter — window.sportMetaData is
+                    //   only hydrated by AUTO runs (see guard above).
+                    var sm = (window.getSportMetaData?.() || window.sportMetaData || {})[grp[0].s._activity];
                     if (!(sm && sm.maxPlayers)) return;
                     var tot = 0;
                     grp.forEach(function (p2) { tot += (bm[p2.bunk] && bm[p2.bunk].size) || 0; });

@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'validator.js'), 'utf8');
+const rulesSrc = fs.readFileSync(path.join(__dirname, '..', 'rules.js'), 'utf8');
 
 function makeValidator(over = {}) {
     const w = {
@@ -22,7 +23,15 @@ function makeValidator(over = {}) {
         divisions: over.divisions || {},
         divisionTimes: over.divisionTimes || {},
         leagueAssignments: over.leagueAssignments || {},
-        loadGlobalSettings: () => ({ app1: { fields: over.fields || [], specialActivities: over.specials || [] } }),
+        loadGlobalSettings: () => ({
+            app1: {
+                fields: over.fields || [],
+                specialActivities: over.specials || [],
+                sportMetaData: over.sportMetaData || {},
+                bunkMetaData: over.bunkMetaData || {},
+            },
+            schedulingRules: { cooldowns: over.cooldowns || [] },
+        }),
         getAllSpecialActivities: () => over.specials || [],
         getDivisionAgeOrder: (names) => over.order || names || [],
         getLocationForActivity: over.getLocationForActivity,
@@ -40,6 +49,10 @@ function makeValidator(over = {}) {
         addEventListener() {},
         removeEventListener() {},
     };
+    if (over.withRules) {
+        // load the REAL rules engine into the same sandbox
+        new Function('window', 'document', 'localStorage', rulesSrc)(w, doc, undefined);
+    }
     new Function('window', 'document', src)(w, doc);
     if (!w.ScheduleValidator || !w.ScheduleValidator._v31) throw new Error('v3.1 exports missing');
     return { w, v: w.ScheduleValidator._v31 };
@@ -332,6 +345,111 @@ const bunkDivMapOf = (divisions) => {
         const { v } = makeValidator({ divisions: { A: { bunks: ['a1'] } }, fields, assignments, divisionTimes: divisionTimes2 });
         const reps = v.checkSameDayRepetitions(assignments, { a1: 'A' }, divisionTimes2);
         check('T14f genuine same-day repetition STILL flagged', reps.length === 1, JSON.stringify(reps));
+    }
+}
+
+// ------------------------------------------- v3.2 CHECK 14: spacing rules
+{
+    const divisions = { A: { bunks: ['b1'] } };
+    const rule = {
+        target: { kind: 'activity', value: 'Basketball' },
+        reference: { kind: 'type', value: 'swim' },
+        minutes: 30, timing: 'both', mode: 'both',
+    };
+    const bdm = { b1: 'A' };
+    // T17a: Basketball 10 min after Swim, rule says 30 → violation
+    {
+        const assignments = {
+            b1: [
+                { _activity: 'Swim', field: 'Pool', _startMin: 600, _endMin: 660 },
+                { _activity: 'Basketball', field: 'Court', _startMin: 670, _endMin: 730 },
+            ],
+        };
+        const { v } = makeValidator({ withRules: true, divisions, assignments, cooldowns: [rule] });
+        const errs = v.checkCooldownRules(assignments, bdm, {});
+        check('T17a spacing rule violation flagged (10 min gap < 30 required)',
+            errs.length === 1 && errs[0].includes('Basketball'), JSON.stringify(errs));
+    }
+    // T17b: compliant 40-min gap → clean
+    {
+        const assignments = {
+            b1: [
+                { _activity: 'Swim', field: 'Pool', _startMin: 600, _endMin: 660 },
+                { _activity: 'Basketball', field: 'Court', _startMin: 700, _endMin: 760 },
+            ],
+        };
+        const { v } = makeValidator({ withRules: true, divisions, assignments, cooldowns: [rule] });
+        check('T17b compliant gap passes', v.checkCooldownRules(assignments, bdm, {}).length === 0);
+    }
+    // T17c: pinned violator not judged (user-placed), but still context
+    {
+        const assignments = {
+            b1: [
+                { _activity: 'Swim', field: 'Pool', _startMin: 600, _endMin: 660 },
+                { _activity: 'Basketball', field: 'Court', _startMin: 670, _endMin: 730, _pinned: true },
+            ],
+        };
+        const { v } = makeValidator({ withRules: true, divisions, assignments, cooldowns: [rule] });
+        check('T17c pinned block is not judged against spacing rules',
+            v.checkCooldownRules(assignments, bdm, {}).length === 0);
+    }
+    // T17d: no rules configured → silent no-op
+    {
+        const assignments = { b1: [{ _activity: 'Basketball', field: 'Court', _startMin: 670, _endMin: 730 }] };
+        const { v } = makeValidator({ withRules: true, divisions, assignments, cooldowns: [] });
+        check('T17d no configured rules → no output', v.checkCooldownRules(assignments, bdm, {}).length === 0);
+    }
+}
+
+// ------------------------------------------- v3.2 CHECK 15: player counts
+{
+    const divisions = { A: { bunks: ['a1'] }, B: { bunks: ['b1'] } };
+    const fields = [{ name: 'Court' }];
+    const mkU = (bunk, div, size) => ({
+        fkey: 'court', facility: 'Court', divName: div, bunk, owner: 'Bunk ' + bunk,
+        kind: 'bunk', startMin: 600, endMin: 660, activity: 'Basketball',
+    });
+    // T18a: 12 + 11 = 23 > 20 + 2 → error
+    {
+        const { v } = makeValidator({
+            divisions, fields,
+            sportMetaData: { Basketball: { maxPlayers: 20 } },
+            bunkMetaData: { a1: { size: 12 }, b1: { size: 11 } },
+        });
+        const r = v.checkSportPlayerRules([mkU('a1', 'A'), mkU('b1', 'B')]);
+        check('T18a combined campers over maxPlayers+2 → error',
+            r.errors.length === 1 && r.errors[0].includes('23'), JSON.stringify(r));
+    }
+    // T18b: 11 + 11 = 22 = max + 2 → within grace, clean
+    {
+        const { v } = makeValidator({
+            divisions, fields,
+            sportMetaData: { Basketball: { maxPlayers: 20 } },
+            bunkMetaData: { a1: { size: 11 }, b1: { size: 11 } },
+        });
+        const r = v.checkSportPlayerRules([mkU('a1', 'A'), mkU('b1', 'B')]);
+        check('T18b within max+2 grace passes', r.errors.length === 0 && r.warnings.length === 0);
+    }
+    // T18c: lone bunk of 4 on a min-10 sport → warning
+    {
+        const { v } = makeValidator({
+            divisions, fields,
+            sportMetaData: { Basketball: { minPlayers: 10 } },
+            bunkMetaData: { a1: { size: 4 } },
+        });
+        const r = v.checkSportPlayerRules([mkU('a1', 'A')]);
+        check('T18c group under minPlayers → warning',
+            r.errors.length === 0 && r.warnings.length === 1, JSON.stringify(r));
+    }
+    // T18d: unknown bunk size → not judged (engine can't count it either)
+    {
+        const { v } = makeValidator({
+            divisions, fields,
+            sportMetaData: { Basketball: { maxPlayers: 20, minPlayers: 10 } },
+            bunkMetaData: {},
+        });
+        const r = v.checkSportPlayerRules([mkU('a1', 'A'), mkU('b1', 'B')]);
+        check('T18d unknown sizes skipped', r.errors.length === 0 && r.warnings.length === 0);
     }
 }
 
