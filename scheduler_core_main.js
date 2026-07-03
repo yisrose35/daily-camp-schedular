@@ -2274,6 +2274,30 @@
                 }
 
                 if (_budgetVal === false && !_isDirectFill) {
+                    // ★ V44.6 HONOR-ADAPTER (kill switch window.__smartTileHonorAdapterSpecials=false):
+                    //   the camp-wide budget pre-pass runs BEFORE the adapter's in-run
+                    //   improvements (fallback logic + the prefer-main1 leftover-fill), so a
+                    //   bunk it marked "no budget" can still have been LAWFULLY handed a
+                    //   still-free special room by the adapter. The old behavior discarded
+                    //   that assignment ("NO BUDGET → Sports Slot") and the room sat idle for
+                    //   the whole window — bunks swam while Arts & Crafts stood empty. Honor
+                    //   the adapter's special when the claim ledger allows it (seniority is
+                    //   preserved: senior jobs ran first and their claims block us here);
+                    //   demote only when the room is genuinely unclaimable.
+                    if (window.__smartTileHonorAdapterSpecials !== false
+                        && activityLabel && knownSpecialNames.has(_lblNorm)
+                        && !(_bunkSpecialsToday[bunk] && _bunkSpecialsToday[bunk].has(_lblNorm))
+                        && !_specialGateBlocks(bunk, divName, activityLabel)) {
+                        const _haSw = _getSharableWith(activityLabel);
+                        const _haCap = (_haSw && _haSw.capacity) || 1;
+                        if (_canClaim(activityLabel, startMin, endMin, _haCap, divName)) {
+                            _registerClaim(activityLabel, startMin, endMin, divName);
+                            (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_lblNorm);
+                            console.log(`[SmartTile V44.6] ${bunk} -> HONORED adapter special (budget said no, room free): ${activityLabel}`);
+                            window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            return;
+                        }
+                    }
                     if (_fbAct && needsGeneration(_fbAct)) {
                         const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
                         console.log(`[SmartTile V44.3] ${bunk} -> NO BUDGET → ${fbSlotType}`);
@@ -2301,11 +2325,25 @@
              if (typeof _budgetVal === 'string' && !_isDirectFill) {
                     console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
                     _registerClaim(_budgetVal, startMin, endMin, divName);
+                    // ★ V44.6: when the budget places a DIFFERENT name than the adapter
+                    //   recorded, keep the cross-division capacity tracker truthful —
+                    //   otherwise the adapter's name stays marked "used" (phantom-blocking
+                    //   later divisions from a room nobody is in) while the room actually
+                    //   consumed goes unrecorded. Also record the placement in the
+                    //   day-wide no-doubles set (this path previously skipped it).
+                    const _bvNorm = String(_budgetVal).toLowerCase().trim();
+                    (_bunkSpecialsToday[bunk] = _bunkSpecialsToday[bunk] || new Set()).add(_bvNorm);
+                    if (window.__smartTileHonorAdapterSpecials !== false
+                        && knownSpecialNames.has(_bvNorm) && _bvNorm !== _lblNorm) {
+                        if (activityLabel && knownSpecialNames.has(_lblNorm)) {
+                            const _kOld = `${activityLabel}|${startMin}|${endMin}`;
+                            if (sharedCapacityTracker[_kOld] > 0) sharedCapacityTracker[_kOld]--;
+                        }
+                        const _kNew = `${_budgetVal}|${startMin}|${endMin}`;
+                        sharedCapacityTracker[_kNew] = (sharedCapacityTracker[_kNew] || 0) + 1;
+                    }
                     window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _budgetVal, sport: null, _fixed: true, _activity: _budgetVal }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                     return;
-                
-                
-                
                 }
 
                // ★★★ FULL GRADE: Fill ALL bunks in division ★★★
