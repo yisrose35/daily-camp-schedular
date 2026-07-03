@@ -7603,6 +7603,45 @@ async function _daPartialRegenerate(selections) {
     window.__regenSlotScope = regenScope;   // consumed by scheduler_core_main STEP 1
     delete window.__regenLeaguePreservedDivs; // fresh per run (populated by STEP 3)
     await runOptimizer();                    // reuses date guards, save, and grid re-render
+
+    // ★ POST-REGEN SELF-HEAL — the pre-generation wipe queues cloud saves of the
+    //   schedule WITHOUT the scoped bunks; those writes complete AFTER the regen and
+    //   their realtime echo re-applies the wiped snapshot over the fresh fill
+    //   (observed live: post-gen save had 53 bunks, RENDER STATE 51 — exactly the
+    //   regenerated bunks — grid showed empty cells + "⚡ Auto Fill"). Snapshot the
+    //   scoped bunks' FINAL data now and re-assert it if a late echo blanks them.
+    try {
+      const _healSnap = {};
+      scopeBunks.forEach(b => {
+        const a = window.scheduleAssignments?.[b];
+        if (Array.isArray(a) && a.some(e => e && (e._activity || e.field))) {
+          _healSnap[b] = JSON.parse(JSON.stringify(a));
+        }
+      });
+      const _healDate = window.currentScheduleDate;
+      [1500, 4500].forEach(_d => setTimeout(() => {
+        try {
+          if (window.currentScheduleDate !== _healDate) return; // date changed — stale
+          let _healed = 0;
+          Object.keys(_healSnap).forEach(b => {
+            const cur = window.scheduleAssignments?.[b];
+            const hasData = Array.isArray(cur) && cur.some(e => e && (e._activity || e.field));
+            if (!hasData) {
+              window.scheduleAssignments[b] = JSON.parse(JSON.stringify(_healSnap[b]));
+              _healed++;
+            }
+          });
+          if (_healed) {
+            console.warn('[PartialRegen] ★ self-heal: restored ' + _healed + ' regenerated bunk(s) clobbered by a late cloud/realtime echo — re-saving');
+            try { window.updateTable?.(); } catch (_e) {}
+            try {
+              if (window.verifiedScheduleSave) window.verifiedScheduleSave(_healDate);
+              else window.saveSchedule?.();
+            } catch (_e) {}
+          }
+        } catch (_e) { /* non-fatal */ }
+      }, _d));
+    } catch (_eHeal) { /* non-fatal */ }
   } finally {
     delete window.__regenSlotScope;
     delete window.__regenLeaguePreservedDivs;
