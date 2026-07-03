@@ -30,6 +30,8 @@ function makeEnv(opts = {}) {
         claims: [],            // _registerClaim calls
         tracker: Object.assign({}, opts.tracker || {}),
         specialsToday: opts.specialsToday || {},
+        deferred: [],          // _noBudgetDeferred pushes (V44.6 settle pass)
+        consumed: new Set(),   // _budgetConsumed marks
     };
     const knownSpecialNames = new Set((opts.specials || ['sushi making', 'arts & crafts', 'gaming center', 'archery']));
     const budget = opts.budget || {};
@@ -50,6 +52,7 @@ function makeEnv(opts = {}) {
         'fieldUsageBySlot', 'yesterdayHistory', 'activityProperties', 'schedulableSlotBlocks',
         '_groupOpenUsed', 'bunkList', 'normalizeCategoryLabel', 'sharedCapacityTracker', 'historicalCounts',
         'getLocationForActivity', '_canClaimDirectFill', '_registerDirectFillClaim', '_directFillCap', '_mayTakeCapped',
+        '_noBudgetDeferred', '_budgetConsumed',
         `function needsGeneration(activityLabel) {
             const cat = normalizeCategoryLabel(activityLabel);
             if (!cat) return false;
@@ -87,7 +90,9 @@ function makeEnv(opts = {}) {
         () => true,          // _canClaimDirectFill
         () => {},            // _registerDirectFillClaim
         () => Infinity,      // _directFillCap
-        () => true           // _mayTakeCapped
+        () => true,          // _mayTakeCapped
+        env.deferred,        // _noBudgetDeferred
+        env.consumed         // _budgetConsumed
     );
     env.route = fn;
     return env;
@@ -110,13 +115,16 @@ function check(name, cond, detail) {
     check('T1b no-doubles set updated', env.specialsToday['b1'] && env.specialsToday['b1'].has('sushi making'));
 }
 
-// TEST 2 — room genuinely claimed elsewhere → old demote behavior preserved
+// TEST 2 — room claim-blocked → DEFERRED to the settle pass (not demoted yet;
+// the blocker may be a stranded budget claim that settle releases)
 {
     const env = makeEnv({ budget: { '7|b1|930|1010': false }, claimable: false });
     env.route('b1', 'Sushi Making', { startMin: 930, endMin: 1010 });
-    check('T2 unclaimable room still demotes to fallback',
-        env.placed.length === 0 && env.queued.length === 1 && env.queued[0].event === 'Sports Slot',
-        JSON.stringify(env.queued));
+    check('T2 claim-blocked special is deferred, not demoted',
+        env.placed.length === 0 && env.queued.length === 0
+        && env.deferred.length === 1 && env.deferred[0].activityLabel === 'Sushi Making'
+        && env.deferred[0].bunk === 'b1' && env.deferred[0].fbAct === 'Sports',
+        JSON.stringify({ queued: env.queued, deferred: env.deferred }));
 }
 
 // TEST 3 — bunk rotation-gated (cooldown/maxUsage) → demotes, never honored
@@ -169,6 +177,8 @@ function check(name, cond, detail) {
     env.route('b1', 'Gaming Center', { startMin: 740, endMin: 805 });
     check('T7 same-name pre-assign leaves tracker alone',
         env.tracker['Gaming Center|740|805'] === 1 && env.placed[0].activity === 'Gaming Center');
+    check('T7b pre-assign marks budget key CONSUMED (settle must not release its claim)',
+        env.consumed.has('7|b1|740|805'));
 }
 
 // TEST 8 — direct-fill label (Swim) bypasses budget/honor entirely (unchanged path)

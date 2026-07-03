@@ -1099,6 +1099,19 @@
             if (!_specialClaims[key]) _specialClaims[key] = [];
             _specialClaims[key].push({ startMin, endMin, divName, actLower: name.toLowerCase() });
         }
+        // ★ V44.6: remove ONE matching claim — used to release a budget claim whose
+        //   bunk was never actually placed on it, so the room stops phantom-blocking.
+        function _releaseClaim(name, startMin, endMin, divName) {
+            const key = _claimKey(name);
+            const list = _specialClaims[key];
+            if (!list) return false;
+            const lower = String(name).toLowerCase();
+            const idx = list.findIndex(c => c.actLower === lower && c.startMin === startMin
+                && c.endMin === endMin && c.divName === divName);
+            if (idx === -1) return false;
+            list.splice(idx, 1);
+            return true;
+        }
 
         // ★ BUNK-LEVEL ROTATION GATE — single source of truth (rotation_engine.js).
         //   Every OTHER manual special-placement path scores candidates through
@@ -1780,6 +1793,14 @@
         window.__smartPreAllocation = preAllocation; // debug
 
         const sharedCapacityTracker = {}; // kept for legacy compat
+        // ★ V44.6: budget keys actually consumed by a PRE-ASSIGNED placement — any
+        //   string-valued budget entry NOT in here after the jobs loop is a STRANDED
+        //   claim (the budget claimed the room for a bunk the adapter routed to Swim
+        //   or another path), released by the settle pass so the room isn't idle.
+        const _budgetConsumed = new Set();
+        // ★ V44.6: adapter-special bunks the budget vetoed whose room was claim-blocked
+        //   on first pass — retried after stranded claims are released, demoted only then.
+        const _noBudgetDeferred = [];
 
         // (Rotation special-quota build + seniority reservation moved ABOVE the budget
         //  pre-pass — see "FAIR-SHARE SPECIAL ROOMS … + SENIORITY RESERVATION" block.)
@@ -2297,6 +2318,13 @@
                             window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                             return;
                         }
+                        // Room claim-blocked right now — but the blocker may be a STRANDED
+                        // budget claim (assigned to a bunk the adapter routed elsewhere).
+                        // Defer: after all jobs run, the settle pass releases unconsumed
+                        // budget claims and retries; only then does this bunk demote.
+                        _noBudgetDeferred.push({ divName, bunk, activityLabel, startMin, endMin, slots, fbAct: _fbAct, pairGroup: job.pairGroup });
+                        console.log(`[SmartTile V44.6] ${bunk} -> adapter special "${activityLabel}" claim-blocked → deferred to settle pass`);
+                        return;
                     }
                     if (_fbAct && needsGeneration(_fbAct)) {
                         const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
@@ -2324,6 +2352,7 @@
                 }
              if (typeof _budgetVal === 'string' && !_isDirectFill) {
                     console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${_budgetVal} (adapter said: ${activityLabel})`);
+                    _budgetConsumed.add(_bk);
                     _registerClaim(_budgetVal, startMin, endMin, divName);
                     // ★ V44.6: when the budget places a DIFFERENT name than the adapter
                     //   recorded, keep the cross-division capacity tracker truthful —
@@ -2475,6 +2504,7 @@
                         if (typeof budgetVal === 'string') {
                             // Pre-assigned specific special — fill directly, solver never touches it
                             console.log(`[SmartTile V44.3] ${bunk} -> PRE-ASSIGNED: ${budgetVal}`);
+                            _budgetConsumed.add(`${divName}|${bunk}|${startMin}|${endMin}`);
                             window.fillBlock({
                                 divName, bunk, startTime: startMin, endTime: endMin, slots
                             }, {
@@ -2557,6 +2587,75 @@
                 });
             }
         });
+
+        // =====================================================================
+        // ★ V44.6 SETTLE PASS: the budget pre-pass claims a named room for every
+        //   bunk it ranks — but a bunk the adapter routed to Swim/another path
+        //   never consumes its claim, leaving the room phantom-locked for the
+        //   rest of the generation (live: Leather + Sushi idle @805-870 while
+        //   eligible bunks were demoted "NO BUDGET → Sports Slot"). Release every
+        //   unconsumed budget claim, then retry the deferred honor bunks; only a
+        //   bunk whose room is STILL unavailable demotes to its fallback.
+        //   Kill switch: window.__smartTileHonorAdapterSpecials = false.
+        // =====================================================================
+        if (window.__smartTileHonorAdapterSpecials !== false) {
+            let _released = 0;
+            Object.entries(smartTileBudget).forEach(([bk, val]) => {
+                if (typeof val !== 'string' || _budgetConsumed.has(bk)) return;
+                const parts = bk.split('|');
+                const endMin = Number(parts[parts.length - 1]);
+                const startMin = Number(parts[parts.length - 2]);
+                const bunk = parts[parts.length - 3];
+                const divName = parts.slice(0, parts.length - 3).join('|');
+                if (!Number.isFinite(startMin) || !Number.isFinite(endMin)) return;
+                if (_releaseClaim(val, startMin, endMin, divName)) {
+                    _released++;
+                    if (_bunkSpecialsToday[bunk]) _bunkSpecialsToday[bunk].delete(String(val).toLowerCase().trim());
+                    smartTileBudget[bk] = false;
+                }
+            });
+            if (_released) console.log(`[SmartTile V44.6] SETTLE: released ${_released} stranded budget claim(s) (rooms held for bunks that were routed elsewhere)`);
+            const _ngen = (label) => {
+                const cat = normalizeCategoryLabel(label);
+                if (!cat) return false;
+                if (cat === 'sport' && (activityProperties?.["Sports"] || activityProperties?.["sports"])) return false;
+                return true;
+            };
+            _noBudgetDeferred.forEach(d => {
+                const dl = String(d.activityLabel).toLowerCase().trim();
+                const _dSw = _getSharableWith(d.activityLabel);
+                const _dCap = (_dSw && _dSw.capacity) || 1;
+                if (!(_bunkSpecialsToday[d.bunk] && _bunkSpecialsToday[d.bunk].has(dl))
+                    && !_specialGateBlocks(d.bunk, d.divName, d.activityLabel)
+                    && _canClaim(d.activityLabel, d.startMin, d.endMin, _dCap, d.divName)) {
+                    _registerClaim(d.activityLabel, d.startMin, d.endMin, d.divName);
+                    (_bunkSpecialsToday[d.bunk] = _bunkSpecialsToday[d.bunk] || new Set()).add(dl);
+                    console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> HONORED adapter special (stranded claim released): ${d.activityLabel}`);
+                    window.fillBlock({ divName: d.divName, bunk: d.bunk, startTime: d.startMin, endTime: d.endMin, slots: d.slots }, { field: d.activityLabel, sport: null, _fixed: true, _activity: d.activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    return;
+                }
+                // Room genuinely unavailable → the legacy NO-BUDGET demote.
+                if (d.fbAct && _ngen(d.fbAct)) {
+                    const fbSlotType = d.fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                    console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> room still unavailable → ${fbSlotType}`);
+                    schedulableSlotBlocks.push({ divName: d.divName, bunk: d.bunk, event: fbSlotType, startTime: d.startMin, endTime: d.endMin, slots: d.slots, fromSmartTile: true, _smartTileFallback: true });
+                } else if (d.fbAct) {
+                    const _fbKey = String(d.fbAct).toLowerCase().trim();
+                    if (d.pairGroup && _groupOpenUsed[d.pairGroup]?.[d.bunk]?.has(_fbKey)) {
+                        console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> "${d.fbAct}" would repeat in group → Sports Slot`);
+                        schedulableSlotBlocks.push({ divName: d.divName, bunk: d.bunk, event: 'Sports Slot', startTime: d.startMin, endTime: d.endMin, slots: d.slots, fromSmartTile: true, _smartTileFallback: true });
+                    } else {
+                        if (d.pairGroup) {
+                            _groupOpenUsed[d.pairGroup] = _groupOpenUsed[d.pairGroup] || {};
+                            _groupOpenUsed[d.pairGroup][d.bunk] = _groupOpenUsed[d.pairGroup][d.bunk] || new Set();
+                            _groupOpenUsed[d.pairGroup][d.bunk].add(_fbKey);
+                        }
+                        console.log(`[SmartTile V44.6] SETTLE: ${d.bunk} -> room still unavailable → DIRECT FILL: ${d.fbAct}`);
+                        window.fillBlock({ divName: d.divName, bunk: d.bunk, startTime: d.startMin, endTime: d.endMin, slots: d.slots }, { field: d.fbAct, sport: null, _fixed: true, _activity: d.fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    }
+                }
+            });
+        }
 
         window.__smartCapTracker = sharedCapacityTracker; // debug
         return schedulableSlotBlocks;
