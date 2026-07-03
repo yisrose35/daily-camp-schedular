@@ -435,6 +435,37 @@
     }
 
     /**
+     * ★ v3.1.1: Pinned-event awareness for the per-bunk field checks.
+     * Pinned tiles store the EVENT NAME in entry.field ("AVL", "Signup
+     * leagues", "Showers lekoved shabbos kodesh"...) — the real facilities
+     * live in _reservedFields and are conflict-checked by the league/event
+     * timeline (CHECK 12, where pin-vs-pin is exempt by design). Treating
+     * the event label as a field made every whole-grade pin a fake
+     * not_sharable/capacity violation.
+     * An entry is skipped by the field checks when:
+     *   - it is flagged _pinned, or
+     *   - it carries _reservedFields (facilities tracked separately), or
+     *   - its field label is not a configured facility/special at all
+     *     (an event label, not a field) — only applied when a facility
+     *     config exists to compare against.
+     */
+    function isPinnedEventEntry(entry, knownFacilities) {
+        if (!entry) return false;
+        if (entry._pinned === true) return true;
+        if (Array.isArray(entry._reservedFields) && entry._reservedFields.length > 0) return true;
+        if (knownFacilities && knownFacilities.size > 0) {
+            const fn = normalizeFieldName(entry.field) || normalizeFieldName(entry._activity);
+            if (fn && !IGNORED_FIELDS.includes(fn) && !knownFacilities.has(fn)) return true;
+        }
+        return false;
+    }
+
+    function buildKnownFacilitySet(activityProperties) {
+        const props = activityProperties || getActivityProperties();
+        return new Set(Object.keys(props || {}).map(k => k.toLowerCase().trim()));
+    }
+
+    /**
      * Check if two time ranges overlap
      */
     function timesOverlap(startA, endA, startB, endB) {
@@ -452,18 +483,20 @@
         // Build a map of all field usages with their actual time ranges
         // { fieldName: [{ bunk, divName, slotIdx, startMin, endMin, activity }] }
         const fieldUsageByTime = {};
-        
+        const knownFacilities = buildKnownFacilitySet(activityProperties);
+
         Object.entries(assignments).forEach(([bunk, slots]) => {
             const divName = bunkDivMap[String(bunk)];
             if (!divName) return;
-            
+
             const divSlots = divisionTimes[divName] || [];
-            
+
             (slots || []).forEach((entry, slotIdx) => {
                 if (!entry || entry.continuation) return;
                 if (isLeagueEntry(entry)) return;
                 if (isTransitionEntry(entry)) return;
-                
+                if (isPinnedEventEntry(entry, knownFacilities)) return; // ★ v3.1.1: pins ≠ fields
+
                 const fieldName = normalizeFieldName(entry.field) || normalizeFieldName(entry._activity);
                 if (!fieldName || IGNORED_FIELDS.includes(fieldName)) return;
                 
@@ -636,16 +669,18 @@
 
     function checkSameDayRepetitions(assignments, bunkDivMap, divisionTimes) {
         const errors = [];
-        
+        const knownFacilities = buildKnownFacilitySet();
+
         Object.entries(assignments).forEach(([bunk, slots]) => {
             const divName = bunkDivMap[String(bunk)];
             const divSlots = divisionTimes[divName] || [];
             const activitySlots = {}; // { activityName: [{ slotIdx, timeLabel }] }
-            
+
             (slots || []).forEach((entry, slotIdx) => {
                 if (!entry || entry.continuation) return;
                 if (isLeagueEntry(entry)) return;
                 if (isTransitionEntry(entry)) return;
+                if (isPinnedEventEntry(entry, knownFacilities)) return; // ★ v3.1.1: pins are user-placed
                 
                 const activity = entry._activity?.toLowerCase().trim();
                 if (!activity) return;
@@ -685,17 +720,19 @@
 
     function checkSameDayFieldRepetitions(assignments, bunkDivMap, divisionTimes) {
         const warnings = [];
-        
+        const knownFacilities = buildKnownFacilitySet();
+
         Object.entries(assignments).forEach(([bunk, slots]) => {
             const divName = bunkDivMap[String(bunk)];
             const divSlots = divisionTimes[divName] || [];
             const fieldSlots = {}; // { fieldName: [{ slotIdx, timeLabel, activity }] }
-            
+
             (slots || []).forEach((entry, slotIdx) => {
                 if (!entry || entry.continuation) return;
                 if (isLeagueEntry(entry)) return;
                 if (isTransitionEntry(entry)) return;
-                
+                if (isPinnedEventEntry(entry, knownFacilities)) return; // ★ v3.1.1: pins ≠ fields
+
                 const fieldName = normalizeFieldName(entry.field);
                 if (!fieldName || IGNORED_FIELDS.includes(fieldName)) return;
                 
@@ -1579,7 +1616,12 @@
             checkDisabledResources,
             checkBunkOnlyAccess,
             checkLeagueFieldConflicts,
-            checkFieldQuality
+            checkFieldQuality,
+            // v3.1.1: core checks exposed so the pinned-event exemption is testable
+            checkFieldConflicts,
+            checkSameDayRepetitions,
+            checkSameDayFieldRepetitions,
+            isPinnedEventEntry
         }
     };
 

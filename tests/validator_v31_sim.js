@@ -218,5 +218,96 @@ const bunkDivMapOf = (divisions) => {
     }
 }
 
+// -------------------------------------- v3.1.1: pinned events ≠ fields
+// (live false positives: "Showers lekoved shabbos kodesh not sharable but
+//  used by 14 bunks", "avl used by 12 bunks (Max Capacity: 1)")
+{
+    const divisions = { A: { bunks: ['a1', 'a2'] }, B: { bunks: ['b1'] }, C: { bunks: ['c1'] } };
+    const fields = [{ name: 'Court X' }]; // Court X defaults to not_sharable
+    const divisionTimes = {
+        A: [{ startMin: 1020, endMin: 1080 }],
+        B: [{ startMin: 1020, endMin: 1080 }],
+        C: [{ startMin: 1020, endMin: 1080 }],
+    };
+    const bdm = bunkDivMapOf(divisions);
+    const mk = (over) => Object.assign({ _startMin: 1020, _endMin: 1080 }, over);
+
+    // T14a: whole-camp custom pin (_pinned, event label as field) → no conflict/capacity errors
+    {
+        const assignments = {
+            a1: [mk({ field: 'Showers Event', _activity: 'Showers Event', _pinned: true, _fixed: true })],
+            a2: [mk({ field: 'Showers Event', _activity: 'Showers Event', _pinned: true, _fixed: true })],
+            b1: [mk({ field: 'Showers Event', _activity: 'Showers Event', _pinned: true, _fixed: true })],
+            c1: [mk({ field: 'Showers Event', _activity: 'Showers Event', _pinned: true, _fixed: true })],
+        };
+        const { w, v } = makeValidator({ divisions, fields, assignments, divisionTimes });
+        const r = v.checkFieldConflicts(assignments, divisions, divisionTimes, w.ScheduleValidator ? { 'Court X': {} } : {}, bdm);
+        check('T14a whole-grade custom pin no longer a cross-division/capacity violation',
+            r.errors.length === 0 && r.warnings.length === 0, JSON.stringify(r.errors));
+    }
+    // T14b: pinned event WITH _reservedFields (AVL-style) → skipped by CHECK 1
+    {
+        const assignments = {
+            a1: [mk({ field: 'AVL', _activity: 'AVL', _reservedFields: ['Court X'] })],
+            a2: [mk({ field: 'AVL', _activity: 'AVL', _reservedFields: ['Court X'] })],
+            b1: [mk({ field: 'AVL', _activity: 'AVL', _reservedFields: ['Court X'] })],
+        };
+        const { v } = makeValidator({ divisions, fields, assignments, divisionTimes });
+        const r = v.checkFieldConflicts(assignments, divisions, divisionTimes, { 'Court X': {} }, bdm);
+        check('T14b reserved-facility pin (AVL-style) skipped by CHECK 1',
+            r.errors.length === 0, JSON.stringify(r.errors));
+    }
+    // T14c: unknown event label WITHOUT any pin flag (legacy pin) → still skipped
+    {
+        const assignments = {
+            a1: [mk({ field: 'Toameha in day camp house', _activity: 'Toameha in day camp house' })],
+            b1: [mk({ field: 'Toameha in day camp house', _activity: 'Toameha in day camp house' })],
+        };
+        const { v } = makeValidator({ divisions, fields, assignments, divisionTimes });
+        const r = v.checkFieldConflicts(assignments, divisions, divisionTimes, { 'Court X': {} }, bdm);
+        check('T14c unknown event label (no facility config) skipped by CHECK 1',
+            r.errors.length === 0, JSON.stringify(r.errors));
+    }
+    // T14d REGRESSION: a REAL not_sharable field used cross-division still errors
+    {
+        const assignments = {
+            a1: [mk({ field: 'Court X', _activity: 'Basketball' })],
+            b1: [mk({ field: 'Court X', _activity: 'Basketball' })],
+        };
+        const { v } = makeValidator({ divisions, fields, assignments, divisionTimes });
+        const r = v.checkFieldConflicts(assignments, divisions, divisionTimes, { 'Court X': {} }, bdm);
+        check('T14d real not_sharable cross-division conflict STILL flagged',
+            r.errors.length === 1 && /court x/i.test(r.errors[0]), JSON.stringify(r.errors));
+    }
+    // T14e: pinned event twice a day → no repetition error / field-reuse warning
+    {
+        const divisionTimes2 = { A: [{ startMin: 600, endMin: 660 }, { startMin: 1020, endMin: 1080 }] };
+        const assignments = {
+            a1: [
+                { field: 'Showers Event', _activity: 'Showers Event', _pinned: true, _startMin: 600, _endMin: 660 },
+                { field: 'Showers Event', _activity: 'Showers Event', _pinned: true, _startMin: 1020, _endMin: 1080 },
+            ],
+        };
+        const { v } = makeValidator({ divisions: { A: { bunks: ['a1'] } }, fields, assignments, divisionTimes: divisionTimes2 });
+        const reps = v.checkSameDayRepetitions(assignments, { a1: 'A' }, divisionTimes2);
+        const reuse = v.checkSameDayFieldRepetitions(assignments, { a1: 'A' }, divisionTimes2);
+        check('T14e pinned event twice a day: no repetition error, no field-reuse warning',
+            reps.length === 0 && reuse.length === 0, JSON.stringify({ reps, reuse }));
+    }
+    // T14f REGRESSION: genuine same-day activity repetition still errors
+    {
+        const divisionTimes2 = { A: [{ startMin: 600, endMin: 660 }, { startMin: 1020, endMin: 1080 }] };
+        const assignments = {
+            a1: [
+                { field: 'Court X', _activity: 'Basketball', _startMin: 600, _endMin: 660 },
+                { field: 'Court X', _activity: 'Basketball', _startMin: 1020, _endMin: 1080 },
+            ],
+        };
+        const { v } = makeValidator({ divisions: { A: { bunks: ['a1'] } }, fields, assignments, divisionTimes: divisionTimes2 });
+        const reps = v.checkSameDayRepetitions(assignments, { a1: 'A' }, divisionTimes2);
+        check('T14f genuine same-day repetition STILL flagged', reps.length === 1, JSON.stringify(reps));
+    }
+}
+
 console.log(`\n${pass + fail} checks: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
