@@ -1756,10 +1756,65 @@
         // ★ Within-slot swap pass (see _swapReoptimizeAssignments). Skipped when an
         // indoor requirement is active — swaps trade fields between matchups and
         // could hand an indoor field away from a team still below its floor.
+        // Instead, run the INDOOR RESCUE pass: lift below-floor teams onto indoor
+        // courts (free same-sport court, else trade with a met-floor matchup).
         if (leagueRules && leagueRules.indoorRequirement && leagueRules.indoorRequirement.enabled) {
-            return assignments;
+            return _indoorRescuePass(assignments, availablePool, leagueRules);
         }
         return _swapReoptimizeAssignments(assignments, leagueName, history, dayId);
+    }
+
+    // =========================================================================
+    // ★★★ INDOOR RESCUE PASS (post-assignment, within one game) ★★★
+    // The per-matchup hard filter can leave a below-floor team outdoors when the
+    // indoor courts were momentarily contended (taken by earlier matchups in this
+    // same game, or freed only by a different-sport choice). After the full game
+    // is assigned, rescue those matchups SAME-SPORT-ONLY (so sport-variety picks,
+    // pair-repeat rules and fair-share sport caps all stay intact):
+    //   (a) relocate onto a FREE indoor court hosting the same sport, else
+    //   (b) trade courts with a same-sport matchup that holds an indoor court
+    //       whose BOTH teams already met the floor (their indoor game is surplus).
+    // Only lifts toward a floor ('>=' / '=' while below target) — never forces
+    // indoor under a '<=' ceiling. Killswitch: window.__leagueIndoorRescue=false.
+    // =========================================================================
+    function _indoorRescuePass(assignments, availablePool, leagueRules) {
+        try {
+            if (window.__leagueIndoorRescue === false) return assignments;
+            const req = leagueRules && leagueRules.indoorRequirement;
+            if (!req || !req.enabled) return assignments;
+            const op = req.op || '>=';
+            if (op === '<=') return assignments;   // ceiling-only rule: nothing to lift
+            const target = Number.isFinite(req.count) ? req.count : 1;
+            const counts = leagueRules.indoorCounts || {};
+            const optByField = {};
+            availablePool.forEach(function (o) { if (!optByField[o.field]) optByField[o.field] = o; });
+            const isIndoorField = function (f) { return _optIsIndoor(optByField[f]); };
+            const used = new Set(assignments.map(function (a) { return a && a.field; }));
+            assignments.forEach(function (a) {
+                if (!a || !a.field || isIndoorField(a.field)) return;
+                if (Math.min(counts[a.team1] || 0, counts[a.team2] || 0) >= target) return; // met floor
+                // (a) free indoor court, same sport → pure relocation
+                const free = availablePool.find(function (o) {
+                    return o.sport === a.sport && !used.has(o.field) && _optIsIndoor(o);
+                });
+                if (free) {
+                    console.log('   🏠 [IndoorRescue] ' + a.team1 + ' vs ' + a.team2 + ' moved indoors: ' + a.field + ' → ' + free.field + ' (' + a.sport + ')');
+                    used.delete(a.field); used.add(free.field);
+                    a.field = free.field;
+                    return;
+                }
+                // (b) court trade with a met-floor matchup on an indoor court, same sport
+                const donor = assignments.find(function (b) {
+                    return b && b !== a && b.sport === a.sport && b.field && isIndoorField(b.field)
+                        && Math.min(counts[b.team1] || 0, counts[b.team2] || 0) >= target;
+                });
+                if (donor) {
+                    console.log('   🏠 [IndoorRescue] court trade (' + a.sport + '): ' + a.team1 + ' vs ' + a.team2 + ' ⇄ ' + donor.team1 + ' vs ' + donor.team2 + ' (' + a.field + ' ↔ ' + donor.field + ')');
+                    const f = a.field; a.field = donor.field; donor.field = f;
+                }
+            });
+        } catch (_eIndR) {}
+        return assignments;
     }
 
     // =========================================================================
@@ -2756,6 +2811,54 @@
                         console.warn('   ⚠️ Away league "' + league.name + '" @' + timeKey + ' → zone "' + _awayZoneForPeriod + '" has no available fields; keeping full pool.');
                     }
                 }
+
+                // ★★★ INDOOR-MINIMUM RESERVATION (cross-league) ★★★
+                // Leagues process senior→junior and LOCK their fields, so a league
+                // with no indoor rule can drain the gyms before a later league that
+                // still OWES its teams indoor games gets its turn — that league's
+                // indoor hard-filter then has nothing to pick and silently falls
+                // back outdoors (same failure shape as the away-zone poach). If THIS
+                // league has no unmet indoor need, withhold up to <demand> indoor
+                // fields that later-processed leagues in this same period still need
+                // for an enabled indoor minimum ('>=' / '='), keeping enough fields
+                // for this league's own matchups. Killswitch: window.__leagueIndoorReserve=false.
+                try {
+                    if (window.__leagueIndoorReserve !== false && availablePool.length > 0) {
+                        const _iNeed = function (l) {
+                            const r = l && l.indoorRequirement;
+                            if (!r || !r.enabled || (r.op || '>=') === '<=') return 0;
+                            const tgt = Number.isFinite(r.count) ? r.count : 1;
+                            const ic = indoorCountsByLeague[l.name] || {};
+                            const below = (l.teams || []).filter(function (t) { return (ic[t] || 0) < tgt; }).length;
+                            return Math.ceil(below / 2);   // 2 teams get indoor credit per matchup
+                        };
+                        if (_iNeed(league) === 0) {
+                            const _selfIdx = applicableLeagues.indexOf(league);
+                            const _later = applicableLeagues.slice(_selfIdx + 1).filter(function (l) {
+                                if (offCampusScheduled[l.name] && offCampusScheduled[l.name].handled) return false;
+                                return _iNeed(l) > 0;
+                            });
+                            if (_later.length) {
+                                const _laterSports = new Set();
+                                _later.forEach(function (l) { (l.sports || []).forEach(function (s) { _laterSports.add(s); }); });
+                                const _demand = _later.reduce(function (n, l) { return n + _iNeed(l); }, 0);
+                                // indoor fields in MY pool that a needing league could actually use
+                                const _indoorFields = [...new Set(availablePool
+                                    .filter(function (o) { return _optIsIndoor(o) && _laterSports.has(o.sport); })
+                                    .map(function (o) { return o.field; }))];
+                                // safety valve: keep enough distinct fields for my own matchups
+                                const _myMatchups = Math.max(1, Math.floor((league.teams || []).length / 2));
+                                const _allFieldCount = new Set(availablePool.map(function (o) { return o.field; })).size;
+                                const _maxDrop = Math.max(0, _allFieldCount - _myMatchups);
+                                const _drop = new Set(_indoorFields.slice(0, Math.min(_demand, _maxDrop)));
+                                if (_drop.size) {
+                                    availablePool = availablePool.filter(function (o) { return !_drop.has(o.field); });
+                                    console.log('   🏠 Withheld ' + _drop.size + ' indoor court(s) [' + [..._drop].join(', ') + '] for indoor-minimum league(s): ' + _later.map(function (l) { return l.name; }).join(', '));
+                                }
+                            }
+                        }
+                    }
+                } catch (_eIndRes) {}
                 // ★ Multi-game-per-day sport variety is now handled PER-MATCHUP,
                 // not league-wide. The old code here shrank the single shared
                 // availablePool by removing every sport that ANY team in the
@@ -3230,6 +3333,33 @@ window._debugLeagueTimeData = timeData;
 
         // ★★★ UPDATE FUTURE SCHEDULES TO MAINTAIN CHRONOLOGICAL ORDER ★★★
         updateFutureSchedules(dayId, history);
+
+        // ★★★ INDOOR-MINIMUM VERIFICATION ★★★ — after the whole day is scheduled,
+        // report every team that ended below its league's indoor floor so a miss
+        // is visible instead of silent. Shortfalls are also published on
+        // window.__leagueIndoorShortfalls for validators / UI checks.
+        try {
+            window.__leagueIndoorShortfalls = [];
+            const _verLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
+            _verLeagues.forEach(function (l) {
+                const r = l && l.indoorRequirement;
+                if (!l || l.enabled === false || !r || !r.enabled || (r.op || '>=') === '<=') return;
+                const ic = indoorCountsByLeague[l.name];
+                if (!ic) return;   // league didn't schedule any games today
+                const tgt = Number.isFinite(r.count) ? r.count : 1;
+                const short = (l.teams || []).filter(function (t) { return (ic[t] || 0) < tgt; });
+                if (short.length) {
+                    console.warn('⚠️ [IndoorMin] "' + l.name + '": ' + short.length + ' team(s) ended BELOW the indoor minimum (' + tgt + '/day): '
+                        + short.map(function (t) { return t + ' ' + (ic[t] || 0) + '/' + tgt; }).join(', '));
+                    window.__leagueIndoorShortfalls.push({
+                        league: l.name, target: tgt,
+                        teams: short.map(function (t) { return { team: t, got: ic[t] || 0 }; })
+                    });
+                } else {
+                    console.log('✅ [IndoorMin] "' + l.name + '": every team met the indoor minimum (' + tgt + '/day)');
+                }
+            });
+        } catch (_eIndVer) {}
 
         console.log("\n" + "=".repeat(60));
         console.log("★★★ REGULAR LEAGUE ENGINE COMPLETE ★★★");
