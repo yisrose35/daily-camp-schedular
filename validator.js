@@ -1274,6 +1274,18 @@
         const byF = {};
         usages.forEach(u => { (byF[u.fkey] = byF[u.fkey] || []).push(u); });
         const isBusy = (key, s, e) => (byF[key] || []).some(u => u.startMin < e && u.endMin > s);
+        // ★ v3.1.2: combined-field awareness — a member of a combo (e.g. New Gym 2
+        //   inside "New Gym Full") is physically consumed whenever any of its
+        //   mutually-exclusive counterparts is in use during the window.
+        const comboBusy = (member, s, e) => {
+            const FC = window.FieldCombos;
+            if (!FC || typeof FC.getExclusiveFields !== 'function') return false;
+            try {
+                if (typeof FC.isInCombo === 'function' && !FC.isInCombo(member.key)) return false;
+                const ex = FC.getExclusiveFields(member.key) || [];
+                return ex.some(x => isBusy(_lc(x), s, e));
+            } catch (err) { return false; }
+        };
 
         const parseMin = (v) => {
             if (v == null) return null;
@@ -1285,6 +1297,12 @@
             const f = member.props;
             if (f.available === false) return false;
             if (specialHosts.has(member.key)) return false;
+            // ★ v3.1.2: exclusive field preference — the solver hard-excludes a
+            //   division not on the list (e.g. a gym reserved for select grades),
+            //   so it is not a "missed" field for anyone else.
+            const pref = f.preferences;
+            if (pref && pref.enabled && pref.exclusive && Array.isArray(pref.list) &&
+                pref.list.length > 0 && !pref.list.includes(divName)) return false;
             const ar = f.accessRestrictions;
             if (ar && ar.enabled && ar.divisions && typeof ar.divisions === 'object' &&
                 Object.keys(ar.divisions).length > 0 && !(divName in ar.divisions)) return false;
@@ -1320,6 +1338,7 @@
                 if (m.rank >= info.rank) break;
                 if (!isOpenFor(m, u.startMin, u.endMin, u.divName)) continue;
                 if (isBusy(m.key, u.startMin, u.endMin)) continue;
+                if (comboBusy(m, u.startMin, u.endMin)) continue;
                 const sig = u.owner + '|' + u.fkey + '|' + u.startMin;
                 if (seenMiss.has(sig)) break;
                 seenMiss.add(sig);

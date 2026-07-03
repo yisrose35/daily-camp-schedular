@@ -29,7 +29,7 @@ function makeValidator(over = {}) {
         isSpecialAvailableForBunk: over.isSpecialAvailableForBunk,
         loadCurrentDailyData: over.loadCurrentDailyData,
         SchedulerCoreUtils: over.SchedulerCoreUtils || {},
-        FieldCombos: null,
+        FieldCombos: over.FieldCombos || null,
         currentScheduleDate: '2026-07-07',
     };
     const doc = {
@@ -202,6 +202,32 @@ const bunkDivMapOf = (divisions) => {
         fields[0].timeRules = [{ type: 'unavailable', startMin: 500, endMin: 700 }];
         const { v } = makeValidator({ divisions, fields });
         check('T13f time-rule-closed better field not a miss', v.checkFieldQuality([mkUsage()]).length === 0);
+    }
+    // T13i: preference-EXCLUSIVE better field (division not on the list) → silent;
+    //        division ON the list still gets the miss (the New Gym 2 case)
+    {
+        const fields = baseFields();
+        fields[0].preferences = { enabled: true, exclusive: true, list: ['B'] };
+        const { v } = makeValidator({ divisions, fields });
+        check('T13i pref-exclusive better field not a miss for excluded division',
+            v.checkFieldQuality([mkUsage()]).length === 0);
+        const { v: v2 } = makeValidator({ divisions, fields });
+        check('T13i2 pref-exclusive better field IS a miss for an included division',
+            v2.checkFieldQuality([mkUsage({ divName: 'B', bunk: 'b1', owner: 'Bunk b1' })]).length === 1);
+    }
+    // T13j: combined field — counterpart in use consumes the candidate (New Gym Full)
+    {
+        const FieldCombos = {
+            isInCombo: (k) => k === 'c1',
+            getExclusiveFields: (k) => (k === 'c1' ? ['Full Court'] : []),
+        };
+        const { v } = makeValidator({ divisions, fields: baseFields(), FieldCombos });
+        const fullBusy = mkUsage({ fkey: 'full court', facility: 'Full Court', divName: 'B', owner: 'B — Event', kind: 'event' });
+        check('T13j combo counterpart busy → candidate not a miss',
+            v.checkFieldQuality([mkUsage(), fullBusy]).length === 0);
+        const { v: v2 } = makeValidator({ divisions, fields: baseFields(), FieldCombos });
+        check('T13j2 combo counterpart free → miss still flagged',
+            v2.checkFieldQuality([mkUsage()]).length === 1);
     }
     // T13g: seniority inversion among bunks → warning; league holder → none
     {
