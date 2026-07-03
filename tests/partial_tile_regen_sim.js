@@ -269,6 +269,33 @@ test('STEP 7.9 evict sweep only touches regenerated slots during a per-tile rege
   assert.strictEqual(step79ShouldSweep(null, 'B', 0), true);
 });
 
+// STEP 5.6 field extraction — regular-league matchups are DISPLAY STRINGS
+// "T1 vs T2 @ Field (Sport)"; specialty matchups are objects with .field.
+function extractLeagueFields(matchups) {
+  const s = new Set();
+  matchups.forEach(m => {
+    if (!m) return;
+    if (typeof m === 'object' && m.field) { s.add(String(m.field).trim()); return; }
+    if (typeof m === 'string') {
+      const mm = m.match(/@\s*([^(@]+?)\s*(?:\(|$)/);
+      if (mm && mm[1]) s.add(mm[1].trim());
+    }
+  });
+  return [...s].filter(Boolean);
+}
+
+test('STEP 5.6 extracts fields from string AND object matchups; skips chinuch/bye lines', () => {
+  const fields = extractLeagueFields([
+    '1 vs 2 @ The Hatrick (Hockey)',
+    '3 vs 4 @ Powerplay (Hockey)',
+    'Armadila vs Squirel @ The Hatrick (Hockey)',   // dup field → deduped
+    'Team 5 — Chinuch (Beis Medrash)',              // no "@" → skipped
+    'Team 6 — BYE',                                 // no "@" → skipped
+    { field: 'Grand Slam Park', sport: 'Baseball' } // specialty object form
+  ]);
+  assert.deepStrictEqual(fields.sort(), ['Grand Slam Park', 'Powerplay', 'The Hatrick']);
+});
+
 test('multi-period selection expands to the whole block', () => {
   const divisions = { Div1: { bunks: ['A'] } };
   // A 60-min Cooking spanning slots 1 & 2 (continuation), same _blockStart.

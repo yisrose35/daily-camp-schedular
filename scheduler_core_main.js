@@ -5529,17 +5529,33 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const _la56 = window.leagueAssignments || {};
             let _lgLocked56 = 0;
             for (const _dv56 in _la56) {
-                const _arr56 = _la56[_dv56];
-                if (!Array.isArray(_arr56)) continue;
+                const _cells56 = _la56[_dv56];
+                // leagueAssignments[div] is a plain OBJECT keyed by slot index
+                // (fillBlock: leagueAssignments[div][slotIdx] = { matchups, ... }),
+                // NOT an array — iterate its keys (also covers array form).
+                if (!_cells56 || typeof _cells56 !== 'object') continue;
                 const _dts56 = (window.divisionTimes && window.divisionTimes[_dv56]) || [];
-                for (let _si56 = 0; _si56 < _arr56.length; _si56++) {
-                    const _cell56 = _arr56[_si56];
+                for (const _sk56 of Object.keys(_cells56)) {
+                    const _si56 = parseInt(_sk56, 10);
+                    if (isNaN(_si56)) continue;
+                    const _cell56 = _cells56[_sk56];
                     const _ms56 = _cell56 && _cell56.matchups;
                     if (!Array.isArray(_ms56) || !_ms56.length) continue;
                     const _slot56 = _dts56[_si56] || {};
                     let _sM56 = _slot56.startMin, _eM56 = _slot56.endMin;
                     if (_sM56 == null) { const _m0 = _ms56.find(m => m && m._startMin != null); if (_m0) { _sM56 = _m0._startMin; _eM56 = _m0._endMin; } }
-                    const _fields56 = [...new Set(_ms56.map(m => m && m.field).filter(Boolean))];
+                    // Matchups are DISPLAY STRINGS "T1 vs T2 @ Field (Sport)" for regular
+                    // leagues (objects with .field for specialty) — extract fields from both.
+                    const _fSet56 = new Set();
+                    _ms56.forEach(m => {
+                        if (!m) return;
+                        if (typeof m === 'object' && m.field) { _fSet56.add(String(m.field).trim()); return; }
+                        if (typeof m === 'string') {
+                            const _mm56 = m.match(/@\s*([^(@]+?)\s*(?:\(|$)/);
+                            if (_mm56 && _mm56[1]) _fSet56.add(_mm56[1].trim());
+                        }
+                    });
+                    const _fields56 = [..._fSet56].filter(Boolean);
                     _fields56.forEach(_f56 => {
                         try {
                             window.GlobalFieldLocks.lockField(_f56, [_si56], {
@@ -5551,7 +5567,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     });
                 }
             }
-            if (_lgLocked56 > 0) console.log('[STEP 5.6] ★ Per-tile regen: time-locked ' + _lgLocked56 + ' league game field(s) so regen bunks route around them');
+            console.log('[STEP 5.6] ★ Per-tile regen: time-locked ' + _lgLocked56 + ' league game field(s) so regen bunks route around them');
         }
 
         // =========================================================================
