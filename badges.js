@@ -358,17 +358,40 @@ function renderIfPresent() {
     if (strip) renderHeroStrip(strip);
 }
 
+// How many medals fit in the hero: measured from real geometry — hero width
+// minus the clock/weather block, hero padding, and a protected zone for the
+// camp-name text — so zoom and display scaling can't miscount (the old
+// viewport-width media queries hid medals on scaled displays even when the
+// hero had visible room). Returns -1 when not even the chip fits.
+function heroMedalBudget(strip) {
+    try {
+        const hero = strip.parentElement;
+        const right = hero && hero.querySelector ? hero.querySelector(".dash-hero-right") : null;
+        if (!hero || !right || !hero.clientWidth) return HERO_MAX_MEDALS;
+        const TITLE_MIN = 260;   // room reserved for the welcome text
+        const CHIP_W = 80;       // count chip + gap
+        const SLOT_W = 38;       // 30px medal + 8px gap
+        const PADDING = 48;      // hero padding + strip margins
+        const free = hero.clientWidth - right.getBoundingClientRect().width - PADDING - TITLE_MIN;
+        if (free < CHIP_W) return -1;
+        return Math.max(0, Math.min(HERO_MAX_MEDALS, Math.floor((free - CHIP_W) / SLOT_W)));
+    } catch (_) { return HERO_MAX_MEDALS; }
+}
+
 function renderHeroStrip(strip) {
     injectStyles();
+    const budget = heroMedalBudget(strip);
+    if (budget < 0) { strip.style.display = "none"; return; }
+
     const earned = (_state && _state.earned) || {};
     let earnedDefs = BADGE_DEFS.filter(d => earned[d.id]);
     const totalEarned = earnedDefs.length;
 
-    // Keep the strip compact: show only the most recently earned medals
-    // (definition order preserved); the chip carries the full count.
-    if (earnedDefs.length > HERO_MAX_MEDALS) {
+    // Show only the most recently earned medals that fit (definition order
+    // preserved); the chip carries the full count.
+    if (earnedDefs.length > budget) {
         const byRecent = [...earnedDefs].sort((a, b) => String(earned[b.id]).localeCompare(String(earned[a.id])));
-        const keep = new Set(byRecent.slice(0, HERO_MAX_MEDALS).map(d => d.id));
+        const keep = new Set(byRecent.slice(0, budget).map(d => d.id));
         earnedDefs = earnedDefs.filter(d => keep.has(d.id));
     }
 
@@ -491,14 +514,14 @@ function injectStyles() {
 }
 
 /* Hero strip — sits between the camp name and the clock/weather widgets.
-   Content-sized (flex: 0 1 auto) so it NEVER steals width from the camp
-   name; .dash-hero-left keeps its flex:1 and the hero keeps its original
-   height. Capped at HERO_MAX_MEDALS small medals; narrower screens trim
-   medals via the nth-of-type rules below, phones hide the strip. */
+   Content-sized and non-shrinking: heroMedalBudget() measures the hero's
+   real free space and renders only as many medals as fit, so the strip
+   never squeezes the camp name regardless of zoom or display scaling.
+   Phones (<760px) hide the strip entirely. */
 .dash-hero-badges {
     position: relative; z-index: 1;
     display: flex; flex-wrap: nowrap; align-items: center;
-    gap: 8px; flex: 0 1 auto; min-width: 0; margin: 0 16px;
+    gap: 8px; flex: 0 0 auto; margin: 0 16px;
 }
 .dash-hero-badges .cbadge-medal { width: 30px; height: 30px; padding: 2px; }
 .dash-hero-badges .cbadge-medal-text { font-size: .54rem; }
@@ -511,8 +534,6 @@ function injectStyles() {
     cursor: pointer; transition: background .15s ease;
 }
 .cbadge-hero-chip:hover { background: rgba(255,255,255,.24); }
-@media (max-width: 1200px) { .dash-hero-badges .cbadge-medal:nth-of-type(n+5) { display: none; } }
-@media (max-width: 1000px) { .dash-hero-badges .cbadge-medal:nth-of-type(n+3) { display: none; } }
 @media (max-width: 760px)  { .dash-hero-badges { display: none !important; } }
 
 .cbadge-toast {
@@ -567,6 +588,14 @@ async function boot() {
     if (onDashboard) {
         if (!(await ensureInit())) return;
         renderIfPresent();                       // show hero strip + collection immediately
+        // Medal budget depends on hero geometry — re-render on resize
+        if (typeof window.addEventListener === "function") {
+            let resizeTimer = null;
+            window.addEventListener("resize", () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(renderIfPresent, 200);
+            });
+        }
         await evaluate();                        // then check for new awards
         renderIfPresent();
     } else {
