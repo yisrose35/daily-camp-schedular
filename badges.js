@@ -1,13 +1,17 @@
 // ============================================================================
-// badges.js — CAMP BADGES / ACHIEVEMENTS v1.0
+// badges.js — CAMP ACHIEVEMENTS v2.0
 // ============================================================================
-// Per-camp achievement badges, displayed on the dashboard and awarded live.
+// Per-camp achievements, displayed on the dashboard and awarded live.
 //
 // Categories:
 //   Milestones  — daily schedules generated (1 / 10 / 50 / 100)
 //   Years       — tenure with Campistry (camps.created_at)
 //   Enrollment  — campers enrolled (camperRoster count, else bunkMetaData sizes)
 //   Secret      — the easter egg (awarded by easter_egg.js via CampBadges.award)
+//
+// Presentation (v2): tiered metal medallions (bronze/silver/gold/platinum)
+// instead of emoji, refined award toast with a shine sweep instead of
+// confetti. Badge IDs are unchanged from v1 — earned cloud data carries over.
 //
 // Storage: camp_state_kv key 'campBadges' → { earned: { badgeId: isoDate } }
 // (direct Supabase upsert with read-merge-union so badges are never lost to a
@@ -18,8 +22,8 @@
 //   dashboard.html — renders the collection into #campBadgesGrid + evaluates
 //   flow.html      — listens for 'campistry-schedule-generated' + evaluates
 //
-// Award moment: sliding toast + mini confetti burst (queued; >3 at once
-// collapses into a summary toast). Kill switch: window.__campBadges = false
+// Award moment: sliding toast (queued; >3 at once collapses into a summary
+// toast). Kill switch: window.__campBadges = false
 // ============================================================================
 (function(){
 'use strict';
@@ -29,28 +33,29 @@ const LOCAL_MIRROR_PREFIX = "campistry_badges_v1:";
 const TOAST_MS = 3400;
 
 // =========================================================================
-// BADGE DEFINITIONS
+// BADGE DEFINITIONS (ids are persisted in the cloud — never change them)
 // =========================================================================
+// medal = short text shown inside the medallion; tier = metal rank.
 // check(stats) — stats fields may be undefined when unknown; comparisons
 // against undefined are false, so badges never award on missing data.
 const BADGE_DEFS = [
     // Milestones — schedules generated
-    { id: "first_schedule", icon: "🗓️", name: "First Light",      cat: "Milestones", desc: "Generate your first daily schedule",  check: s => s.schedules >= 1 },
-    { id: "schedules_10",   icon: "📅", name: "Getting Rolling",  cat: "Milestones", desc: "Generate 10 daily schedules",          check: s => s.schedules >= 10 },
-    { id: "schedules_50",   icon: "🏗️", name: "Schedule Machine", cat: "Milestones", desc: "Generate 50 daily schedules",          check: s => s.schedules >= 50 },
-    { id: "schedules_100",  icon: "💯", name: "Century Club",     cat: "Milestones", desc: "Generate 100 daily schedules",         check: s => s.schedules >= 100 },
+    { id: "first_schedule", medal: "1",   tier: "bronze",   name: "First Schedule", cat: "Milestones", desc: "Generated your first daily schedule", check: s => s.schedules >= 1 },
+    { id: "schedules_10",   medal: "10",  tier: "silver",   name: "10 Schedules",   cat: "Milestones", desc: "10 daily schedules generated",        check: s => s.schedules >= 10 },
+    { id: "schedules_50",   medal: "50",  tier: "gold",     name: "50 Schedules",   cat: "Milestones", desc: "50 daily schedules generated",        check: s => s.schedules >= 50 },
+    { id: "schedules_100",  medal: "100", tier: "platinum", name: "100 Schedules",  cat: "Milestones", desc: "100 daily schedules generated",       check: s => s.schedules >= 100 },
     // Years with Campistry
-    { id: "rookie_season",  icon: "🌱", name: "Rookie Season",    cat: "Years with Campistry", desc: "Welcome to Campistry!",       check: s => s.years >= 0 },
-    { id: "second_summer",  icon: "🥈", name: "Second Summer",    cat: "Years with Campistry", desc: "One year with Campistry",     check: s => s.years >= 1 },
-    { id: "camp_veteran",   icon: "🏕️", name: "Camp Veteran",     cat: "Years with Campistry", desc: "Three years with Campistry",  check: s => s.years >= 3 },
-    { id: "founding_legend",icon: "🏛️", name: "Founding Legend",  cat: "Years with Campistry", desc: "Five years with Campistry",   check: s => s.years >= 5 },
+    { id: "rookie_season",  medal: "★",  tier: "bronze",   name: "First Season", cat: "Years with Campistry", desc: "Joined Campistry",            check: s => s.years >= 0 },
+    { id: "second_summer",  medal: "1Y", tier: "silver",   name: "One Year",     cat: "Years with Campistry", desc: "One year with Campistry",     check: s => s.years >= 1 },
+    { id: "camp_veteran",   medal: "3Y", tier: "gold",     name: "Three Years",  cat: "Years with Campistry", desc: "Three years with Campistry",  check: s => s.years >= 3 },
+    { id: "founding_legend",medal: "5Y", tier: "platinum", name: "Five Years",   cat: "Years with Campistry", desc: "Five years with Campistry",   check: s => s.years >= 5 },
     // Enrollment
-    { id: "campers_50",     icon: "🐣", name: "Cozy Camp",        cat: "Enrollment", desc: "50+ campers enrolled",   check: s => s.campers >= 50 },
-    { id: "campers_100",    icon: "🚌", name: "Growing Strong",   cat: "Enrollment", desc: "100+ campers enrolled",  check: s => s.campers >= 100 },
-    { id: "campers_250",    icon: "🎪", name: "Big League",       cat: "Enrollment", desc: "250+ campers enrolled",  check: s => s.campers >= 250 },
-    { id: "campers_500",    icon: "🌆", name: "Mega Camp",        cat: "Enrollment", desc: "500+ campers enrolled",  check: s => s.campers >= 500 },
+    { id: "campers_50",     medal: "50",  tier: "bronze",   name: "50 Campers",  cat: "Enrollment", desc: "50+ campers enrolled",  check: s => s.campers >= 50 },
+    { id: "campers_100",    medal: "100", tier: "silver",   name: "100 Campers", cat: "Enrollment", desc: "100+ campers enrolled", check: s => s.campers >= 100 },
+    { id: "campers_250",    medal: "250", tier: "gold",     name: "250 Campers", cat: "Enrollment", desc: "250+ campers enrolled", check: s => s.campers >= 250 },
+    { id: "campers_500",    medal: "500", tier: "platinum", name: "500 Campers", cat: "Enrollment", desc: "500+ campers enrolled", check: s => s.campers >= 500 },
     // Secret — event-awarded only (no check)
-    { id: "egg_hunter",     icon: "🥚", name: "Egg Hunter",       cat: "Secret", desc: "Found the hidden easter egg", secret: true },
+    { id: "egg_hunter",     medal: "★",  tier: "accent",   name: "Easter Egg",  cat: "Secret", desc: "Discovered the hidden easter egg", secret: true },
 ];
 
 const CATEGORY_ORDER = ["Milestones", "Years with Campistry", "Enrollment", "Secret"];
@@ -256,7 +261,7 @@ async function evaluate(statsOverride) {
 }
 
 // =========================================================================
-// AWARD TOAST + MINI CONFETTI (queued, sequential)
+// AWARD TOAST (queued, sequential; refined — no confetti)
 // =========================================================================
 const _toastQueue = [];
 let _toastActive = false;
@@ -265,8 +270,9 @@ function queueToast(defs) {
     // >3 at once (e.g. retroactive first run): show 2, collapse the rest
     if (defs.length > 3) {
         _toastQueue.push(defs[0], defs[1], {
-            icon: "🎖️", name: `+${defs.length - 2} more badges earned!`,
-            cat: "See your collection on the Dashboard", _summary: true,
+            medal: "+" + (defs.length - 2), tier: "gold",
+            name: (defs.length - 2) + " more achievements earned",
+            desc: "See the full collection on your Dashboard", _summary: true,
         });
     } else {
         _toastQueue.push(...defs);
@@ -285,68 +291,26 @@ function pumpToasts() {
     const toast = document.createElement("div");
     toast.className = "cbadge-toast" + (reducedMotion ? " cbadge-noanim" : "");
     toast.innerHTML = [
-        '<canvas class="cbadge-burst" width="300" height="150"></canvas>',
-        '<div class="cbadge-toast-icon"></div>',
+        `<div class="cbadge-medal cbadge-tier-${def.tier}"><span class="cbadge-medal-text"></span></div>`,
         '<div class="cbadge-toast-text">',
-        '  <div class="cbadge-toast-kicker">🏅 BADGE EARNED</div>',
+        '  <div class="cbadge-toast-kicker">Achievement unlocked</div>',
         '  <div class="cbadge-toast-name"></div>',
-        '  <div class="cbadge-toast-cat"></div>',
+        '  <div class="cbadge-toast-desc"></div>',
         '</div>',
     ].join("");
-    toast.querySelector(".cbadge-toast-icon").textContent = def.icon;
+    toast.querySelector(".cbadge-medal-text").textContent = def.medal;
     toast.querySelector(".cbadge-toast-name").textContent = def.name;
-    toast.querySelector(".cbadge-toast-cat").textContent = def._summary ? def.cat : (def.desc || def.cat);
+    toast.querySelector(".cbadge-toast-desc").textContent = def.desc || "";
     document.body.appendChild(toast);
-
-    let stopBurst = null;
-    if (!reducedMotion) stopBurst = runMiniBurst(toast.querySelector(".cbadge-burst"));
 
     setTimeout(() => {
         toast.classList.add("cbadge-out");
         setTimeout(() => {
-            if (stopBurst) stopBurst();
             toast.remove();
             _toastActive = false;
             pumpToasts();
         }, 350);
     }, TOAST_MS);
-}
-
-function runMiniBurst(canvas) {
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    const colors = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#ffd700", "#ff9ff3"];
-    const parts = [];
-    for (let i = 0; i < 45; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const speed = 1.5 + Math.random() * 3.5;
-        parts.push({
-            x: W * 0.22, y: H * 0.5,
-            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 1,
-            life: 1, decay: 0.015 + Math.random() * 0.02,
-            size: 2 + Math.random() * 3,
-            color: colors[i % colors.length],
-        });
-    }
-    let rafId = null;
-    function frame() {
-        ctx.clearRect(0, 0, W, H);
-        let alive = 0;
-        for (const p of parts) {
-            if (p.life <= 0) continue;
-            alive++;
-            p.vy += 0.06;
-            p.x += p.vx; p.y += p.vy;
-            p.life -= p.decay;
-            ctx.globalAlpha = Math.max(0, p.life);
-            ctx.fillStyle = p.color;
-            ctx.fillRect(p.x, p.y, p.size, p.size * 0.7);
-        }
-        ctx.globalAlpha = 1;
-        if (alive > 0) rafId = requestAnimationFrame(frame);
-    }
-    rafId = requestAnimationFrame(frame);
-    return () => { if (rafId) cancelAnimationFrame(rafId); };
 }
 
 // =========================================================================
@@ -363,7 +327,7 @@ function renderCollection(grid) {
     const earnedCount = BADGE_DEFS.filter(d => earned[d.id]).length;
 
     const counter = document.getElementById("campBadgesCount");
-    if (counter) counter.textContent = `${earnedCount} / ${BADGE_DEFS.length} earned`;
+    if (counter) counter.textContent = `${earnedCount} of ${BADGE_DEFS.length} earned`;
 
     grid.innerHTML = "";
     CATEGORY_ORDER.forEach(cat => {
@@ -381,24 +345,28 @@ function renderCollection(grid) {
             const hidden = def.secret && !got;
             const card = document.createElement("div");
             card.className = "cbadge-card" + (got ? " cbadge-earned" : " cbadge-locked");
-            const icon = document.createElement("div");
-            icon.className = "cbadge-icon";
-            icon.textContent = hidden ? "❓" : def.icon;
+
+            const medal = document.createElement("div");
+            medal.className = "cbadge-medal " + (got ? `cbadge-tier-${def.tier}` : "cbadge-tier-locked");
+            const medalText = document.createElement("span");
+            medalText.className = "cbadge-medal-text";
+            medalText.textContent = hidden ? "?" : def.medal;
+            medal.appendChild(medalText);
+
             const name = document.createElement("div");
             name.className = "cbadge-name";
-            name.textContent = hidden ? "???" : def.name;
-            const desc = document.createElement("div");
-            desc.className = "cbadge-desc";
-            desc.textContent = hidden ? "A hidden secret… keep exploring." : def.desc;
-            card.appendChild(icon); card.appendChild(name); card.appendChild(desc);
+            name.textContent = hidden ? "Hidden" : def.name;
+
+            let tip = hidden ? "A hidden achievement — keep exploring" : (def.desc || def.name);
             if (got) {
-                const when = document.createElement("div");
-                when.className = "cbadge-date";
                 try {
-                    when.textContent = "Earned " + new Date(got).toLocaleDateString(undefined, { month: "short", year: "numeric" });
-                } catch (_) { when.textContent = "Earned"; }
-                card.appendChild(when);
+                    tip += " — earned " + new Date(got).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+                } catch (_) {}
             }
+            card.setAttribute("title", tip);
+
+            card.appendChild(medal);
+            card.appendChild(name);
             row.appendChild(card);
         });
         grid.appendChild(row);
@@ -409,7 +377,7 @@ function renderCollection(grid) {
 }
 
 // =========================================================================
-// STYLES (injected once; used by toast on both pages + dashboard grid)
+// STYLES (injected once; toast used on both pages + dashboard grid)
 // =========================================================================
 let _styled = false;
 function injectStyles() {
@@ -417,52 +385,69 @@ function injectStyles() {
     _styled = true;
     const style = document.createElement("style");
     style.textContent = `
+.cbadge-medal {
+    position: relative; overflow: hidden;
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 2.5px solid; flex: 0 0 auto;
+}
+.cbadge-medal-text { font-size: .78rem; font-weight: 800; letter-spacing: .02em; }
+.cbadge-tier-bronze   { border-color: #b3763e; background: #faf3ec; color: #8a5a2e; }
+.cbadge-tier-silver   { border-color: #94a3b3; background: #f4f6f8; color: #5c6b7a; }
+.cbadge-tier-gold     { border-color: #d4af37; background: #fdf8e7; color: #a8842a; }
+.cbadge-tier-platinum { border-color: #8fa6bd; background: #eef4fa; color: #51677d; box-shadow: 0 0 0 3px #eef4fa, 0 0 0 4.5px #c3d3e2; }
+.cbadge-tier-accent   { border-color: #7c5cd4; background: #f5f3ff; color: #5b3fb8; }
+.cbadge-tier-locked   { border-color: #d5dbe3; border-style: dashed; background: #f8fafc; color: #b0b9c4; }
+.cbadge-medal::after {
+    content: ""; position: absolute; top: -60%; left: -80%;
+    width: 55%; height: 220%; transform: rotate(25deg);
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.55) 50%, rgba(255,255,255,0) 100%);
+    animation: cbadgeShine 3.2s ease-in-out infinite;
+}
+.cbadge-tier-locked::after { display: none; }
+
 .cbadge-toast {
     position: fixed; top: 18px; right: 18px; z-index: 100000;
     display: flex; align-items: center; gap: 14px;
     width: min(340px, 92vw); padding: 14px 18px;
-    background: linear-gradient(160deg, #1b2148 0%, #131735 60%, #1f1440 100%);
-    color: #fff; border-radius: 16px;
-    box-shadow: 0 0 0 2px rgba(255,215,0,.6), 0 0 26px rgba(255,215,0,.25), 0 14px 40px rgba(0,0,0,.4);
-    animation: cbadgeIn .45s cubic-bezier(.2,1.5,.4,1);
-    overflow: hidden;
+    background: #ffffff; color: #1e293b;
+    border: 1px solid #e2e8f0; border-left: 3px solid #d4af37;
+    border-radius: 12px;
+    box-shadow: 0 10px 34px rgba(15, 23, 42, .16);
+    animation: cbadgeIn .4s cubic-bezier(.25,1.2,.4,1);
 }
-.cbadge-toast.cbadge-out { opacity: 0; transform: translateX(30px); transition: opacity .35s ease, transform .35s ease; }
+.cbadge-toast.cbadge-out { opacity: 0; transform: translateX(24px); transition: opacity .35s ease, transform .35s ease; }
 .cbadge-toast.cbadge-noanim { animation: none; }
-.cbadge-burst { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.cbadge-toast-icon { font-size: 38px; line-height: 1; filter: drop-shadow(0 0 8px rgba(255,215,0,.6)); z-index: 1; }
-.cbadge-toast-text { z-index: 1; min-width: 0; }
-.cbadge-toast-kicker { font-size: .68rem; font-weight: 800; letter-spacing: .16em; color: #ffd700; }
-.cbadge-toast-name { margin-top: 2px; font-size: 1.02rem; font-weight: 800; }
-.cbadge-toast-cat { margin-top: 2px; font-size: .78rem; color: #cdd3f2; }
+.cbadge-toast.cbadge-noanim .cbadge-medal::after { display: none; }
+.cbadge-toast-text { min-width: 0; }
+.cbadge-toast-kicker { font-size: .66rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #a8842a; }
+.cbadge-toast-name { margin-top: 2px; font-size: .98rem; font-weight: 700; color: #0f172a; }
+.cbadge-toast-desc { margin-top: 1px; font-size: .78rem; color: #64748b; }
 @keyframes cbadgeIn {
-    0% { opacity: 0; transform: translateX(60px) scale(.85); }
-    100% { opacity: 1; transform: translateX(0) scale(1); }
+    0% { opacity: 0; transform: translateX(48px); }
+    100% { opacity: 1; transform: translateX(0); }
 }
+@keyframes cbadgeShine {
+    0%, 72% { left: -80%; }
+    100% { left: 130%; }
+}
+
 .cbadge-cat {
-    margin: 18px 0 10px; font-size: .72rem; font-weight: 800;
-    letter-spacing: .14em; text-transform: uppercase; color: var(--slate-400, #94a3b8);
+    margin: 16px 0 8px; font-size: .68rem; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--slate-400, #94a3b8);
 }
 .cbadge-cat:first-child { margin-top: 0; }
 .cbadge-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px;
 }
 .cbadge-card {
-    position: relative; text-align: center;
-    padding: 16px 10px 14px; border-radius: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 12px 6px 10px; border-radius: 12px;
     border: 1px solid var(--slate-200, #e2e8f0); background: #fff;
+    cursor: default;
 }
-.cbadge-card.cbadge-earned {
-    border: 2px solid #ffd700;
-    background: linear-gradient(180deg, #fffdf2 0%, #fff8dc 100%);
-    box-shadow: 0 4px 14px rgba(255,190,0,.18);
-}
-.cbadge-card.cbadge-locked { opacity: .55; filter: grayscale(1); }
-.cbadge-icon { font-size: 34px; line-height: 1; }
-.cbadge-earned .cbadge-icon { filter: drop-shadow(0 0 6px rgba(255,200,0,.55)); }
-.cbadge-name { margin-top: 8px; font-size: .88rem; font-weight: 700; color: var(--slate-800, #1e293b); }
-.cbadge-desc { margin-top: 4px; font-size: .72rem; line-height: 1.35; color: var(--slate-500, #64748b); }
-.cbadge-date { margin-top: 6px; font-size: .68rem; font-weight: 700; color: #b8860b; }
+.cbadge-card.cbadge-locked .cbadge-name { color: var(--slate-400, #94a3b8); }
+.cbadge-name { font-size: .74rem; font-weight: 600; color: var(--slate-700, #334155); text-align: center; line-height: 1.25; }
 `;
     document.head.appendChild(style);
 }
