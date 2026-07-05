@@ -2607,7 +2607,17 @@
         for (var idx=0;idx<freeIdx.length;idx++) {
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
             if (sM===undefined||eM===undefined) continue; S._todayCache.clear();
-            var fresh=[];
+            // ★ REGEN LAST-RESORT (fill quality): a regen tile whose window is
+            //   saturated used to fall to the first-legal STEP 7.5 fallback (which
+            //   ignores min-players entirely). Instead, keep two graded reserves:
+            //   _lr2 = passed EVERY hard gate, only the penalty cost >=900k (e.g.
+            //         another grade's preferred-exclusive field) — fully legal.
+            //   _lr3 = failed ONLY the sport min-player check (forceLeague=true
+            //         relaxes exactly that and nothing else) — same trade-off the
+            //         fallback makes blindly, but cost-ranked with all other rules.
+            //   Kill switch: window.__regenLastResort = false.
+            var fresh=[], _lr2=[], _lr3=[];
+            var _regenLR = window.__regenSlotScope && window.__regenLastResort !== false;
             for (var ci=0;ci<allCands.length;ci++) {
                 var c=allCands[ci];
                 // ★ Tile-kind gate: a Sports tile never takes a special, a Special tile
@@ -2635,10 +2645,25 @@
                 var _gsoD=(fp&&fp.gradeShareRules&&bDiv)?fp.gradeShareRules[bDiv]:null; if (_gsoD) { st=_gsoD.type||'not_sharable'; cap=parseInt(_gsoD.capacity)||(st==='not_sharable'?1:2); } // ★ per-grade sharing override
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
-                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
-                S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
+                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) {
+                    if (_regenLR && window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,true)) {
+                        S.setScratchPick(c); var _lrC=S.calculatePenaltyCost(blk,S.setScratchPick(c));
+                        if (_lrC<Infinity) _lr3.push({ci:ci,cost:_lrC});
+                    }
+                    continue;
+                }
+                S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c));
+                if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
+                else if (_regenLR && dfCost<Infinity) _lr2.push({ci:ci,cost:dfCost});
             }
             if (fresh.length>0) { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
+            if (_regenLR && (_lr2.length>0 || _lr3.length>0)) {
+                var _lr=_lr2.length>0?_lr2:_lr3;
+                _lr.sort(function(a,b){return a.cost-b.cost;});
+                var _lrCand=allCands[_lr[0].ci];
+                console.warn('[SOLVER-REGEN] ⚠ last-resort ('+(_lr2.length>0?'legal high-penalty':'relaxed min-players')+'): "'+bunk+'" @'+sM+'-'+eM+' → "'+(_lrCand.activityName||_lrCand.field)+'@'+_lrCand.field+'" cost='+_lr[0].cost+' ('+_lr.length+' option(s))');
+                var _lrPk=S.clonePick(_lrCand); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:_lr[0].ci,pick:_lrPk,cost:_lr[0].cost}); S.applyPickToSchedule(blk,_lrPk); var _lrFn=normName(_lrPk.field); S.addToFieldTimeIndex(_lrFn,sM,eM,bunk,bDiv,normName(_lrPk._activity)); var _lrAn=normName(_lrPk._activity); if (_lrAn&&_lrAn!==_lrFn) S.addToFieldTimeIndex(_lrAn,sM,eM,bunk,bDiv,_lrAn); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue;
+            }
             // ★ REGEN FILL-QUALITY DIAGNOSTIC — a per-tile regen block with ZERO
             //   candidates falls through to the first-legal STEP 7.5 fallback. Tally
             //   the FIRST gate that rejected each candidate so the live log says WHY
