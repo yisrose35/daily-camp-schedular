@@ -2616,7 +2616,18 @@
                 if (blk._slotKind === 'sport' && c.type === 'special') continue;
                 if (blk._slotKind === 'special' && c.type !== 'special') continue;
                 if (disabled.indexOf(c.field)!==-1) continue;
-                if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
+                // ★ REGEN FILL-QUALITY FIX: the index fast-path in isFieldLocked is
+                //   time-blind — a lock stored at this slot INDEX may belong to a
+                //   non-overlapping wall-clock window on another grid (e.g. an ABBL
+                //   pin @890-970 blocking an 805-870 query). During partial regen,
+                //   ignore an indexed lock whose explicit times don't overlap this
+                //   block; genuine overlaps are still caught here AND by the
+                //   isFieldLockedByTime gate right below.
+                //   Kill switch: window.__regenIndexLockTimeCheck = false.
+                if (window.__regenSlotScope && window.__regenIndexLockTimeCheck !== false) {
+                    var _dfIL = window.GlobalFieldLocks?.isFieldLocked(c.field,slots,bDiv);
+                    if (_dfIL && !(_dfIL.startMin!=null && _dfIL.endMin!=null && !(_dfIL.startMin<eM && _dfIL.endMin>sM))) continue;
+                } else if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
                 if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var _dfCombo = S._comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
@@ -2636,13 +2647,19 @@
             if (window.__regenSlotScope) {
                 try {
                     var _dgTally={}, _dgSamples=[];
-                    var _dgAdd=function(gate,c){ _dgTally[gate]=(_dgTally[gate]||0)+1; if (_dgSamples.length<12) _dgSamples.push((c.activityName||c.field)+'@'+c.field+'→'+gate); };
+                    var _dgAdd=function(gate,c){ _dgTally[gate]=(_dgTally[gate]||0)+1; if (_dgSamples.length<20) _dgSamples.push((c.activityName||c.field)+'@'+c.field+'→'+gate); };
                     for (var _dgi=0;_dgi<allCands.length;_dgi++) {
                         var dc=allCands[_dgi];
                         if (blk._slotKind==='sport' && dc.type==='special') { _dgAdd('slotKind',dc); continue; }
                         if (blk._slotKind==='special' && dc.type!=='special') { _dgAdd('slotKind',dc); continue; }
                         if (disabled.indexOf(dc.field)!==-1) { _dgAdd('disabledField',dc); continue; }
-                        if (window.GlobalFieldLocks?.isFieldLocked(dc.field,slots)) { _dgAdd('indexLock',dc); continue; }
+                        if (window.__regenIndexLockTimeCheck !== false) {
+                            var _dgIL=window.GlobalFieldLocks?.isFieldLocked(dc.field,slots,bDiv);
+                            if (_dgIL) {
+                                if (_dgIL.startMin!=null && _dgIL.endMin!=null && !(_dgIL.startMin<eM && _dgIL.endMin>sM)) { /* time-disjoint index collision — ignored, fall through */ }
+                                else { _dgAdd('indexLock',dc); continue; }
+                            }
+                        } else if (window.GlobalFieldLocks?.isFieldLocked(dc.field,slots)) { _dgAdd('indexLock',dc); continue; }
                         if (S.isFieldLockedByTime(dc.field,sM,eM,bDiv)) { _dgAdd('timeLock',dc); continue; }
                         if (S.checkCrossDivisionTimeConflict(dc.field,bDiv,sM,eM,bunk)) { _dgAdd('xdivTimeConflict',dc); continue; }
                         var _dgCombo=S._comboExclusiveMap.get(dc._fieldNorm); if (_dgCombo){var _dgB=false;for(var _dgc=0;_dgc<_dgCombo.length;_dgc++){if(S.getFieldUsageFromTimeIndex(_dgCombo[_dgc],sM,eM,bunk)>0){_dgB=true;break;}}if(_dgB){_dgAdd('comboExclusive',dc);continue;}}
@@ -2673,7 +2690,7 @@
                 var saved={candIdx:oa.candIdx,pick:oa.pick,cost:oa.cost};
                 S.undoPickFromSchedule(ob,oa.pick); var ap=S.clonePick(alts[0].cand); S._assignments.set(obi,{candIdx:alts[0].ci,pick:ap,cost:alts[0].cost}); S.applyPickToSchedule(ob,ap);
                 S.addToFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(ap._activity)); S.removeFromFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear();
-                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (blk._slotKind === 'sport' && pc.type === 'special') continue; if (blk._slotKind === 'special' && pc.type !== 'special') continue; if (disabled.indexOf(pc.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(pc.field,slots)) continue; var _pLoc=window.getLocationForActivity?.(pc.activityName||pc.field)||window.getPinnedTileDefaultLocation?.(pc.activityName||pc.field); if (_pLoc&&typeof _pLoc==='string'&&window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots)) continue; if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
+                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (blk._slotKind === 'sport' && pc.type === 'special') continue; if (blk._slotKind === 'special' && pc.type !== 'special') continue; if (disabled.indexOf(pc.field)!==-1) continue; var _pIL=(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false)?window.GlobalFieldLocks?.isFieldLocked(pc.field,slots,bDiv):window.GlobalFieldLocks?.isFieldLocked(pc.field,slots); if (_pIL&&!(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false&&_pIL.startMin!=null&&_pIL.endMin!=null&&!(_pIL.startMin<eM&&_pIL.endMin>sM))) continue; var _pLoc=window.getLocationForActivity?.(pc.activityName||pc.field)||window.getPinnedTileDefaultLocation?.(pc.activityName||pc.field); if (_pLoc&&typeof _pLoc==='string'){ var _pIL2=(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false)?window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots,bDiv):window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots); if (_pIL2&&!(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false&&_pIL2.startMin!=null&&_pIL2.endMin!=null&&!(_pIL2.startMin<eM&&_pIL2.endMin>sM))) continue; } if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
                 if (pf2.length>0) { pf2.sort(function(a,b){return a.cost-b.cost;}); var opk=S.clonePick(allCands[pf2[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:pf2[0].ci,pick:opk,cost:pf2[0].cost}); S.applyPickToSchedule(blk,opk); S.addToFieldTimeIndex(normName(opk.field),sM,eM,bunk,bDiv,normName(opk._activity)); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; break; }
                 else { S.undoPickFromSchedule(ob,ap); S.removeFromFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk); S._assignments.set(obi,saved); S.applyPickToSchedule(ob,saved.pick); S.addToFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(saved.pick._activity)); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear(); }
             }

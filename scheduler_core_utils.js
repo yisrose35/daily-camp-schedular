@@ -776,7 +776,22 @@
         if (window.GlobalFieldLocks && uniqueSlots.length > 0) {
             // Pass the division context so elective locks work correctly
             const divisionContext = block.divName || block.division;
-            const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, uniqueSlots, divisionContext);
+            let lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, uniqueSlots, divisionContext);
+
+            // ★ PARTIAL-REGEN INDEX-COLLISION FIX (2026-07-03): the index fast-path
+            //   is time-blind — a plain-index lock (e.g. a pinned event @890-970)
+            //   collides with a query at the same INDEX but a disjoint wall-clock
+            //   window on another grid. During partial regen, ignore an indexed
+            //   lock whose explicit times don't overlap this block; real overlaps
+            //   still block (and isFieldLockedByTime covers time-keyed locks).
+            //   Kill switch: window.__regenIndexLockTimeCheck = false.
+            if (lockInfo && window.__regenSlotScope && window.__regenIndexLockTimeCheck !== false
+                && lockInfo.startMin != null && lockInfo.endMin != null) {
+                const { blockStartMin: _qS, blockEndMin: _qE } = Utils.getBlockTimeRange(block);
+                if (_qS != null && _qE != null && !(lockInfo.startMin < _qE && lockInfo.endMin > _qS)) {
+                    lockInfo = null; // time-disjoint index collision — not a real conflict
+                }
+            }
 
             if (lockInfo) {
                 if (DEBUG_FITS) {
@@ -1072,13 +1087,58 @@
             );
         }
 
+        // ★ PARTIAL-REGEN INDEX-COLLISION FIX (2026-07-03): slot indices are
+        //   per-division — slot N is a DIFFERENT wall-clock time in each grade's
+        //   grid. During a partial regen the full preserved schedule of every
+        //   other division sits in scheduleAssignments/fieldUsageBySlot at raw
+        //   indices, so the index-keyed usage scan below counts bunks whose
+        //   entry at index N doesn't even overlap this block's time (e.g. a
+        //   div whose slot 1 is 890-970 "occupying" a field against an 805-870
+        //   query) → false capacity rejections → solver starves → dumb 7.5
+        //   fallback fills the tile. Filter usage to bunks whose entry actually
+        //   overlaps this block's window. Preserved fields stay protected by
+        //   the TIME-aware STEP 1.7/5.6 locks + isFieldLockedByTime.
+        //   Kill switch: window.__regenTimeAwareCapacity = false.
+        const _regenTimeFilter = (window.__regenSlotScope && window.__regenTimeAwareCapacity !== false
+            && blockStartMin != null && blockEndMin != null)
+            ? function (bunkName, idx) {
+                try {
+                    const _e = (window.scheduleAssignments || {})[bunkName]?.[idx];
+                    let _s = (_e && _e._startMin != null) ? _e._startMin : null;
+                    let _en = (_e && _e._endMin != null) ? _e._endMin : null;
+                    if (_s == null || _en == null) {
+                        const _d = Utils.getDivisionForBunk(bunkName);
+                        const _sl = _d && window.divisionTimes?.[_d]?.[idx];
+                        if (_sl) { _s = _sl.startMin; _en = _sl.endMin; }
+                    }
+                    if (_s == null || _en == null) return true;      // can't resolve → keep (conservative)
+                    return _s < blockEndMin && _en > blockStartMin;   // keep only real time-overlaps
+                } catch (_) { return true; }
+            } : null;
+
         for (const idx of uniqueSlots) {
             const trackedUsage = getFieldUsageAtSlot(idx, fieldName, fieldUsageBySlot);
             const scheduleUsage = getScheduleUsageAtSlot(idx, fieldName);
 
-            const allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
-            const allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
-            const allDivisions = [...new Set([...trackedUsage.divisions, ...scheduleUsage.divisions])];
+            let allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
+            let allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
+            let allDivisions = [...new Set([...trackedUsage.divisions, ...scheduleUsage.divisions])];
+
+            if (_regenTimeFilter) {
+                const _kept = [...allBunks].filter(_b => _regenTimeFilter(_b, idx));
+                if (_kept.length !== allBunks.size) {
+                    allBunks = new Set(_kept);
+                    allActivities = new Set();
+                    const _keptDivs = new Set();
+                    for (const _b of _kept) {
+                        const _a = trackedUsage.bunks[_b] || scheduleUsage.bunks[_b];
+                        if (_a) allActivities.add(String(_a).toLowerCase().trim());
+                        const _d = Utils.getDivisionForBunk(_b);
+                        if (_d) _keptDivs.add(_d);
+                    }
+                    allDivisions = [..._keptDivs];
+                }
+            }
 
             allBunks.delete(block.bunk);
 
