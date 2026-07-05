@@ -130,9 +130,17 @@
                 if (k === 'general' || k === 'generals') return 'general';
                 return fallback;
             }
+            // ★ Sports carry their own usage limits in sportMetaData (Facilities →
+            //   Usage Limits), including per-grade overrides — surface them here so
+            //   the report's Limit column + "At Limit" flag reflect them, not ∞.
+            const _sportMeta = g.app1?.sportMetaData || {};
+            const _pgObj = pg => (pg && typeof pg === 'object' && Object.keys(pg).some(k => (parseInt(pg[k]) || 0) > 0)) ? pg : null;
             allActivities = [
-                ...allFieldsDat.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
-                ...specials.map(s => ({ name: s.name, type: _normType(s.type, 'special'), max: s.maxUsage || 0 }))
+                ...allFieldsDat.flatMap(f => (f.activities || []).map(a => {
+                    const sm = _sportMeta[a] || {};
+                    return { name: a, type: 'sport', max: parseInt(sm.maxUsage) || 0, maxPerGrade: _pgObj(sm.maxUsagePerGrade) };
+                })),
+                ...specials.map(s => ({ name: s.name, type: _normType(s.type, 'special'), max: s.maxUsage || 0, maxPerGrade: _pgObj(s.maxUsagePerGrade) }))
             ];
             const seen = new Set();
             allActivities = allActivities.filter(a => { if (seen.has(a.name)) return false; seen.add(a.name); return true; });
@@ -154,6 +162,18 @@
 
     function isSpecialByName(name) {
         return allActivities.some(a => a.name === name && a.type === 'special');
+    }
+
+    // Effective usage limit for a bunk: a >0 per-grade override for the bunk's
+    // grade wins over the activity's base max (mirrors calculateLimitScore).
+    // Returns 0 for "no limit".
+    function effectiveMax(act, bunk) {
+        if (act && act.maxPerGrade) {
+            const gr = getDivisionForBunk(bunk);
+            const gv = parseInt(act.maxPerGrade[gr]) || 0;
+            if (gv > 0) return gv;
+        }
+        return (act && parseInt(act.max)) || 0;
     }
 
     function getDivisionForBunk(bunkName) {
@@ -1616,7 +1636,9 @@
                 const hist = liveCounts[bunk]?.[act.name] || 0;
                 const offset = manualOffsets[bunk]?.[act.name] || 0;
                 const total = Math.max(0, hist + offset);
-                const limit = act.max > 0 ? act.max : '∞';
+                const effMax = effectiveMax(act, bunk);
+                const isPerGrade = act.maxPerGrade && (parseInt(act.maxPerGrade[getDivisionForBunk(bunk)]) || 0) > 0;
+                const limit = effMax > 0 ? (isPerGrade ? effMax + '*' : effMax) : '∞';
                 // Only surface a "Last Done" date when the bunk actually has a
                 // recorded occurrence (Count > 0). The lastDone map merges an
                 // extra source — the cumulative rotation-history blob
@@ -1640,7 +1662,7 @@
                     daysSince = diff < 0 ? 'upcoming' : diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : `${diff}d ago`;
                 }
                 let rowBg = bunkBg, totalStyle = 'font-weight:600;';
-                if (act.max > 0 && total >= act.max) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
+                if (effMax > 0 && total >= effMax) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
                 else if (total === 0) totalStyle += 'color:#d97706;';
 
                 // ★ Day 18: 4 distinct type buckets.
@@ -1667,7 +1689,7 @@
                         </td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${totalStyle}">${total}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;font-size:0.85em;">${lastDateFormatted} <span style="color:#9ca3af;font-size:0.85em;">${daysSince}</span></td>
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${act.max > 0 && total >= act.max ? 'color:#b91c1c;font-weight:600;' : 'color:#6b7280;'}">${limit}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${effMax > 0 && total >= effMax ? 'color:#b91c1c;font-weight:600;' : 'color:#6b7280;'}"${isPerGrade ? ' title="Per-grade limit for ' + escapeHtml(getDivisionForBunk(bunk) || '') + '"' : ''}>${limit}</td>
                     </tr>`;
                 isFirstRow = false;
             });
@@ -1714,7 +1736,8 @@
             activities.forEach(act => {
                 const total = Math.max(0, (rawCounts[bunk]?.[act.name] || 0) + (manualOffsets[bunk]?.[act.name] || 0));
                 if (total === 0) neverDone.push({ bunk, activity: act.name });
-                if (act.max > 0 && total >= act.max) atLimit.push({ bunk, activity: act.name });
+                const em = effectiveMax(act, bunk);
+                if (em > 0 && total >= em) atLimit.push({ bunk, activity: act.name });
             });
         });
 
