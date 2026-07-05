@@ -396,6 +396,51 @@
             if (fLower !== f.name) props[fLower] = fieldEntry;
         });
 
+        // ★ PER-SPORT usage/frequency limits (mirror specials). Sports live only as
+        //   names inside a field's activities[] and normally get NO activity-props
+        //   entry, so the maxUsage / frequencyDays / exactFrequency gates in
+        //   RotationEngine.calculateLimitScore (and the solver's calculatePenaltyCost)
+        //   never fired for them. Give any sport that has a limit configured in
+        //   sportMetaData its own entry carrying the SAME fields a special uses — the
+        //   enforcement path is then identical (already proven for specials). Only
+        //   created when a limit is actually set, so unconfigured sports are unchanged
+        //   (their props stay undefined, exactly as before). isSpecialAvailableForBunk
+        //   returns true for a non-special name, so this never false-blocks a sport.
+        try {
+            const _sportMeta = (typeof window !== 'undefined' && typeof window.getSportMetaData === 'function')
+                ? (window.getSportMetaData() || {})
+                : ((typeof window !== 'undefined' && window.sportMetaData) || {});
+            const _seenSports = new Set();
+            fields.forEach(f => (Array.isArray(f.activities) ? f.activities : []).forEach(sp => {
+                if (sp) _seenSports.add(sp);
+            }));
+            _seenSports.forEach(sp => {
+                const m = _sportMeta[sp] || {};
+                const hasLimit = (parseInt(m.maxUsage) || 0) > 0
+                    || (parseInt(m.frequencyDays) || 0) > 0
+                    || (parseInt(m.exactFrequency) || 0) > 0
+                    || (parseInt(m.minFrequency) || 0) > 0;
+                if (!hasLimit) return;                                    // no limit → leave sport as-is
+                if (props[sp] && props[sp].type !== 'sport') return;      // never clobber a special/field of the same name
+                const sportEntry = {
+                    type: 'sport',
+                    available: true,
+                    maxUsage: parseInt(m.maxUsage) || 0,
+                    maxUsagePeriod: m.maxUsagePeriod || null,
+                    maxUsagePerGrade: m.maxUsagePerGrade || null,
+                    frequencyDays: parseInt(m.frequencyDays) || 0,
+                    exactFrequency: parseInt(m.exactFrequency) || 0,
+                    exactFrequencyPeriod: m.exactFrequencyPeriod || null,
+                    exactFrequencyPerGrade: m.exactFrequencyPerGrade || null,
+                    minFrequency: parseInt(m.minFrequency) || 0,
+                    minFrequencyPeriod: m.minFrequencyPeriod || null
+                };
+                props[sp] = sportEntry;
+                const spLower = String(sp).toLowerCase().trim();
+                if (spLower !== sp) props[spLower] = sportEntry;
+            });
+        } catch (_eSportLimits) { /* additive: sport limits must never break the load */ }
+
         return props;
     }
 

@@ -538,6 +538,10 @@ function renderSportsRulesCard(container) {
         const m = meta[sport] || {};
         const row = document.createElement('div');
         row.className = 'sr-row';
+        const _periodLabel = p => ({ half: 'per half', week: 'per week', '2weeks': 'per 2 weeks', '3weeks': 'per 3 weeks', '4weeks': 'per 4 weeks' }[p] || p);
+        const _selPeriod = m.maxUsagePeriod || 'week';
+        const _periodOpts = ['half', 'week', '2weeks', '3weeks', '4weeks']
+            .map(p => `<option value="${p}"${p === _selPeriod ? ' selected' : ''}>${_periodLabel(p)}</option>`).join('');
         row.innerHTML = `
             <span class="sr-name">${escapeHtml(sport)}</span>
             <div class="sr-inputs">
@@ -545,6 +549,13 @@ function renderSportsRulesCard(container) {
                 <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="min" value="${m.minPlayers || ''}" placeholder="—" min="1">
                 <span class="sr-label">Max</span>
                 <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="max" value="${m.maxPlayers || ''}" placeholder="∞" min="1">
+            </div>
+            <div class="sr-inputs sr-limits">
+                <span class="sr-label">Max times</span>
+                <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="maxusage" value="${m.maxUsage || ''}" placeholder="∞" min="1" title="Most times a bunk can get this sport per period (blank = no limit)">
+                <select class="rules-input sr-in sr-period" data-sport="${escapeHtml(sport)}" data-type="maxusageperiod" title="Period the max applies over">${_periodOpts}</select>
+                <span class="sr-label">Min days between</span>
+                <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="freqdays" value="${m.frequencyDays || ''}" placeholder="0" min="0" title="Minimum days before a bunk can get this sport again (0 = no cooldown)">
             </div>`;
         grid.appendChild(row);
     });
@@ -554,10 +565,13 @@ function renderSportsRulesCard(container) {
         container.querySelectorAll('.sr-in').forEach(inp => {
             const sp = inp.dataset.sport;
             const type = inp.dataset.type;
-            const v = parseInt(inp.value) || null;
             if (!updated[sp]) updated[sp] = {};
-            if (type === 'min') updated[sp].minPlayers = v;
-            else if (type === 'max') updated[sp].maxPlayers = v;
+            if (type === 'min') updated[sp].minPlayers = parseInt(inp.value) || null;
+            else if (type === 'max') updated[sp].maxPlayers = parseInt(inp.value) || null;
+            // ★ Per-sport frequency limits (same fields specials use → same enforcement)
+            else if (type === 'maxusage') updated[sp].maxUsage = parseInt(inp.value) || 0;
+            else if (type === 'maxusageperiod') updated[sp].maxUsagePeriod = inp.value || 'week';
+            else if (type === 'freqdays') updated[sp].frequencyDays = parseInt(inp.value) || 0;
         });
         return updated;
     }
