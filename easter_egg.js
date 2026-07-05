@@ -84,6 +84,9 @@ function celebrate() {
     if (running) return;
     running = true;
 
+    // Finding the egg earns the camp its secret badge (badges.js)
+    try { window.CampBadges && window.CampBadges.award("egg_hunter"); } catch (_) {}
+
     const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const style = buildStyle();

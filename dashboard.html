@@ -265,6 +265,18 @@
             </div>
         </section>
 
+        <!-- ===== CAMP BADGES (populated by badges.js) ===== -->
+        <section id="camp-badges-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+                Badges
+                <span id="campBadgesCount" style="margin-left:auto; font-size:0.78rem; font-weight:600; color:var(--slate-400);"></span>
+            </h2>
+            <div class="dashboard-card">
+                <div id="campBadgesGrid"></div>
+            </div>
+        </section>
+
         <!-- ===== RBAC TEAM & ACCESS (Owners only) ===== -->
         <section id="team-access-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">
@@ -320,6 +332,7 @@ if (window.location.protocol === 'file:') {
     <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
     <script src="dashboard.js"></script>
+    <script src="badges.js"></script>
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
     <script src="camp_clone.js"></script>
