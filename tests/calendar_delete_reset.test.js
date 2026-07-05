@@ -147,7 +147,12 @@ global.scheduleAssignments = {};
 global.leagueAssignments = {};
 global.updateTable = function() {};
 global.initScheduleSystem = function() {};
-global.setTimeout = global.setTimeout; // already exists in Node
+// Unref timers started by calendar.js at load (5-min autosave interval,
+// deferred wire() retries) so the test process can exit when tests finish.
+const _realSetInterval = global.setInterval;
+const _realSetTimeout = global.setTimeout;
+global.setInterval = function() { const t = _realSetInterval.apply(global, arguments); if (t && t.unref) t.unref(); return t; };
+global.setTimeout = function() { const t = _realSetTimeout.apply(global, arguments); if (t && t.unref) t.unref(); return t; };
 
 global.divisions = {
     'Junior Boys': { bunks: ['Bunk 1', 'Bunk 2'] },
