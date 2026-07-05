@@ -1,5 +1,5 @@
 // ============================================================================
-// badges.js — CAMP ACHIEVEMENTS v2.0
+// badges.js — CAMP ACHIEVEMENTS v3.0
 // ============================================================================
 // Per-camp achievements, displayed on the dashboard and awarded live.
 //
@@ -9,9 +9,13 @@
 //   Enrollment  — campers enrolled (camperRoster count, else bunkMetaData sizes)
 //   Secret      — the easter egg (awarded by easter_egg.js via CampBadges.award)
 //
-// Presentation (v2): tiered metal medallions (bronze/silver/gold/platinum)
-// instead of emoji, refined award toast with a shine sweep instead of
-// confetti. Badge IDs are unchanged from v1 — earned cloud data carries over.
+// Presentation (v3): metallic medallions — conic-gradient metal ring
+// (bronze/silver/gold/platinum, violet for the secret) around a dark coin
+// face with a periodic shine sweep and tier glow. Earned medals also render
+// in the dashboard HERO next to the camp name (#dashHeroBadges, flex-wrap so
+// it shares the row with long camp names) with a count chip that scrolls to
+// the full collection at the bottom of the page. Badge IDs are unchanged —
+// earned cloud data carries over.
 //
 // Storage: camp_state_kv key 'campBadges' → { earned: { badgeId: isoDate } }
 // (direct Supabase upsert with read-merge-union so badges are never lost to a
@@ -19,7 +23,7 @@
 // accumulate — merge = union with earliest timestamp.
 //
 // Runs on BOTH pages:
-//   dashboard.html — renders the collection into #campBadgesGrid + evaluates
+//   dashboard.html — hero strip + collection in #campBadgesGrid + evaluates
 //   flow.html      — listens for 'campistry-schedule-generated' + evaluates
 //
 // Award moment: sliding toast (queued; >3 at once collapses into a summary
@@ -261,7 +265,25 @@ async function evaluate(statsOverride) {
 }
 
 // =========================================================================
-// AWARD TOAST (queued, sequential; refined — no confetti)
+// MEDALLION BUILDER (shared by hero strip, collection grid, toast)
+// =========================================================================
+function buildMedal(def, opts) {
+    const locked = !!(opts && opts.locked);
+    const hidden = !!(opts && opts.hidden);
+    const medal = document.createElement("div");
+    medal.className = "cbadge-medal " + (locked ? "cbadge-tier-locked" : `cbadge-tier-${def.tier}`);
+    const face = document.createElement("span");
+    face.className = "cbadge-medal-face";
+    const text = document.createElement("span");
+    text.className = "cbadge-medal-text";
+    text.textContent = hidden ? "?" : def.medal;
+    face.appendChild(text);
+    medal.appendChild(face);
+    return medal;
+}
+
+// =========================================================================
+// AWARD TOAST (queued, sequential)
 // =========================================================================
 const _toastQueue = [];
 let _toastActive = false;
@@ -290,17 +312,17 @@ function pumpToasts() {
     const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const toast = document.createElement("div");
     toast.className = "cbadge-toast" + (reducedMotion ? " cbadge-noanim" : "");
-    toast.innerHTML = [
-        `<div class="cbadge-medal cbadge-tier-${def.tier}"><span class="cbadge-medal-text"></span></div>`,
-        '<div class="cbadge-toast-text">',
-        '  <div class="cbadge-toast-kicker">Achievement unlocked</div>',
-        '  <div class="cbadge-toast-name"></div>',
-        '  <div class="cbadge-toast-desc"></div>',
-        '</div>',
+    toast.appendChild(buildMedal(def));
+    const textWrap = document.createElement("div");
+    textWrap.className = "cbadge-toast-text";
+    textWrap.innerHTML = [
+        '<div class="cbadge-toast-kicker">Achievement unlocked</div>',
+        '<div class="cbadge-toast-name"></div>',
+        '<div class="cbadge-toast-desc"></div>',
     ].join("");
-    toast.querySelector(".cbadge-medal-text").textContent = def.medal;
-    toast.querySelector(".cbadge-toast-name").textContent = def.name;
-    toast.querySelector(".cbadge-toast-desc").textContent = def.desc || "";
+    textWrap.querySelector(".cbadge-toast-name").textContent = def.name;
+    textWrap.querySelector(".cbadge-toast-desc").textContent = def.desc || "";
+    toast.appendChild(textWrap);
     document.body.appendChild(toast);
 
     setTimeout(() => {
@@ -314,11 +336,39 @@ function pumpToasts() {
 }
 
 // =========================================================================
-// DASHBOARD COLLECTION RENDER
+// RENDER — HERO STRIP (earned medals by the camp name) + COLLECTION GRID
 // =========================================================================
 function renderIfPresent() {
+    if (!_state) return;
     const grid = document.getElementById("campBadgesGrid");
-    if (grid && _state) renderCollection(grid);
+    if (grid) renderCollection(grid);
+    const strip = document.getElementById("dashHeroBadges");
+    if (strip) renderHeroStrip(strip);
+}
+
+function renderHeroStrip(strip) {
+    injectStyles();
+    const earned = (_state && _state.earned) || {};
+    const earnedDefs = BADGE_DEFS.filter(d => earned[d.id]);
+
+    strip.innerHTML = "";
+    earnedDefs.forEach(def => {
+        const medal = buildMedal(def);
+        medal.setAttribute("title", def.name + " — " + (def.desc || ""));
+        strip.appendChild(medal);
+    });
+
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "cbadge-hero-chip";
+    chip.textContent = `${earnedDefs.length} of ${BADGE_DEFS.length}`;
+    chip.setAttribute("title", "View all achievements");
+    chip.addEventListener("click", () => {
+        const section = document.getElementById("camp-badges-section");
+        if (section && section.scrollIntoView) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    strip.appendChild(chip);
+    strip.style.display = "";
 }
 
 function renderCollection(grid) {
@@ -346,13 +396,6 @@ function renderCollection(grid) {
             const card = document.createElement("div");
             card.className = "cbadge-card" + (got ? " cbadge-earned" : " cbadge-locked");
 
-            const medal = document.createElement("div");
-            medal.className = "cbadge-medal " + (got ? `cbadge-tier-${def.tier}` : "cbadge-tier-locked");
-            const medalText = document.createElement("span");
-            medalText.className = "cbadge-medal-text";
-            medalText.textContent = hidden ? "?" : def.medal;
-            medal.appendChild(medalText);
-
             const name = document.createElement("div");
             name.className = "cbadge-name";
             name.textContent = hidden ? "Hidden" : def.name;
@@ -365,7 +408,7 @@ function renderCollection(grid) {
             }
             card.setAttribute("title", tip);
 
-            card.appendChild(medal);
+            card.appendChild(buildMedal(def, { locked: !got, hidden }));
             card.appendChild(name);
             row.appendChild(card);
         });
@@ -377,7 +420,7 @@ function renderCollection(grid) {
 }
 
 // =========================================================================
-// STYLES (injected once; toast used on both pages + dashboard grid)
+// STYLES (injected once; shared by hero strip, grid, toast on both pages)
 // =========================================================================
 let _styled = false;
 function injectStyles() {
@@ -387,24 +430,59 @@ function injectStyles() {
     style.textContent = `
 .cbadge-medal {
     position: relative; overflow: hidden;
-    width: 44px; height: 44px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    border: 2.5px solid; flex: 0 0 auto;
+    width: 48px; height: 48px; border-radius: 50%;
+    padding: 3px; flex: 0 0 auto;
+    display: flex;
 }
-.cbadge-medal-text { font-size: .78rem; font-weight: 800; letter-spacing: .02em; }
-.cbadge-tier-bronze   { border-color: #b3763e; background: #faf3ec; color: #8a5a2e; }
-.cbadge-tier-silver   { border-color: #94a3b3; background: #f4f6f8; color: #5c6b7a; }
-.cbadge-tier-gold     { border-color: #d4af37; background: #fdf8e7; color: #a8842a; }
-.cbadge-tier-platinum { border-color: #8fa6bd; background: #eef4fa; color: #51677d; box-shadow: 0 0 0 3px #eef4fa, 0 0 0 4.5px #c3d3e2; }
-.cbadge-tier-accent   { border-color: #7c5cd4; background: #f5f3ff; color: #5b3fb8; }
-.cbadge-tier-locked   { border-color: #d5dbe3; border-style: dashed; background: #f8fafc; color: #b0b9c4; }
+.cbadge-medal-face {
+    flex: 1; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 32% 28%, #2a3560 0%, #161d3d 58%, #0e1330 100%);
+}
+.cbadge-medal-text { font-size: .76rem; font-weight: 800; letter-spacing: .02em; }
+.cbadge-tier-bronze   { background: conic-gradient(from 210deg, #8a5a2e, #e0a06a, #6f4522, #f0c395, #8a5a2e); box-shadow: 0 2px 12px rgba(200,130,70,.45); }
+.cbadge-tier-bronze   .cbadge-medal-text { color: #eab585; }
+.cbadge-tier-silver   { background: conic-gradient(from 210deg, #6e7d8c, #e8eff5, #5d6c7b, #ffffff, #6e7d8c); box-shadow: 0 2px 12px rgba(150,170,190,.5); }
+.cbadge-tier-silver   .cbadge-medal-text { color: #dde6ee; }
+.cbadge-tier-gold     { background: conic-gradient(from 210deg, #8f6b1d, #f9e076, #7a5a14, #fff3ae, #8f6b1d); box-shadow: 0 2px 14px rgba(220,180,60,.55); }
+.cbadge-tier-gold     .cbadge-medal-text { color: #f7dd7a; }
+.cbadge-tier-platinum { background: conic-gradient(from 210deg, #47596e, #d9e9f8, #3c4c5f, #f2faff, #47596e); box-shadow: 0 2px 16px rgba(150,195,235,.6), 0 0 0 1.5px rgba(210,230,250,.45); }
+.cbadge-tier-platinum .cbadge-medal-text { color: #d9e9f8; }
+.cbadge-tier-accent   { background: conic-gradient(from 210deg, #4c2fa8, #b49bfc, #3d2494, #d4c6ff, #4c2fa8); box-shadow: 0 2px 14px rgba(140,100,250,.55); }
+.cbadge-tier-accent   .cbadge-medal-text { color: #c3b0fd; }
 .cbadge-medal::after {
     content: ""; position: absolute; top: -60%; left: -80%;
     width: 55%; height: 220%; transform: rotate(25deg);
-    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.55) 50%, rgba(255,255,255,0) 100%);
-    animation: cbadgeShine 3.2s ease-in-out infinite;
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.5) 50%, rgba(255,255,255,0) 100%);
+    animation: cbadgeShine 3.6s ease-in-out infinite;
 }
+.cbadge-tier-locked { background: repeating-conic-gradient(#dfe5ec 0deg 14deg, #f2f5f8 14deg 28deg); box-shadow: none; }
+.cbadge-tier-locked .cbadge-medal-face { background: #f8fafc; }
+.cbadge-tier-locked .cbadge-medal-text { color: #b0b9c4; }
 .cbadge-tier-locked::after { display: none; }
+@keyframes cbadgeShine {
+    0%, 76% { left: -80%; }
+    100% { left: 140%; }
+}
+
+/* Hero strip — sits between the camp name and the clock/weather widgets.
+   flex-wrap + min-width:0 lets long camp names compress and wrap it. */
+.dash-hero-badges {
+    position: relative; z-index: 1;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 10px; flex: 1 1 auto; min-width: 0; margin: 0 22px;
+}
+.dash-hero-badges .cbadge-medal { width: 40px; height: 40px; padding: 2.5px; }
+.dash-hero-badges .cbadge-medal-text { font-size: .64rem; }
+.cbadge-hero-chip {
+    padding: 7px 12px; border-radius: 999px;
+    background: rgba(255,255,255,.14); color: #eef6f6;
+    border: 1px solid rgba(255,255,255,.28);
+    font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+    cursor: pointer; transition: background .15s ease;
+}
+.cbadge-hero-chip:hover { background: rgba(255,255,255,.24); }
+@media (max-width: 760px) { .dash-hero-badges { display: none !important; } }
 
 .cbadge-toast {
     position: fixed; top: 18px; right: 18px; z-index: 100000;
@@ -426,10 +504,6 @@ function injectStyles() {
 @keyframes cbadgeIn {
     0% { opacity: 0; transform: translateX(48px); }
     100% { opacity: 1; transform: translateX(0); }
-}
-@keyframes cbadgeShine {
-    0%, 72% { left: -80%; }
-    100% { left: 130%; }
 }
 
 .cbadge-cat {
@@ -461,7 +535,7 @@ async function boot() {
 
     if (onDashboard) {
         if (!(await ensureInit())) return;
-        renderIfPresent();                       // show collection immediately
+        renderIfPresent();                       // show hero strip + collection immediately
         await evaluate();                        // then check for new awards
         renderIfPresent();
     } else {

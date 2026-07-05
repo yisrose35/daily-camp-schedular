@@ -49,6 +49,8 @@
                 <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Your Camp</span>!</h1>
                 <p class="welcome-sub" id="welcomeSubtitle">Here's what's happening at camp today.</p>
             </div>
+            <!-- Earned achievement medals (populated by badges.js) -->
+            <div class="dash-hero-badges" id="dashHeroBadges" style="display:none;"></div>
             <div class="dash-hero-right">
                 <div class="dash-clock-widget">
                     <div class="dash-clock-time" id="dashClockTime">--:--</div>
@@ -135,18 +137,6 @@
                     <span class="dash-stat-value" id="statStaff">—</span>
                     <span class="dash-stat-label">Team</span>
                 </div>
-            </div>
-        </section>
-
-        <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
-        <section id="camp-badges-section" class="dashboard-section" style="display: none;">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
-                Achievements
-                <span id="campBadgesCount" style="margin-left:auto; font-size:0.78rem; font-weight:600; color:var(--slate-400);"></span>
-            </h2>
-            <div class="dashboard-card">
-                <div id="campBadgesGrid"></div>
             </div>
         </section>
 
@@ -274,6 +264,18 @@
                         <span id="campDatesStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
                     </div>
                 </div>
+            </div>
+        </section>
+
+        <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
+        <section id="camp-badges-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+                Achievements
+                <span id="campBadgesCount" style="margin-left:auto; font-size:0.78rem; font-weight:600; color:var(--slate-400);"></span>
+            </h2>
+            <div class="dashboard-card">
+                <div id="campBadgesGrid"></div>
             </div>
         </section>
 
