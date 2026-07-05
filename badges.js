@@ -39,6 +39,7 @@
 
 const KV_KEY = "campBadges";
 const LOCAL_MIRROR_PREFIX = "campistry_badges_v1:";
+const SEEN_PREFIX = "campistry_badges_seen_v1:";
 const TOAST_MS = 3400;
 
 // =========================================================================
@@ -260,6 +261,37 @@ async function ensureInit() {
 
 function isEarned(id) { return !!(_state && _state.earned && _state.earned[id]); }
 
+// ---- per-DEVICE "seen" tracking (localStorage, separate from camp-level
+// earned state): badges awarded while this device wasn't looking replay
+// their award moment here exactly once, then are marked seen. This is what
+// lets each camp user experience badges as NEW on their own machine even
+// when another device triggered the actual award. ----
+const _unseenThisView = new Set();   // drives the NEW markers this page view
+
+function readSeen(campId) {
+    try { return JSON.parse(localStorage.getItem(SEEN_PREFIX + campId) || "null") || {}; }
+    catch (_) { return {}; }
+}
+
+function markSeen(ids) {
+    if (!_campId || !ids.length) return;
+    const seen = readSeen(_campId);
+    ids.forEach(id => { seen[id] = true; _unseenThisView.add(id); });
+    try { localStorage.setItem(SEEN_PREFIX + _campId, JSON.stringify(seen)); } catch (_) {}
+}
+
+// Replay the award moment for anything earned but never seen on this device.
+function celebrateUnseen() {
+    if (window.__campBadges === false) return;
+    if (!_state || !_campId) return;
+    const seen = readSeen(_campId);
+    const unseen = BADGE_DEFS.filter(d => _state.earned[d.id] && !seen[d.id]);
+    if (!unseen.length) return;
+    markSeen(unseen.map(d => d.id));
+    queueToast(unseen);
+    renderIfPresent();   // show the NEW markers
+}
+
 // Award one badge by id (used by evaluate + external callers like the egg).
 async function award(id, opts) {
     if (window.__campBadges === false) return false;
@@ -270,6 +302,7 @@ async function award(id, opts) {
     _state.earned[id] = new Date().toISOString();
     _state = await persistState(_campId, _state);
     if (!(opts && opts.silent)) queueToast([def]);
+    markSeen([id]);   // this device watched the award happen
     renderIfPresent();
     return true;
 }
@@ -285,6 +318,7 @@ async function evaluate(statsOverride) {
     newly.forEach(d => { _state.earned[d.id] = now; });
     _state = await persistState(_campId, _state);
     queueToast(newly);
+    markSeen(newly.map(d => d.id));   // this device watched the awards happen
     renderIfPresent();
     return newly.map(d => d.id);
 }
@@ -487,6 +521,12 @@ function renderCollection(grid) {
 
             card.appendChild(buildMedal(def, { locked: !got, hidden }));
             card.appendChild(name);
+            if (got && _unseenThisView.has(def.id)) {
+                const pip = document.createElement("span");
+                pip.className = "cbadge-new";
+                pip.textContent = "NEW";
+                card.appendChild(pip);
+            }
             row.appendChild(card);
         });
         grid.appendChild(row);
@@ -622,10 +662,17 @@ function injectStyles() {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px;
 }
 .cbadge-card {
+    position: relative;
     display: flex; flex-direction: column; align-items: center; gap: 7px;
     padding: 12px 6px 10px; border-radius: 12px;
     border: 1px solid var(--slate-200, #e2e8f0); background: #fff;
     cursor: default;
+}
+.cbadge-new {
+    position: absolute; top: 6px; right: 6px;
+    padding: 2px 7px; border-radius: 999px;
+    background: linear-gradient(135deg, #ffd700, #ff9f1a);
+    color: #22160a; font-size: .56rem; font-weight: 800; letter-spacing: .08em;
 }
 .cbadge-card.cbadge-locked .cbadge-name { color: var(--slate-400, #94a3b8); }
 .cbadge-name { font-size: .74rem; font-weight: 600; color: var(--slate-700, #334155); text-align: center; line-height: 1.25; }
@@ -652,14 +699,15 @@ async function boot() {
             });
         }
         await evaluate();                        // then check for new awards
+        celebrateUnseen();                       // replay awards this device missed
         renderIfPresent();
     } else {
         // Flow (or any page firing generation events): evaluate after each
         // successful generation + once shortly after boot (retroactive catch-up).
         document.addEventListener("campistry-schedule-generated", () => {
-            setTimeout(() => { evaluate().catch(() => {}); }, 2000);
+            setTimeout(() => { evaluate().then(celebrateUnseen).catch(() => {}); }, 2000);
         });
-        setTimeout(() => { evaluate().catch(() => {}); }, 8000);
+        setTimeout(() => { evaluate().then(celebrateUnseen).catch(() => {}); }, 8000);
     }
 }
 
