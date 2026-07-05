@@ -698,8 +698,8 @@ function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').f
 
 function _activeCanteenChild(){
     var activeTab=document.querySelector('#canteenTabs .lk-tab.active');
-    var first=activeTab?activeTab.textContent.trim():'';
-    return children.find(function(c){return c.name.split(' ')[0]===first;})||children[0]||null;
+    var id=activeTab?activeTab.dataset.childId:'';
+    return children.find(function(c){return c.id===id;})||children[0]||null;
 }
 
 // Mutate the shared Campistry Snacks store (read by POS + Snacks admin)
@@ -778,7 +778,7 @@ function init(){
 
     // Canteen tabs
     var ct=document.getElementById('canteenTabs');if(ct){ct.innerHTML='';
-    if(children.length){children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});switchCanteen(children[0].id);}
+    if(children.length){children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+c.id+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});switchCanteen(children[0].id);}
     else{var ca=document.getElementById('canteenAmt');if(ca)ca.textContent='$0.00';var tl=document.getElementById('txList');if(tl)tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No canteen accounts yet</h3></div>';}}
 
     // Schedule date label
@@ -1281,8 +1281,8 @@ function submitPickup(type) {
 
     // Get active child from tab
     var activeTab = document.querySelector('#'+tabsIds[type]+' .lk-tab.active');
-    var firstName = activeTab ? activeTab.textContent.trim() : '';
-    var child = children.find(function(c){return c.name.split(' ')[0]===firstName}) || children[0] || {};
+    var childId = activeTab ? activeTab.dataset.childId : '';
+    var child = children.find(function(c){return c.id===childId}) || children[0] || {};
 
     // Read form fields
     var form = document.getElementById('pickup-'+type);
@@ -1376,7 +1376,7 @@ function initPickupTabs() {
         var el = document.getElementById(id); if(!el) return;
         el.innerHTML = '';
         children.forEach(function(c,i){
-            el.innerHTML += '<button class="lk-tab '+(i===0?'active':'')+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.name.split(' ')[0]+'</button>';
+            el.innerHTML += '<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+c.id+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.name.split(' ')[0]+'</button>';
         });
     });
 }
@@ -1406,9 +1406,8 @@ window.addEventListener('storage', function(e) {
     // Snacks POS ran a transaction — refresh canteen balance
     if (e.key === 'campGlobalSettings_v1' && children.length) {
         _loadSnacksData(children);
-        var activeTab = document.querySelector('#canteenTabs .lk-tab.active');
-        var activeId = activeTab ? children.find(function(c){ return c.name.split(' ')[0] === activeTab.textContent.trim(); }) : children[0];
-        if (activeId) switchCanteen(activeId.id);
+        var activeChild = _activeCanteenChild();
+        if (activeChild) switchCanteen(activeChild.id);
         // Refresh home canteen total
         var bal = children.reduce(function(s,c){ return s + (c.canteenBalance || 0); }, 0);
         var cs = document.getElementById('homeCanteenSub');
