@@ -922,6 +922,9 @@ function renderSportsConfig(container, fac) {
     container.appendChild(section("Durations", summaryFieldDurations(fieldData),
         () => renderFieldDurations(fieldData)));
 
+    container.appendChild(section("Usage Limits", summaryFieldLimits(fieldData),
+        () => renderFieldLimits(fieldData)));
+
     container.appendChild(section("Access & Restrictions", summaryAccess(fieldData),
         () => renderAccess(fieldData)));
 
@@ -2057,6 +2060,124 @@ function renderFieldDurations(f) {
         unit.style.cssText = "font-size:0.8rem; color:#9CA3AF; width:30px;";
         unit.textContent = "min";
         row.appendChild(unit);
+
+        box.appendChild(row);
+    });
+
+    return box;
+}
+
+// -- Per-sport usage/frequency limits (mirror specials) --
+// Like durations, a usage cap is a property of the SPORT (Soccer is capped
+// wherever it's played), stored globally in sportMetaData[name].{maxUsage,
+// maxUsagePeriod,frequencyDays}. buildActivityProperties reads these and the
+// SAME calculateLimitScore gate that enforces special limits enforces them.
+const SPORT_LIMIT_PERIODS = [
+    { v: 'half', l: 'per half' }, { v: 'week', l: 'per week' },
+    { v: '2weeks', l: 'per 2 weeks' }, { v: '3weeks', l: 'per 3 weeks' }, { v: '4weeks', l: 'per 4 weeks' }
+];
+function getSportLimit(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    return {
+        maxUsage: parseInt(m.maxUsage, 10) || 0,
+        maxUsagePeriod: m.maxUsagePeriod || 'week',
+        frequencyDays: parseInt(m.frequencyDays, 10) || 0
+    };
+}
+function setSportLimitGlobal(sport, patch) {
+    if (!sportMetaData[sport]) sportMetaData[sport] = {};
+    Object.assign(sportMetaData[sport], patch);
+    // Persist straight into app1.sportMetaData (the canonical store the engine
+    // reads) so saveFieldData's stored-meta merge can't clobber it, then flush —
+    // exact same pattern as setSportDurationGlobal.
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    if (!app1.sportMetaData) app1.sportMetaData = {};
+    if (!app1.sportMetaData[sport]) app1.sportMetaData[sport] = {};
+    Object.assign(app1.sportMetaData[sport], patch);
+    window.saveGlobalSettings?.("app1", app1);
+    window.forceSyncToCloud?.();
+}
+function summaryFieldLimits(f) {
+    const sports = (f.activities || []).filter(Boolean);
+    if (!sports.length) return "No sports selected";
+    const set = sports.map(s => ({ s, ...getSportLimit(s) })).filter(x => x.maxUsage > 0 || x.frequencyDays > 0);
+    if (!set.length) return "No limits (normal rotation)";
+    const parts = set.slice(0, 2).map(x => x.maxUsage > 0
+        ? `${x.s} max ${x.maxUsage} ${x.maxUsagePeriod}`
+        : `${x.s} ${x.frequencyDays}d gap`);
+    const extra = set.length - parts.length;
+    return parts.join(', ') + (extra > 0 ? ` +${extra}` : '');
+}
+function renderFieldLimits(f) {
+    const box = document.createElement("div");
+    const sports = (f.activities || []).filter(Boolean);
+
+    const desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
+    desc.textContent = "Cap how often a bunk can get a sport — exactly like a special activity. “Max” limits how many times per period; “Min days between” is a cooldown before a bunk can repeat it. Leave blank for no limit (normal rotation). Applies to the sport everywhere it's played.";
+    box.appendChild(desc);
+
+    if (!sports.length) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "font-size:0.85rem; color:#9CA3AF; font-style:italic;";
+        empty.textContent = "No sports selected yet — add sports in the Activities section first.";
+        box.appendChild(empty);
+        return box;
+    }
+
+    const updateSummary = () => {
+        const el = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryFieldLimits(f);
+    };
+
+    const inStyle = "width:60px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+    const lblStyle = "font-size:0.8rem; color:#6B7280;";
+
+    sports.forEach(sport => {
+        const cur = getSportLimit(sport);
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;";
+
+        const nameEl = document.createElement("span");
+        nameEl.style.cssText = "flex:1 1 100%; font-size:0.9rem; color:#374151; font-weight:600; margin-bottom:2px;";
+        nameEl.textContent = sport;
+        row.appendChild(nameEl);
+
+        const maxLbl = document.createElement("span"); maxLbl.style.cssText = lblStyle; maxLbl.textContent = "Max"; row.appendChild(maxLbl);
+        const maxIn = document.createElement("input");
+        maxIn.type = "number"; maxIn.min = "1"; maxIn.placeholder = "∞";
+        maxIn.value = cur.maxUsage > 0 ? cur.maxUsage : "";
+        maxIn.style.cssText = inStyle;
+        maxIn.title = "Most times a bunk can get " + sport + " per period. Blank = no limit.";
+        row.appendChild(maxIn);
+
+        const perSel = document.createElement("select");
+        perSel.style.cssText = "padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
+        SPORT_LIMIT_PERIODS.forEach(p => {
+            const o = document.createElement("option"); o.value = p.v; o.textContent = p.l;
+            if (p.v === cur.maxUsagePeriod) o.selected = true;
+            perSel.appendChild(o);
+        });
+        row.appendChild(perSel);
+
+        const gapLbl = document.createElement("span"); gapLbl.style.cssText = lblStyle + " margin-left:8px;"; gapLbl.textContent = "Min days between"; row.appendChild(gapLbl);
+        const gapIn = document.createElement("input");
+        gapIn.type = "number"; gapIn.min = "0"; gapIn.placeholder = "0";
+        gapIn.value = cur.frequencyDays > 0 ? cur.frequencyDays : "";
+        gapIn.style.cssText = inStyle;
+        gapIn.title = "Minimum days before a bunk can get " + sport + " again. 0 / blank = no cooldown.";
+        row.appendChild(gapIn);
+
+        const commit = () => {
+            const mu = parseInt(maxIn.value, 10); const muVal = Number.isFinite(mu) && mu > 0 ? mu : 0;
+            const fd = parseInt(gapIn.value, 10); const fdVal = Number.isFinite(fd) && fd > 0 ? fd : 0;
+            setSportLimitGlobal(sport, { maxUsage: muVal, maxUsagePeriod: perSel.value, frequencyDays: fdVal });
+            maxIn.value = muVal > 0 ? muVal : "";
+            gapIn.value = fdVal > 0 ? fdVal : "";
+            updateSummary();
+        };
+        maxIn.onchange = commit; perSel.onchange = commit; gapIn.onchange = commit;
 
         box.appendChild(row);
     });
