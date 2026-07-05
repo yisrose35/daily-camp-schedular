@@ -122,6 +122,7 @@
         <div class="lk-nav-label">Camp Life</div>
         <button class="lk-nav-item" data-page="schedule" onclick="nav('schedule')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Schedule</button>
         <button class="lk-nav-item" data-page="forms" onclick="nav('forms')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Forms & Docs</button>
+        <button class="lk-nav-item" data-page="lists" onclick="nav('lists')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg> Lists</button>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Photos</button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Camp Day</div>
@@ -203,6 +204,15 @@
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Pickup & Arrival</div>
                 <div class="lk-home-tile-sub">Notify the office</div>
+            </div>
+        </button>
+        <button class="lk-home-tile" onclick="nav('lists')">
+            <div class="lk-home-tile-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+            </div>
+            <div class="lk-home-tile-body">
+                <div class="lk-home-tile-label">Lists</div>
+                <div class="lk-home-tile-sub" id="homeListsSub">Packing &amp; checklists</div>
             </div>
         </button>
         <button class="lk-home-tile" onclick="nav('children')">
@@ -372,6 +382,16 @@
     <div class="lk-card"><div class="lk-card-head"><h2>Camp Documents</h2></div>
         <div id="campDocsList"><div class="lk-empty" style="padding:20px 0;"><h3>No documents shared yet</h3><p>Camp documents will appear here when uploaded by the camp office.</p></div></div>
     </div>
+</div>
+
+<!-- LISTS -->
+<div class="lk-page" id="page-lists">
+    <div class="lk-page-hero">
+    <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div>
+    <div><h1>Lists</h1><p>Packing lists and checklists from camp — check items off as you go</p></div>
+</div>
+    <div class="lk-tabs" id="listChildTabs" style="margin-bottom:16px;"></div>
+    <div id="campListsWrap"><div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div><h3>No lists yet</h3><p>When camp shares a packing list or checklist, it will appear here.</p></div></div>
 </div>
 
 <!-- PHOTOS -->
@@ -551,17 +571,17 @@
         <div class="lk-field"><label>Email</label><input type="email" class="lk-input" id="settingsEmail" value="" placeholder="your@email.com"></div>
         <div class="lk-field"><label>Phone</label><input type="tel" class="lk-input" id="settingsPhone" value="" placeholder="(555) 000-0000"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
-            <button class="btn btn-primary btn-sm" onclick="toast('Saved!')">Save Changes</button>
+            <button class="btn btn-primary btn-sm" onclick="saveParentSettings()">Save Changes</button>
             <button class="btn btn-secondary btn-sm" onclick="parentSignOut && parentSignOut()">Sign Out</button>
         </div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Notifications</h2></div>
         <div style="display:flex;flex-direction:column;gap:12px;">
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Messages</div><div style="font-size:.72rem;color:var(--text-muted);">New messages from camp</div></div><input type="checkbox" checked style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Payment Reminders</div><div style="font-size:.72rem;color:var(--text-muted);">Upcoming payment alerts</div></div><input type="checkbox" checked style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Canteen Activity</div><div style="font-size:.72rem;color:var(--text-muted);">Purchases and low balance</div></div><input type="checkbox" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Photos</div><div style="font-size:.72rem;color:var(--text-muted);">New photo uploads</div></div><input type="checkbox" checked style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Health Updates</div><div style="font-size:.72rem;color:var(--text-muted);">Nurse visit notes and health alerts</div></div><input type="checkbox" checked style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Messages</div><div style="font-size:.72rem;color:var(--text-muted);">New messages from camp</div></div><input type="checkbox" checked data-pref="notifyMessages" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Payment Reminders</div><div style="font-size:.72rem;color:var(--text-muted);">Upcoming payment alerts</div></div><input type="checkbox" checked data-pref="notifyPayments" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Canteen Activity</div><div style="font-size:.72rem;color:var(--text-muted);">Purchases and low balance</div></div><input type="checkbox" data-pref="notifyCanteen" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Photos</div><div style="font-size:.72rem;color:var(--text-muted);">New photo uploads</div></div><input type="checkbox" checked data-pref="notifyPhotos" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Health Updates</div><div style="font-size:.72rem;color:var(--text-muted);">Nurse visit notes and health alerts</div></div><input type="checkbox" checked data-pref="notifyHealth" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
         </div>
     </div>
 </div>
@@ -669,6 +689,7 @@ function nav(p){
     if(p==='messages'){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
     if(p==='children')document.getElementById('childDetail').style.display='none';
     if(p==='tips')renderTipsPage();
+    if(p==='lists')renderCampLists();
     window.scrollTo(0,0);
 }
 function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
@@ -841,45 +862,64 @@ function switchCanteen(id,btn){
 function downloadBlankForm(id){
     toast('Downloading blank form — print, fill by hand, then upload it back.');
 }
-function handleFormReturn(formId,camperName,formName,input){
+function handleFormReturn(rowId,camperName,formName,input,formId){
     if(!input.files||!input.files[0])return;
     var file=input.files[0];
-    var row=document.getElementById('pr-'+formId);
-    if(row){
-        var info=row.querySelector('.doc-info');
-        if(info){
-            var p=info.querySelector('p');
-            var now=new Date();
-            var ds=(now.getMonth()+1)+'/'+now.getDate();
-            if(p)p.innerHTML=camperName+' &nbsp;&middot;&nbsp; <span class="badge badge-info" style="font-size:.62rem;">Submitted '+ds+'</span>';
+    if(file.size>4*1024*1024){toast('File too large — keep it under 4 MB');input.value='';return;}
+    var reader=new FileReader();
+    reader.onload=function(){
+        var fileDataUrl=reader.result;
+        var row=document.getElementById('pr-'+rowId);
+        if(row){
+            var info=row.querySelector('.doc-info');
+            if(info){
+                var p=info.querySelector('p');
+                var now=new Date();
+                var ds=(now.getMonth()+1)+'/'+now.getDate();
+                if(p)p.innerHTML=camperName+' &nbsp;&middot;&nbsp; <span class="badge badge-info" style="font-size:.62rem;">Submitted '+ds+'</span>';
+            }
+            row.style.opacity='0.6';
+            var actions=row.querySelector('div[style*="display:flex"]');
+            if(actions){actions.innerHTML='<button class="btn btn-ghost btn-sm" onclick="toast(\'Choose the form row again to re-upload\')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-upload</button>';}
         }
-        row.style.opacity='0.6';
-        var actions=row.querySelector('div[style*="display:flex"]');
-        if(actions){actions.innerHTML='<button class="btn btn-ghost btn-sm" onclick="toast(\'Re-uploading...\')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-upload</button>';}
-    }
-    // Record submission so admin can see it in the Received tab
-    try {
+        var child=children.find(function(c){return c.name===camperName;})||{};
+        // Record submission locally (same-device admin view) …
         var now2 = new Date();
         var sub = {
             id: 'sub_' + Date.now(),
-            formId: formId,
+            formId: formId||rowId,
             formName: formName,
             docType: 'upload',
             camper: camperName,
-            grade: '', division: '', bunk: '',
+            grade: child.grade||'', division: child.division||'', bunk: child.bunk||'',
+            parentName: parent.name||'',
             date: now2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
             submittedAt: now2.toISOString(),
             values: { 'File': file.name },
             signatureDataUrl: null,
             mode: 'upload',
             filename: file.name,
+            fileDataUrl: fileDataUrl,
             folderId: null
         };
-        var subs = JSON.parse(localStorage.getItem('campistry_link_form_submissions_v1')||'[]');
-        subs.push(sub);
-        localStorage.setItem('campistry_link_form_submissions_v1', JSON.stringify(subs));
-    } catch(e){}
-    toast(camperName+' — '+formName+' submitted! Camp will review it shortly.');
+        try {
+            var subs = JSON.parse(localStorage.getItem('campistry_link_form_submissions_v1')||'[]');
+            subs.push(sub);
+            localStorage.setItem('campistry_link_form_submissions_v1', JSON.stringify(subs));
+        } catch(e){} // quota exceeded on big files — cloud copy below still goes through
+        // … and to the cloud so the camp office receives the actual file
+        if (window._submitFormResponseCloud) {
+            window._submitFormResponseCloud({
+                formId: formId||rowId, formName: formName, mode: 'upload',
+                camperName: camperName, camperId: child.id||'',
+                answers: { 'File': file.name },
+                fileName: file.name, fileData: fileDataUrl,
+                division: child.division||'', grade: child.grade||'', bunk: child.bunk||''
+            });
+        }
+        toast(camperName+' — '+formName+' submitted! Camp will review it shortly.');
+    };
+    reader.readAsDataURL(file);
     input.value='';
 }
 
@@ -965,10 +1005,29 @@ function openMsg(id){
     var nm2=document.getElementById('navMsgCount');if(nm2){nm2.textContent=unread;nm2.style.display=unread?'':'none';}
     document.getElementById('msgListView').style.display='none';document.getElementById('msgDetailView').style.display='block';
     var typeBadge=m.type==='announcement'?'<span class="badge badge-warn">Announcement</span>':'<span class="badge badge-info">Direct</span>';
-    var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent!\')">Send Reply</button></div></div>':'';
+    var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" id="msgReplyBody" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="sendMsgReply(\''+String(m.id).replace(/'/g,'')+'\',\''+String(m.subject||'').replace(/[\'"<>]/g,'')+'\')">Send Reply</button></div></div>':'';
     document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+replyHtml;
 }
 function closeMsgDetail(){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
+function sendMsgReply(threadId, subject){
+    var ta=document.getElementById('msgReplyBody');
+    var body=(ta?ta.value:'').trim();
+    if(!body){toast('Write a reply first.');return;}
+    var now=new Date();
+    var store=_readLinkStore();
+    if(!store.messages)store.messages=[];
+    store.messages.unshift({
+        id:'msg_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5),
+        direction:'in',from:parent.name||'Parent',to:'Camp Office',toType:'individual',
+        subject:'RE: '+(subject||''),body:body,channels:['app'],date:now.toISOString(),
+        read:false,replied:false,threadId:threadId||null,
+        metadata:{parentEmail:parent.email,isReply:true}
+    });
+    _writeLinkStore(store);
+    if(ta)ta.value='';
+    toast('Reply sent to camp!');
+    closeMsgDetail();
+}
 function toggleCompose(show){
     document.getElementById('msgComposeView').style.display=show?'block':'none';
     if(show){document.getElementById('composeSubject').value='';document.getElementById('composeBody').value='';}
@@ -1003,10 +1062,134 @@ function changeSchedDate(delta){
     var lbl=document.getElementById('schedDateLabel');if(lbl)lbl.textContent=schedDays[d.getDay()]+', '+schedMonths[d.getMonth()]+' '+d.getDate();
 }
 
+// SETTINGS — persisted locally per device
+var PARENT_PREFS_KEY = 'campistry_link_parent_prefs_v1';
+function _loadParentPrefs(){ try{ return JSON.parse(localStorage.getItem(PARENT_PREFS_KEY)||'{}'); }catch(e){ return {}; } }
+function saveParentSettings(silent){
+    var prefs=_loadParentPrefs();
+    prefs.phone=(document.getElementById('settingsPhone')||{}).value||'';
+    document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){ prefs[cb.dataset.pref]=cb.checked; });
+    try{ localStorage.setItem(PARENT_PREFS_KEY, JSON.stringify(prefs)); }catch(e){}
+    if(!silent) toast('Settings saved');
+}
+function applyParentPrefs(){
+    var prefs=_loadParentPrefs();
+    var ph=document.getElementById('settingsPhone'); if(ph&&prefs.phone)ph.value=prefs.phone;
+    document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){
+        if(typeof prefs[cb.dataset.pref]==='boolean') cb.checked=prefs[cb.dataset.pref];
+    });
+}
+
+// CAMP LISTS (packing lists / checklists shared by the camp)
+var LIST_CHECK_KEY = 'campistry_link_list_checks_v1';
+window._campLists = window._campLists || [];
+var _listActiveChild = null;
+
+function _listChecks(){ try{ return JSON.parse(localStorage.getItem(LIST_CHECK_KEY)||'{}'); }catch(e){ return {}; } }
+function _listCheckId(childName, listId, itemIdx){ return childName+'|'+listId+'|'+itemIdx; }
+
+function toggleListItem(childName, listId, itemIdx, checked){
+    var checks=_listChecks();
+    var k=_listCheckId(childName, listId, itemIdx);
+    if(checked) checks[k]=true; else delete checks[k];
+    try{ localStorage.setItem(LIST_CHECK_KEY, JSON.stringify(checks)); }catch(e){}
+    renderCampLists(); // refresh progress bars
+}
+
+function _listAppliesToChild(list, c){
+    if(!list.scope || list.scope==='all') return true;
+    if(list.scope==='division') return c.division===list.scopeValue;
+    if(list.scope==='grade')    return c.grade===list.scopeValue;
+    if(list.scope==='bunk')     return c.bunk===list.scopeValue;
+    return true;
+}
+
+function renderCampLists(){
+    var wrap=document.getElementById('campListsWrap'); if(!wrap) return;
+    var tabs=document.getElementById('listChildTabs');
+    var lists=window._campLists||[];
+
+    // Child tabs (lists are checked off per child)
+    if(tabs){
+        tabs.innerHTML='';
+        if(children.length>1){
+            if(!_listActiveChild || !children.some(function(c){return c.name===_listActiveChild;})) _listActiveChild=children[0].name;
+            children.forEach(function(c){
+                tabs.innerHTML+='<button class="lk-tab '+(c.name===_listActiveChild?'active':'')+'" onclick="_listActiveChild=\''+c.name.replace(/'/g,"\\'")+'\';renderCampLists()">'+c.name.split(' ')[0]+'</button>';
+            });
+        } else {
+            _listActiveChild=children.length?children[0].name:null;
+        }
+    }
+
+    var c=children.find(function(k){return k.name===_listActiveChild;})||children[0];
+    var visible=c?lists.filter(function(l){return _listAppliesToChild(l,c);}):[];
+    if(!c||!visible.length){
+        wrap.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div><h3>No lists yet</h3><p>When camp shares a packing list or checklist, it will appear here.</p></div>';
+        _updateListsHomeTile();
+        return;
+    }
+    var checks=_listChecks();
+    var esc=function(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');};
+    var h='';
+    visible.forEach(function(list){
+        var items=list.items||[];
+        var done=items.filter(function(it,i){return checks[_listCheckId(c.name,list.id,i)];}).length;
+        var pct=items.length?Math.round(done/items.length*100):0;
+        h+='<div class="lk-card" style="margin-bottom:14px;">';
+        h+='<div class="lk-card-head"><h2>'+esc(list.name)+'</h2><span style="font-size:.74rem;font-weight:700;color:'+(pct===100?'var(--green-600)':'var(--text-muted)')+';">'+done+' / '+items.length+(pct===100?' ✓':'')+'</span></div>';
+        if(list.description)h+='<p style="font-size:.8rem;color:var(--text-muted);margin:-4px 0 10px;">'+esc(list.description)+'</p>';
+        h+='<div class="progress" style="height:6px;margin-bottom:12px;"><div class="progress-fill" style="width:'+pct+'%;'+(pct===100?'background:var(--green-500);':'')+'"></div></div>';
+        items.forEach(function(it,i){
+            var text=typeof it==='string'?it:(it.text||'');
+            var checked=!!checks[_listCheckId(c.name,list.id,i)];
+            h+='<label style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--slate-100);cursor:pointer;">';
+            h+='<input type="checkbox" '+(checked?'checked':'')+' onchange="toggleListItem(\''+c.name.replace(/'/g,"\\'")+'\',\''+esc(list.id)+'\','+i+',this.checked)" style="width:17px;height:17px;accent-color:var(--link-color);flex-shrink:0;">';
+            h+='<span style="font-size:.87rem;color:'+(checked?'var(--text-muted)':'var(--slate-800)')+';'+(checked?'text-decoration:line-through;':'')+'">'+esc(text)+'</span>';
+            h+='</label>';
+        });
+        h+='</div>';
+    });
+    wrap.innerHTML=h;
+    _updateListsHomeTile();
+}
+
+function _updateListsHomeTile(){
+    var sub=document.getElementById('homeListsSub'); if(!sub) return;
+    var lists=window._campLists||[];
+    if(!lists.length){ sub.textContent='Packing & checklists'; return; }
+    var checks=_listChecks();
+    var total=0, done=0;
+    children.forEach(function(c){
+        lists.forEach(function(l){
+            if(!_listAppliesToChild(l,c)) return;
+            (l.items||[]).forEach(function(it,i){ total++; if(checks[_listCheckId(c.name,l.id,i)]) done++; });
+        });
+    });
+    sub.textContent=total?(done>=total?'All checked off':done+' of '+total+' checked'):'Packing & checklists';
+}
+
 // PICKUP & ARRIVAL
 var PARENT_REQ_KEY = 'campistry_parent_requests_v1';
 var LINK_STORE_KEY = 'campistry_link_v1';
 var pickupRequests = [];
+var _PICKUP_ICONS = {early:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',change:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',friend:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',late:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'};
+
+// Rebuild today's request history from the shared store, so it survives reload
+function hydratePickupRequests(){
+    var store=[];
+    try{ store=JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]'); }catch(e){}
+    var startOfDay=new Date(); startOfDay.setHours(0,0,0,0);
+    pickupRequests=store.filter(function(r){
+        if(!r.submittedAt||r.submittedAt<startOfDay.getTime())return false;
+        return !parent.name||r.parentName===parent.name;
+    }).map(function(r){
+        var d=new Date(r.submittedAt);
+        return {id:r.id,type:r.type,label:r.label||r.type,icon:_PICKUP_ICONS[r.type]||_PICKUP_ICONS.late,
+            time:d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(),status:r.status||'Pending'};
+    });
+    renderPickupHistory();
+}
 
 // ── Shared message store helpers ──────────────────────────────────────────────
 function _readLinkStore(){try{return JSON.parse(localStorage.getItem(LINK_STORE_KEY)||'{}');}catch(e){return {};}}
@@ -1090,7 +1273,7 @@ function selPickup(type, btn) {
 }
 function submitPickup(type) {
     var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
-    var icons = {early:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',change:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',friend:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',late:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'};
+    var icons = _PICKUP_ICONS;
     var tabsIds = {early:'pickupChildTabs',change:'pickupChangeTabs',friend:'pickupFriendTabs',late:'pickupLateTabs'};
     var now = new Date();
     var reqId = now.getTime().toString(36)+Math.random().toString(36).slice(2,5);
@@ -1155,10 +1338,11 @@ function renderPickupHistory() {
     });
 }
 
-// PHOTO CONSENT
+// PHOTO CONSENT — only an explicit "yes" unlocks the Photos page;
+// declining stores 'no' and the modal is offered again on the next visit.
 var photoConsented = localStorage.getItem('lk_photo_consent');
 function checkPhotoConsent() {
-    if (!photoConsented) {
+    if (photoConsented !== 'yes') {
         document.getElementById('photoConsentOverlay').classList.add('open');
     }
 }
@@ -1182,7 +1366,7 @@ document.getElementById('consentCheck').addEventListener('change', function(){
 // Hook photo consent into nav
 var _origNav = nav;
 nav = function(p) {
-    if (p === 'photos' && !photoConsented) { checkPhotoConsent(); return; }
+    if (p === 'photos' && photoConsented !== 'yes') { checkPhotoConsent(); return; }
     _origNav(p);
 };
 
@@ -1199,12 +1383,14 @@ function initPickupTabs() {
 
 init();
 initPickupTabs();
+hydratePickupRequests();
+applyParentPrefs();
 
 // ── Cross-tab storage sync ─────────────────────────────────────────────────────
 window.addEventListener('storage', function(e) {
     // Live updated a pickup request status — refresh history panel
     if (e.key === PARENT_REQ_KEY) {
-        renderPickupHistory();
+        hydratePickupRequests();
     }
     // Admin sent a message / broadcast / notification — refresh inbox badge + list
     if (e.key === LINK_STORE_KEY) {
@@ -1256,6 +1442,48 @@ window.addEventListener('storage', function(e) {
     }
     var db = supabase.createClient(cfg.url, cfg.anonKey);
     var urlToken = new URLSearchParams(window.location.search).get('invite') || '';
+    window._parentDB = db; // shared with the fill-online module (script below)
+
+    // ── Cloud form-response bridge ────────────────────────────────────────────
+    // Sends a submission to link_form_responses via the submit_link_form_response
+    // RPC (migration 013). Fire-and-forget with console diagnostics — the
+    // localStorage copy is already written by the caller, so a network failure
+    // never loses the parent's work on this device.
+    var _cloudSubs = []; // [{form_id, camper_name, ...}] — my submissions from the cloud
+    window._submitFormResponseCloud = function(p, done) {
+        db.rpc('submit_link_form_response', {
+            p_form_id:     p.formId || '',
+            p_form_name:   p.formName || '',
+            p_mode:        p.mode || 'digital',
+            p_camper_name: p.camperName || '',
+            p_camper_id:   String(p.camperId || ''),
+            p_answers:     p.answers || {},
+            p_signature:   p.signature || null,
+            p_file_name:   p.fileName || null,
+            p_file_data:   p.fileData || null,
+            p_division:    p.division || null,
+            p_grade:       p.grade || null,
+            p_bunk:        p.bunk || null
+        }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Cloud form submit failed:', res.error ? res.error.message : (res.data||{}).error);
+            } else {
+                console.log('[Parent] Form response saved to cloud:', res.data.id);
+                _cloudSubs.push({ form_id: p.formId, camper_name: p.camperName, mode: p.mode });
+            }
+            if (done) done(res);
+        });
+    };
+
+    function _loadMyCloudSubmissions(cb) {
+        db.rpc('get_my_form_responses').then(function(res) {
+            if (!res.error && res.data && res.data.success) _cloudSubs = res.data.responses || [];
+            if (cb) cb();
+        });
+    }
+    window._isFormSubmittedCloud = function(formId, camperName) {
+        return _cloudSubs.some(function(s) { return s.form_id === formId && s.camper_name === camperName; });
+    };
 
     console.log('[Parent] Auth init. Token in URL:', urlToken ? urlToken.slice(0,8)+'…' : 'none');
 
@@ -1320,16 +1548,42 @@ window.addEventListener('storage', function(e) {
         }
         _loadMessages(); // pull messages/broadcasts/notifications from shared store
         init();
+        hydratePickupRequests();
         _hideOverlay('parentAuthOverlay');
-        // Load camp-configured forms after portal is visible
-        if (parent.campId) _loadLinkForms(parent.campId);
+        // Load camp-configured forms + lists after portal is visible
+        if (parent.campId) {
+            _loadLinkForms(parent.campId);
+            _loadLinkLists(parent.campId);
+        }
     }
 
+    var _lastLinkForms = null; // cache so post-submit re-renders don't lose the RPC data
     function _loadLinkForms(campId) {
-        db.rpc('get_link_camp_forms', {p_camp_id: campId}).then(function(res) {
-            if (res.error || !res.data || !res.data.success) return; // silent — empty state already shown
-            var lf = res.data.forms || {};
-            _renderLinkForms(lf.digital||[], lf.printReturn||[], lf.documents||[]);
+        // Load my cloud submissions first so "Submitted" badges are correct
+        // on any device, then the camp's forms.
+        _loadMyCloudSubmissions(function() {
+            db.rpc('get_link_camp_forms', {p_camp_id: campId}).then(function(res) {
+                if (res.error || !res.data || !res.data.success) return; // silent — empty state already shown
+                var lf = res.data.forms || {};
+                _lastLinkForms = lf;
+                _renderLinkForms(lf.digital||[], lf.printReturn||[], lf.documents||[]);
+            });
+        });
+    }
+    // Re-render from the cached RPC payload (used after a submit)
+    window._refreshLinkForms = function() {
+        if (!_lastLinkForms) { if (parent.campId) _loadLinkForms(parent.campId); return; }
+        _renderLinkForms(_lastLinkForms.digital||[], _lastLinkForms.printReturn||[], _lastLinkForms.documents||[]);
+    };
+
+    function _loadLinkLists(campId) {
+        db.rpc('get_link_camp_lists', {p_camp_id: campId}).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                if (res.error) console.warn('[Parent] get_link_camp_lists:', res.error.message);
+                return;
+            }
+            window._campLists = res.data.lists || [];
+            renderCampLists();
         });
     }
 
@@ -1343,8 +1597,13 @@ window.addEventListener('storage', function(e) {
         var checkSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
         var emptyEl = '<div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">No forms assigned yet.</div>';
 
-        // Get submissions for this parent to show submitted state
+        // Get submissions for this parent to show submitted state —
+        // local (this device) merged with cloud (any device)
         var mySubs = (typeof _foGetMySubmissions === 'function') ? _foGetMySubmissions() : [];
+        function isSubmitted(formId, camperName) {
+            return mySubs.some(function(s){ return s.formId === formId && s.camper === camperName; })
+                || _cloudSubs.some(function(s){ return s.form_id === formId && s.camper_name === camperName; });
+        }
 
         // Digital forms
         var fol = document.getElementById('formsOnlineList');
@@ -1353,7 +1612,7 @@ window.addEventListener('storage', function(e) {
                 var fh='';
                 digital.forEach(function(f, fi) {
                     children.forEach(function(c) {
-                        var submitted = mySubs.some(function(s){ return s.formId === f.id && s.camper === c.name; });
+                        var submitted = isSubmitted(f.id, c.name);
                         var reqBadge = f.required && !submitted ? '<span class="badge badge-warn" style="font-size:.62rem;">Required</span> ' : '';
                         fh+='<div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);">'+docSvgFill+'</div>';
                         fh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+' '+reqBadge+'</p></div>';
@@ -1367,7 +1626,7 @@ window.addEventListener('storage', function(e) {
                 });
                 fol.innerHTML=fh;
                 // Update badge count (only pending, not submitted)
-                var pending = digital.reduce(function(acc, f, fi){ return acc + children.filter(function(c){ return !mySubs.some(function(s){ return s.formId===f.id && s.camper===c.name; }); }).length; }, 0);
+                var pending = digital.reduce(function(acc, f, fi){ return acc + children.filter(function(c){ return !isSubmitted(f.id, c.name); }).length; }, 0);
                 var onlineBadge=document.getElementById('formsOnlineBadge');
                 if(onlineBadge){if(pending>0){onlineBadge.textContent=pending;onlineBadge.style.display='';}else{onlineBadge.style.display='none';}}
             }
@@ -1378,20 +1637,23 @@ window.addEventListener('storage', function(e) {
         if (prl) {
             if (printReturn.length) {
                 var prh='';
+                var printPending=0;
                 printReturn.forEach(function(f,fi) {
                     children.forEach(function(c) {
                         var cid=c.id+'_pr'+fi;
-                        prh+='<div class="doc-item" id="pr-'+_escHtml(cid)+'"><div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);">'+docSvgFill+'</div>';
-                        prh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+(f.required?' <span class=\'badge badge-warn\' style=\'font-size:.62rem;\'>Required</span>':'')+'</p></div>';
+                        var submitted=isSubmitted(f.id, c.name);
+                        if(!submitted)printPending++;
+                        prh+='<div class="doc-item" id="pr-'+_escHtml(cid)+'"'+(submitted?' style="opacity:.75;"':'')+'><div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);">'+docSvgFill+'</div>';
+                        prh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+(f.required&&!submitted?' <span class=\'badge badge-warn\' style=\'font-size:.62rem;\'>Required</span>':'')+(submitted?' <span class="badge badge-ok" style="font-size:.62rem;">'+checkSvg+' Submitted</span>':'')+'</p></div>';
                         prh+='<div style="display:flex;gap:6px;">';
                         if(f.downloadUrl)prh+='<a class="btn btn-secondary btn-sm" href="'+_escHtml(f.downloadUrl)+'" target="_blank" download>'+dlSvg+' Download</a>';
-                        prh+='<label class="btn btn-primary btn-sm" style="cursor:pointer;">'+ulSvg+' Upload<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',this)"></label>';
+                        prh+='<label class="btn '+(submitted?'btn-secondary':'btn-primary')+' btn-sm" style="cursor:pointer;">'+ulSvg+' '+(submitted?'Re-upload':'Upload')+'<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',this,\''+_escHtml(f.id||'')+'\')"></label>';
                         prh+='</div></div>';
                     });
                 });
                 prl.innerHTML=prh;
                 var printBadge=document.getElementById('printReturnBadge');
-                if(printBadge){printBadge.textContent=printReturn.length*children.length;printBadge.style.display=printReturn.length?'':'none';}
+                if(printBadge){printBadge.textContent=printPending;printBadge.style.display=printPending?'':'none';}
             }
         }
 
@@ -1411,10 +1673,11 @@ window.addEventListener('storage', function(e) {
             }
         }
 
-        // Recompute home forms badge
-        var fol2=document.getElementById('formsOnlineList');
-        var prl2=document.getElementById('printReturnList');
-        var fc=(fol2?fol2.querySelectorAll('.doc-item').length:0)+(prl2?prl2.querySelectorAll('.doc-item').length:0);
+        // Recompute home forms badge — pending (unsubmitted) items only
+        var fc=0;
+        digital.concat(printReturn).forEach(function(f){
+            children.forEach(function(c){ if(!isSubmitted(f.id, c.name)) fc++; });
+        });
         var fb=document.getElementById('homeFormsBadge');var fs=document.getElementById('homeFormsSub');
         if(fb){fb.textContent=fc;fb.style.display=fc>0?'flex':'none';}
         if(fs){fs.textContent=fc>0?fc+' need attention':'All up to date';}
@@ -1836,13 +2099,10 @@ function submitFillOnline(){
 
     var now = new Date();
     var ds = now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-    var parentInfo = {};
-    try {
-        if (window.CampistryLink && window.CampistryLink.data){
-            var pm = window.CampistryLink.data.getCamperParentMap();
-            parentInfo = pm[_foCamper] || {};
-        }
-    } catch(e){}
+    // Enrich from the portal's own children data (division/grade/bunk come
+    // with the invite payload)
+    var child = (typeof children !== 'undefined' && children.find)
+        ? (children.find(function(c){ return c.name === _foCamper; }) || {}) : {};
 
     var sub = {
         id: 'sub_'+Date.now(),
@@ -1851,10 +2111,10 @@ function submitFillOnline(){
         docType: formDef.category||'custom',
         camper: _foCamper,
         camperId: _foCamperId,
-        parentName: parentInfo.parentName||'',
-        grade: parentInfo.grade||'',
-        division: parentInfo.division||'',
-        bunk: parentInfo.bunk||'',
+        parentName: (typeof parent !== 'undefined' && parent.name) || '',
+        grade: child.grade||'',
+        division: child.division||'',
+        bunk: child.bunk||'',
         date: ds,
         submittedAt: now.toISOString(),
         values: values,
@@ -1864,19 +2124,28 @@ function submitFillOnline(){
         folderId: null
     };
 
-    var subs = JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
-    subs.push(sub);
-    localStorage.setItem(FORM_SUB_KEY_P, JSON.stringify(subs));
+    try {
+        var subs = JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
+        subs.push(sub);
+        localStorage.setItem(FORM_SUB_KEY_P, JSON.stringify(subs));
+    } catch(e){}
+
+    // Record in the cloud so the camp office receives it (migration 013)
+    if (window._submitFormResponseCloud) {
+        window._submitFormResponseCloud({
+            formId: sub.formId, formName: sub.formName, mode: 'digital',
+            camperName: _foCamper, camperId: _foCamperId,
+            answers: values, signature: sigDataUrl,
+            division: sub.division, grade: sub.grade, bunk: sub.bunk
+        });
+    }
 
     closeFillOnline();
     _foToast('Form submitted!');
 
-    // Refresh forms display to show submitted state
-    var lf = JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    var linkForms = lf.link_forms || {};
-    if (typeof _renderLinkForms === 'function') {
-        _renderLinkForms(linkForms.digital||[], linkForms.printReturn||[], linkForms.documents||[]);
-    }
+    // Refresh forms display from the cached cloud payload to show the
+    // submitted badge (re-reading localStorage here used to wipe the list)
+    if (window._refreshLinkForms) window._refreshLinkForms();
 }
 
 function _foToast(msg){
