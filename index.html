@@ -74,7 +74,7 @@
         <div class="hero-content">
             <div class="hero-badge">
                 <span class="badge-dot"></span>
-                <span>Founding member pricing available now</span>
+                <span>Build your own bundle — pay for just what you need</span>
             </div>
             <h1 class="hero-title">
                 Camp-Tech,<br>
@@ -438,8 +438,6 @@
                     <button class="pricing-cta primary bundle-cta" onclick="openAuthModal('signup')">Get started</button>
                     <button class="bundle-reset" type="button" id="bundleReset">Clear bundle</button>
                 </div>
-
-                <p class="pricing-note bundle-founding-note"><strong>Founding member pricing — locked in through June 1, 2026</strong></p>
             </div>
         </div>
 
@@ -730,10 +728,7 @@ if (window.location.protocol === 'file:') {
       chip.innerHTML =
         '<span class="bundle-chip-grip" aria-hidden="true">' + GRIP_SVG + '</span>' +
         '<img class="bundle-chip-logo" src="' + p.logo + '" alt="" loading="lazy">' +
-        '<span class="bundle-chip-body">' +
-          '<span class="bundle-chip-name">Campistry <b>' + p.name + '</b></span>' +
-          '<span class="bundle-chip-tag">' + p.tagline + '</span>' +
-        '</span>' +
+        '<span class="bundle-chip-name">Campistry <b>' + p.name + '</b></span>' +
         priceHtml +
         '<span class="bundle-chip-added" aria-hidden="true">Added</span>';
 
@@ -839,13 +834,14 @@ if (window.location.protocol === 'file:') {
           if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
           dragging = true;
           chip.classList.add('is-dragging');
-          ghost = chip.cloneNode(true);
-          ghost.className = 'bundle-chip bundle-chip-ghost' + (inBundle(key) ? ' is-added' : '');
-          ghost.style.setProperty('--accent', chip.style.getPropertyValue('--accent'));
-          var r = chip.getBoundingClientRect();
-          ghost.style.width = r.width + 'px';
-          gx = ev.clientX - r.left; gy = ev.clientY - r.top;
+          var p = byKey[key];
+          ghost = document.createElement('div');           // compact pill, not the whole chip
+          ghost.className = 'bundle-drag-ghost';
+          ghost.style.setProperty('--accent', p.color);
+          ghost.innerHTML = '<img src="' + p.logo + '" alt=""><span>Campistry ' + p.name + '</span>';
           document.body.appendChild(ghost);
+          var gr = ghost.getBoundingClientRect();
+          gx = gr.width / 2; gy = gr.height / 2;            // center the pill on the pointer
           dropzone.classList.add('is-armed');
         }
         ev.preventDefault();
