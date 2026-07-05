@@ -1182,6 +1182,76 @@
     }
 
     // =========================================================================
+    // ★ BYE / SKIPPED-GAME REPORT — the user must be TOLD when a matchup gets a
+    // forced bye (or a whole league period can't run) because fields ran out,
+    // not discover "Team — Bye" / free-filled bunks on the grid. Collected
+    // during each processRegularLeagues run, published on
+    // window.__leagueByeReport, and dispatched as the
+    // 'campistry-league-bye-warnings' event consumed by coverage_warning.js.
+    // Killswitch: window.__leagueByeNotify = false (report still collected on
+    // window.__leagueByeReport; no event → no panel).
+    // Entry shape: { league, kind: 'bye'|'skipped', team1?, team2?, time?, game?, reason }
+    // =========================================================================
+    let _byeReport = [];
+    let _byeCtx = null;   // { time, game } — stamped by the assigner call sites
+
+    function _recordByeEvent(entry) {
+        try {
+            if (_byeCtx) {
+                if (entry.time == null) entry.time = _byeCtx.time;
+                if (entry.game == null) entry.game = _byeCtx.game;
+            }
+            // blocksByTime keys are strings — hand consumers minutes as a number
+            if (entry.time != null && entry.time !== '' && !isNaN(Number(entry.time))) entry.time = Number(entry.time);
+            _byeReport.push(entry);
+        } catch (_) {}
+    }
+
+    // Matchup-level forced bye. Every filter between the pool and the pick has
+    // a non-empty fallback, so a null pick means the pool itself ran dry:
+    // either the league had NO field options at this time, or every open field
+    // was already claimed by this period's earlier matchups (incl. combined-
+    // field counterparts). Say which, with the numbers.
+    function _recordForcedBye(leagueName, t1, t2, availablePool, gamesWanted, gamesPlaced) {
+        const fields = new Set();
+        (availablePool || []).forEach(function (o) { if (o && o.field) fields.add(o.field); });
+        const nf = fields.size;
+        let reason;
+        if (nf === 0) {
+            reason = 'No fields were open for this league\'s sports at this time — every matching field was reserved, locked, or in use by another league or division.';
+        } else {
+            const names = Array.from(fields);
+            const shown = names.slice(0, 4).join(', ') + (names.length > 4 ? ', …' : '');
+            reason = 'Not enough fields: ' + gamesWanted + ' simultaneous game' + (gamesWanted === 1 ? '' : 's')
+                + ' needed but only ' + nf + ' field' + (nf === 1 ? ' was' : 's were')
+                + ' open for this league (' + shown + ') — every open field was already taken by another matchup this period, so '
+                + t1 + ' vs ' + t2 + ' got a bye.';
+        }
+        _recordByeEvent({ league: leagueName, kind: 'bye', team1: t1, team2: t2, reason: reason });
+    }
+
+    function _publishByeReport() {
+        try {
+            window.__leagueByeReport = _byeReport.slice();
+            if (_byeReport.length) {
+                console.warn('⚠️ [LeagueByes] ' + _byeReport.length + ' league matchup(s)/period(s) could not be placed:');
+                _byeReport.forEach(function (b) {
+                    console.warn('   • ' + b.league + (b.game != null ? ' (Game ' + b.game + ')' : '') + ': '
+                        + (b.kind === 'skipped' ? 'PERIOD SKIPPED' : (b.team1 + ' vs ' + b.team2 + ' → BYE'))
+                        + ' — ' + b.reason);
+                });
+            }
+            if (window.__leagueByeNotify === false) return;
+            // Empty dispatch too — a clean regen must CLEAR a stale banner.
+            if (typeof window.CustomEvent === 'function' && typeof window.dispatchEvent === 'function') {
+                window.dispatchEvent(new window.CustomEvent('campistry-league-bye-warnings', {
+                    detail: { count: _byeReport.length, items: _byeReport.slice() }
+                }));
+            }
+        } catch (_) {}
+    }
+
+    // =========================================================================
     // FIELD QUALITY — prefer the better-ranked field in a group
     // =========================================================================
     // Builds a {fieldName: qualityRank} map (lower rank = better field). Used to
@@ -1491,6 +1561,7 @@
                 console.log(`   ✅ [SportVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
                 console.log(`   ❌ No field available for ${t1} vs ${t2}`);
+                _recordForcedBye(leagueName, t1, t2, availablePool, matchups.length, assignments.length);
             }
         }
 
@@ -1669,6 +1740,7 @@
                 console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
                 console.log(`   ❌ No field available for ${t1} vs ${t2}`);
+                _recordForcedBye(leagueName, t1, t2, availablePool, matchups.length, assignments.length);
             }
         }
 
@@ -2062,8 +2134,14 @@
             rotationHistory
         } = context;
 
+        // ★ BYE REPORT: fresh collection per run; publish even on the early
+        // return so a stale banner from a prior gen clears.
+        _byeReport = [];
+        _byeCtx = null;
+
         if (!masterLeagues || Object.keys(masterLeagues).length === 0) {
             console.log("[RegularLeagues] No regular leagues configured.");
+            _publishByeReport();
             return;
         }
 
@@ -2337,10 +2415,13 @@
                 // ★ Pass dayId so the assigners read date-correct history (without it
                 //   they fell back to the full teamSports/gameLog including future
                 //   dates — wrong needs when regenerating a middle date).
+                _byeCtx = { time: timeKey1, game: gameNum };       // stamp bye records with this period
                 var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
                 var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
+                _byeCtx = { time: timeKey2, game: gameNum + 1 };
                 var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
                 var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
+                _byeCtx = null;
                 var g1All = g1Off.concat(g1On), g2All = g2Off.concat(g2On);
                 var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
 
@@ -2881,6 +2962,10 @@
 
                 if (availablePool.length === 0) {
                     console.log(`   🚨 No fields available for league sports!`);
+                    _recordByeEvent({
+                        league: league.name, kind: 'skipped', time: timeKey, game: gameNumber,
+                        reason: 'No fields were open for any of this league\'s sports at this time, so the league period could not run at all — the affected bunks were given regular activities instead. Check field reservations, other leagues at the same time, and which fields host these sports.'
+                    });
                     continue;
                 }
 
@@ -3027,6 +3112,7 @@
                 // ★★★ PASS SCHEDULING PRIORITY TO ASSIGNMENT FUNCTION ★★★
                 // For playoff mode: each matchup has its own fixed sport — bypass
                 // the variety logic and assign per-matchup directly.
+                _byeCtx = { time: timeKey, game: gameNumber };   // stamp bye records with this period
                 let assignments;
                 if (playoffMatchupSports) {
                     assignments = [];
@@ -3073,6 +3159,10 @@
                                 }
                             }
                             console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
+                            _recordByeEvent({
+                                league: league.name, kind: 'bye', team1: teamA, team2: teamB,
+                                reason: 'Playoff: no open field supported "' + wantedSport + '" at this time — the matchup could not be placed.'
+                            });
                             return;
                         }
                         const pick = candidates[0];
@@ -3099,6 +3189,10 @@
 
                 if (assignments.length === 0) {
                     console.log(`   ❌ No assignments possible`);
+                    _recordByeEvent({
+                        league: league.name, kind: 'skipped',
+                        reason: 'None of this league\'s ' + matchups.length + ' matchup(s) could get a field at this time (see the bye entries), so the league period was skipped — the affected bunks were given regular activities instead.'
+                    });
                     continue;
                 }
 
@@ -3360,6 +3454,12 @@ window._debugLeagueTimeData = timeData;
                 }
             });
         } catch (_eIndVer) {}
+
+        // ★★★ BYE / SKIPPED-GAME NOTIFICATION ★★★ — surface every matchup that
+        // got a forced bye and every league period that couldn't run because
+        // fields ran out. Dispatches 'campistry-league-bye-warnings' (rendered
+        // by coverage_warning.js); an empty dispatch clears a stale banner.
+        _publishByeReport();
 
         console.log("\n" + "=".repeat(60));
         console.log("★★★ REGULAR LEAGUE ENGINE COMPLETE ★★★");
