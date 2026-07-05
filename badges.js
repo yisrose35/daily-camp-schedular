@@ -1,5 +1,5 @@
 // ============================================================================
-// badges.js — CAMP ACHIEVEMENTS v3.0
+// badges.js — CAMP ACHIEVEMENTS v3.1
 // ============================================================================
 // Per-camp achievements, displayed on the dashboard and awarded live.
 //
@@ -7,15 +7,19 @@
 //   Milestones  — daily schedules generated (1 / 10 / 50 / 100)
 //   Years       — tenure with Campistry (camps.created_at)
 //   Enrollment  — campers enrolled (camperRoster count, else bunkMetaData sizes)
+//   Special     — Founding Member (camps.plan_status === 'founding_member')
 //   Secret      — the easter egg (awarded by easter_egg.js via CampBadges.award)
 //
-// Presentation (v3): metallic medallions — conic-gradient metal ring
-// (bronze/silver/gold/platinum, violet for the secret) around a dark coin
+// Presentation: metallic medallions — conic-gradient metal ring (bronze/
+// silver/gold/platinum, rose-gold founder, violet secret) around a dark coin
 // face with a periodic shine sweep and tier glow. Earned medals also render
-// in the dashboard HERO next to the camp name (#dashHeroBadges, flex-wrap so
-// it shares the row with long camp names) with a count chip that scrolls to
-// the full collection at the bottom of the page. Badge IDs are unchanged —
-// earned cloud data carries over.
+// in the dashboard HERO next to the camp name (#dashHeroBadges) — the strip
+// is content-sized so it never squeezes the camp name (v3.1: the v3 strip
+// grabbed flex space and wrapped long names), 30px medals capped at the 6
+// most recent, plus a count chip that scrolls to the full collection at the
+// bottom of the page. Badge IDs are unchanged — earned cloud data carries
+// over. No SQL migrations anywhere: state lives in the existing
+// camp_state_kv table; founder status reads the existing camps.plan_status.
 //
 // Storage: camp_state_kv key 'campBadges' → { earned: { badgeId: isoDate } }
 // (direct Supabase upsert with read-merge-union so badges are never lost to a
@@ -58,11 +62,14 @@ const BADGE_DEFS = [
     { id: "campers_100",    medal: "100", tier: "silver",   name: "100 Campers", cat: "Enrollment", desc: "100+ campers enrolled", check: s => s.campers >= 100 },
     { id: "campers_250",    medal: "250", tier: "gold",     name: "250 Campers", cat: "Enrollment", desc: "250+ campers enrolled", check: s => s.campers >= 250 },
     { id: "campers_500",    medal: "500", tier: "platinum", name: "500 Campers", cat: "Enrollment", desc: "500+ campers enrolled", check: s => s.campers >= 500 },
+    // Special — founding camps (camps.plan_status === 'founding_member')
+    { id: "founding_member",medal: "✦",  tier: "rose",     name: "Founding Member", cat: "Special", desc: "One of Campistry's founding camps", check: s => s.foundingMember === true },
     // Secret — event-awarded only (no check)
     { id: "egg_hunter",     medal: "★",  tier: "accent",   name: "Easter Egg",  cat: "Secret", desc: "Discovered the hidden easter egg", secret: true },
 ];
 
-const CATEGORY_ORDER = ["Milestones", "Years with Campistry", "Enrollment", "Secret"];
+const CATEGORY_ORDER = ["Milestones", "Years with Campistry", "Enrollment", "Special", "Secret"];
+const HERO_MAX_MEDALS = 6;   // hero strip shows the N most recent; chip carries the full count
 
 // =========================================================================
 // IDENTITY + PERSISTENCE
@@ -189,17 +196,21 @@ async function collectStats(campId) {
         }
     } catch (_) {}
 
-    // -- years with the program (camps.created_at; may be RLS-blocked for
-    //    scheduler-role users → tenure just doesn't evaluate on that client) --
+    // -- years with the program + founding-member plan (camps row; may be
+    //    RLS-blocked for scheduler-role users → these just don't evaluate
+    //    on that client, the owner's dashboard visit awards them) --
     try {
         const { data, error } = await window.supabase
             .from("camps")
-            .select("created_at")
+            .select("created_at, plan_status")
             .eq("id", campId);
-        const created = !error && data && data[0] && data[0].created_at;
-        if (created) {
-            const ms = Date.now() - new Date(created).getTime();
+        const row = !error && data && data[0];
+        if (row && row.created_at) {
+            const ms = Date.now() - new Date(row.created_at).getTime();
             if (ms >= 0) stats.years = Math.floor(ms / (365.25 * 24 * 3600 * 1000));
+        }
+        if (row && row.plan_status) {
+            stats.foundingMember = String(row.plan_status) === "founding_member";
         }
     } catch (_) {}
 
@@ -349,7 +360,16 @@ function renderIfPresent() {
 function renderHeroStrip(strip) {
     injectStyles();
     const earned = (_state && _state.earned) || {};
-    const earnedDefs = BADGE_DEFS.filter(d => earned[d.id]);
+    let earnedDefs = BADGE_DEFS.filter(d => earned[d.id]);
+    const totalEarned = earnedDefs.length;
+
+    // Keep the strip compact: show only the most recently earned medals
+    // (definition order preserved); the chip carries the full count.
+    if (earnedDefs.length > HERO_MAX_MEDALS) {
+        const byRecent = [...earnedDefs].sort((a, b) => String(earned[b.id]).localeCompare(String(earned[a.id])));
+        const keep = new Set(byRecent.slice(0, HERO_MAX_MEDALS).map(d => d.id));
+        earnedDefs = earnedDefs.filter(d => keep.has(d.id));
+    }
 
     strip.innerHTML = "";
     earnedDefs.forEach(def => {
@@ -361,7 +381,7 @@ function renderHeroStrip(strip) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "cbadge-hero-chip";
-    chip.textContent = `${earnedDefs.length} of ${BADGE_DEFS.length}`;
+    chip.textContent = `${totalEarned} of ${BADGE_DEFS.length}`;
     chip.setAttribute("title", "View all achievements");
     chip.addEventListener("click", () => {
         const section = document.getElementById("camp-badges-section");
@@ -450,6 +470,8 @@ function injectStyles() {
 .cbadge-tier-platinum .cbadge-medal-text { color: #d9e9f8; }
 .cbadge-tier-accent   { background: conic-gradient(from 210deg, #4c2fa8, #b49bfc, #3d2494, #d4c6ff, #4c2fa8); box-shadow: 0 2px 14px rgba(140,100,250,.55); }
 .cbadge-tier-accent   .cbadge-medal-text { color: #c3b0fd; }
+.cbadge-tier-rose     { background: conic-gradient(from 210deg, #8f4a3e, #f2b09b, #7a3a30, #ffd3c0, #8f4a3e); box-shadow: 0 2px 14px rgba(235,145,115,.55); }
+.cbadge-tier-rose     .cbadge-medal-text { color: #f4b8a4; }
 .cbadge-medal::after {
     content: ""; position: absolute; top: -60%; left: -80%;
     width: 55%; height: 220%; transform: rotate(25deg);
@@ -466,23 +488,29 @@ function injectStyles() {
 }
 
 /* Hero strip — sits between the camp name and the clock/weather widgets.
-   flex-wrap + min-width:0 lets long camp names compress and wrap it. */
+   Content-sized (flex: 0 1 auto) so it NEVER steals width from the camp
+   name; .dash-hero-left keeps its flex:1 and the hero keeps its original
+   height. Capped at HERO_MAX_MEDALS small medals; narrower screens trim
+   medals via the nth-of-type rules below, phones hide the strip. */
 .dash-hero-badges {
     position: relative; z-index: 1;
-    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
-    gap: 10px; flex: 1 1 auto; min-width: 0; margin: 0 22px;
+    display: flex; flex-wrap: nowrap; align-items: center;
+    gap: 8px; flex: 0 1 auto; min-width: 0; margin: 0 16px;
 }
-.dash-hero-badges .cbadge-medal { width: 40px; height: 40px; padding: 2.5px; }
-.dash-hero-badges .cbadge-medal-text { font-size: .64rem; }
+.dash-hero-badges .cbadge-medal { width: 30px; height: 30px; padding: 2px; }
+.dash-hero-badges .cbadge-medal-text { font-size: .54rem; }
 .cbadge-hero-chip {
-    padding: 7px 12px; border-radius: 999px;
+    padding: 5px 10px; border-radius: 999px;
     background: rgba(255,255,255,.14); color: #eef6f6;
     border: 1px solid rgba(255,255,255,.28);
-    font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+    font-size: .66rem; font-weight: 700; letter-spacing: .04em;
+    white-space: nowrap;
     cursor: pointer; transition: background .15s ease;
 }
 .cbadge-hero-chip:hover { background: rgba(255,255,255,.24); }
-@media (max-width: 760px) { .dash-hero-badges { display: none !important; } }
+@media (max-width: 1200px) { .dash-hero-badges .cbadge-medal:nth-of-type(n+5) { display: none; } }
+@media (max-width: 1000px) { .dash-hero-badges .cbadge-medal:nth-of-type(n+3) { display: none; } }
+@media (max-width: 760px)  { .dash-hero-badges { display: none !important; } }
 
 .cbadge-toast {
     position: fixed; top: 18px; right: 18px; z-index: 100000;
