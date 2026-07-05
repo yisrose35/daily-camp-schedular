@@ -1596,6 +1596,60 @@ function _rainySplitScheduleAt(assignments, divisionTimes, divisions, tMin, keep
   return { assignments: out, stats };
 }
 
+// Pure — mirrored verbatim in tests/rainy_midday_split_sim.js; keep in sync.
+// Builds the __regenSlotScope for a Generate while the mid-day rain cut is
+// active, so ONLY the day from the cut onward regenerates:
+//   • regen = slots whose time window ends AFTER the cut and that don't hold a
+//     pinned/fixed entry (kept-morning stamps, user pins, bunk overrides).
+//     The STEP 6.5 / 7.5 slot-scope gates make this authoritative — the solver
+//     cannot fill any slot outside regen, including EMPTY pre-cut slots.
+//   • keep  = every existing entry outside regen, snapshotted byte-for-byte
+//     (scheduler_core_main STEP 1 re-inserts them pinned after the wipe).
+//   • orig  = pre-regen content of regen slots (no-blank fallback parity with
+//     the per-tile regen core).
+// Slots with no resolvable end time are treated as pre-cut (left alone).
+function _rainyBuildMidDayRegenScope(assignments, divisionTimes, divisions, tMin) {
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  };
+  const scope = {};
+  let regenTotal = 0;
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk] || [];
+      const n = Math.max(arr.length, slots.length);
+      const regen = new Set();
+      const keep = {};
+      const orig = {};
+      for (let i = 0; i < n; i++) {
+        const e = arr[i];
+        const s = slots[i] || {};
+        const se = toMin((s.endMin != null) ? s.endMin : ((s.end != null) ? s.end : (e ? e._endMin : null)));
+        const postCut = (se != null) && (se > tMin);
+        const pinnedByUser = !!(e && (e._pinned || e._fixed));
+        if (postCut && !pinnedByUser) {
+          regen.add(i);
+          if (e) orig[i] = JSON.parse(JSON.stringify(e));
+        } else if (e) {
+          keep[i] = JSON.parse(JSON.stringify(e));
+        }
+      }
+      scope[bunk] = { regen, keep, orig };
+      regenTotal += regen.size;
+    });
+  });
+  return { scope, regenTotal };
+}
+
 // Show mid-day rain start time picker modal
 function showMidDayRainModal() {
   // Remove any existing modal
@@ -2527,11 +2581,25 @@ function renderGrid() {
     html += `<div data-col-header="${divName}" draggable="true" class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0; cursor:grab; user-select:none;">${divName}</div>`;
   });
   
+  // ★ Mid-day rain cut: draw a line across the whole grid at the cut time.
+  //   Everything above it is the kept (pre-rain) history; everything below is
+  //   the wiped, editable rest-of-day that a Generate re-rolls (indoor-only).
+  const _rainCutMin = (window.isRainyDay === true &&
+                       typeof window.rainyDayStartTime === 'number' &&
+                       window.rainyDayStartTime > earliestMin &&
+                       window.rainyDayStartTime < latestMin)
+                      ? window.rainyDayStartTime : null;
+
   // Time column
   html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
   for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
     const top = (m - earliestMin) * PIXELS_PER_MINUTE;
     html += `<div class="da-time-marker" style="top:${top}px;">${minutesToTime(m)}</div>`;
+  }
+  if (_rainCutMin != null) {
+    const _rcTop = (_rainCutMin - earliestMin) * PIXELS_PER_MINUTE;
+    html += `<div title="Mid-day rain started at ${minutesToTime(_rainCutMin)} — the schedule below this line was cleared" ` +
+            `style="position:absolute;top:${_rcTop - 9}px;left:1px;right:1px;background:#2563eb;color:#fff;font-size:9px;font-weight:700;text-align:center;border-radius:4px;padding:1px 2px;z-index:7;pointer-events:auto;">🌧️ ${minutesToTime(_rainCutMin)}</div>`;
   }
   html += `</div>`;
   
@@ -2549,7 +2617,11 @@ function renderGrid() {
     if (e !== null && e < latestMin) {
       html += `<div class="da-grid-disabled da-grid-night-zone" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px;height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
     }
-    
+
+    if (_rainCutMin != null) {
+      html += `<div class="da-rain-cut-line" style="position:absolute;left:0;right:0;top:${(_rainCutMin - earliestMin) * PIXELS_PER_MINUTE}px;border-top:3px dashed #2563eb;z-index:6;pointer-events:none;"></div>`;
+    }
+
     dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(ev => {
       const start = parseTimeToMinutes(ev.startTime);
       const end = parseTimeToMinutes(ev.endTime);
@@ -5398,6 +5470,10 @@ async function runOptimizer() {
         }
     } catch (_eFn17) { /* non-fatal — proceed */ }
     _daOptimizerRunning = true;
+    // ★ Mid-day rain cut: set when THIS run installed the auto slot-scope, so
+    //   the outer finally only clears a scope it owns (per-tile regen manages
+    //   its own __regenSlotScope lifecycle).
+    let _midDayCutScopeApplied = false;
     try {
 
     // ★ Pull the authoritative LEAGUE HISTORY from the cloud right before generating,
@@ -5624,6 +5700,34 @@ async function runOptimizer() {
         // Manual mode: original check
         if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
 
+        // ★★★ MID-DAY RAIN CUT — regenerate ONLY from the cut onward ★★★
+        // While mid-day rain is active, a plain Generate must respect the cut
+        // line: everything before rainyDayStartTime is history and stays
+        // byte-for-byte; only slots from the cut onward are re-rolled (indoor-
+        // only, since isRainyDay gates the candidate pool). Reuses the per-tile
+        // regen plumbing: build a __regenSlotScope covering every scoped bunk
+        // (keep = pre-cut entries + user-pinned tiles; regen = the rest), which
+        // STEP 1 re-inserts after the wipe and the STEP 6.5/7.5 slot-scope
+        // gates enforce. Skipped when a per-tile regen already set its own scope.
+        if (!window.__regenSlotScope &&
+            window.isRainyDay === true &&
+            typeof window.rainyDayStartTime === 'number' && window.rainyDayStartTime > 0) {
+            try {
+                const _cutScope = _rainyBuildMidDayRegenScope(
+                    window.scheduleAssignments || {},
+                    window.divisionTimes || {},
+                    _rainyScopedDivisions(),
+                    window.rainyDayStartTime
+                );
+                window.__regenSlotScope = _cutScope.scope;
+                _midDayCutScopeApplied = true;
+                console.log('[Optimizer] 🌧️ Mid-day cut active at ' + minutesToTime(window.rainyDayStartTime) +
+                            ' — regenerating ONLY ' + _cutScope.regenTotal + ' post-cut slot(s); everything before the cut is preserved');
+            } catch (_eCut) {
+                console.warn('[Optimizer] mid-day cut scope build failed (falling back to full gen):', _eCut);
+            }
+        }
+
         // ★ Day 32 (warn-then-discard, user decision 2026-06-01): a manual
         //   re-generation rebuilds from the skeleton and therefore DISCARDS
         //   cell-level daily adjustments (post-edits, `_postEdit:true`). Bunk
@@ -5644,9 +5748,17 @@ async function runOptimizer() {
                 _scopeDivsW.forEach(d => ((_divsW[d] || _divsW[String(d)] || {}).bunks || []).forEach(b => _wipeBunks.add(String(b))));
             }
             let _adjCount = 0; const _adjBunks = new Set();
+            // ★ Mid-day cut: post-edits OUTSIDE the regen slots survive (STEP 1
+            //   re-inserts them from the scope's keep snapshot) — don't warn
+            //   about edits this run won't actually clear.
+            const _cutRs = _midDayCutScopeApplied ? window.__regenSlotScope : null;
             Object.keys(_sa).forEach(b => {
                 if (_wipeBunks && !_wipeBunks.has(String(b))) return; // out of scope → not wiped
-                (_sa[b] || []).forEach(e => { if (e && e._postEdit === true && !e.continuation) { _adjCount++; _adjBunks.add(b); } });
+                const _bRs = _cutRs && _cutRs[b];
+                (_sa[b] || []).forEach((e, _ei) => {
+                    if (_bRs && _bRs.regen && typeof _bRs.regen.has === 'function' && !_bRs.regen.has(_ei)) return; // preserved by the cut
+                    if (e && e._postEdit === true && !e.continuation) { _adjCount++; _adjBunks.add(b); }
+                });
             });
             if (_adjCount > 0) {
                 const _msg = '⚠️ This day has ' + _adjCount + ' daily adjustment' + (_adjCount === 1 ? '' : 's')
@@ -5951,6 +6063,9 @@ if (success) {
       // ★ FN-14: clear the gen-date marker now that this generation (and its awaited
       //   verified save) is fully done, so it can never go stale between gens.
       try { window._activeGenDate = null; } catch (_e) {}
+      // ★ Mid-day rain cut: release the auto-installed slot scope (per-tile
+      //   regen owns and clears its own).
+      if (_midDayCutScopeApplied) { try { delete window.__regenSlotScope; } catch (_e) {} }
   }
 }
   // =================================================================

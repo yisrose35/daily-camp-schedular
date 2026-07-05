@@ -5683,9 +5683,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // overwrite those fills. Remove any block whose slot is already occupied.
         {
             const preFilt = schedulableSlotBlocks.length;
+            let _scopeDropped65 = 0;
             for (let _fi = schedulableSlotBlocks.length - 1; _fi >= 0; _fi--) {
                 const _fb = schedulableSlotBlocks[_fi];
                 if (!_fb.bunk || !_fb.slots?.length) continue;
+                // ★ Slot-scope gate: when a per-slot regen scope is active for this
+                //   bunk (per-tile regen OR the mid-day rain cut), the solver may fill
+                //   ONLY the scoped regen slots. An EMPTY out-of-scope slot (e.g. an
+                //   unscheduled slot before the rain cut) must stay empty — without
+                //   this gate it reads as "free" and gets backfilled, rewriting the
+                //   part of the day the scope promised to leave alone.
+                const _rsg = window.__regenSlotScope && window.__regenSlotScope[_fb.bunk];
+                if (_rsg && _rsg.regen && typeof _rsg.regen.has === 'function' && !_rsg.regen.has(_fb.slots[0])) {
+                    schedulableSlotBlocks.splice(_fi, 1);
+                    _scopeDropped65++;
+                    continue;
+                }
                 const _ex = window.scheduleAssignments[_fb.bunk]?.[_fb.slots[0]];
                 if (_ex && !_ex.continuation && !_ex._isTransition) {
                     const _act = (_ex._activity || _ex.field || '').toLowerCase().trim();
@@ -5695,7 +5708,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
             }
             const removed = preFilt - schedulableSlotBlocks.length;
-            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events`);
+            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events` +
+                (_scopeDropped65 > 0 ? ` (${_scopeDropped65} outside the active slot scope)` : ''));
         }
 
         // =========================================================================
@@ -5811,8 +5825,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                     if (_allowedBunks && !_allowedBunks.has(bunk)) return;
                     const arr = window.scheduleAssignments[bunk] || [];
+                    // ★ Slot-scope gate (mirrors STEP 6.5): with an active per-slot
+                    //   regen scope, this fallback may only touch the scoped regen
+                    //   slots — never backfill an out-of-scope empty (e.g. pre-rain-cut).
+                    const _rs75 = window.__regenSlotScope && window.__regenSlotScope[bunk];
                     for (let si = 0; si < arr.length; si++) {
                         const e = arr[si];
+                        if (_rs75 && _rs75.regen && typeof _rs75.regen.has === 'function' && !_rs75.regen.has(si)) continue;
                         if (_isLeagueSlot75(bunk, si)) { _lgSkipped75++; continue; }
                         if (!e) { _freeFills.push({ bunk, si }); continue; }
                         if (e.continuation || e._isTransition || e._fixed || e._pinned || e._h2h || e._bunkOverride) continue;

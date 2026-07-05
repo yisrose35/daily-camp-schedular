@@ -95,6 +95,66 @@ function rainySplitScheduleAt(assignments, divisionTimes, divisions, tMin, keepF
   return { assignments: out, stats };
 }
 
+// ── Pure re-implementation of the mid-day CUT-SCOPED GENERATE logic ─────────
+// (mirrors daily_adjustments.js _rainyBuildMidDayRegenScope — keep in sync)
+
+function rainyBuildMidDayRegenScope(assignments, divisionTimes, divisions, tMin) {
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  };
+  const scope = {};
+  let regenTotal = 0;
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk] || [];
+      const n = Math.max(arr.length, slots.length);
+      const regen = new Set();
+      const keep = {};
+      const orig = {};
+      for (let i = 0; i < n; i++) {
+        const e = arr[i];
+        const s = slots[i] || {};
+        const se = toMin((s.endMin != null) ? s.endMin : ((s.end != null) ? s.end : (e ? e._endMin : null)));
+        const postCut = (se != null) && (se > tMin);
+        const pinnedByUser = !!(e && (e._pinned || e._fixed));
+        if (postCut && !pinnedByUser) {
+          regen.add(i);
+          if (e) orig[i] = JSON.parse(JSON.stringify(e));
+        } else if (e) {
+          keep[i] = JSON.parse(JSON.stringify(e));
+        }
+      }
+      scope[bunk] = { regen, keep, orig };
+      regenTotal += regen.size;
+    });
+  });
+  return { scope, regenTotal };
+}
+
+// scheduler_core_main.js STEP 6.5 slot-scope gate + occupied filter (simplified):
+// with an active per-slot scope, the solver may fill ONLY the scoped regen slots.
+function filterBlocksWithScope(blocks, scheduleAssignments, regenSlotScope) {
+  return blocks.filter(b => {
+    const rs = regenSlotScope && regenSlotScope[b.bunk];
+    if (rs && rs.regen && typeof rs.regen.has === 'function' && !rs.regen.has(b.slots[0])) return false;
+    const ex = scheduleAssignments[b.bunk] && scheduleAssignments[b.bunk][b.slots[0]];
+    if (ex && !ex.continuation && !ex._isTransition) {
+      const act = (ex._activity || ex.field || '').toLowerCase().trim();
+      if (act && act !== 'free' && act !== 'free play') return false;
+    }
+    return true;
+  });
+}
+
 // rotation_cloud.js saveRotationCounts / scheduler_core_utils rebuildHistoricalCounts
 // counting rule (simplified): skip null / continuation / transition / Free.
 function countRotation(assignments) {
@@ -259,6 +319,68 @@ test('entry-level _startMin/_endMin used when division slot times are missing', 
   const r = rainySplitScheduleAt(assignments, divisionTimes, divisions, 700);
   assert.ok(r.assignments.A[0]._pinned, 'past block (entry times) kept');
   assert.strictEqual(r.assignments.A[1], null, 'future block (entry times) erased');
+});
+
+test('cut-scoped generate: only post-cut unpinned slots are regen; pre-cut + pinned kept', () => {
+  const { divisions, divisionTimes, scheduleAssignments } = fixture();
+  // Simulate the state AFTER a split at 720 followed by the user pinning a
+  // manual tile into a post-cut slot.
+  const split = rainySplitScheduleAt(scheduleAssignments, divisionTimes, divisions, 720);
+  const sa = split.assignments;
+  sa.A[2] = { _activity: 'Board Games', field: 'Rec Room', _pinned: true }; // user-pinned post-cut
+  const { scope, regenTotal } = rainyBuildMidDayRegenScope(sa, divisionTimes, divisions, 720);
+
+  // A: slots 0-1 pre-cut kept entries → keep; slot 2 pinned → keep; slot 3 → regen.
+  assert.deepStrictEqual([...scope.A.regen].sort(), [3], 'only the unpinned post-cut slot regens');
+  assert.deepStrictEqual(Object.keys(scope.A.keep).map(Number).sort(), [0, 1, 2], 'pre-cut + pinned post-cut kept');
+  // B: slots 2,3 post-cut empty → regen; slot 1 pre-cut EMPTY → neither set.
+  assert.deepStrictEqual([...scope.B.regen].sort(), [2, 3]);
+  assert.ok(!(1 in scope.B.keep) && !scope.B.regen.has(1), 'empty pre-cut slot in neither set');
+  // C (ends at 720): nothing post-cut.
+  assert.strictEqual(scope.C.regen.size, 0);
+  assert.strictEqual(regenTotal, 1 + 2, 'A:1 + B:2');
+});
+
+test('cut-scoped generate: solver blocks outside the regen set are dropped — empty pre-cut slots stay empty', () => {
+  const { divisions, divisionTimes, scheduleAssignments } = fixture();
+  const split = rainySplitScheduleAt(scheduleAssignments, divisionTimes, divisions, 720);
+  const { scope } = rainyBuildMidDayRegenScope(split.assignments, divisionTimes, divisions, 720);
+
+  // Model STEP 1: keeps re-inserted pinned, everything else null.
+  const rebuilt = {};
+  Object.keys(scope).forEach(bunk => {
+    const n = (split.assignments[bunk] || []).length;
+    const arr = new Array(n).fill(null);
+    Object.keys(scope[bunk].keep).forEach(k => {
+      arr[+k] = Object.assign({}, scope[bunk].keep[k], { _fixed: true, _pinned: true });
+    });
+    rebuilt[bunk] = arr;
+  });
+
+  // The skeleton emits a block for EVERY (bunk, slot) — incl. B's empty pre-cut slot 1.
+  const blocks = [];
+  ['A', 'B'].forEach(bunk => { for (let s = 0; s < 4; s++) blocks.push({ bunk, slots: [s] }); });
+  const surviving = filterBlocksWithScope(blocks, rebuilt, scope);
+  const keys = surviving.map(b => b.bunk + ':' + b.slots[0]).sort();
+
+  // Without the slot-scope gate, B:1 (empty pre-cut) would survive and get
+  // backfilled — rewriting history. With it, only post-cut slots fill.
+  assert.deepStrictEqual(keys, ['A:2', 'A:3', 'B:2', 'B:3'], 'only post-cut slots are fillable');
+});
+
+test('cut-scoped generate: unpinned post-cut entries land in orig (no-blank fallback) and regen', () => {
+  const divisions = { Div1: { bunks: ['A'] } };
+  const divisionTimes = { Div1: [ { startMin: 600, endMin: 660 }, { startMin: 660, endMin: 720 } ] };
+  // User hand-placed an UNPINNED tile after the cut — a Generate re-rolls it,
+  // but its content is snapshotted for the no-blank fallback.
+  const sa = { A: [
+    { _activity: 'Soccer', field: 'Field 1', _pinned: true, _midDayPreserved: true },
+    { _activity: 'Ping Pong', field: 'Rec Room' },
+  ] };
+  const { scope } = rainyBuildMidDayRegenScope(sa, divisionTimes, divisions, 630);
+  assert.ok(scope.A.regen.has(1), 'unpinned post-cut entry is re-rolled');
+  assert.strictEqual(scope.A.orig[1]._activity, 'Ping Pong', 'content snapshotted into orig');
+  assert.ok(scope.A.keep[0]._midDayPreserved, 'kept straddle-pinned morning entry stays');
 });
 
 test('bunks outside the passed divisions are never scanned or returned; input not mutated', () => {
