@@ -49,7 +49,12 @@
             USER_ID: 'campistry_user_id',
             AUTH_USER_ID: 'campistry_auth_user_id',
             ROLE: 'campistry_role',
-            IS_TEAM_MEMBER: 'campistry_is_team_member'
+            IS_TEAM_MEMBER: 'campistry_is_team_member',
+            // Debug-copy feature: which camp the user has explicitly switched
+            // into (their own camp or a debug copy). UI hint only — the server
+            // enforces entitlement via active_camp_selection + get_user_camp_id().
+            ACTIVE_CAMP_ID: 'campistry_active_camp_id',
+            IS_SUPER_ADMIN: 'campistry_is_super_admin'
         },
 
         // Debug mode - set to true to see detailed logs
@@ -214,6 +219,9 @@
         try {
             // =================================================================
             // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
+            //    NOTE (Debug Copy): a super-admin "switches into" a debug copy
+            //    by joining it as a team member (camp_users row, role owner).
+            //    So this same path naturally resolves the active copy for them.
             // This ensures invited users get their correct assigned role
             // =================================================================
             // Multi-camp users: .maybeSingle() throws on >1 rows, so a user
@@ -292,13 +300,20 @@
             // =================================================================
             // ⭐ STEP 3: Check if user is a CAMP OWNER (only if not a team member)
             // =================================================================
-            const { data: ownedCamp, error: ownerError } = await _client
+            // A user may own MULTIPLE camps once debug copies exist. Resolve
+            // deterministically: prefer the camp whose id == uid (signup
+            // convention = the user's "real" camp). Copies are only entered
+            // via the explicit active-camp selection handled in STEP 0.
+            const { data: ownedCamps, error: ownerError } = await _client
                 .from('camps')
                 .select('id, name')
-                .eq('owner', _userId)
-                .maybeSingle();
+                .eq('owner', _userId);
 
-            if (!ownerError && ownedCamp) {
+            const ownedCamp = (!ownerError && Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === _userId) || ownedCamps[0])
+                : null;
+
+            if (ownedCamp) {
                 _campId = ownedCamp.id;
                 _role = 'owner';
                 _isTeamMember = false;
@@ -582,6 +597,117 @@
     }
 
     // =========================================================================
+    // DEBUG-COPY / ACTIVE-CAMP SWITCHING
+    // =========================================================================
+
+    // Is the current user on the platform super-admin allow-list? Cached for
+    // the session. Returns false (fail-closed) if the table/policy is absent.
+    async function checkSuperAdmin() {
+        try {
+            if (!_userId) return false;
+            const { data, error } = await _client
+                .from('super_admins')
+                .select('user_id')
+                .eq('user_id', _userId)
+                .maybeSingle();
+            const isSA = !error && !!data;
+            try { localStorage.setItem(CONFIG.CACHE_KEYS.IS_SUPER_ADMIN, String(isSA)); } catch (_) {}
+            return isSA;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function isSuperAdmin() {
+        // Synchronous UI hint from cache; call checkSuperAdmin() for the
+        // authoritative answer. Never used for a security decision (RLS is).
+        return localStorage.getItem(CONFIG.CACHE_KEYS.IS_SUPER_ADMIN) === 'true';
+    }
+
+    // Purge the camp-scoped local caches so a camp switch loads the target
+    // camp fresh from cloud instead of showing the previous camp's data.
+    function purgeCampDataCaches() {
+        const dataKeys = [
+            'campGlobalSettings_v1', 'campistryGlobalSettings', 'CAMPISTRY_LOCAL_CACHE',
+            'campDailyData_v1', 'campGlobalRegistry_v1', 'campistry_settings_camp_id'
+        ];
+        try { dataKeys.forEach(k => localStorage.removeItem(k)); } catch (_) {}
+        // Date-keyed layer / skeleton caches.
+        try {
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+                const k = localStorage.key(i);
+                if (k && (k.indexOf('campAutoLayers_') === 0 ||
+                          k.indexOf('campManualSkeleton_') === 0)) {
+                    localStorage.removeItem(k);
+                }
+            }
+        } catch (_) {}
+        // The big IndexedDB warm cache.
+        try { if (window.LocalCacheIDB && window.LocalCacheIDB.clear) window.LocalCacheIDB.clear(); } catch (_) {}
+    }
+
+    // IDs of debug copies this super-admin owns the debugging session for.
+    async function _myDebugCopyIds() {
+        try {
+            const { data } = await _client
+                .from('debug_copies')
+                .select('copy_camp_id')
+                .eq('super_admin_id', _userId);
+            return (data || []).map(r => r.copy_camp_id);
+        } catch (_) { return []; }
+    }
+
+    // Remove every debug-copy membership this user holds, so they hold at most
+    // one at a time (keeps detection unambiguous and avoids .maybeSingle crashes
+    // elsewhere). Real-camp memberships are never touched.
+    async function _leaveAllDebugCopies() {
+        const copies = await _myDebugCopyIds();
+        if (copies.length) {
+            try {
+                await _client.from('camp_users')
+                    .delete().eq('user_id', _userId).in('camp_id', copies);
+            } catch (_) {}
+        }
+    }
+
+    // Switch the active camp to a DEBUG COPY by joining it as a team-member
+    // owner — the same path every module uses to resolve the active camp. Then
+    // purge local caches and re-detect. Caller reloads the page afterwards.
+    async function setActiveCamp(campId) {
+        if (!campId) throw new Error('setActiveCamp: campId required');
+        if (!_userId) throw new Error('setActiveCamp: not authenticated');
+        await _leaveAllDebugCopies();
+        const copies = await _myDebugCopyIds();
+        if (copies.indexOf(campId) >= 0) {
+            // camp_users.email is NOT NULL — use the super-admin's own email.
+            const myEmail = (_session && _session.user && _session.user.email) ||
+                            localStorage.getItem('campistry_user_email') || 'super-admin@campistry.local';
+            // role must satisfy camp_users_role_check; 'owner' is not a valid
+            // camp_users role (owners live in camps.owner). 'admin' grants full
+            // write access (create/edit/generate) — enough to debug the copy.
+            const { error } = await _client.from('camp_users').insert({
+                camp_id: campId,
+                user_id: _userId,
+                email: myEmail,
+                role: 'admin',
+                accepted_at: new Date().toISOString()
+            });
+            if (error) throw error;
+        }
+        try { localStorage.setItem(CONFIG.CACHE_KEYS.ACTIVE_CAMP_ID, campId); } catch (_) {}
+        purgeCampDataCaches();
+        return await refresh();
+    }
+
+    // Leave any debug copy → fall back to the user's real owned camp.
+    async function clearActiveCamp() {
+        await _leaveAllDebugCopies();
+        try { localStorage.removeItem(CONFIG.CACHE_KEYS.ACTIVE_CAMP_ID); } catch (_) {}
+        purgeCampDataCaches();
+        return await refresh();
+    }
+
+    // =========================================================================
     // EXPORT
     // =========================================================================
 
@@ -607,7 +733,13 @@
         isAdmin,
         isTeamMember,
         isAuthenticated,
-        
+
+        // Debug-copy / active-camp switching
+        checkSuperAdmin,
+        isSuperAdmin,
+        setActiveCamp,
+        clearActiveCamp,
+
         // Auth listeners
         onAuthChange,
         

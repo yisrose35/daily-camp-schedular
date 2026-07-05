@@ -192,8 +192,12 @@
     // =========================================================================
 
     function getAllBunkIds() {
+        // window.bunks is an array of bunk NAME STRINGS in this app;
+        // legacy object form ({id,name}) is still handled.
         const bunks = window.bunks || window.globalBunks || [];
-        return bunks.map(b => String(b.id || b.name));
+        return bunks
+            .map(b => typeof b === 'string' ? b : String(b.id || b.name))
+            .filter(b => b && b !== 'undefined');
     }
 
     // =========================================================================
@@ -201,16 +205,32 @@
     // =========================================================================
 
     function getBunksForDivisions(divisionNames) {
-        const bunks = window.bunks || window.globalBunks || [];
         const divisionSet = new Set(divisionNames.map(String));
-        
+
+        // Primary: the division registry — bunk membership lives at
+        // divisions[name].bunks (array of bunk-name strings).
+        const divs = window.divisions || {};
+        const fromRegistry = [];
+        Object.entries(divs).forEach(([name, info]) => {
+            if (!divisionSet.has(String(name))) return;
+            (info?.bunks || []).forEach(b => {
+                const v = typeof b === 'string' ? b : String(b.id || b.name);
+                if (v && v !== 'undefined') fromRegistry.push(v);
+            });
+        });
+        if (fromRegistry.length > 0) return fromRegistry;
+
+        // Legacy fallback: object-shaped window.bunks with division refs.
+        const bunks = window.bunks || window.globalBunks || [];
         return bunks
             .filter(bunk => {
+                if (typeof bunk === 'string') return false;
                 const divId = String(bunk.divisionId || bunk.division);
                 const divName = getDivisionName(divId);
                 return divisionSet.has(divName) || divisionSet.has(divId);
             })
-            .map(b => String(b.id || b.name));
+            .map(b => String(b.id || b.name))
+            .filter(b => b && b !== 'undefined');
     }
 
     function getDivisionName(divisionId) {
@@ -240,14 +260,17 @@
 
     function canEditBunk(bunkId) {
         const role = window.CampistryDB?.getRole?.() || 'viewer';
-        
-        // Owners and admins can edit everything
-        if (role === 'owner' || role === 'admin') return true;
-        
+
+        // ★ CB-136: v3.13 — schedulers have full edit access (matches AccessControl.canEditBunk).
+        // This duplicate had diverged: it still scoped schedulers to _editableBunks, so a scheduler
+        // editing a bunk outside their assignment got `false` here vs `true` from AccessControl.
+        // Owners/admins/schedulers all bypass; only viewers are blocked.
+        if (role === 'owner' || role === 'admin' || role === 'scheduler') return true;
+
         // Viewers can't edit
         if (role === 'viewer') return false;
-        
-        // Schedulers - check specific permissions
+
+        // Any other role - check specific permissions
         return _editableBunks.includes(String(bunkId));
     }
 
@@ -285,6 +308,14 @@
     /**
      * Filter schedule data to only include bunks this user can edit.
      * Used before saving to prevent overwriting other schedulers' work.
+     *
+     * ★★★ CB-131 — DEAD CODE (advertised but never wired). This + PermissionsGuard's
+     * validateScheduleWrite/validateLeagueWrite/assertCanWriteGrade are documented as the
+     * bunk-level write guard, but a repo-wide grep shows NO save path calls them (only
+     * rbac_diagnostics self-tests). The safety net is currently provided instead by
+     * scheduler_id row scoping + the v3.13 "scheduler = full edit by design" model. DO NOT
+     * assume this filter runs — if you relax row scoping or merge schedulers' rows, wire this
+     * (or an equivalent) into the save path FIRST. Left in place (not removed) for that future use.
      */
     function filterToMyDivisions(scheduleAssignments) {
         if (hasFullAccess()) {

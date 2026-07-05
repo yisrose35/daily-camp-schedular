@@ -85,7 +85,32 @@
         const dailyData = window.loadCurrentDailyData?.() || {};
         const dateData = dailyData[_currentDateKey] || dailyData;
         _subdivisionSchedules = dateData.subdivisionSchedules || {};
-        
+
+        // ★★★ CB-109: this load was LOCAL-ONLY (campDailyData_v1) while every
+        // lock/draft/fieldUsageClaims write fans out to the cloud daily_schedules
+        // KV — so scheduler B operated on a stale view and could double-book a field
+        // scheduler A had reserved. Merge in the cloud-synced copy from global
+        // settings (kept fresher by realtime/hydration), adopting an entry that is
+        // LOCKED or has a newer lastModifiedAt so a remote lock/claim isn't missed.
+        // (Full per-row lock authority would need a dedicated cloud table — [LIVE],
+        // verify with 2 accounts.)
+        try {
+            const _gsDaily = (window.loadGlobalSettings && window.loadGlobalSettings().daily_schedules) || null;
+            const _cloudSubs = _gsDaily && _gsDaily[_currentDateKey] && _gsDaily[_currentDateKey].subdivisionSchedules;
+            if (_cloudSubs && typeof _cloudSubs === 'object') {
+                Object.keys(_cloudSubs).forEach(function (sid) {
+                    const _c = _cloudSubs[sid]; if (!_c) return;
+                    const _l = _subdivisionSchedules[sid];
+                    const _cTime = _c.lastModifiedAt || _c.lockedAt || '';
+                    const _lTime = (_l && (_l.lastModifiedAt || _l.lockedAt)) || '';
+                    const _cLocked = _c.status === SCHEDULE_STATUS.LOCKED || !!_c.lockedBy;
+                    if (!_l || _cTime > _lTime || (_cLocked && !(_l && _l.lockedBy))) {
+                        _subdivisionSchedules[sid] = _c;
+                    }
+                });
+            }
+        } catch (_e109) { /* non-fatal — local view stands */ }
+
         console.log('[SubdivisionScheduler] Loading schedules for date:', _currentDateKey);
         console.log('[SubdivisionScheduler] Found subdivision schedules:', Object.keys(_subdivisionSchedules).length);
 
@@ -125,12 +150,18 @@
     function saveSubdivisionSchedules() {
         // Save to the correct date key
         const dailyData = window.loadCurrentDailyData?.() || {};
-        
-        if (!dailyData[_currentDateKey]) {
-            dailyData[_currentDateKey] = {};
+
+        // ★ CB-129: resolve the date FRESH at save time. _currentDateKey is captured once in
+        // initialize() and never updated on calendar nav, so saving after a date change would write
+        // the new date's subdivisionSchedules under the stale init key (and re-fan the whole
+        // multi-date campDailyData_v1 to cloud under that wrong date). Prefer the live date.
+        const dk = window.currentScheduleDate || _currentDateKey || new Date().toISOString().split('T')[0];
+
+        if (!dailyData[dk]) {
+            dailyData[dk] = {};
         }
-        
-        dailyData[_currentDateKey].subdivisionSchedules = _subdivisionSchedules;
+
+        dailyData[dk].subdivisionSchedules = _subdivisionSchedules;
         
         // Save the whole thing
         try {
@@ -365,6 +396,14 @@
         return data;
     }
 
+    // ★★★ CB-134 — LATENT KEYING HAZARD (dead path). extractScheduleDataForSubdivision keys data
+    //   by each bunk's OWN per-bunk array index, but this function keys claims by the DIVISION-level
+    //   fieldUsageBySlot index — two different slot-index spaces. The restore/register consumers
+    //   (restoreLockedSchedules / registerLockedClaimsInGlobalLocks / getBunksToSchedule / etc.) have
+    //   ZERO callers today (grep-confirmed) so this is inert, but if the subdivision-lock multi-
+    //   scheduler feature is revived, reconcile the two index spaces FIRST (resolve both through the
+    //   bunk's _perBunkSlots geometry — see SchedulerCoreUtils._resolveSlotArray) or claims will be
+    //   registered against the wrong slots.
     function extractFieldUsageClaimsForSubdivision(subdivisionId) {
         const schedule = _subdivisionSchedules[subdivisionId];
         if (!schedule) return {};

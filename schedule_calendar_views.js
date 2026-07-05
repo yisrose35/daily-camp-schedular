@@ -54,10 +54,7 @@
         return hh + ':' + String(m).padStart(2, '0') + ' ' + ampm;
     }
 
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
+    function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical; #V2-19 quote-escaping preserved)
 
     // ── Division Helpers ────────────────────────────────────────────────
     function getDivisions() { return window.divisions || {}; }
@@ -91,6 +88,27 @@
     // JSON blob 700+ times and freezes the browser.
     var _dataCache = null;
     var _rotCache = null;
+
+    // ★★★ CB-70: the calendar data layer reads ONLY localStorage campDailyData_v1,
+    // so a cloud-only date (created on another device) or a locally-pruned date
+    // rendered "No schedule" even though a real schedule exists in Supabase. This
+    // additive cloud-date index marks those days as having a schedule. It NEVER
+    // removes a local marker — worst case (offline / old bundle) it stays empty and
+    // behaviour is unchanged. Hydrated once per session, then one re-render.
+    var _cloudDateSet = null;        // Set<dateKey> once loaded
+    var _cloudDatesHydrating = false;
+    function _hydrateCloudScheduleDates() {
+        if (_cloudDateSet !== null || _cloudDatesHydrating) return; // once
+        if (!window.ScheduleDB || typeof window.ScheduleDB.listScheduleDates !== 'function') return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+        _cloudDatesHydrating = true;
+        Promise.resolve(window.ScheduleDB.listScheduleDates()).then(function (dates) {
+            _cloudDateSet = new Set((dates || []).map(String));
+            _cloudDatesHydrating = false;
+            // One re-render so the freshly-known cloud dates get their markers.
+            if (_cloudDateSet.size > 0) { try { render(); } catch (e) {} }
+        }).catch(function () { _cloudDatesHydrating = false; _cloudDateSet = new Set(); });
+    }
 
     function beginRenderCache() {
         try {
@@ -129,17 +147,11 @@
         } catch (e) { return []; }
     }
 
-    // Does this day have a generated schedule?
-    // Fast check: just confirms scheduleAssignments has bunk data.
-    function hasSchedule(dateKey) {
-        var data = getScheduleDataForDate(dateKey);
-        if (!data || !data.scheduleAssignments) return false;
-        var keys = Object.keys(data.scheduleAssignments);
-        if (keys.length === 0) return false;
-        // Quick: check first bunk has an array with entries
-        var first = data.scheduleAssignments[keys[0]];
-        return Array.isArray(first) && first.length > 0;
-    }
+    // ★ FN-12: a duplicate hasSchedule() definition lived here. An identical
+    //   declaration further down (the one that also verifies EVERY bunk has real
+    //   slot data, not just the first) wins via function-declaration hoisting, so
+    //   this first copy was unreachable dead code. Removed to avoid the confusion
+    //   of two same-named definitions in one scope; the thorough copy survives.
 
     // ── Special Events Only ─────────────────────────────────────────────
     // The calendar ONLY shows truly notable/special things — NOT the
@@ -313,14 +325,17 @@
     // Does this day have a generated schedule? (checks scheduleAssignments)
     function hasSchedule(dateKey) {
         var data = getScheduleDataForDate(dateKey);
-        if (!data || !data.scheduleAssignments) return false;
-        var bunks = Object.keys(data.scheduleAssignments);
-        if (bunks.length === 0) return false;
-        // Make sure at least one bunk has real slot data
-        for (var i = 0; i < bunks.length; i++) {
-            var slots = data.scheduleAssignments[bunks[i]];
-            if (Array.isArray(slots) && slots.length > 0) return true;
+        if (data && data.scheduleAssignments) {
+            var bunks = Object.keys(data.scheduleAssignments);
+            // Make sure at least one bunk has real slot data
+            for (var i = 0; i < bunks.length; i++) {
+                var slots = data.scheduleAssignments[bunks[i]];
+                if (Array.isArray(slots) && slots.length > 0) return true;
+            }
         }
+        // ★★★ CB-70: a cloud-only / locally-pruned date still has a real schedule
+        // in Supabase — mark it so the overview doesn't show a false "No schedule".
+        if (_cloudDateSet && _cloudDateSet.has(String(dateKey))) return true;
         return false;
     }
 
@@ -345,14 +360,22 @@
         var picker = document.getElementById('calendar-date-picker');
         var currentKey = (picker && picker.value) || window.currentScheduleDate || '';
 
-        window.currentScheduleDate = newKey;
-
         if (currentKey === newKey) {
-            // Same date — just trigger render directly
+            // Same date — no cross-date transition, safe to set + render directly.
+            window.currentScheduleDate = newKey;
             console.log(LOG, 'Date unchanged (' + newKey + '), calling updateTable');
             callOriginalUpdateTable();
             return;
         }
+
+        // ★★★ CB-61: do NOT eagerly set window.currentScheduleDate before the
+        // date-change handler runs. The handler saves the CURRENT date's
+        // in-memory schedule before switching; if currentScheduleDate already
+        // points at the NEW key, that pre-switch save targets the wrong date,
+        // the cross-date guard blocks it, and the old day's unsaved edits are
+        // silently lost. The picker 'change' → calendar.js onDateChanged →
+        // orchestrator chain persists the current date under its correct key,
+        // THEN sets currentScheduleDate to newKey and loads it.
 
         // Different date — set picker value, fire change event.
         // This triggers: calendar.js onDateChanged → campistry-date-changed
@@ -436,6 +459,8 @@
                         '<button class="scv-view-btn" data-view="week">Week</button>' +
                         '<button class="scv-view-btn active" data-view="day">Day</button>' +
                     '</div>' +
+                    '<button class="scv-save-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.saveNow()">Save</button>' +
+                    '<button class="scv-saved-btn" onclick="window.SnapshotUI &amp;&amp; window.SnapshotUI.openModal()">Saved</button>' +
                     '<button class="scv-validate-btn" onclick="window.validateSchedule &amp;&amp; window.validateSchedule()">Validate</button>' +
                 '</div>' +
             '</div>' +
@@ -595,6 +620,10 @@
         _calendarContainer.style.display = '';
         _calendarContainer.innerHTML = '';
 
+        // ★★★ CB-70: lazily hydrate the cloud schedule-date index (once); when it
+        // resolves it triggers one more render so cloud-only days show markers.
+        _hydrateCloudScheduleDates();
+
         // Parse localStorage ONCE for the entire render
         beginRenderCache();
         if (_currentView === 'year') renderYearView();
@@ -664,7 +693,77 @@
     // ══════════════════════════════════════════════════════════════════════
     // MONTH VIEW
     // ══════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // CAMP DATES — half / transition / start-end markers
+    // Reads the LIVE user-input camp dates (top-level `campDates`, the same
+    // source the rotation engine's Utils.getCampDates uses). ISO date strings
+    // (YYYY-MM-DD) compare correctly lexicographically, so no Date parsing.
+    // ══════════════════════════════════════════════════════════════════════
+    function _getCampDatesCfg() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getCampDates === 'function') {
+                var cd = window.SchedulerCoreUtils.getCampDates();
+                if (cd && cd.startDate) return cd;
+            }
+        } catch (e) {}
+        try {
+            if (window.loadGlobalSettings) {
+                var gs = window.loadGlobalSettings() || {};
+                var cd2 = gs.campDates || window.loadGlobalSettings('campDates');
+                if (cd2 && cd2.startDate) return cd2;
+            }
+        } catch (e) {}
+        return null;
+    }
+    // Classify an ISO dateKey against the camp-dates config.
+    // Returns null if no camp dates set. Otherwise:
+    //   { inCamp, isStart, isEnd, half: 1|2|0|null, isTransition }
+    // half===0 + isTransition===true means the changeover gap between
+    // half1End and half2Start (rendered as a non-numbered transition marker).
+    function _campDateInfo(dateKey, cd) {
+        if (!cd || !cd.startDate || !dateKey) return null;
+        var start = cd.startDate, end = cd.endDate || null, h1End = cd.half1End || null, h2Start = cd.half2Start || null;
+        if (dateKey < start) return { inCamp: false };
+        if (end && dateKey > end) return { inCamp: false };
+        var info = { inCamp: true, isStart: dateKey === start, isEnd: !!(end && dateKey === end), half: null, isTransition: false };
+        if (h2Start) {
+            if (dateKey >= h2Start) info.half = 2;
+            else if (h1End && dateKey > h1End) { info.half = 0; info.isTransition = true; } // changeover gap
+            else info.half = 1;
+        } else if (h1End) {
+            info.half = (dateKey <= h1End) ? 1 : 2;
+        }
+        return info;
+    }
+    // Build the marker HTML (badge) + returns the cell CSS class suffix.
+    function _campDateMarker(info) {
+        if (!info || !info.inCamp) return { cls: '', badge: '' };
+        var cls = info.isTransition ? ' scv-cd-transition' : (info.half === 2 ? ' scv-cd-half2' : (info.half === 1 ? ' scv-cd-half1' : ''));
+        // Half is conveyed by the cell tint (cls) + legend; badges mark only
+        // the milestone days so the grid stays readable.
+        var badge = '';
+        if (info.isStart) badge = '<div class="scv-cd-badge scv-cd-badge-start">Camp Start</div>';
+        else if (info.isEnd) badge = '<div class="scv-cd-badge scv-cd-badge-end">Camp End</div>';
+        else if (info.isTransition) badge = '<div class="scv-cd-badge scv-cd-badge-transition">Transition</div>';
+        return { cls: cls, badge: badge };
+    }
+    // A one-row color legend shown above month/week views when camp dates exist.
+    function _campDatesLegendHtml(cd) {
+        if (!cd || !cd.startDate) return '';
+        var items = '<span class="scv-cd-leg-item"><span class="scv-cd-leg-sw scv-cd-half1"></span>1st Half</span>';
+        if (cd.half2Start) {
+            if (cd.half1End && cd.half1End < cd.half2Start) {
+                // only show a transition swatch when there is an actual gap (changeover days)
+                var _g = new Date(cd.half2Start + 'T00:00:00') - new Date(cd.half1End + 'T00:00:00');
+                if (_g > 86400000) items += '<span class="scv-cd-leg-item"><span class="scv-cd-leg-sw scv-cd-transition"></span>Transition</span>';
+            }
+            items += '<span class="scv-cd-leg-item"><span class="scv-cd-leg-sw scv-cd-half2"></span>2nd Half</span>';
+        }
+        return '<div class="scv-cd-legend">' + items + '</div>';
+    }
+
     function renderMonthView() {
+        var _campCd = _getCampDatesCfg();
         var daysInMonth = new Date(_viewYear, _viewMonth + 1, 0).getDate();
         var firstDow = new Date(_viewYear, _viewMonth, 1).getDay();
         var prevMonthDays = new Date(_viewYear, _viewMonth, 0).getDate();
@@ -676,7 +775,7 @@
         var headerHtml = '<div class="scv-month-header-row">';
         DAYS.forEach(function (d) { headerHtml += '<div class="scv-month-hdr">' + d + '</div>'; });
         headerHtml += '</div>';
-        wrapper.innerHTML = headerHtml;
+        wrapper.innerHTML = _campDatesLegendHtml(_campCd) + headerHtml;
 
         var grid = document.createElement('div');
         grid.className = 'scv-month-grid';
@@ -703,6 +802,10 @@
 
                 if (inMonth) {
                     var dateKey = getDateKey(_viewYear, _viewMonth, dayNum);
+                    // ★ Camp-date marker: tint the cell by half + badge milestone days.
+                    var _cdMark = _campDateMarker(_campDateInfo(dateKey, _campCd));
+                    if (_cdMark.cls) cell.className += _cdMark.cls;
+                    if (_cdMark.badge) inner += _cdMark.badge;
                     var events = getGradeEvents(dateKey);
                     var scheduled = hasSchedule(dateKey);
                     var maxShow = 3;
@@ -739,6 +842,7 @@
     // WEEK VIEW
     // ══════════════════════════════════════════════════════════════════════
     function renderWeekView() {
+        var _campCd = _getCampDatesCfg();
         var current = new Date(_viewYear, _viewMonth, _viewDay);
         var startOfWeek = new Date(current);
         startOfWeek.setDate(current.getDate() - current.getDay());
@@ -762,6 +866,7 @@
             var dateKey = getDateKey(wd.getFullYear(), wd.getMonth(), wd.getDate());
             var activeGrades = getActiveGrades(dateKey);
             var scheduled = hasSchedule(dateKey);
+            var _cdMark = _campDateMarker(_campDateInfo(dateKey, _campCd)); // camp-date half tint + milestone badge
             var dotHtml = '';
             activeGrades.slice(0, 6).forEach(function (g) {
                 dotHtml += '<span class="scv-week-hdr-dot" style="background:' + g.color + ';" title="' + escapeHtml(g.division) + '"></span>';
@@ -769,17 +874,18 @@
             var schedBadge = scheduled
                 ? '<span class="scv-week-sched-badge">\u2713</span>'
                 : '<span class="scv-week-no-sched-badge">\u2013</span>';
-            headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
+            headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + _cdMark.cls + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
                 '<span class="scv-week-day-name">' + DAYS[wd.getDay()] + '</span>' +
                 '<div class="scv-week-day-num-row">' +
                     '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
                     schedBadge +
                 '</div>' +
+                _cdMark.badge +
                 (dotHtml ? '<div class="scv-week-hdr-dots">' + dotHtml + '</div>' : '') +
                 '</div>';
         });
         headerHtml += '</div>';
-        wrapper.innerHTML = headerHtml;
+        wrapper.innerHTML = _campDatesLegendHtml(_campCd) + headerHtml;
 
         var hdrEls = wrapper.querySelectorAll('.scv-week-day-hdr');
         for (var h = 0; h < hdrEls.length; h++) {
@@ -905,7 +1011,9 @@
 '.scv-view-btn:hover{color:var(--slate-700,#334155)}' +
 '.scv-view-btn.active{background:#fff;color:var(--slate-900,#0f172a);box-shadow:0 1px 3px rgba(0,0,0,.08)}' +
 '.scv-validate-btn{padding:6px 16px;border:none;border-radius:6px;background:#ff9800;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
-'.scv-validate-btn:hover{opacity:.85}' +
+'.scv-save-btn{padding:6px 16px;border:none;border-radius:6px;background:#2e7d32;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
+'.scv-saved-btn{padding:6px 16px;border:none;border-radius:6px;background:#147D91;color:#fff;font-size:13px;font-weight:600;cursor:pointer;transition:opacity .15s}' +
+'.scv-validate-btn:hover,.scv-save-btn:hover,.scv-saved-btn:hover{opacity:.85}' +
 
 /* Filter */
 '.scv-filter-row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}' +
@@ -950,6 +1058,21 @@
 '.scv-month-ev{font-size:10px;line-height:15px;padding:2px 6px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}' +
 '.scv-month-sched{font-size:9px;color:#059669;font-weight:600;margin-top:auto;padding-top:4px;opacity:.7}' +
 '.scv-month-no-sched{font-size:9px;color:var(--slate-300,#cbd5e1);margin-top:auto;padding-top:4px}' +
+
+/* Camp-date markers: half tint (left stripe) + milestone badges + legend */
+'.scv-cd-half1{box-shadow:inset 3px 0 0 #7C3AED}' +
+'.scv-cd-half2{box-shadow:inset 3px 0 0 #2563EB}' +
+'.scv-cd-transition{box-shadow:inset 3px 0 0 #d97706;background:repeating-linear-gradient(45deg,rgba(217,119,6,.07),rgba(217,119,6,.07) 6px,transparent 6px,transparent 12px)}' +
+'.scv-cd-badge{display:inline-block;font-size:8px;font-weight:700;line-height:1.2;padding:1px 5px;border-radius:8px;margin:2px 0;letter-spacing:.3px;text-transform:uppercase}' +
+'.scv-cd-badge-start{background:rgba(5,150,105,.16);color:#047857}' +
+'.scv-cd-badge-end{background:rgba(220,38,38,.16);color:#b91c1c}' +
+'.scv-cd-badge-transition{background:rgba(217,119,6,.20);color:#b45309}' +
+'.scv-cd-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:6px 10px;font-size:11px;color:var(--slate-600,#475569);background:var(--slate-50,#f8fafc);border-bottom:1px solid var(--slate-100,#f1f5f9)}' +
+'.scv-cd-leg-item{display:inline-flex;align-items:center;gap:5px;font-weight:600}' +
+'.scv-cd-leg-sw{display:inline-block;width:12px;height:12px;border-radius:3px;box-shadow:none}' +
+'.scv-cd-leg-sw.scv-cd-half1{background:#7C3AED}' +
+'.scv-cd-leg-sw.scv-cd-half2{background:#2563EB}' +
+'.scv-cd-leg-sw.scv-cd-transition{background:#d97706}' +
 
 /* Week */
 '.scv-week-wrapper{border:1px solid var(--slate-200,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff}' +

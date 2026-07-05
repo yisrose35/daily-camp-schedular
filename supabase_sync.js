@@ -163,6 +163,7 @@
                 log('No data in localStorage - clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
+                window._scheduleAssignmentsDate = dateKey; // keep owner stamp coherent with cleared memory
                 return false;
             }
             
@@ -173,6 +174,7 @@
                 log('No data for date:', dateKey, '- clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
+                window._scheduleAssignmentsDate = dateKey; // keep owner stamp coherent with cleared memory
                 return false;
             }
             
@@ -197,6 +199,28 @@
                             }
                         }
                     });
+
+                    // ★★★ CB-15: the loop above only protects AUTO-mode in-flight
+                    // generations (_isPerBunk). In MANUAL mode a bunk has no
+                    // _isPerBunk marker, so myBunks stayed empty and a realtime
+                    // refresh full-REPLACED window.scheduleAssignments — wiping a
+                    // scheduler's unsaved manual edits. When this is a refresh of
+                    // the date ALREADY in memory (not a date-change load) and the
+                    // user is a SCHEDULER (scoped subset — owner/admin = all
+                    // divisions, so expanding would suppress every remote update;
+                    // their case is handled by integration_hooks' merge), also
+                    // protect that scheduler's editable bunks so remote updates
+                    // merge for OTHER bunks without clobbering the scheduler's own.
+                    try {
+                        var _role = window.CampistryDB?.getRole?.() || window.AccessControl?.getCurrentRole?.();
+                        if (_role === 'scheduler' && window._scheduleAssignmentsDate === dateKey) {
+                            var _myDivs = window.AccessControl?.getEditableDivisions?.() || [];
+                            _myDivs.forEach(function(dn) {
+                                var di = (window.divisions || {})[dn];
+                                if (di && di.bunks) di.bunks.forEach(function(b) { myBunks.add(b); });
+                            });
+                        }
+                    } catch (_e) { /* fall through to existing behavior */ }
 
                     if (myBunks.size === 0) {
                         // No live generation — full replace is safe
@@ -309,8 +333,16 @@
                 }
             }
             
+            // ★★★ CROSS-DATE STAMP: bind in-memory schedule to its owner date,
+            // atomically with the data writes above (no await in between). Without
+            // this, an async hydrate for a non-current date left the owner stamp
+            // (window._scheduleAssignmentsDate) pointing at the wrong day, so a
+            // later lazy save serialized THIS day's data under the stamped key —
+            // silently corrupting cloud. Keeping the stamp honest lets the save
+            // guards refuse the mismatch.
+            window._scheduleAssignmentsDate = dateKey;
             return hydrated;
-            
+
         } catch (e) {
             logError('Hydration error:', e);
             return false;
@@ -376,6 +408,7 @@
                         window.divisionTimes = {};
                         window.unifiedTimes = [];
                         window._localGenerationTimestamp = 0;
+                        window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with full-clear
                         const DAILY_KEY = 'campDailyData_v1';
                         const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                         delete allData[dateKey];
@@ -492,6 +525,9 @@
             });
 
             window.scheduleAssignments = localAssignments;
+            // ★★★ CROSS-DATE STAMP: this merge applied dateKey's cloud data — bind
+            // the owner stamp so a concurrent nav's lazy save can't mistake it.
+            window._scheduleAssignmentsDate = dateKey;
 
             // Merge divisionTimes — add/update grades that aren't ours
             var cloudDT = cloudResult.data.divisionTimes || {};
@@ -764,7 +800,15 @@
                     {
                         event: '*',
                         schema: 'public',
-                        table: 'daily_schedules'
+                        table: 'daily_schedules',
+                        // ★★★ CROSS-TENANT FIX: scope realtime to THIS camp so a
+                        // delete/edit in any other camp never reaches this client
+                        // (was unfiltered → other camps' DELETEs were misattributed
+                        // to the viewed date and wiped it). Requires REPLICA IDENTITY
+                        // FULL on daily_schedules (migration 014) so DELETE payloads
+                        // carry camp_id to match against — otherwise this filter would
+                        // drop every DELETE. Apply migration 014 before/with this code.
+                        filter: `camp_id=eq.${campId}`
                     },
                     handleRealtimeChange
                 )
@@ -873,9 +917,10 @@
         const record = payload.new || payload.old || {};
         const eventType = payload.eventType;
 
-        // Client-side camp_id filter (server-side filter removed because
-        // DELETE events with default REPLICA IDENTITY lack camp_id in
-        // payload.old, causing them to be silently dropped).
+        // Client-side camp_id backstop (defense-in-depth). The subscription now
+        // ALSO filters camp_id server-side (see subscribe()), and REPLICA IDENTITY
+        // FULL (migration 014) makes camp_id present on DELETE payloads too — so
+        // an other-camp event should never even reach here.
         if (record.camp_id && myCampId && record.camp_id !== myCampId) {
             return;
         }
@@ -889,13 +934,16 @@
             return;
         }
 
-        // For DELETE events, payload.old may only have the primary key (id)
-        // if REPLICA IDENTITY is default. Treat unknown-date deletes as
-        // potentially affecting the current date.
+        // With REPLICA IDENTITY FULL (migration 014), DELETE payloads carry the
+        // full old row, so date_key is present. If it is somehow missing, do NOT
+        // guess "current date" — that misattribution let an unrelated delete (other
+        // camp / other date) wipe the viewed schedule. An unattributable delete is
+        // ignored (safe: stale data persists) rather than acted on (unsafe: real
+        // data wiped).
         var recordDateKey = record.date_key;
         if (eventType === 'DELETE' && !recordDateKey) {
-            log('DELETE with unknown date_key — treating as current date');
-            recordDateKey = _currentDateKey;
+            log('DELETE with unknown date_key (REPLICA IDENTITY not FULL?) — ignoring, cannot safely attribute');
+            return;
         }
 
         if (recordDateKey !== _currentDateKey) {
@@ -1026,10 +1074,20 @@
         updateStatus('offline');
     }
 
+    let _draining = false;
     async function processOfflineQueue() {
+        // ★ RE-ENTRANCY GUARD: two reconnect paths (the window 'online' handler and
+        //   the realtime scheduleReconnect timer) can both call this. Without a
+        //   guard, a 2nd drain's loadOfflineQueue() below overwrites _offlineQueue
+        //   mid-loop — either re-running queued saves (duplicates) or DISCARDING
+        //   failed items the 1st drain re-queued in memory (they live only in
+        //   _offlineQueue until the loop finishes). Serialize: skip if already draining.
+        if (_draining) { log('Offline queue drain already running — skipping concurrent call'); return; }
+        _draining = true;
+        try {
         // Load from persistence first
         loadOfflineQueue();
-        
+
         if (_offlineQueue.length === 0) return;
 
         log('Processing offline queue:', _offlineQueue.length, 'items');
@@ -1045,7 +1103,10 @@
 
         for (const item of queue) {
             try {
-                const result = await window.ScheduleDB?.saveSchedule?.(item.dateKey, item.data);
+                // ★ allowCrossDate: a queued offline save legitimately persists THAT date's
+                //   own captured payload under THAT date, even though the user may now be
+                //   viewing a different date — exempt it from the cross-date save guard.
+                const result = await window.ScheduleDB?.saveSchedule?.(item.dateKey, item.data, { allowCrossDate: true });
                 
                 if (!result?.success) {
                     item.retries = (item.retries || 0) + 1;
@@ -1082,6 +1143,9 @@
         }
         if (failCount > 0) {
             showSyncToast(`⚠️ ${failCount} change(s) failed to sync`, true);
+        }
+        } finally {
+            _draining = false;
         }
     }
 
@@ -1232,6 +1296,10 @@
     });
 
     // Listen for realtime updates
+    // ★★★ CB-44: NOTE — 'campistry-realtime-update' is never dispatched anywhere
+    // (verified repo-wide), so this listener is currently DORMANT. Realtime
+    // multi-scheduler refresh is driven by integration_hooks' realtime handler,
+    // not this event. Kept as intended wiring; do not assume it fires today.
     window.addEventListener('campistry-realtime-update', (e) => {
         console.log('[Sync] Realtime update event received');
         refreshMultiSchedulerView(getCurrentDateKey(), true);
@@ -1272,10 +1340,10 @@
     function initAfterRBAC() {
         const waitForRBAC = setInterval(() => {
             if (!window.AccessControl?.isInitialized) return;
-            
+
             clearInterval(waitForRBAC);
             console.log('[Sync] RBAC ready, performing initial hydration');
-            
+
             const dateKey = getCurrentDateKey();
             forceHydrateFromLocalStorage(dateKey, true);
             ensureEmptyStateForUnscheduledDivisions();

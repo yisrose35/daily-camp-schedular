@@ -34,6 +34,18 @@
         return dt[slotIdx] || null;
     }
 
+    // A "Sports" tile slot (event "Sports Slot") only accepts sports; a "Special
+    // Activity" slot only accepts specials; everything else is flexible ('any').
+    // Mirrors slotKindOf in scheduler_core_main.js so the leftover-slot free-fill
+    // and the manual ⚡ Auto Fill button respect the same sport/special boundary
+    // the solver enforces.
+    function slotKindOf(ev) {
+        const s = String(ev || '').toLowerCase().trim();
+        if (s === 'sports slot' || s === 'sport slot') return 'sport';
+        if (s === 'special activity') return 'special';
+        return 'any';
+    }
+
     function getGlobalSettings() {
         return window.loadGlobalSettings?.() || {};
     }
@@ -66,8 +78,20 @@
         if (window.activityProperties && Object.keys(window.activityProperties).length) {
             return window.activityProperties;
         }
-        // Build from global settings
+        // Build from global settings (fallback used when window.activityProperties
+        // wasn't populated by a generation this session — e.g. Auto Fill right
+        // after a page reload). Must carry field time windows so Auto Fill honors
+        // them the way canBlockFit does; the previous fallback omitted timeRules
+        // entirely, so BOTH setup ("Available 10-12") and daily windows went
+        // unchecked in this path.
         const gs = getGlobalSettings();
+        const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        const _parseRules = (arr) => Array.isArray(arr) ? arr.map(r => ({
+            type: r.type, available: r.available,
+            startMin: (r.startMin != null) ? r.startMin : (_parseTM ? _parseTM(r.start || r.startTime) : null),
+            endMin: (r.endMin != null) ? r.endMin : (_parseTM ? _parseTM(r.end || r.endTime) : null),
+            divisions: Array.isArray(r.divisions) ? r.divisions : []
+        })) : [];
         const map = {};
         (gs.app1?.fields || []).forEach(f => {
             map[f.name] = {
@@ -78,6 +102,7 @@
                 maxUsage: f.maxUsage || 0,
                 exactFrequency: f.exactFrequency || 0,
                 exactFrequencyPeriod: f.exactFrequencyPeriod || '1week',
+                timeRules: _parseRules(f.timeRules),
             };
         });
         (gs.app1?.specialActivities || []).forEach(s => {
@@ -92,6 +117,26 @@
                 exactFrequencyPeriod: s.exactFrequencyPeriod || '1week',
             };
         });
+        // Merge per-date Daily-Adjustments windows — they OVERRIDE the setup
+        // windows for the same field (parity with the activityProperties merge
+        // canBlockFit uses), keyed to the active gen/schedule date.
+        try {
+            const _dk = window._activeGenDate || window.currentScheduleDate || '';
+            let _dfa = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+            if ((!_dfa || !Object.keys(_dfa).length) && _dk) {
+                const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability) _dfa = _p.dailyFieldAvailability; }
+            }
+            if (_dfa) {
+                Object.keys(_dfa).forEach(fn => {
+                    const rules = _dfa[fn];
+                    if (Array.isArray(rules) && rules.length) {
+                        map[fn] = map[fn] || { name: fn, type: 'field', activities: [] };
+                        map[fn].timeRules = _parseRules(rules);
+                    }
+                });
+            }
+        } catch (_e) {}
         return map;
     }
 
@@ -161,14 +206,16 @@
         return out;
     }
 
-    function isFieldAvailable(fieldName, myBunk, myDiv, slotStart, slotEnd, actProps) {
+    function isFieldAvailable(fieldName, myBunk, myDiv, slotStart, slotEnd, actProps, wantActivity) {
         const ap = actProps[fieldName] || {};
         const sharing = ap.sharableWith || ap.sharing || {};
         const sharingType = sharing.type || 'not_sharable';
         const capacity = (sharingType === 'not_sharable') ? 1 : (sharing.capacity || 1);
 
         let usageCount = 0;
+        let sharedPlayers = 0, sharedSport = null;   // ★ player-max gate accumulators
         const sa = window.scheduleAssignments || {};
+        const _bmMax = (window.getBunkMetaData && window.getBunkMetaData()) || {};
 
         for (const [otherBunk, slots] of Object.entries(sa)) {
             if (!Array.isArray(slots) || otherBunk === myBunk) continue;
@@ -202,6 +249,16 @@
                     continue;
                 }
 
+                // ★ Same-activity-when-sharing: a shared field/room hosts ONE activity
+                //   at a time. A co-occupant doing a DIFFERENT activity means this fill
+                //   can't share it — two different specials on one room (e.g. Running
+                //   Bases + Off The Wall on "Football Turf"), or two different sports on
+                //   one field, is a double-book even within capacity. Only enforced when
+                //   the caller names the activity it intends to place.
+                if (wantActivity) {
+                    const _oAct = oe._activity || oe.sport || oe.activity || '';
+                    if (_oAct && String(_oAct).toLowerCase().trim() !== String(wantActivity).toLowerCase().trim()) return false;
+                }
                 // Apply sharing rules
                 if (sharingType === 'not_sharable') return false;
                 if (sharingType === 'same_division' && otherDiv !== myDiv) return false;
@@ -210,7 +267,24 @@
                     if (!allowed.includes(myDiv) || !allowed.includes(otherDiv)) return false;
                 }
                 usageCount++;
+                // ★ accumulate combined players for the sport-max gate (this co-occupant
+                //   passed the sharing rules, so its campers join the shared-game total)
+                var _oActF = (oe && (oe.activity || oe.sport)) || null;
+                if (_oActF) { if (!sharedSport) sharedSport = _oActF; sharedPlayers += ((_bmMax[otherBunk] && _bmMax[otherBunk].size) || 0); }
                 if (usageCount >= capacity) return false;
+            }
+        }
+        // ★ Player-max co-occupancy gate (parity with the solver's
+        //   checkSharedPlayerMaxConflict): don't fill onto a SHARED field if the combined
+        //   campers would exceed the sport's maxPlayers + 2 grace (e.g. Basketball max 20:
+        //   two 15-bunks = 30 is rejected → the fill picks an empty court instead). Only
+        //   when the field is actually shared; a lone fill onto an empty field is untouched.
+        if (sharedPlayers > 0 && sharedSport) {
+            var _allMetaF = (window.getSportMetaData && window.getSportMetaData()) || null;
+            var _mxF = _allMetaF && _allMetaF[sharedSport] && _allMetaF[sharedSport].maxPlayers;
+            if (_mxF && _mxF > 0) {
+                var _mySizeF = (_bmMax[myBunk] && _bmMax[myBunk].size) || 0;
+                if (sharedPlayers + _mySizeF > _mxF + 2) return false;
             }
         }
         return true;
@@ -221,16 +295,50 @@
     // Returns all activities that are physically available for the slot.
     // ========================================================================
 
-    function buildCandidates(bunk, slotStart, slotEnd, divName, actProps) {
+    function buildCandidates(bunk, slotStart, slotEnd, divName, actProps, slotKind) {
         const gs = getGlobalSettings();
         const candidates = [];
         // ★ Respect rainy day: when not raining, skip rainyOnly activities/specials.
         const isRainy = !!window.isRainyDay;
+        // ★ Tile-kind gate: a Sports-only slot skips specials; a Special-only slot
+        //   skips sports. 'any' (or unset) keeps both, the pre-existing behavior.
+        const _kind = slotKind || 'any';
 
-        // Sports / field activities
-        (gs.app1?.fields || []).forEach(f => {
+        // ★ Today's Resource disables (Daily Adjustments → Resources). The main solver
+        //   already excludes these via canBlockFit / the domain build, but this fill path
+        //   (the STEP 7.5 silent free-slot fallback AND the manual ⚡ Auto Fill button)
+        //   iterates the RAW field/special config, so without these gates it re-fills the
+        //   very fields/sports/specials the user shut off for today. Read both the gen-time
+        //   global (currentDisabledFields, set during generation) and the date-fresh daily
+        //   data (for the post-gen manual button). currentDisabledFields also contains
+        //   special-activity LOCATIONS — disabling a facility adds its name there.
+        const _curDaily = window.loadCurrentDailyData?.() || {};
+        const _disabledLc = new Set([
+            ...(window.currentDisabledFields || []),
+            ...(((_curDaily.overrides || {}).disabledFields) || [])
+        ].map(n => String(n).toLowerCase().trim()));
+        const _disabledSportsByField = _curDaily.dailyDisabledSportsByField || {};
+        const _disabledSpecialsLc = new Set((((_curDaily.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
+
+        // ★ CONFIG-LEVEL facility shut-off (Facilities tab → AVAILABLE/UNAVAILABLE switch =
+        //   available:false on the room's backing field entry). The PERMANENT analog of the
+        //   per-date Resource disables above. The solver/STEP 7.6 honor it (canBlockFit +
+        //   _sportFields76 filter on available!==false), but THIS fill path (STEP 7.5 silent
+        //   fallback + the manual ⚡ Auto Fill button) iterates raw config and never checked
+        //   it — re-filling sports onto a shut-off field and specials hosted in a shut-off
+        //   room. Gate the sport branch by f.available and the special branch by its host.
+        const _unavailFieldsLc = new Set((gs.app1?.fields || [])
+            .filter(f => f && f.name && f.available === false)
+            .map(f => String(f.name).toLowerCase().trim()));
+
+        // Sports / field activities (skipped entirely for a Special-only slot)
+        if (_kind !== 'special') (gs.app1?.fields || []).forEach(f => {
             if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
             if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
+            // ★ Field shut off in Facilities config (AVAILABLE/UNAVAILABLE switch)
+            if (f.available === false) return;
+            // ★ Field disabled today in Resources
+            if (_disabledLc.has(String(f.name).toLowerCase().trim())) return;
             // ★ Grade restriction — skip if this field excludes our division
             if (isDivisionRestricted(f, divName)) return;
             // ★ Time rules — skip if [slotStart, slotEnd] is unavailable
@@ -239,25 +347,86 @@
             if (isFieldGloballyLocked(f.name, slotStart, slotEnd, divName)) return;
             // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
+            // ★ Specific sports disabled on THIS field today (dailyDisabledSportsByField)
+            const _blockedOnField = _disabledSportsByField[f.name] || null;
             (f.activities || []).forEach(actName => {
-                candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
+                if (_blockedOnField && _blockedOnField.indexOf(actName) !== -1) return;
+                // ★ Per-date bunk-only restriction (sport actName / facility f.name)
+                if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, actName, f.name, divName)) return;
+                // ★ Same-activity-when-sharing: skip a sport whose field is already held
+                //   by a DIFFERENT activity at this time (mismatch double-book).
+                if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps, actName)) return;
+                candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, maxUsagePeriod: f.maxUsagePeriod || 'half', exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
             });
         });
 
-        // Special activities
-        (gs.app1?.specialActivities || []).forEach(s => {
-            if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
-            if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
-            // ★ Grade restriction
-            if (isDivisionRestricted(s, divName)) return;
-            const loc = s.location || null;
-            if (loc) {
-                if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
-                if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
-                if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
-            }
-            candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
-        });
+        // Special activities (skipped entirely for a Sports-only slot)
+        if (_kind !== 'sport') {
+            // ★ Valid-location set (facilities ∪ fields). A special whose `location`
+            //   isn't a real facility/field (e.g. "Canteen"/"Gameroom" with no such
+            //   facility) has nowhere to be held — drop it from fill candidates, matching
+            //   the loader + SmartTile gates. Fail-open if the registry is unreadable.
+            let _validLocs = null;
+            try {
+                const _facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+                const _facNames = Array.isArray(_facs) ? _facs.map(f => (f && f.name) || f) : (_facs ? Object.keys(_facs) : []);
+                const _fieldNames = (gs.app1?.fields || []).map(f => (f && f.name) || f);
+                const _names = _facNames.concat(_fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
+                if (_names.length) _validLocs = new Set(_names);
+            } catch (_e) {}
+            (gs.app1?.specialActivities || []).forEach(s => {
+                if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
+                if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
+                // ★ Special toggled UNAVAILABLE in Facilities (config-level available:false).
+                //   The PERMANENT analog of the per-date Resource disable below — the sport
+                //   branch above gates on f.available; this is the parity gate for specials.
+                if (s.available === false) return;
+                // ★ Special disabled today (e.g. its facility was toggled off → cascade)
+                if (_disabledSpecialsLc.has(String(s.name).toLowerCase().trim())) return;
+                // ★ Access restriction — division AND bunk level. The canonical
+                //   check (scheduler_core_auto.js, exposed as window.isSpecialAvailableForBunk)
+                //   reads the authoritative special config and honors the per-bunk
+                //   allow-list inside accessRestrictions.divisions[grade]. Previously
+                //   this only consulted isDivisionRestricted (division/grade level),
+                //   so a special restricted to specific bunks within an allowed grade
+                //   (e.g. "Sushi" gated to certain bunks) could still be filled into a
+                //   General Activity / free slot for a bunk that should never get it.
+                if (typeof window.isSpecialAvailableForBunk === 'function') {
+                    if (!window.isSpecialAvailableForBunk(s.name, divName, bunk, gs)) return;
+                } else if (isDivisionRestricted(s, divName)) {
+                    return; // fallback: division-level only when canonical check unavailable
+                }
+                const loc = s.location || null;
+                // ★ Per-date bunk-only restriction (special s.name / facility host).
+                //   Resolve host like the shut-off gate below so facility targets match
+                //   even when a duplicated special's own .location is blank.
+                {
+                    const _rHost = loc || (window.getLocationForActivity && window.getLocationForActivity(s.name)) || null;
+                    if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, s.name, _rHost, divName)) return;
+                }
+                // ★ Special's host facility shut off in Facilities config. Resolve the host
+                //   robustly: this camp duplicates specials cap/lowercase and the dup's own
+                //   .location is often blank, so fall back to getLocationForActivity (the same
+                //   case-insensitive resolver the lock ledger uses) before checking.
+                {
+                    const _host = loc || (window.getLocationForActivity && window.getLocationForActivity(s.name)) || '';
+                    if (_host && _unavailFieldsLc.has(String(_host).toLowerCase().trim())) return;
+                }
+                // ★ Special's location/facility disabled today in Resources
+                if (loc && _disabledLc.has(String(loc).toLowerCase().trim())) return;
+                // ★ Facility-existence gate
+                if (_validLocs && loc && String(loc).trim() && !_validLocs.has(String(loc).trim().toLowerCase())) return;
+                if (loc) {
+                    if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
+                    if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
+                    // ★ wantActivity = s.name: reject this special if its room is already
+                    //   held by a DIFFERENT activity (a different special, or a sport that
+                    //   shares the room) — a shared room hosts one activity at a time.
+                    if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps, s.name)) return;
+                }
+                candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, maxUsagePeriod: s.maxUsagePeriod || 'half', exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
+            });
+        }
 
         return candidates;
     }
@@ -317,12 +486,24 @@
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
             if (todayActs.has(act)) return null;     // already doing it today
-            if (c.maxUsage > 0 && (countsByAct[act] || 0) >= c.maxUsage) return null; // at limit
-            if (c.exactFrequency > 0 && (countsByAct[act] || 0) >= c.exactFrequency) return null; // at exact limit
+            // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
+            //   against a period-windowed count, NOT the lifetime countsByAct — else
+            //   the cap silently degrades into a lifetime cap and permanently blocks
+            //   the activity later in the season (e.g. "max 2 per week" stops the
+            //   activity forever after 2 total occurrences). Mirrors the auto
+            //   planner's getPeriodCount usage (scheduler_core_auto.js:4253).
+            //   Fallback to the lifetime count if SchedulerCoreUtils is unavailable
+            //   (never break); period count <= lifetime, so this only RELAXES the
+            //   over-restriction, never adds a false block.
+            const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+            const _maxCount = _gpc ? _gpc(bunk, act, c.maxUsagePeriod || 'half', today) : (countsByAct[act] || 0);
+            if (c.maxUsage > 0 && _maxCount >= c.maxUsage) return null; // at per-period limit
+            const _exactCount = _gpc ? _gpc(bunk, act, c.exactFrequencyPeriod || '1week', today) : (countsByAct[act] || 0);
+            if (c.exactFrequency > 0 && _exactCount >= c.exactFrequency) return null; // at per-period exact limit
 
             // ── SCORING ─────────────────────────────────────────────────────
             let score = 0;
-            const count = countsByAct[act] || 0;
+            const count = countsByAct[act] || 0;   // lifetime count — correct for the fairness tiers below
 
             if (count === 0) score -= 5000;           // never done — strong bonus
             else if (count === 1) score -= 2000;
@@ -339,7 +520,7 @@
 
             // Escalating bonus for exact frequency: pull harder as period deadline nears
             if (c.exactFrequency > 0) {
-                const needed = c.exactFrequency - count;
+                const needed = c.exactFrequency - _exactCount;  // ★ FN-4: per-period count, not lifetime
                 if (needed > 0) {
                     const esc = window.SchedulerCoreUtils?.getEscalationBonus?.(c.exactFrequencyPeriod || '1week', needed);
                     score -= esc || (needed * 100);
@@ -407,9 +588,9 @@
             return;
         }
 
-        // 3. Build candidates
+        // 3. Build candidates (honoring the slot's Sports-only / Special-only kind)
         const actProps = getActivityProperties();
-        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps);
+        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps, slotKindOf(slot.event));
         if (!candidates.length) { toast('No available activities found for this slot', 'warning'); return; }
 
         // 4. Score and pick
@@ -518,7 +699,7 @@
     // toasts, without per-cell saves, without UI updates. The caller is
     // expected to save once at the end. Returns true if a pick was applied.
     // ─────────────────────────────────────────────────────────────────────
-    function autoFillSlotSilent(bunk, slotIdx) {
+    function autoFillSlotSilent(bunk, slotIdx, forcedKind) {
         const divName = getDivision(bunk);
         if (!divName) return false;
         const slot = getSlotInfo(divName, slotIdx, bunk);
@@ -530,7 +711,11 @@
         if (entry && !isFreeEntry(entry) && entry._fixed) return false;
 
         const actProps = getActivityProperties();
-        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps);
+        // ★ Prefer the caller's explicit tile-kind (authoritative, from the solver's
+        //   _slotKind) over the slot.event guess — divisionTimes' event is not always
+        //   the raw "Sports Slot" / "Special Activity" label.
+        const _kind = (forcedKind === 'sport' || forcedKind === 'special') ? forcedKind : slotKindOf(slot.event);
+        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps, _kind);
         if (!candidates.length) return false;
 
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
@@ -540,7 +725,13 @@
         // Write straight to memory — no save, no toast, no updateTable.
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
-        window.scheduleAssignments[bunk][slotIdx] = {
+        // ★ Day-19 special features for the leftover-slot auto-fill path too, so a
+        //   special filled here honors multiPart part label/location, prep, and
+        //   durations best-fit just like the main solver write. Gated/no-op for
+        //   ordinary activities.
+        const _afFeat = (typeof window.computeManualSpecialFeatures === 'function')
+            ? window.computeManualSpecialFeatures(best.activity, slotStart, slotEnd, bunk, actProps) : null;
+        const _afEntry = {
             field: best.field || best.activity,
             sport: best.activity,
             _activity: best.activity,
@@ -549,7 +740,21 @@
             _fixed: true,
             _autoFilled: true,
             _editedAt: Date.now(),
+            // ★★★ CB-47: stamp the slot time on ORDINARY fills too (was only stamped
+            // for duration-best-fit specials). Without it, a reader that lacks
+            // division/per-bunk slot context for the index (e.g. camper locator on a
+            // freshly cloud-loaded manual day) couldn't resolve the fill's time. The
+            // special branch below still refines _endMin for best-fit durations.
+            _startMin: slotStart,
+            _endMin: slotEnd,
         };
+        if (_afFeat) {
+            if (_afFeat._partLabel) { _afEntry._partNumber = _afFeat._partNumber; _afEntry._totalParts = _afFeat._totalParts; _afEntry._partLabel = _afFeat._partLabel; }
+            if (_afFeat._partLocation) { _afEntry.field = _afFeat._partLocation; _afEntry._location = _afFeat._partLocation; _afEntry._partLocation = _afFeat._partLocation; }
+            if (_afFeat._prepDuration) { _afEntry._prepDuration = _afFeat._prepDuration; _afEntry._prepLabel = _afFeat._prepLabel; _afEntry._prepLocation = _afFeat._prepLocation; }
+            if (_afFeat._endMin) { _afEntry._startMin = slotStart; _afEntry._endMin = _afFeat._endMin; _afEntry._durationBestFit = _afFeat._durationBestFit; }
+        }
+        window.scheduleAssignments[bunk][slotIdx] = _afEntry;
         return true;
     }
 

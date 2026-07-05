@@ -49,6 +49,8 @@
                 <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Your Camp</span>!</h1>
                 <p class="welcome-sub" id="welcomeSubtitle">Here's what's happening at camp today.</p>
             </div>
+            <!-- Earned achievement medals (populated by badges.js) -->
+            <div class="dash-hero-badges" id="dashHeroBadges" style="display:none;"></div>
             <div class="dash-hero-right">
                 <div class="dash-clock-widget">
                     <div class="dash-clock-time" id="dashClockTime">--:--</div>
@@ -76,8 +78,8 @@
                 <img src="Flow_clean.png" alt="Flow" class="dash-ql-logo">
                 <span>Flow</span>
             </a>
-            <a href="campistry_lite.html" class="dash-ql-tile" style="--ql-color: #F0654F;">
-                <img src="Campistry_clean.png" alt="Lite" class="dash-ql-logo">
+            <a href="campistry_lite.html" class="dash-ql-tile" style="--ql-color: var(--lite-color);">
+                <img src="Lite_clean.png" alt="Lite" class="dash-ql-logo">
                 <span>Lite</span>
             </a>
             <a href="campistry_go.html" class="dash-ql-tile" style="--ql-color: var(--go-color);">
@@ -273,6 +275,18 @@
             </div>
         </section>
 
+        <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
+        <section id="camp-badges-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+                Achievements
+                <span id="campBadgesCount" style="margin-left:auto; font-size:0.78rem; font-weight:600; color:var(--slate-400);"></span>
+            </h2>
+            <div class="dashboard-card">
+                <div id="campBadgesGrid"></div>
+            </div>
+        </section>
+
         <!-- ===== RBAC TEAM & ACCESS (Owners only) ===== -->
         <section id="team-access-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">
@@ -411,10 +425,13 @@ if (window.location.protocol === 'file:') {
 }
 </script>
     <script src="supabase_client.js"></script>
+    <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
     <script src="dashboard.js"></script>
+    <script src="badges.js"></script>
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
+    <script src="camp_clone.js"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
 
     <!-- ===== DASHBOARD WIDGETS (clock, weather, notifications, greeting) ===== -->
@@ -541,7 +558,7 @@ if (window.location.protocol === 'file:') {
                 items.push({ type: 'info', icon: 'eye', text: 'You have view-only access. Contact your camp owner to request editing permissions.', time: 'Note' });
             }
 
-            items.push({ type: 'tip', icon: 'sparkle', text: 'Campistry Go, Health, Live, Snacks &amp; Link are now accessible from the dashboard.', time: 'New' });
+            items.push({ type: 'tip', icon: 'sparkle', text: 'Campistry Go, Health, Live, Snacks, Link, Notes &amp; Lite are now accessible from the dashboard.', time: 'New' });
 
             var html = '';
             items.forEach(function(item) {

@@ -1,3 +1,4 @@
+
 // ============================================================================
 // facilities.js — UNIFIED FACILITY MANAGEMENT v1.0
 // ============================================================================
@@ -60,7 +61,7 @@ function initFacilitiesTab() {
     const contentWrapper = document.createElement('div');
     contentWrapper.innerHTML = `
         <div class="setup-grid">
-          <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+          <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent; padding-bottom:0;">
             <div class="setup-card-header" style="margin-bottom:20px;">
               <span class="setup-step-pill">Facilities</span>
               <div class="setup-card-text">
@@ -85,13 +86,13 @@ function initFacilitiesTab() {
                   <button id="facilities-search-clear" style="display:none; background:none; border:none; cursor:pointer; color:#9CA3AF; font-size:1rem; line-height:1; padding:0;">✕</button>
                 </div>
 
-                <div id="facilities-master-list" style="max-height:600px; overflow-y:auto;"></div>
+                <div id="facilities-master-list" style="max-height:max(360px, calc(100vh - 341px)); overflow-y:auto;"></div>
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
               <div style="flex:1.4; min-width:340px; position:sticky; top:0; align-self:flex-start;">
                 <div class="setup-subtitle">Facility Configuration</div>
-                <div id="facilities-detail-pane" style="margin-top:8px; max-height:calc(100vh - 120px); overflow-y:auto; padding-right:4px;"></div>
+                <div id="facilities-detail-pane" style="margin-top:8px; max-height:calc(100vh - 228px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>
@@ -268,6 +269,41 @@ function saveFacilitiesMetadata() {
     window.saveGlobalSettings?.("facilities", facilities);
 }
 
+// ★ FN-40: CUSTOM general activities as layer-palette tiles. Every custom
+//   general activity configured on a facility (e.g. "Main activity" at the
+//   Auditorium) becomes its own pinned tile in the Master Scheduler / Daily
+//   Adjustments layer palettes — dropping one creates a custom layer pre-
+//   bound to the activity + its facility (customActivity/customField), the
+//   same lane hand-made Custom Pinned layers use. Each item carries its
+//   `quickType` so the drop can tag the layer (swim/lunch/snacks/dinner →
+//   the solver applies that behavior). Only `dismissal` is excluded — it
+//   keeps its native hard-coded tile.
+window.getGeneralActivityPaletteItems = function () {
+    try {
+        const out = [], seen = {};
+        const _exclude = { dismissal: 1 };
+        // The module-local `facilities` array only populates when the
+        // Facilities tab initializes — fall back to the persisted registry so
+        // the palettes work on a fresh page load too.
+        let _src = facilities;
+        if (!Array.isArray(_src) || _src.length === 0) {
+            const _gs = window.loadGlobalSettings?.() || {};
+            _src = _gs.facilities || [];
+        }
+        (_src || []).forEach(f => {
+            if (!f || !f.name) return;
+            (f.generalActivities || []).forEach(ga => {
+                if (!ga || !ga.name) return;
+                const qt = String(ga.quickType || '').toLowerCase();
+                if (_exclude[qt]) return;
+                const k = String(ga.name).toLowerCase() + '|' + String(f.name).toLowerCase();
+                if (!seen[k]) { seen[k] = 1; out.push({ name: ga.name, facility: f.name, quickType: qt || 'custom' }); }
+            });
+        });
+        return out;
+    } catch (e) { return []; }
+};
+
 function saveData() {
     if (!window.AccessControl?.canEditSetup?.()) {
         console.warn('[FACILITIES] Save blocked - insufficient permissions');
@@ -388,6 +424,8 @@ function createDefaultSpecialActivity(name) {
     return {
         name: name,
         type: 'Special',
+        instructor: '',
+        consecutiveBunks: false,
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
@@ -881,6 +919,12 @@ function renderSportsConfig(container, fac) {
     container.appendChild(section("Activities", summaryActivities(fieldData),
         () => renderActivities(fieldData, allSports)));
 
+    container.appendChild(section("Durations", summaryFieldDurations(fieldData),
+        () => renderFieldDurations(fieldData)));
+
+    container.appendChild(section("Usage Limits", summaryFieldLimits(fieldData),
+        () => renderFieldLimits(fieldData)));
+
     container.appendChild(section("Access & Restrictions", summaryAccess(fieldData),
         () => renderAccess(fieldData)));
 
@@ -1027,16 +1071,9 @@ function renderSpecialConfig(container, fac) {
             if (sa) sa.name = newName;
             window.saveGlobalSpecialActivities?.(allSpecials);
 
-            // 3. Update references in schedules
-            const schedules = window.scheduleAssignments || {};
-            for (const bunk of Object.keys(schedules)) {
-                (schedules[bunk] || []).forEach(entry => {
-                    if (!entry) return;
-                    if (entry._activity === oldName) entry._activity = newName;
-                    if (entry.field === oldName) entry.field = newName;
-                    if (entry.sport === oldName) entry.sport = newName;
-                });
-            }
+            // 3. Update references across SAVED per-date schedules AND the live
+            //    grid — so the old name stops surfacing in the Rotation report.
+            renameActivityInSchedules(oldName, newName);
 
             // 4. Update references in zones
             const settings = window.loadGlobalSettings?.() || {};
@@ -1049,6 +1086,11 @@ function renderSpecialConfig(container, fac) {
             if (Object.keys(zones).length > 0) {
                 window.saveLocationZones?.(zones);
             }
+
+            // 5. Carry rotation counts/offsets/history to the new name (local +
+            //    cloud) so the renamed special keeps its history and the old
+            //    name disappears from the Rotation report.
+            migrateRotationCountsForRename(oldName, newName);
 
             saveData();
             renderDetailPane();
@@ -1068,13 +1110,56 @@ function renderSpecialConfig(container, fac) {
             renderDetailPane();
         };
 
+        // ── Availability toggle ──────────────────────────────────────
+        //   Mirrors the sports field "AVAILABLE/UNAVAILABLE" switch. When a
+        //   special is toggled off (saData.available === false) the solver
+        //   skips it entirely (scheduler_core_auto.js filters todaysSpecials
+        //   on `s.available === false`; rotation_engine scores it Infinity).
+        //   This lets the user disable a special without deleting it.
+        const isAvail = saData.available !== false;
+
+        const saRight = document.createElement("div");
+        saRight.style.cssText = "display:flex; align-items:center; gap:10px;";
+
+        const availToggle = document.createElement("label");
+        availToggle.className = "switch";
+        availToggle.title = isAvail ? "Special is on — click to turn off" : "Special is off — click to turn on";
+        availToggle.onclick = e => e.stopPropagation();
+        const availCb = document.createElement("input");
+        availCb.type = "checkbox";
+        availCb.checked = isAvail;
+        availCb.onchange = () => {
+            saData.available = availCb.checked;
+            saveSpecialData(saData);
+            renderDetailPane();
+        };
+        const availSlider = document.createElement("span");
+        availSlider.className = "slider";
+        availToggle.appendChild(availCb);
+        availToggle.appendChild(availSlider);
+        saRight.appendChild(availToggle);
+        saRight.appendChild(saDelBtn);
+
+        // Dim the card and mute the title when the special is turned off so
+        // the disabled state is obvious at a glance.
+        if (!isAvail) {
+            saCard.style.opacity = "0.6";
+            saTitle.style.color = "#9CA3AF";
+        }
+
         saHeader.appendChild(saTitle);
-        saHeader.appendChild(saDelBtn);
+        saHeader.appendChild(saRight);
         saCard.appendChild(saHeader);
 
         // Special activity config sections
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
+
+        // ★ INSTRUCTOR — first config. Names the person who runs this special
+        //   and lets the user link other activities the same person also runs
+        //   via the Connected to subsection.
+        saBody.appendChild(section("Instructor", summarySpecialInstructor(saData),
+            () => renderSpecialInstructor(saData, fac)));
 
         saBody.appendChild(section("Subcategory", summarySpecialSubcategory(saData),
             () => renderSpecialSubcategory(saData)));
@@ -1114,53 +1199,53 @@ function renderSpecialConfig(container, fac) {
 // =========================================================================
 // GENERAL ACTIVITY CONFIG
 // =========================================================================
+// Shared instructor datalist — used by every per-activity Instructor input.
+// Built lazily so each render of the General config refreshes the suggestions
+// (specials + every general across the camp).
+function _ensureFacInstructorDatalist() {
+    const dlId = 'fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+}
+
 function renderGeneralConfig(container, fac) {
     if (!fac.generalActivities) fac.generalActivities = [];
+    _ensureFacInstructorDatalist();
 
-    // Quick-push buttons
-    const quickLabel = document.createElement("div");
-    quickLabel.style.cssText = "font-weight:500; font-size:0.9rem; margin-bottom:10px; color:#374151;";
-    quickLabel.textContent = "Quick Add:";
-    container.appendChild(quickLabel);
+    // Quick-Add preset buttons were removed: every general activity is added by
+    //   name below. A general activity literally named Swim / Lunch / Snacks /
+    //   Dinner is recognized (quickType inferred from the name) and the solver
+    //   applies that behavior; anything else is a plain custom general activity.
+    //   So swim/snacks/etc. only exist (and only appear in the layer palette) if
+    //   the user actually created them here.
 
-    const quickRow = document.createElement("div");
-    quickRow.style.cssText = "display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;";
-
-    const quickOptions = [
-        { name: 'Lunch', quickType: 'lunch' },
-        { name: 'Snacks', quickType: 'snacks' },
-        { name: 'Dinner', quickType: 'dinner' },
-        { name: 'Swim', quickType: 'swim' }
-    ];
-
-    quickOptions.forEach(opt => {
-        const exists = fac.generalActivities.some(ga => ga.quickType === opt.quickType);
-        const btn = document.createElement("button");
-        btn.style.cssText = `padding:8px 14px; border-radius:8px; cursor:pointer; font-size:0.85rem; font-weight:500; transition:all 0.2s; display:flex; align-items:center; gap:6px;
-            border:1px solid ${exists ? '#D97706' : '#E5E7EB'}; background:${exists ? '#FEF3C7' : 'white'}; color:${exists ? '#92400E' : '#6B7280'};`;
-        btn.textContent = opt.name;
-
-        btn.onclick = () => {
-            if (exists) {
-                fac.generalActivities = fac.generalActivities.filter(ga => ga.quickType !== opt.quickType);
-            } else {
-                fac.generalActivities.push({ name: opt.name, quickType: opt.quickType });
-            }
-            saveData();
-            renderDetailPane();
-        };
-
-        quickRow.appendChild(btn);
-    });
-
-    container.appendChild(quickRow);
-
-    // Custom input
+    // Add-activity input
     const customRow = document.createElement("div");
     customRow.style.cssText = "display:flex; gap:8px; margin-bottom:16px;";
 
     const customInput = document.createElement("input");
-    customInput.placeholder = "Custom activity name...";
+    customInput.placeholder = "Activity name (e.g. Swim, Lunch, Snacks, or custom)...";
     customInput.style.cssText = "flex:1; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; outline:none;";
 
     const customBtn = document.createElement("button");
@@ -1174,7 +1259,14 @@ function renderGeneralConfig(container, fac) {
             alert("This activity already exists at this facility.");
             return;
         }
-        fac.generalActivities.push({ name: name, quickType: 'custom' });
+        // Infer behavior from the NAME: an activity called Swim/Lunch/Snacks/Dinner
+        //   gets that quickType so the solver applies its behavior (pool capacity,
+        //   meal pinning, …). Everything else is a plain custom general activity.
+        const _qtByName = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner' };
+        const _qt = _qtByName[name.toLowerCase()] || 'custom';
+        // Each activity is self-contained — seed its OWN sharing config (no
+        //   facility default). The user tightens it per activity.
+        fac.generalActivities.push({ name: name, quickType: _qt, sharableWith: _defaultGaSharing() });
         customInput.value = "";
         saveData();
         renderDetailPane();
@@ -1187,23 +1279,49 @@ function renderGeneralConfig(container, fac) {
     customRow.appendChild(customBtn);
     container.appendChild(customRow);
 
-    // List existing general activities
+    // List existing general activities — each row carries an expandable
+    // dropdown next to the name with its own Instructor, Sharing Rules, and
+    // Consecutive Bunks config (per-activity, "like specials"). The resolver
+    // (window.getCustomActivitySharingInfo) falls through to facility/field
+    // defaults when an entry is left blank.
     if (fac.generalActivities.length > 0) {
         const listLabel = document.createElement("div");
         listLabel.style.cssText = "font-weight:500; font-size:0.85rem; margin-bottom:8px; color:#374151;";
         listLabel.textContent = "Configured Activities:";
         container.appendChild(listLabel);
 
-        fac.generalActivities.forEach(ga => {
-            const row = document.createElement("div");
-            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:6px;";
+        const _gaIsAutoModeRow = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        // Only 'dismissal' stays non-configurable (a simple pin with its own native
+        //   tile). swim/lunch/snacks/dinner are now full General Activities and DO
+        //   take per-activity config (Sharing Rules carry pool/dining capacity into
+        //   the solver — the connection that was previously missing).
+        const _builtinNonConfig = { dismissal: 1 };
 
-            const info = document.createElement("div");
+        fac.generalActivities.forEach(ga => {
+            const actBlock = document.createElement("div");
+            actBlock.style.cssText = "border:1px solid #FDE68A; background:#FFFBEB; border-radius:8px; margin-bottom:6px; overflow:hidden;";
+
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 12px;";
+
+            // ── Dropdown caret (left of the name) ─────────────────────────
+            //   Toggles the per-activity config panel. Built-in quick types
+            //   (Lunch, Snacks, Dinner, Swim) hide the caret since they don't
+            //   take per-activity overrides.
+            const isBuiltin = _builtinNonConfig[String(ga.quickType || '').toLowerCase()];
+            const caret = document.createElement("button");
+            caret.type = "button";
+            caret.style.cssText = "border:none; background:transparent; cursor:pointer; padding:2px 4px; display:flex; align-items:center; transition:transform 0.18s;";
+            caret.innerHTML = '<svg width="16" height="16" fill="none" stroke="#92400E" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>';
+            caret.title = "Show per-activity config";
+            if (isBuiltin) caret.style.visibility = "hidden";
+            row.appendChild(caret);
+
             const gaLabel = document.createElement("strong");
             gaLabel.textContent = ga.name;
-            gaLabel.style.cursor = "pointer";
+            gaLabel.style.cssText = "cursor:pointer; flex:1;";
             gaLabel.title = "Double click to rename";
-            info.appendChild(gaLabel);
+            row.appendChild(gaLabel);
 
             makeEditable(gaLabel, newName => {
                 if (!newName.trim()) return;
@@ -1221,6 +1339,12 @@ function renderGeneralConfig(container, fac) {
                     window.savePinnedTileDefaults?.(pinned);
                 }
                 ga.name = newName;
+                // Carry rotation counts/offsets/history to the new name (local +
+                // cloud), and rewrite saved/live schedule entries, so the renamed
+                // activity keeps its history and the old name disappears from the
+                // Rotation report.
+                migrateRotationCountsForRename(oldName, newName);
+                renameActivityInSchedules(oldName, newName);
                 saveData();
                 renderDetailPane();
             });
@@ -1235,10 +1359,69 @@ function renderGeneralConfig(container, fac) {
                 saveData();
                 renderDetailPane();
             };
-
-            row.appendChild(info);
             row.appendChild(removeBtn);
-            container.appendChild(row);
+            actBlock.appendChild(row);
+
+            // ── Per-activity config panel (hidden until caret is clicked) ──
+            //   Each config knob is its OWN collapsible section inside the
+            //   activity's dropdown — Instructor, Sharing Rules, Consecutive
+            //   Bunks — so the user can drill into one without seeing all
+            //   three open at once. Same accordion pattern as the facility
+            //   editor's top-level sections.
+            if (!isBuiltin) {
+                const panel = document.createElement("div");
+                panel.style.cssText = "display:none; padding:8px 12px 12px; border-top:1px solid #FDE68A; background:#FEFCF3;";
+
+                // Instructor section — summary shows current name (or empty).
+                const instrSummary = () => {
+                    const v = (typeof ga.instructor === 'string') ? ga.instructor.trim() : '';
+                    return v || 'No instructor set';
+                };
+                const buildInstructor = () => {
+                    const wrap = document.createElement('div');
+                    const desc = document.createElement('div');
+                    desc.style.cssText = "font-size:0.74rem; color:#6B7280; margin-bottom:8px;";
+                    desc.textContent = "Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can't be scheduled at the same time.";
+                    wrap.appendChild(desc);
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.placeholder = 'No instructor';
+                    input.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+                    input.setAttribute('list', 'fac-instructor-list');
+                    input.style.cssText = "padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:100%; max-width:300px; background:#fff;";
+                    input.addEventListener('change', () => {
+                        const v = (input.value || '').trim();
+                        if ((ga.instructor || '') === v) return;
+                        ga.instructor = v;
+                        saveData();
+                        // Refresh this section's summary line in place.
+                        const summaryEl = wrap.closest('.detail-section')?.querySelector('.detail-section-summary');
+                        if (summaryEl) summaryEl.textContent = instrSummary();
+                    });
+                    wrap.appendChild(input);
+                    return wrap;
+                };
+                panel.appendChild(section('Instructor', instrSummary(), buildInstructor));
+
+                // Sharing Rules section (summary + builder already exist).
+                panel.appendChild(section('Sharing Rules', summaryGaSharing(ga), () => renderGaSharing(ga)));
+
+                // Consecutive Bunks section (auto-mode only).
+                if (_gaIsAutoModeRow) {
+                    panel.appendChild(section('Consecutive Bunks', summaryGaConsec(ga), () => renderGaConsec(ga)));
+                }
+
+                actBlock.appendChild(panel);
+
+                caret.onclick = () => {
+                    const isOpen = panel.style.display === 'block';
+                    panel.style.display = isOpen ? 'none' : 'block';
+                    caret.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+                    caret.title = isOpen ? "Show per-activity config" : "Hide per-activity config";
+                };
+            }
+
+            container.appendChild(actBlock);
         });
     }
 
@@ -1283,34 +1466,232 @@ function renderGeneralConfig(container, fac) {
         app1.fields.push(fieldData);
         window.saveGlobalSettings?.("app1", app1);
         window.saveGlobalSettings?.("fields", app1.fields);
-    } else {
-        // Migrate existing General-Activity fieldData that has the old
-        // 'not_sharable' default to the new sharing-on default. Only touch
-        // facilities that the user has not explicitly customized (i.e.,
-        // still showing the legacy default).
-        if (fieldData._generalOnly && fieldData.sharableWith?.type === 'not_sharable' && fieldData.sharableWith?.capacity === 1) {
-            const _defaultPairs = {};
-            _allDivsForDefault.forEach(g => {
-                _defaultPairs[_pkDefault(g, g)] = true;
-            });
-            fieldData.sharableWith = {
-                type: 'cross_division',
-                divisions: [],
-                capacity: 20,
-                allowedPairs: _defaultPairs
-            };
-            window.saveGlobalSettings?.("app1", app1);
-            window.saveGlobalSettings?.("fields", app1.fields);
-        }
     }
+    // (A one-shot 'not_sharable → sharing-on' migration used to live here.
+    //  REMOVED: 'not_sharable + capacity 1' is exactly what an explicit
+    //  "sharing off" writes, so the migration resurrected sharing on every
+    //  pane render — the user's off-switch never stuck. Explicit user state
+    //  is never rewritten; only brand-new entries get the default above.)
 
     const divider = document.createElement("div");
     divider.style.cssText = "border-top:1px solid #E5E7EB; margin:20px 0 14px;";
     container.appendChild(divider);
 
-    container.appendChild(section("Sharing Rules", summaryGeneralSharing(fieldData),
-        () => renderGeneralSharing(fieldData)));
+    // Instructor / Sharing Rules / Consecutive Bunks are configured PER ACTIVITY
+    //   (inline dropdown on each "Configured Activities" row above). There are no
+    //   facility-level defaults anymore — every general activity is self-contained
+    //   (seeded with its own config when added). Removed the facility-default
+    //   Sharing / Consecutive Bunks sections per user request.
 }
+
+// =========================================================================
+// GENERAL ACTIVITY — CONSECUTIVE BUNKS (auto-only, FN-39)
+// =========================================================================
+function summaryGeneralConsec(f) {
+    return f.consecutiveBunks === true
+        ? 'On · slot length set by the layer'
+        : 'Off';
+}
+
+function renderGeneralConsec(fieldData, fac, app1) {
+    const wrap = document.createElement('div');
+
+    const box = document.createElement('div');
+    box.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px;';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = fieldData.consecutiveBunks === true;
+    check.id = 'ga-consec-' + String(fieldData.name || '').replace(/[^a-z0-9]/gi, '_');
+    check.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+    const label = document.createElement('label');
+    label.htmlFor = check.id;
+    label.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+    // ★ FN-42: no duration here — each bunk's slot length comes from the
+    //   activity's LAYER (the band you drop in Master Builder / Daily
+    //   Adjustments). A 20-min layer = 20 minutes per bunk, walked
+    //   back-to-back from the layer's start time.
+    label.innerHTML = '<strong>Schedule bunks consecutively</strong>'
+        + '<div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">'
+        + 'Each bunk in the grade comes through this facility one after the next, '
+        + 'starting at the activity\'s layer. The layer\'s length sets each bunk\'s '
+        + 'slot (a 20-min layer = 20 minutes per bunk). If sharing is on, bunks '
+        + 'share each slot up to capacity (e.g. 6 bunks at capacity 2 = 3 '
+        + 'consecutive slots).</div>';
+    box.appendChild(check);
+    box.appendChild(label);
+    wrap.appendChild(box);
+
+    const persist = () => {
+        // Snapshot the general-activity names onto the field entry — the auto
+        // solver reads app1.fields and needs to know what runs at this station.
+        // FN-41: `fac` can be stale or not yet hydrated when the toggle fires
+        // (live repro: snapshot saved []) — fall back to the persisted registry,
+        // excluding built-in generals. The solver also re-resolves at gen time.
+        const _builtin = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
+        let _names = (fac.generalActivities || [])
+            .filter(g => g && g.name && !_builtin[String(g.quickType || '').toLowerCase()])
+            .map(g => g.name);
+        if (!_names.length) {
+            const _reg = (window.loadGlobalSettings?.() || {}).facilities || [];
+            const _low = String(fieldData.name || '').toLowerCase().trim();
+            const _hit = _reg.find(x => x && x.name && String(x.name).toLowerCase().trim() === _low);
+            _names = ((_hit && _hit.generalActivities) || [])
+                .filter(g => g && g.name && !_builtin[String(g.quickType || '').toLowerCase()])
+                .map(g => g.name);
+        }
+        fieldData.consecutiveGeneralNames = _names;
+        window.saveGlobalSettings?.('app1', app1);
+        window.saveGlobalSettings?.('fields', app1.fields);
+    };
+    check.addEventListener('change', () => {
+        fieldData.consecutiveBunks = check.checked;
+        persist();
+    });
+
+    return wrap;
+}
+
+// =========================================================================
+// FACILITY INSTRUCTOR — per-activity tag, section pattern (like Sharing Rules)
+// =========================================================================
+function summaryFacilityInstructors(fac) {
+    const acts = fac.generalActivities || [];
+    if (acts.length === 0) return 'No activities to tag';
+    // Distinct, non-empty instructor names across activities at this facility.
+    const set = new Set();
+    acts.forEach(a => {
+        if (a && typeof a.instructor === 'string' && a.instructor.trim()) set.add(a.instructor.trim());
+    });
+    if (set.size === 0) return 'No instructor set';
+    if (set.size === 1) return [...set][0];
+    return [...set].join(', ');
+}
+
+function renderFacilityInstructors(fac) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+    const acts = fac.generalActivities || [];
+    if (acts.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:0.85rem; color:#6B7280;';
+        empty.textContent = 'Add a general activity to this facility first.';
+        wrap.appendChild(empty);
+        return wrap;
+    }
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
+    desc.textContent = 'Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
+    wrap.appendChild(desc);
+
+    // Shared datalist of existing instructor names (specials + all general).
+    const dlId = 'fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+
+    let primaryInstructor = '';
+    if (acts.length === 1) {
+        // Single activity — no name label (it's already shown above in Configured Activities).
+        const ga = acts[0];
+        primaryInstructor = (typeof ga.instructor === 'string' ? ga.instructor : '').trim();
+        const inputRow = document.createElement('div');
+        inputRow.style.cssText = 'display:flex; align-items:center; gap:10px;';
+        const label = document.createElement('span');
+        label.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+        label.textContent = 'Instructor:';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'No instructor';
+        input.value = ga.instructor || '';
+        input.setAttribute('list', dlId);
+        input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; flex:1; min-width:200px;';
+        input.addEventListener('change', () => {
+            const v = (input.value || '').trim();
+            if ((ga.instructor || '') === v) return;
+            ga.instructor = v;
+            saveData();
+            renderDetailPane();
+        });
+        inputRow.appendChild(label);
+        inputRow.appendChild(input);
+        wrap.appendChild(inputRow);
+    } else {
+        // 2+ activities — keep per-activity labels so each input is unambiguous.
+        primaryInstructor = (typeof acts[0].instructor === 'string' ? acts[0].instructor : '').trim();
+        acts.forEach(ga => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:12px; padding:8px 10px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:6px;';
+            const nameEl = document.createElement('div');
+            nameEl.style.cssText = 'flex:1; font-weight:600; font-size:0.88rem; color:#1F2937;';
+            nameEl.textContent = ga.name;
+            row.appendChild(nameEl);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'No instructor';
+            input.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+            input.setAttribute('list', dlId);
+            input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:200px; background:#fff;';
+            input.addEventListener('change', () => {
+                const v = (input.value || '').trim();
+                if ((ga.instructor || '') === v) return;
+                ga.instructor = v;
+                saveData();
+                renderDetailPane();
+            });
+            row.appendChild(input);
+            wrap.appendChild(row);
+        });
+    }
+
+    // Also-runs picker — declare other activities the same instructor runs.
+    const aBlock = window.buildAlsoRunsChecklist?.(primaryInstructor, { facilityName: fac.name });
+    if (aBlock) wrap.appendChild(aBlock);
+
+    return wrap;
+}
+
+// Cross-write helper — called from window.buildAlsoRunsChecklist when the
+// user toggles an "also runs" checkbox that targets a general activity.
+// Updates the in-memory facilities array, persists, and re-renders.
+window.setGeneralActivityInstructor = function(activityName, instructor) {
+    if (!activityName) return false;
+    let touched = false;
+    (facilities || []).forEach(f => {
+        (f.generalActivities || []).forEach(ga => {
+            if (ga && ga.name === activityName) {
+                ga.instructor = String(instructor || '');
+                touched = true;
+            }
+        });
+    });
+    if (touched) {
+        saveData();
+        if (typeof renderDetailPane === 'function') renderDetailPane();
+    }
+    return touched;
+};
 
 // =========================================================================
 // GENERAL ACTIVITY SHARING — Pair-based UI mirroring Specials
@@ -1470,6 +1851,75 @@ function renderGeneralSharing(item) {
 }
 
 // =========================================================================
+// PER-ACTIVITY (ga entry) Sharing + Consecutive Bunks
+// — same pattern as facility-level, scoped to one activity. The engine
+//   resolves config via getCustomActivitySharingInfo: layer override → this
+//   per-activity entry → facility/field fallback. So two activities at the
+//   same facility (e.g. Main Activity vs. Morning Activity in Auditorium) can
+//   have DIFFERENT sharing rules / consecutive flags, "like specials".
+// =========================================================================
+
+// Per-activity default sharing — every general activity is SELF-CONTAINED
+//   (no facility default to fall back to). Sharing on within-grade by default,
+//   cross-grade opt-in; capacity high (the user tightens it per activity, e.g.
+//   real pool capacity on a Swim activity).
+function _defaultGaSharing() {
+    const divs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+    const pairs = {};
+    divs.forEach(g => { pairs[[g, g].sort().join('|')] = true; });
+    return { type: 'cross_division', divisions: [], capacity: 20, allowedPairs: pairs };
+}
+
+function summaryGaSharing(ga) {
+    if (!ga) return 'Off';
+    // Self-contained — report this activity's own config (default if not yet set);
+    //   no facility fallback. (renderGaSharing seeds the default when edited.)
+    return summaryGeneralSharing({ sharableWith: ga.sharableWith || _defaultGaSharing() });
+}
+
+function renderGaSharing(ga) {
+    // Each activity owns its sharing config (renderGeneralSharing is polymorphic
+    //   over `item.sharableWith`). No facility default / fallback anymore.
+    if (ga && !ga.sharableWith) ga.sharableWith = _defaultGaSharing();
+    const wrap = document.createElement('div');
+    wrap.appendChild(renderGeneralSharing(ga));
+    return wrap;
+}
+
+function summaryGaConsec(ga) {
+    return ga && ga.consecutiveBunks === true
+        ? 'On · slot length set by the layer'
+        : 'Off';
+}
+
+function renderGaConsec(ga) {
+    const wrap = document.createElement('div');
+    const box = document.createElement('div');
+    box.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px;';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = ga.consecutiveBunks === true;
+    check.id = 'ga-act-consec-' + String(ga.name || '').replace(/[^a-z0-9]/gi, '_');
+    check.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+    const label = document.createElement('label');
+    label.htmlFor = check.id;
+    label.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+    label.innerHTML = '<strong>Schedule bunks consecutively</strong>'
+        + '<div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">'
+        + 'Each bunk in the grade comes through this activity one after the next, '
+        + 'starting at the activity\'s layer. The layer\'s length sets each bunk\'s '
+        + 'slot. If sharing is on, bunks share each slot up to capacity.</div>';
+    box.appendChild(check);
+    box.appendChild(label);
+    wrap.appendChild(box);
+    check.addEventListener('change', () => {
+        ga.consecutiveBunks = check.checked;
+        saveData();
+    });
+    return wrap;
+}
+
+// =========================================================================
 // SECTION BUILDER (Accordion UX) — Same pattern as fields.js
 // =========================================================================
 function section(title, summary, builder) {
@@ -1515,6 +1965,300 @@ function section(title, summary, builder) {
 
 // -- Summaries --
 function summaryActivities(f) { return f.activities?.length ? `${f.activities.length} sports selected` : "No sports selected"; }
+
+// -- Per-sport duration helpers --
+// Duration is a property of the SPORT (Baseball is 60min wherever it's played),
+// stored globally in sportMetaData[name].durations (canonical, mirrors specials)
+// with the scalar .duration kept in sync. The facility editor just surfaces the
+// sports THIS facility hosts so the user can set each one's length in context.
+function getSportDurationValue(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    if (Array.isArray(m.durations) && m.durations.length) return parseInt(m.durations[0], 10) || null;
+    const d = parseInt(m.duration, 10);
+    return d > 0 ? d : null;
+}
+function setSportDurationGlobal(sport, mins) {
+    if (!sportMetaData[sport]) sportMetaData[sport] = {};
+    const v = parseInt(mins, 10);
+    if (Number.isFinite(v) && v > 0) {
+        sportMetaData[sport].durations = [v];
+        sportMetaData[sport].duration = v;
+    } else {
+        sportMetaData[sport].durations = [];
+        sportMetaData[sport].duration = null;
+    }
+    // Persist directly into app1.sportMetaData (the canonical store the engine
+    // reads) so the value can't be clobbered by saveFieldData's stored-meta
+    // merge, then force the cloud flush like every other facilities write.
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    if (!app1.sportMetaData) app1.sportMetaData = {};
+    if (!app1.sportMetaData[sport]) app1.sportMetaData[sport] = {};
+    app1.sportMetaData[sport].durations = sportMetaData[sport].durations;
+    app1.sportMetaData[sport].duration = sportMetaData[sport].duration;
+    window.saveGlobalSettings?.("app1", app1);
+    window.forceSyncToCloud?.();
+}
+function summaryFieldDurations(f) {
+    const sports = (f.activities || []).filter(Boolean);
+    if (!sports.length) return "No sports selected";
+    const set = sports.map(s => ({ s, d: getSportDurationValue(s) })).filter(x => x.d);
+    if (!set.length) return "Flexible (uses block size)";
+    const parts = set.slice(0, 3).map(x => `${x.s} ${x.d}m`);
+    const extra = set.length - parts.length;
+    return parts.join(', ') + (extra > 0 ? ` +${extra}` : '');
+}
+function renderFieldDurations(f) {
+    const box = document.createElement("div");
+    const sports = (f.activities || []).filter(Boolean);
+
+    const desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
+    desc.textContent = "Set a fixed length for any sport this facility hosts. When set, the auto-scheduler keeps that sport to exactly this duration (like a special). Leave blank to use the layer's block size. This length applies to the sport everywhere it's played.";
+    box.appendChild(desc);
+
+    if (!sports.length) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "font-size:0.85rem; color:#9CA3AF; font-style:italic;";
+        empty.textContent = "No sports selected yet — add sports in the Activities section first.";
+        box.appendChild(empty);
+        return box;
+    }
+
+    const updateSummary = () => {
+        const el = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryFieldDurations(f);
+    };
+
+    sports.forEach(sport => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:8px;";
+
+        const nameEl = document.createElement("span");
+        nameEl.style.cssText = "flex:1; font-size:0.9rem; color:#374151;";
+        nameEl.textContent = sport;
+        row.appendChild(nameEl);
+
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "5"; input.max = "180"; input.step = "5";
+        input.placeholder = "—";
+        const cur = getSportDurationValue(sport);
+        input.value = cur != null ? cur : "";
+        input.style.cssText = "width:80px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+        input.title = "Fixed duration in minutes for " + sport + ". Leave blank to use the layer block size.";
+        input.onchange = () => {
+            const v = parseInt(input.value, 10);
+            const clamped = Number.isFinite(v) && v > 0 ? Math.max(5, Math.min(180, v)) : null;
+            setSportDurationGlobal(sport, clamped);
+            if (clamped != null) input.value = clamped; else input.value = "";
+            updateSummary();
+        };
+        row.appendChild(input);
+
+        const unit = document.createElement("span");
+        unit.style.cssText = "font-size:0.8rem; color:#9CA3AF; width:30px;";
+        unit.textContent = "min";
+        row.appendChild(unit);
+
+        box.appendChild(row);
+    });
+
+    return box;
+}
+
+// -- Per-sport usage/frequency limits (mirror specials) --
+// Like durations, a usage cap is a property of the SPORT (Soccer is capped
+// wherever it's played), stored globally in sportMetaData[name].{maxUsage,
+// maxUsagePeriod,frequencyDays}. buildActivityProperties reads these and the
+// SAME calculateLimitScore gate that enforces special limits enforces them.
+const SPORT_LIMIT_PERIODS = [
+    { v: 'half', l: 'per half' }, { v: 'week', l: 'per week' },
+    { v: '2weeks', l: 'per 2 weeks' }, { v: '3weeks', l: 'per 3 weeks' }, { v: '4weeks', l: 'per 4 weeks' }
+];
+function getSportLimit(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    return {
+        maxUsage: parseInt(m.maxUsage, 10) || 0,
+        maxUsagePeriod: m.maxUsagePeriod || 'week',
+        frequencyDays: parseInt(m.frequencyDays, 10) || 0
+    };
+}
+function setSportLimitGlobal(sport, patch) {
+    if (!sportMetaData[sport]) sportMetaData[sport] = {};
+    Object.assign(sportMetaData[sport], patch);
+    // Persist straight into app1.sportMetaData (the canonical store the engine
+    // reads) so saveFieldData's stored-meta merge can't clobber it, then flush —
+    // exact same pattern as setSportDurationGlobal.
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    if (!app1.sportMetaData) app1.sportMetaData = {};
+    if (!app1.sportMetaData[sport]) app1.sportMetaData[sport] = {};
+    Object.assign(app1.sportMetaData[sport], patch);
+    window.saveGlobalSettings?.("app1", app1);
+    window.forceSyncToCloud?.();
+}
+function getSportMaxPerGrade(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    const pg = (m.maxUsagePerGrade && typeof m.maxUsagePerGrade === 'object') ? m.maxUsagePerGrade : {};
+    return pg;
+}
+function _sportPerGradeCount(sport) {
+    const pg = getSportMaxPerGrade(sport);
+    return Object.keys(pg).filter(k => (parseInt(pg[k]) || 0) > 0).length;
+}
+function sportHasAnyLimit(sport) {
+    const l = getSportLimit(sport);
+    return l.maxUsage > 0 || l.frequencyDays > 0 || _sportPerGradeCount(sport) > 0;
+}
+function summaryFieldLimits(f) {
+    const sports = (f.activities || []).filter(Boolean);
+    if (!sports.length) return "No sports selected";
+    const set = sports.filter(sportHasAnyLimit);
+    if (!set.length) return "No limits (normal rotation)";
+    const parts = set.slice(0, 2).map(s => {
+        const l = getSportLimit(s);
+        const pgN = _sportPerGradeCount(s);
+        if (l.maxUsage > 0) return `${s} max ${l.maxUsage} ${l.maxUsagePeriod}` + (pgN ? ` (+${pgN} grade)` : '');
+        if (l.frequencyDays > 0) return `${s} ${l.frequencyDays}d gap`;
+        return `${s} per-grade max`;
+    });
+    const extra = set.length - parts.length;
+    return parts.join(', ') + (extra > 0 ? ` +${extra}` : '');
+}
+function renderFieldLimits(f) {
+    const box = document.createElement("div");
+    const sports = (f.activities || []).filter(Boolean);
+
+    const desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
+    desc.textContent = "Cap how often a bunk can get a sport — exactly like a special activity. “Max” limits how many times per period; “Min days between” is a cooldown before a bunk can repeat it. Leave blank for no limit (normal rotation). Applies to the sport everywhere it's played.";
+    box.appendChild(desc);
+
+    if (!sports.length) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "font-size:0.85rem; color:#9CA3AF; font-style:italic;";
+        empty.textContent = "No sports selected yet — add sports in the Activities section first.";
+        box.appendChild(empty);
+        return box;
+    }
+
+    const updateSummary = () => {
+        const el = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryFieldLimits(f);
+    };
+
+    const inStyle = "width:60px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+    const lblStyle = "font-size:0.8rem; color:#6B7280;";
+
+    sports.forEach(sport => {
+        const cur = getSportLimit(sport);
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;";
+
+        const nameEl = document.createElement("span");
+        nameEl.style.cssText = "flex:1 1 100%; font-size:0.9rem; color:#374151; font-weight:600; margin-bottom:2px;";
+        nameEl.textContent = sport;
+        row.appendChild(nameEl);
+
+        const maxLbl = document.createElement("span"); maxLbl.style.cssText = lblStyle; maxLbl.textContent = "Max"; row.appendChild(maxLbl);
+        const maxIn = document.createElement("input");
+        maxIn.type = "number"; maxIn.min = "1"; maxIn.placeholder = "∞";
+        maxIn.value = cur.maxUsage > 0 ? cur.maxUsage : "";
+        maxIn.style.cssText = inStyle;
+        maxIn.title = "Most times a bunk can get " + sport + " per period. Blank = no limit.";
+        row.appendChild(maxIn);
+
+        const perSel = document.createElement("select");
+        perSel.style.cssText = "padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;";
+        SPORT_LIMIT_PERIODS.forEach(p => {
+            const o = document.createElement("option"); o.value = p.v; o.textContent = p.l;
+            if (p.v === cur.maxUsagePeriod) o.selected = true;
+            perSel.appendChild(o);
+        });
+        row.appendChild(perSel);
+
+        const gapLbl = document.createElement("span"); gapLbl.style.cssText = lblStyle + " margin-left:8px;"; gapLbl.textContent = "Min days between"; row.appendChild(gapLbl);
+        const gapIn = document.createElement("input");
+        gapIn.type = "number"; gapIn.min = "0"; gapIn.placeholder = "0";
+        gapIn.value = cur.frequencyDays > 0 ? cur.frequencyDays : "";
+        gapIn.style.cssText = inStyle;
+        gapIn.title = "Minimum days before a bunk can get " + sport + " again. 0 / blank = no cooldown.";
+        row.appendChild(gapIn);
+
+        const commit = () => {
+            const mu = parseInt(maxIn.value, 10); const muVal = Number.isFinite(mu) && mu > 0 ? mu : 0;
+            const fd = parseInt(gapIn.value, 10); const fdVal = Number.isFinite(fd) && fd > 0 ? fd : 0;
+            setSportLimitGlobal(sport, { maxUsage: muVal, maxUsagePeriod: perSel.value, frequencyDays: fdVal });
+            maxIn.value = muVal > 0 ? muVal : "";
+            gapIn.value = fdVal > 0 ? fdVal : "";
+            updateSummary();
+        };
+        maxIn.onchange = commit; perSel.onchange = commit; gapIn.onchange = commit;
+
+        box.appendChild(row);
+
+        // ── Per-grade max override (mirrors the specials "Different max per grade").
+        //    Writes sportMetaData[sport].maxUsagePerGrade[grade]; calculateLimitScore
+        //    already prefers a >0 per-grade value over the sport's base max.
+        const pgWrap = document.createElement("div");
+        pgWrap.style.cssText = "flex:1 1 100%; margin:0 0 12px 4px;";
+        const pgMap = { ...getSportMaxPerGrade(sport) };
+        const hasPg = Object.keys(pgMap).some(k => (parseInt(pgMap[k]) || 0) > 0);
+
+        const pgTog = document.createElement("label");
+        pgTog.style.cssText = "display:inline-flex; align-items:center; gap:8px; cursor:pointer;";
+        const pgCb = document.createElement("input"); pgCb.type = "checkbox"; pgCb.checked = hasPg;
+        const pgLbl = document.createElement("span"); pgLbl.style.cssText = lblStyle; pgLbl.textContent = "Different max per grade";
+        pgTog.appendChild(pgCb); pgTog.appendChild(pgLbl);
+        pgWrap.appendChild(pgTog);
+
+        const pgGrid = document.createElement("div");
+        pgGrid.style.cssText = "flex-direction:column; gap:5px; margin-top:6px;";
+        pgGrid.style.display = hasPg ? "flex" : "none";
+
+        const persistPg = () => {
+            Object.keys(pgMap).forEach(k => { if (!((parseInt(pgMap[k]) || 0) > 0)) delete pgMap[k]; });
+            setSportLimitGlobal(sport, { maxUsagePerGrade: { ...pgMap } });
+            updateSummary();
+        };
+
+        const grades = (typeof _getOrderedGrades === 'function') ? (_getOrderedGrades() || []) : [];
+        grades.forEach(div => {
+            const gr = document.createElement("div");
+            gr.style.cssText = "display:flex; align-items:center; gap:8px;";
+            const gLbl = document.createElement("span");
+            gLbl.style.cssText = "font-size:0.82rem; color:#374151; flex:1;";
+            gLbl.textContent = div;
+            const gIn = document.createElement("input");
+            gIn.type = "number"; gIn.min = "1";
+            gIn.placeholder = getSportLimit(sport).maxUsage > 0 ? String(getSportLimit(sport).maxUsage) : "∞";
+            if ((parseInt(pgMap[div]) || 0) > 0) gIn.value = pgMap[div];
+            gIn.style.cssText = "width:56px; padding:4px 6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+            gIn.title = "Max " + sport + " per period for " + div + " (overrides the sport's max)";
+            gIn.onchange = () => {
+                const v = parseInt(gIn.value, 10);
+                if (Number.isFinite(v) && v > 0) pgMap[div] = v; else { delete pgMap[div]; gIn.value = ""; }
+                persistPg();
+            };
+            gr.appendChild(gLbl); gr.appendChild(gIn);
+            pgGrid.appendChild(gr);
+        });
+        pgWrap.appendChild(pgGrid);
+
+        pgCb.onchange = () => {
+            pgGrid.style.display = pgCb.checked ? "flex" : "none";
+            if (!pgCb.checked) {
+                Object.keys(pgMap).forEach(k => delete pgMap[k]);
+                pgGrid.querySelectorAll("input").forEach(i => { i.value = ""; });
+                persistPg();
+            }
+        };
+        box.appendChild(pgWrap);
+    });
+
+    return box;
+}
 function summarySharing(f) {
     const rules = f.sharableWith;
     if (!rules || rules.type === 'not_sharable') return "No sharing (1 bunk only)";
@@ -2075,8 +2819,8 @@ function renderComboSettings(fieldItem) {
 
             const box = document.createElement('div');
             box.style.cssText = 'background:#e6f4f7; border:1px solid #b2dce6; border-radius:10px; padding:16px; margin-bottom:12px;';
-            box.innerHTML = `<div style="font-size:1rem; font-weight:600; color:#0A4A56; text-align:center;">${currentCombo.subFields.join(' + ')}  =  ${currentCombo.combinedField}</div>
-                <div style="font-size:0.82rem; color:#0F5F6E; text-align:center; margin-top:6px;">${isCombined ? 'This is the combined (full) field' : 'This field is part of "' + currentCombo.combinedField + '"'}</div>`;
+            box.innerHTML = `<div style="font-size:1rem; font-weight:600; color:#0A4A56; text-align:center;">${currentCombo.subFields.map(escapeHtml).join(' + ')}  =  ${escapeHtml(currentCombo.combinedField)}</div>
+                <div style="font-size:0.82rem; color:#0F5F6E; text-align:center; margin-top:6px;">${isCombined ? 'This is the combined (full) field' : 'This field is part of "' + escapeHtml(currentCombo.combinedField) + '"'}</div>`;
             container.appendChild(box);
 
             const removeBtn = document.createElement('button');
@@ -2165,9 +2909,10 @@ function summarySpecialAccess(s) {
         if (list.length === 0) parts.push(g);
         else { parts.push(g + ' (' + list.length + ')'); totalBunks += list.length; hasBunkFilter = true; }
     });
-    return hasBunkFilter
+    const priSuffix = s.accessRestrictions.usePriority ? ' · prioritized' : '';
+    return (hasBunkFilter
         ? parts.join(', ')
-        : `${gradeKeys.length} grade${gradeKeys.length !== 1 ? 's' : ''} allowed`;
+        : `${gradeKeys.length} grade${gradeKeys.length !== 1 ? 's' : ''} allowed`) + priSuffix;
 }
 function summarySpecialTime(s) { return s.timeRules?.length ? `${s.timeRules.length} rule(s)` : "Available all day"; }
 function summarySpecialDays(s) {
@@ -2180,11 +2925,12 @@ function summarySpecialWeather(s) {
 }
 function summarySpecialSchedulingMode(s) {
     if (s.fullGrade) return "Full Grade — entire grade together";
+    const consec = s.consecutiveBunks === true ? 'Consecutive · ' : '';
     const rules = s.sharableWith;
-    if (!rules || rules.type === 'not_sharable') return "Individual bunks — no sharing";
+    if (!rules || rules.type === 'not_sharable') return consec + "Individual bunks — no sharing";
     const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
     const cap = parseInt(rules.capacity) || 2;
-    return 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
+    return consec + 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
 }
 function summarySpecialUsage(s) {
     var parts = [];
@@ -2251,6 +2997,79 @@ function summarySpecialSubcategory(s) {
     return v ? v : 'Uncategorized';
 }
 
+function summarySpecialInstructor(s) {
+    var v = (typeof s.instructor === 'string') ? s.instructor.trim() : '';
+    return v ? v : 'No instructor set';
+}
+
+// Renders the Instructor section for a special activity inside the facility
+// view (the renderSpecialConfig card). saData is the special's record;
+// `fac` is the hosting facility (used to exclude self from the connections
+// picker).
+function renderSpecialInstructor(saData, fac) {
+    const container = document.createElement('div');
+    container.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280;';
+    desc.textContent = 'Name the person who runs this special. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
+    container.appendChild(desc);
+
+    // Shared datalist (existing instructor names across specials + general).
+    const dlId = 'sa-fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+
+    const inputRow = document.createElement('div');
+    inputRow.style.cssText = 'display:flex; align-items:center; gap:10px;';
+    const label = document.createElement('span');
+    label.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+    label.textContent = 'Instructor:';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'No instructor';
+    input.value = (typeof saData.instructor === 'string') ? saData.instructor : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; flex:1; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((saData.instructor || '') === v) return;
+        saData.instructor = v;
+        saveSpecialData(saData);
+        if (typeof renderDetailPane === 'function') renderDetailPane();
+    });
+    inputRow.appendChild(label);
+    inputRow.appendChild(input);
+    container.appendChild(inputRow);
+
+    // "Connected to" subsection — pick other activities the same instructor runs.
+    const aBlock = window.buildAlsoRunsChecklist?.(saData.instructor, { specialName: saData.name });
+    if (aBlock) container.appendChild(aBlock);
+
+    return container;
+}
+
 function saveSpecialData(saData) {
     const allSpecials = window.getAllSpecialActivities?.() || [];
     const idx = allSpecials.findIndex(s => s.name === saData.name);
@@ -2304,10 +3123,12 @@ function renderSpecialAccess(saData) {
     };
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = saData.accessRestrictions || { enabled: false, divisions: {}, priorityList: [] };
+        const rules = saData.accessRestrictions || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
         if (!rules.divisions || typeof rules.divisions !== 'object' || Array.isArray(rules.divisions)) {
             rules.divisions = {};
         }
+        if (!Array.isArray(rules.priorityList)) rules.priorityList = Object.keys(rules.divisions || {});
+        if (rules.usePriority === undefined) rules.usePriority = false;
 
         const modeWrap = document.createElement("div");
         modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
@@ -2326,14 +3147,10 @@ function renderSpecialAccess(saData) {
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        if (!rules.enabled) {
-            renderContent._done = true;
-            return;
-        }
-
         const divisions = window.divisions || window.getGlobalDivisions?.() || {};
         const allDivs = _getOrderedGrades();
 
+        if (rules.enabled) {
         const help = document.createElement("div");
         help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
         help.innerHTML = 'Click a <strong>grade</strong> to allow/disallow it. Once a grade is allowed, click "All bunks" to switch to per-bunk picking and choose specific bunks (e.g., for a teacher-tied class).';
@@ -2357,8 +3174,14 @@ function renderSpecialAccess(saData) {
             gChip.textContent = divName;
             gChip.style.cursor = 'pointer';
             gChip.onclick = () => {
-                if (isAllowed) delete rules.divisions[divName];
-                else rules.divisions[divName] = [];
+                if (isAllowed) {
+                    delete rules.divisions[divName];
+                    rules.priorityList = (rules.priorityList || []).filter(d => d !== divName);
+                } else {
+                    rules.divisions[divName] = [];
+                    if (!Array.isArray(rules.priorityList)) rules.priorityList = [];
+                    if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName);
+                }
                 saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
             };
             headRow.appendChild(gChip);
@@ -2395,8 +3218,25 @@ function renderSpecialAccess(saData) {
                     bChip.style.cursor = 'pointer';
                     bChip.style.fontSize = '0.75rem';
                     bChip.onclick = () => {
-                        if (isOn) rules.divisions[divName] = bunkList.filter(b => b !== bunkName);
-                        else rules.divisions[divName] = bunkList.concat([bunkName]);
+                        if (isOn) {
+                            const _next = bunkList.filter(b => b !== bunkName);
+                            // ★ Deselecting the LAST bunk = "no one in this grade".
+                            //   An empty array means "ALL bunks" to the scheduler
+                            //   (isSpecialAvailableForBunk / canBunkAccessSpecial treat
+                            //   []  as no per-bunk restriction), so leaving [] here would
+                            //   silently grant the activity to the WHOLE grade — the exact
+                            //   opposite of the user's intent. Excluding the grade (drop the
+                            //   key) is the only representation the scheduler reads as
+                            //   "shut off for this grade".
+                            if (_next.length === 0) {
+                                delete rules.divisions[divName];
+                                rules.priorityList = (rules.priorityList || []).filter(d => d !== divName);
+                            } else {
+                                rules.divisions[divName] = _next;
+                            }
+                        } else {
+                            rules.divisions[divName] = bunkList.concat([bunkName]);
+                        }
                         saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
                     };
                     bunkWrap.appendChild(bChip);
@@ -2413,6 +3253,85 @@ function renderSpecialAccess(saData) {
 
             container.appendChild(gradeRow);
         });
+        } // end if (rules.enabled) — grade/bunk chips only show when restricted
+
+        // Priority Order — rank the grades that can use this special. When the
+        // activity is capacity-limited and contested, higher-priority grades are
+        // processed first and claim it first. Same data model + auto-solver
+        // mechanism as sport/field access priority (scheduler_core_auto.js reads
+        // accessRestrictions.usePriority/priorityList for both fields and specials).
+        const availableGrades = rules.enabled ? Object.keys(rules.divisions) : allDivs;
+        if (availableGrades.length >= 2) {
+            const prioritySection = document.createElement("div");
+            prioritySection.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-top:12px;";
+
+            const priToggleRow = document.createElement("div");
+            priToggleRow.style.cssText = "display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;";
+
+            const priLabel = document.createElement("span");
+            priLabel.style.cssText = "font-weight:600; font-size:0.9rem;";
+            priLabel.textContent = "Priority Order";
+
+            const priTog = document.createElement("label"); priTog.className = "switch";
+            const priCb = document.createElement("input"); priCb.type = "checkbox"; priCb.checked = rules.usePriority === true;
+            priCb.onchange = () => {
+                rules.usePriority = priCb.checked;
+                if (priCb.checked && rules.priorityList.length === 0) rules.priorityList = [...availableGrades];
+                saData.accessRestrictions = rules;
+                saveSpecialData(saData); renderContent(); updateSummary();
+            };
+            const priSl = document.createElement("span"); priSl.className = "slider";
+            priTog.appendChild(priCb); priTog.appendChild(priSl);
+
+            priToggleRow.appendChild(priLabel); priToggleRow.appendChild(priTog);
+            prioritySection.appendChild(priToggleRow);
+
+            const priDesc = document.createElement("div");
+            priDesc.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:10px;";
+            priDesc.textContent = rules.usePriority ? "Higher = first access when this activity is contested." : "No preference — grades treated equally.";
+            prioritySection.appendChild(priDesc);
+
+            if (rules.usePriority) {
+                const validPriority = rules.priorityList.filter(d => availableGrades.includes(d));
+                const missing = availableGrades.filter(d => !validPriority.includes(d));
+                rules.priorityList = [...validPriority, ...missing];
+
+                const listEl = document.createElement("div");
+                listEl.style.cssText = "display:flex; flex-direction:column; gap:4px;";
+
+                rules.priorityList.forEach((divName, idx) => {
+                    const row = document.createElement("div");
+                    row.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#fff; border:1px solid #E5E7EB; border-radius:6px;";
+                    row.innerHTML = `<span style="width:20px; text-align:center; font-weight:600; color:#147D91; font-size:0.85rem;">${idx + 1}</span>
+                        <span style="flex:1; font-size:0.85rem;">${escapeHtml(divName)}</span>`;
+
+                    const btnUp = document.createElement("button");
+                    btnUp.textContent = "↑";
+                    btnUp.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer;";
+                    btnUp.disabled = idx === 0;
+                    if (idx === 0) btnUp.style.opacity = "0.3";
+                    btnUp.onclick = () => {
+                        [rules.priorityList[idx - 1], rules.priorityList[idx]] = [rules.priorityList[idx], rules.priorityList[idx - 1]];
+                        saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    };
+
+                    const btnDown = document.createElement("button");
+                    btnDown.textContent = "↓";
+                    btnDown.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer;";
+                    btnDown.disabled = idx === rules.priorityList.length - 1;
+                    if (idx === rules.priorityList.length - 1) btnDown.style.opacity = "0.3";
+                    btnDown.onclick = () => {
+                        [rules.priorityList[idx], rules.priorityList[idx + 1]] = [rules.priorityList[idx + 1], rules.priorityList[idx]];
+                        saData.accessRestrictions = rules; saveSpecialData(saData); renderContent(); updateSummary();
+                    };
+
+                    row.appendChild(btnUp); row.appendChild(btnDown);
+                    listEl.appendChild(row);
+                });
+                prioritySection.appendChild(listEl);
+            }
+            container.appendChild(prioritySection);
+        }
     };
     renderContent();
     return container;
@@ -2734,6 +3653,34 @@ function renderSpecialSchedulingMode(saData) {
             return;
         }
 
+        // ── Step 1.5 (AUTO ONLY): Consecutive Bunks ──────────────
+        // Hidden in manual mode — the manual builder doesn't support
+        // multi-slot per-grade allocation. Auto mode reserves N consecutive
+        // slots and assigns bunks round-robin (sharing-capacity-aware).
+        const _isAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        if (_isAutoMode) {
+            const consecWrap = document.createElement('div');
+            consecWrap.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px; margin-bottom:14px;';
+            const consecCheck = document.createElement('input');
+            consecCheck.type = 'checkbox';
+            consecCheck.checked = saData.consecutiveBunks === true;
+            consecCheck.id = 'sa-consec-' + String(saData.name || '').replace(/[^a-z0-9]/gi, '_');
+            consecCheck.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+            const consecLabel = document.createElement('label');
+            consecLabel.htmlFor = consecCheck.id;
+            consecLabel.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+            consecLabel.innerHTML = '<strong>Schedule bunks consecutively</strong><div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">Each bunk in the grade goes one after the next, using this activity\'s duration as the per-bunk slot. If sharing is on, bunks share each slot up to capacity (e.g. 6 bunks at capacity 2 = 3 consecutive slots).</div>';
+            consecCheck.addEventListener('change', () => {
+                saData.consecutiveBunks = consecCheck.checked;
+                saveSpecialData(saData);
+                renderContent();
+                updateSummary();
+            });
+            consecWrap.appendChild(consecCheck);
+            consecWrap.appendChild(consecLabel);
+            container.appendChild(consecWrap);
+        }
+
         // ── Step 2: Allow sharing? ────────────────────────────────
         const rules = saData.sharableWith || { type: 'not_sharable', capacity: 2 };
         if (!rules.allowedPairs || typeof rules.allowedPairs !== 'object') rules.allowedPairs = {};
@@ -2776,7 +3723,7 @@ function renderSpecialSchedulingMode(saData) {
             + (isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
 
         btnNo.onclick = () => {
-            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {};
+            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {}; rules.minBunks = 0;
             saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
         btnYes.onclick = () => {
@@ -2812,11 +3759,43 @@ function renderSpecialSchedulingMode(saData) {
         capIn.onchange = () => {
             rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value) || 2));
             capIn.value = rules.capacity;
-            saData.sharableWith = rules; saveSpecialData(saData); updateSummary();
+            if (rules.minBunks && rules.minBunks > rules.capacity) rules.minBunks = rules.capacity;
+            saData.sharableWith = rules; saveSpecialData(saData); renderContent(); updateSummary();
         };
         capWrap.appendChild(capLbl);
         capWrap.appendChild(capIn);
         container.appendChild(capWrap);
+
+        // ── Step 3b: Minimum bunks together (the floor) ───────────
+        // 0 / blank = no minimum (default). When set to 2+, the activity only
+        // runs when at least that many bunks attend together — the scheduler
+        // pulls in a partner bunk, and drops the activity for that slot if none
+        // can be found (e.g. the lake always needs 2 bunks). Manual builder only.
+        const minWrap = document.createElement('div');
+        minWrap.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px;';
+        const minLbl = document.createElement('span');
+        minLbl.style.cssText = 'font-size:0.84rem; color:#374151;';
+        minLbl.textContent = 'Min bunks together:';
+        const minIn = document.createElement('input');
+        minIn.type = 'number'; minIn.min = '0'; minIn.max = String(rules.capacity || 2);
+        minIn.value = (rules.minBunks && rules.minBunks >= 2) ? rules.minBunks : '';
+        minIn.placeholder = 'none';
+        minIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.9rem; font-weight:600;';
+        minIn.onchange = () => {
+            const v = parseInt(minIn.value, 10);
+            if (!v || v < 2) { rules.minBunks = 0; minIn.value = ''; }
+            else { rules.minBunks = Math.min(rules.capacity || 2, v); minIn.value = rules.minBunks; }
+            saData.sharableWith = rules; saveSpecialData(saData); updateSummary();
+        };
+        minWrap.appendChild(minLbl);
+        minWrap.appendChild(minIn);
+        container.appendChild(minWrap);
+        const minNote = document.createElement('div');
+        minNote.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-bottom:16px; line-height:1.5;';
+        minNote.textContent = (rules.minBunks && rules.minBunks >= 2)
+            ? 'Only runs when at least ' + rules.minBunks + ' bunks go together; the scheduler pulls in a partner bunk, or drops it for that slot if none is available.'
+            : 'Leave blank to allow a single bunk. Set to 2+ to require bunks to go together (e.g. the lake always needs 2).';
+        container.appendChild(minNote);
 
         // ── Step 4: Grade pairing ─────────────────────────────────
         const allDivs = _getOrderedGrades();
@@ -2905,6 +3884,26 @@ function renderSpecialUsage(saData) {
 
     var renderContent = function() {
         container.innerHTML = '';
+
+        // ── FORCE: must run every generation ──────────────────────────────
+        var forceRow = document.createElement('div');
+        forceRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:6px;';
+        var forceTog = document.createElement('label'); forceTog.className = 'switch';
+        var forceCb = document.createElement('input'); forceCb.type = 'checkbox'; forceCb.checked = saData.forcePlacement === true;
+        var forceSl = document.createElement('span'); forceSl.className = 'slider';
+        forceTog.appendChild(forceCb); forceTog.appendChild(forceSl);
+        var forceLbl = document.createElement('span');
+        forceLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        forceLbl.textContent = 'Always schedule this every generation';
+        forceRow.appendChild(forceTog); forceRow.appendChild(forceLbl);
+        container.appendChild(forceRow);
+        forceCb.onchange = function() { saData.forcePlacement = forceCb.checked; saveSpecialData(saData); renderContent(); updateSummary(); };
+        var forceNote = document.createElement('div');
+        forceNote.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-bottom:16px; line-height:1.5;';
+        forceNote.textContent = saData.forcePlacement === true
+            ? 'Every time you generate, the scheduler guarantees this runs at least once (with the minimum bunks), giving it to the bunks most overdue for it. It only skips if no eligible bunks/time exist that day.'
+            : 'Off: this is placed by normal rotation and may not appear on a given day. Turn on to force it into every generation.';
+        container.appendChild(forceNote);
 
         // ── A: MAXIMUM (CEILING) ──────────────────────────────────────────
         var ceilLabel = document.createElement('div');
@@ -4323,6 +5322,136 @@ window.cleanupDeletedGeneral = cleanupDeletedGeneral;
 window.cleanupRotationTracking = cleanupRotationTracking;
 window.sweepOrphanedReferences = sweepOrphanedReferences;
 
+// Move ALL rotation bookkeeping for a renamed activity from oldName → newName
+// across every store the Rotation report reads: local historicalCounts,
+// manualUsageOffsets, rotationHistory, and the cloud rotation_counts table.
+// Counts MERGE into any existing newName entry; the old name is removed so it
+// drops out of the rotation report entirely. Best-effort + idempotent (safe to
+// re-run, and a no-op when the old name has no rotation data).
+//
+// The facility/field rename path (propagateFieldRename) already inlines the
+// local-store moves inside its snapshot/rollback transaction, so it does NOT
+// call this — it just needs RotationCloud.renameActivity (now defined). This
+// helper exists for the special-activity and general-activity rename handlers,
+// which previously migrated nothing and left counts orphaned under the old name.
+function migrateRotationCountsForRename(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // 1) historicalCounts[bunk][name] — local cumulative counts.
+        const hc = settings.historicalCounts || window.historicalCounts;
+        if (hc && typeof hc === 'object') {
+            let changed = false;
+            Object.keys(hc).forEach(bunk => {
+                const m = hc[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+                changed = true;
+            });
+            if (changed) {
+                window.historicalCounts = hc;
+                window.saveGlobalSettings?.('historicalCounts', hc);
+            }
+        }
+
+        // 2) manualUsageOffsets[bunk][name] — user's hand-typed "Adjust" values.
+        const mo = settings.manualUsageOffsets || window.manualUsageOffsets;
+        if (mo && typeof mo === 'object') {
+            let changed = false;
+            Object.keys(mo).forEach(bunk => {
+                const m = mo[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+                changed = true;
+            });
+            if (changed) {
+                window.manualUsageOffsets = mo;
+                window.saveGlobalSettings?.('manualUsageOffsets', mo);
+            }
+        }
+
+        // 3) rotationHistory.bunks[bunk][name] — last-done timestamps. Fill the
+        //    new name only if absent so we never clobber a real newer timestamp.
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {} };
+            let changed = false;
+            Object.keys(rh.bunks || {}).forEach(bunk => {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldName in m)) return;
+                if (!(newName in m)) m[newName] = m[oldName];
+                delete m[oldName];
+                changed = true;
+            });
+            if (changed && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 4) Cloud rotation_counts — merge old rows into new across all dates.
+        if (window.RotationCloud && typeof window.RotationCloud.renameActivity === 'function') {
+            try { window.RotationCloud.renameActivity(oldName, newName); } catch (_) {}
+        }
+
+        console.log('[ROTATION] Migrated rotation counts on rename: "' + oldName + '" → "' + newName + '"');
+    } catch (e) {
+        console.error('[ROTATION] Rotation-count rename migration failed:', e);
+    }
+}
+
+// Rewrite a renamed activity's name inside SAVED per-date schedules and the live
+// in-memory grid, across all the slot fields a name can live in (_activity,
+// sport, field, location, _location). Without this the Rotation report keeps
+// surfacing the OLD name as a "0-count / other" row, because it rebuilds its
+// activity list by scanning saved schedules (loadAllDailyData) — whose entries
+// still literally carry the old _activity string. Persisting via
+// saveGlobalSettings('daily_schedules', ...) fans the change out to the cloud
+// daily_schedules table through the same bridge the calendar save uses.
+function renameActivityInSchedules(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    let changed = false;
+    const rewriteSlot = (slot) => {
+        if (!slot || typeof slot !== 'object') return;
+        if (slot._activity === oldName) { slot._activity = newName; changed = true; }
+        if (slot.sport === oldName) { slot.sport = newName; changed = true; }
+        if (slot.field === oldName) { slot.field = newName; changed = true; }
+        if (slot.location === oldName) { slot.location = newName; changed = true; }
+        if (slot._location === oldName) { slot._location = newName; changed = true; }
+    };
+    const walk = (slots) => {
+        if (!Array.isArray(slots)) return;
+        slots.forEach(s => Array.isArray(s) ? s.forEach(rewriteSlot) : rewriteSlot(s));
+    };
+    try {
+        // Saved per-date schedules (local blob → cloud daily_schedules via bridge).
+        const all = window.loadAllDailyData?.() || {};
+        Object.keys(all).forEach(dateKey => {
+            const sa = all[dateKey] && all[dateKey].scheduleAssignments;
+            if (sa && typeof sa === 'object') Object.keys(sa).forEach(bunk => walk(sa[bunk]));
+        });
+        if (changed) {
+            window.saveGlobalSettings?.('daily_schedules', all);
+            window.invalidateDailyDataCache?.();
+        }
+        // Live in-memory grid (today's schedule).
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bunk => walk(window.scheduleAssignments[bunk]));
+        }
+        // Cloud daily_schedules rows directly — the save bridge above only
+        // pushes the CURRENT date, so past-date cloud rows keep the old name
+        // and re-hydrate it into the local blob on the next reload. Rewrite
+        // them in place (best-effort, async; RLS-blocked rows are skipped).
+        if (window.ScheduleDB?.renameActivityInCloud) {
+            try { window.ScheduleDB.renameActivityInCloud(oldName, newName); } catch (_) {}
+        }
+        if (changed) console.log('[ROTATION] Rewrote saved schedule entries: "' + oldName + '" → "' + newName + '"');
+    } catch (e) {
+        console.error('[ROTATION] Schedule rename rewrite failed:', e);
+    }
+}
+
 // Slice 4 audit fix — full propagation, transactional best-effort.
 // Earlier this only updated `daily_schedules` (localStorage), `app1.disabledFields`,
 // and `locationZones`. Missed:
@@ -4358,6 +5487,11 @@ function propagateFieldRename(oldName, newName) {
                         if (slot.location === oldName) slot.location = newName;
                         if (slot.field === oldName) slot.field = newName;
                         if (slot._location === oldName) slot._location = newName;
+                        // Self-hosted facility (field name == activity name): the
+                        // activity string must follow the rename too, else it lingers
+                        // in the Rotation report's schedule scan under the old name.
+                        if (slot._activity === oldName) slot._activity = newName;
+                        if (slot.sport === oldName) slot.sport = newName;
                     });
                 });
             }
@@ -4481,6 +5615,14 @@ function propagateFieldRename(oldName, newName) {
             }
         }
 
+        // 10b) Cloud daily_schedules rows directly. The daily_schedules save
+        //      above fans out only the CURRENT date via the bridge, so past-date
+        //      cloud rows keep the old name and re-hydrate it on reload. Rewrite
+        //      them in place (best-effort, async; RLS-blocked rows skipped).
+        if (window.ScheduleDB && typeof window.ScheduleDB.renameActivityInCloud === 'function') {
+            try { window.ScheduleDB.renameActivityInCloud(oldName, newName); } catch (_) {}
+        }
+
         // 11) Save the app1 mutation last (smallest blast radius if it throws).
         window.saveGlobalSettings?.('app1', app1);
 
@@ -4547,12 +5689,7 @@ function handleComboFieldDeleted(fieldName) {
 // =========================================================================
 // UTILITY HELPERS
 // =========================================================================
-function escapeHtml(str) {
-    if (str === null || str === undefined) return "";
-    const div = document.createElement("div");
-    div.textContent = String(str);
-    return div.innerHTML;
-}
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
 function makeEditable(el, save) {
     el.ondblclick = () => {
@@ -4576,30 +5713,68 @@ function makeEditable(el, save) {
     };
 }
 
-function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12;
-        else if (mer === "pm") hh += 12;
-    }
-    return hh * 60 + mm;
-}
+function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
 // =========================================================================
 // EXPORTS
 // =========================================================================
 window.initFacilitiesTab = initFacilitiesTab;
+
+// ★ FN-45: remote config changes (another device or tab) re-hydrate storage —
+//   refresh the module state + visible UI so this tab doesn't keep editing,
+//   and later SAVE, a stale copy: saveFacilitiesMetadata pushes the whole
+//   array, so a stale tab wholesale-erases the other writer's general
+//   activities / sharing / consecutive settings. The detail pane re-resolves
+//   the selected facility by name, so an open editor refreshes onto the
+//   fresh objects (or empties if the facility was deleted remotely).
+(function () {
+    let _facRefreshTimer = null;
+    // Is the user actively editing the detail pane right now? A hydrate event
+    // is usually just the realtime echo of THIS tab's own forceSyncToCloud
+    // (saveSpecialData fires one on every click). Tearing down + rebuilding
+    // detailPaneEl mid-edit collapses every open section (open/closed state
+    // lives only in the DOM) — so the menu the user just opened slams shut
+    // ~2s after they click. Skip the visual rebuild while they're interacting;
+    // it catches up the next time the pane is idle (FN-45's anti-stale intent
+    // is preserved — a focused tab's own edits should win anyway).
+    function _facUserIsEditing() {
+        try {
+            if (!detailPaneEl) return false;
+            const ae = document.activeElement;
+            if (ae && detailPaneEl.contains(ae) &&
+                /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName || '')) return true;
+            if (ae && detailPaneEl.contains(ae) && ae.isContentEditable) return true;
+            // Any expanded detail-section means a menu is open in front of the user.
+            const bodies = detailPaneEl.querySelectorAll('.detail-section-body');
+            for (let i = 0; i < bodies.length; i++) {
+                if (bodies[i].style.display === 'block') return true;
+            }
+        } catch (_) { /* fall through — treat as not editing */ }
+        return false;
+    }
+    function _refreshFacilitiesFromStorage() {
+        if (_facRefreshTimer) clearTimeout(_facRefreshTimer);
+        _facRefreshTimer = setTimeout(() => {
+            _facRefreshTimer = null;
+            try {
+                const settings = window.loadGlobalSettings?.() || {};
+                if (!Array.isArray(settings.facilities) || settings.facilities.length === 0) return;
+                // Don't rip the DOM out from under an open editor / menu.
+                if (_facUserIsEditing()) return;
+                loadData();
+                const tab = document.getElementById('facilities');
+                if (tab && tab.offsetParent !== null && facilitiesListEl) {
+                    renderMasterList();
+                    renderDetailPane();
+                }
+            } catch (e) { console.warn('[FACILITIES] hydrate refresh failed:', e); }
+        }, 250);
+    }
+    window.addEventListener('campistry-cloud-hydrated', _refreshFacilitiesFromStorage);
+    window.addEventListener('storage', (e) => {
+        if (e && e.key === 'CAMPISTRY_LOCAL_CACHE') _refreshFacilitiesFromStorage();
+    });
+})();
 window.getFacilities = function () {
     const settings = window.loadGlobalSettings?.() || {};
     return settings.facilities || [];

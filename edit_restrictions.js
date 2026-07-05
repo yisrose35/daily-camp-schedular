@@ -12,6 +12,18 @@
 // ============================================================================
 
 (function() {
+
+// ★★★ CB-40: division & subdivision names are user-controlled camp config and
+// were interpolated RAW into the access-denied toast and the view-only overlay
+// innerHTML → stored XSS in a restricted user's session. No escaper existed in
+// this file; add one (CampUtils delegate + complete &<>"' fallback) and wrap
+// both sinks.
+const _erEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+    ? window.CampUtils.escapeHtml(s)
+    : String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
     'use strict';
 
     console.log("🚫 Edit Restrictions v1.1 loading...");
@@ -295,7 +307,7 @@
                 <span class="view-only-text">View Only</span>
             </div>
             ${subdivision ? `
-                <div class="view-only-info">Managed by ${subdivision.name}</div>
+                <div class="view-only-info">Managed by ${_erEsc(subdivision.name)}</div>
             ` : ''}
         `;
         
@@ -394,9 +406,9 @@
 
     function showAccessDeniedToast(divisionName) {
         const subdivision = window.AccessControl?.getSubdivisionForDivision(divisionName);
-        const message = subdivision 
-            ? `"${divisionName}" is managed by ${subdivision.name}`
-            : `You don't have permission to edit "${divisionName}"`;
+        const message = subdivision
+            ? `"${_erEsc(divisionName)}" is managed by ${_erEsc(subdivision.name)}`
+            : `You don't have permission to edit "${_erEsc(divisionName)}"`;
         
         const toast = document.createElement('div');
         toast.className = 'access-denied-toast';

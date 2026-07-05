@@ -33,12 +33,7 @@ var _pendingFQGroups = [];
 // ──────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ──────────────────────────────────────────────────────────────────────────
-function escapeHtml(s) {
-    if (s === null || s === undefined) return '';
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
-}
+function escapeHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 function loadSettings() { return (window.loadGlobalSettings && window.loadGlobalSettings()) || {}; }
 function saveKey(k, v) { window.saveGlobalSettings && window.saveGlobalSettings(k, v); }
 function uid(prefix) { return (prefix || 'r_') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
@@ -1057,6 +1052,267 @@ function initRulesTab() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// SPACING ENFORCEMENT SWEEP — post-generation, BOTH builders
+// ──────────────────────────────────────────────────────────────────────────
+// The main auto path gates placement via isCandidateAllowed({mode:'auto'}), but
+// coverage / recapture fill passes (e.g. phase4.9-recapture, the final free-fill
+// sweeps) place activities WITHOUT that gate, and the manual builder never gated
+// spacing at all. This sweep runs as the FINAL pass on the assembled per-bunk
+// schedule and demotes any block that violates a spacing rule (target within N
+// minutes of reference) to Free — guaranteeing 0 violations regardless of which
+// placement path created them.
+//
+// Design:
+//   • Demote the movable TARGET only; the (usually pinned) REFERENCE is left intact.
+//   • DEMOTE-ONLY — never moves an activity to a new field/time, so it cannot
+//     introduce a field-sharing / capacity conflict (unlike a swap-based repair).
+//   • User-locked blocks (_league / _postEdit / _pinned) are never demoted; if a
+//     locked block is the violating target, it's left + counted as unresolved.
+//   • Times come from each entry's own _startMin/_endMin (both builders stamp
+//     these), so it needs no external geometry and works identically in both.
+//   • Mode-filtered: a rule applies when its mode is 'both' or matches opts.mode.
+// Must run LAST (after every fill/refill pass) or a later fill can re-violate.
+function enforceSpacingSweep(scheduleAssignments, opts) {
+    const mode = (opts && opts.mode) || 'auto';
+    const rules = getCooldownRules().filter(function (r) {
+        const rm = r.mode || 'both';
+        return (rm === 'both' || rm === mode) && r.target && r.reference && (parseInt(r.minutes) || 0) > 0;
+    });
+    const report = { mode: mode, rulesApplied: rules.length, refilled: 0, demoted: 0, unresolved: 0, details: [] };
+    if (!rules.length || !scheduleAssignments) return report;
+
+    // Time resolution mirrors the room-capacity sweep's _rtime: manual block-A entries
+    // do NOT carry _startMin/_endMin (their geometry lives in _perBunkSlots / divisionTimes
+    // by slot index), so reading only the entry would make this sweep BLIND to them. Resolve
+    // per-bunk geometry first, then the entry's own stamp, then division-level period times.
+    const _divs = (opts && opts.divisions) || window.divisions || {};
+    const _b2g = {};
+    Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
+    const _dt = window.divisionTimes || {};
+    function slotTime(bunk, idx, e) {
+        // ENTRY stamp first: it is the activity's ACTUAL placement time, set by the
+        // placing pass. _perBunkSlots is the render grid, but mid-gen (auto STEP 6.85)
+        // it isn't settled yet — preferring it made the sweep fall through to the coarse
+        // division-period time and miss a block whose entry already held the real
+        // (violating) time. Geometry is the fallback for manual block-A entries that
+        // carry no _startMin (their time lives only in _perBunkSlots / divisionTimes).
+        if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+        const g = _b2g[String(bunk)];
+        const pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][bunk])
+                 || (_dt[g] && _dt[g]._perBunkSlots && _dt[g]._perBunkSlots[bunk]);
+        if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+        const ds = _dt[g];
+        if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+        return null;
+    }
+    function blocksOf(bunk, slots) {
+        const out = [];
+        for (let i = 0; i < slots.length; i++) {
+            const e = slots[i];
+            if (!e || e.continuation) continue;
+            const act = e._activity || e.sport || e.event;
+            if (!act) continue;
+            const t = slotTime(bunk, i, e);
+            if (!t || t.s == null || t.e == null) continue;
+            let em = t.e;
+            for (let k = i + 1; k < slots.length; k++) { // extend end across continuation slots
+                if (slots[k] && slots[k].continuation) { const ct = slotTime(bunk, k, slots[k]); if (ct && ct.e != null) em = ct.e; }
+                else break;
+            }
+            out.push({
+                idx: i, event: act, type: inferTypeFromActivity(act),
+                field: e.field || e._specialLocation || e.location || null,
+                startMin: t.s, endMin: em,
+                prot: !!(e._league || e._postEdit || e._pinned)
+            });
+        }
+        return out;
+    }
+    function demote(slots, idx, s, e) {
+        if (!slots[idx]) return false;
+        slots[idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: s, _endMin: e, _fixed: true, _constraintDemoted: true, _demotedReason: 'spacing', continuation: false };
+        for (let k = idx + 1; k < slots.length; k++) {
+            if (slots[k] && slots[k].continuation) slots[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false };
+            else break;
+        }
+        return true;
+    }
+
+    // ── COMPLIANT REFILL ─────────────────────────────────────────────────────
+    // A spacing violation must not just leave a hole: try to put a DIFFERENT
+    // valid activity in the slot that does NOT violate spacing, leaving Free only
+    // when nothing legal fits (genuinely impossible). Tries the displaced
+    // activity's OWN type first (keep the slot's character), then the other type —
+    // so under "no sport near lunch" a sport slot can be refilled with a special,
+    // and vice-versa. Validation mirrors the existing fill passes (STEP 6.8 / 7.6):
+    // field/room must be COMPLETELY free at the slot's time (stricter than sharing →
+    // can never create a capacity/share conflict), grade access honored, no same-day
+    // repeat, time-restricted fields skipped (conservative), plus isCandidateAllowed
+    // for spacing. (Special frequency caps aren't re-checked here — a best-effort
+    // fill is preferred to a Free per the requirement; rare and bounded.)
+    const _gsR = (window.loadGlobalSettings && window.loadGlobalSettings()) || (window.globalSettings || {});
+    const _app1R = _gsR.app1 || _gsR;
+    const _fieldsR = (_app1R && _app1R.fields) || _gsR.fields || [];
+    const _specialsR = (_app1R && _app1R.specialActivities) || _gsR.specialActivities || [];
+    const _nmR = function (s) { return String(s || '').toLowerCase().trim(); };
+    const _skipFL = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'snack': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
+    const _specialRoomR = {}; _specialsR.forEach(function (s) { if (s && s.location) _specialRoomR[_nmR(s.location)] = 1; });
+    const _accessOk = function (ar, grade) { if (!ar || !ar.enabled) return true; const dv = ar.divisions || {}; if (!Object.keys(dv).length) return true; return !!dv[grade]; };
+    function _occFree(exclBunk, exclIdx, fl, s, e) {
+        const key = _nmR(fl);
+        const names = Object.keys(scheduleAssignments);
+        for (let bi = 0; bi < names.length; bi++) {
+            const b = names[bi]; const arr = scheduleAssignments[b]; if (!Array.isArray(arr)) continue;
+            for (let i = 0; i < arr.length; i++) {
+                if (String(b) === String(exclBunk) && i === exclIdx) continue;
+                const en = arr[i]; if (!en || en.continuation) continue;
+                if (_nmR(en.field || en._specialLocation || en.location) !== key) continue;
+                const t = slotTime(b, i, en); if (!t) continue;
+                if (t.s < e && t.e > s) return false;
+            }
+        }
+        return true;
+    }
+    // ★ Sharing-aware occupancy: who's on this room/field during [s,e)?
+    //   Returns {count, sameGradeOnly} so the refill can SHARE under capacity
+    //   (the completely-free-only rule left rule-displaced slots unfillable in
+    //   the pre-lunch crunch when every bunk competes for the special rooms).
+    function _occInfo(exclBunk, exclIdx, fl, s, e, grade) {
+        const key = _nmR(fl);
+        let count = 0, sameGradeOnly = true;
+        const names = Object.keys(scheduleAssignments);
+        for (let bi = 0; bi < names.length; bi++) {
+            const b = names[bi]; const arr = scheduleAssignments[b]; if (!Array.isArray(arr)) continue;
+            for (let i = 0; i < arr.length; i++) {
+                if (String(b) === String(exclBunk) && i === exclIdx) continue;
+                const en = arr[i]; if (!en || en.continuation) continue;
+                if (_nmR(en.field || en._specialLocation || en.location) !== key) continue;
+                const t = slotTime(b, i, en); if (!t) continue;
+                if (t.s < e && t.e > s) {
+                    count++;
+                    if (_b2g[String(b)] !== grade) sameGradeOnly = false;
+                }
+            }
+        }
+        return { count: count, sameGradeOnly: sameGradeOnly };
+    }
+    // Sharing capacity of a room/field from its sharableWith config — mirrors the
+    // solvers' normalization: not_sharable→1, explicit capacity wins, 'all'→∞,
+    // anything else defaults to 2 (same_division-style).
+    function _capOfSW(sw) {
+        if (!sw) return 1;
+        const t = String(sw.type || sw.shareType || 'not_sharable').toLowerCase();
+        if (t === 'not_sharable') return 1;
+        const c = parseInt(sw.capacity);
+        if (c > 0) return c;
+        return t === 'all' ? 999 : 2;
+    }
+    function refillSlot(bunk, grade, slots, idx, s, e, demotedType, template) {
+        const done = {};
+        slots.forEach(function (en, i) { if (i !== idx && en && !en.continuation) { const a = en._activity || en.sport || en.event; if (a && !/^free$/i.test(a)) done[_nmR(a)] = 1; } });
+        // Shared-room admission: under capacity, and only joining occupants of the
+        // SAME grade (conservative — no cross-division pairing logic re-implemented here).
+        const roomOpen = function (room, sw) {
+            const occ = _occInfo(bunk, idx, room, s, e, grade);
+            if (occ.count === 0) return true;
+            if (!occ.sameGradeOnly) return false;
+            return occ.count < _capOfSW(sw);
+        };
+        const trySport = function () {
+            for (let fi = 0; fi < _fieldsR.length; fi++) {
+                const f = _fieldsR[fi]; if (!f || !f.name) continue;
+                if (_specialRoomR[_nmR(f.name)]) continue;                       // not a special room
+                if (f.available === false) continue;
+                if (f.timeRules && f.timeRules.enabled) continue;                // skip time-restricted (conservative)
+                if (!Array.isArray(f.activities) || !f.activities.length) continue;
+                if (!_accessOk(f.accessRestrictions, grade)) continue;
+                if (!roomOpen(f.name, f.sharableWith)) continue;
+                for (let ai = 0; ai < f.activities.length; ai++) {
+                    const A = f.activities[ai]; if (!A || done[_nmR(A)]) continue;
+                    if (isCandidateAllowed({ type: 'sport', event: A, field: f.name, startMin: s, endMin: e }, template, { mode: mode }))
+                        return { field: f.name, act: A, isSpecial: false };
+                }
+            }
+            return null;
+        };
+        const trySpecial = function () {
+            for (let si = 0; si < _specialsR.length; si++) {
+                const sp = _specialsR[si]; if (!sp || !sp.name || done[_nmR(sp.name)]) continue;
+                const room = sp.location || sp.name;
+                if (!_accessOk(sp.accessRestrictions, grade)) continue;
+                if (!roomOpen(room, sp.sharableWith)) continue;
+                let dur = null;
+                if (Array.isArray(sp.durations) && sp.durations.filter(Boolean).length) dur = Math.min.apply(null, sp.durations.filter(Boolean));
+                else dur = sp.duration || sp.periodMin || null;
+                if (dur && (e - s) < dur) continue;                              // slot too short for this special
+                if (isCandidateAllowed({ type: 'special', event: sp.name, field: room, _assignedSpecial: sp.name, _specialLocation: room, startMin: s, endMin: e }, template, { mode: mode }))
+                    return { field: room, act: sp.name, isSpecial: true };
+            }
+            return null;
+        };
+        return (demotedType === 'special') ? (trySpecial() || trySport()) : (trySport() || trySpecial());
+    }
+
+    Object.keys(scheduleAssignments).forEach(function (bunk) {
+        const slots = scheduleAssignments[bunk];
+        if (!Array.isArray(slots)) return;
+        const grade = _b2g[String(bunk)];
+        for (let round = 0; round < 12; round++) { // bounded: each fix may clear cascading violations
+            const blocks = blocksOf(bunk, slots);
+            let acted = false;
+            for (let a = 0; a < blocks.length && !acted; a++) {
+                const T = blocks[a];
+                for (let ri = 0; ri < rules.length && !acted; ri++) {
+                    const r = rules[ri];
+                    if (!blockMatchesDescriptor(T, r.target)) continue;
+                    const minutes = parseInt(r.minutes) || 0;
+                    const timing = r.timing || 'both';
+                    for (let b = 0; b < blocks.length; b++) {
+                        if (b === a) continue;
+                        const R = blocks[b];
+                        if (!blockMatchesDescriptor(R, r.reference)) continue;
+                        const gapBefore = R.startMin - T.endMin;
+                        const gapAfter = T.startMin - R.endMin;
+                        let viol = false;
+                        if ((timing === 'before' || timing === 'both') && gapBefore >= 0 && gapBefore < minutes) viol = true;
+                        if ((timing === 'after' || timing === 'both') && gapAfter >= 0 && gapAfter < minutes) viol = true;
+                        if (!viol) continue;
+                        if (T.prot) {
+                            if (round === 0) { report.unresolved++; report.details.push({ bunk: bunk, unresolved: T.event, near: R.event }); }
+                        } else {
+                            // Template = the bunk's OTHER blocks (so the refill candidate is checked
+                            // against everything except the slot we're replacing).
+                            const template = blocks.filter(function (_x, _i) { return _i !== a; });
+                            const fill = refillSlot(bunk, grade, slots, T.idx, T.startMin, T.endMin, T.type, template);
+                            if (fill) {
+                                slots[T.idx] = {
+                                    field: fill.field, sport: fill.isSpecial ? null : fill.act, _activity: fill.act,
+                                    _startMin: T.startMin, _endMin: T.endMin, _fixed: true, _spacingRefill: true, continuation: false
+                                };
+                                if (fill.isSpecial) slots[T.idx]._specialLocation = fill.field;
+                                report.refilled++;
+                                report.details.push({ bunk: bunk, refilled: fill.act, replaced: T.event, near: R.event });
+                            } else {
+                                demote(slots, T.idx, T.startMin, T.endMin);
+                                report.demoted++;
+                                report.details.push({ bunk: bunk, demoted: T.event, near: R.event });
+                            }
+                            acted = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!acted) break;
+        }
+    });
+    if (report.refilled || report.demoted || report.unresolved) {
+        console.log('[SPACING] enforceSpacingSweep (' + mode + '): ' + report.refilled + ' refilled (compliant), ' + report.demoted + ' demoted → Free (unfillable)' + (report.unresolved ? ', ' + report.unresolved + ' unresolved (user-locked)' : ''));
+    }
+    return report;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // EXPORTS
 // ──────────────────────────────────────────────────────────────────────────
 window.initRulesTab = initRulesTab;
@@ -1073,6 +1329,7 @@ window.SchedulingRules = {
     applyFieldGroupUpdates: applyFieldGroupUpdates,
     inferTypeFromActivity: inferTypeFromActivity,
     buildTemplateFromBunkSlots: buildTemplateFromBunkSlots,
+    enforceSpacingSweep: enforceSpacingSweep,
     describeRule: describeRule
 };
 

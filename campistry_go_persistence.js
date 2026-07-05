@@ -103,20 +103,26 @@ window.GoNhPersistence = (function () {
         const payload = await load();
         const now = new Date().toISOString();
 
-        // Build nhId → busId map from assignment (split parts point back to parent)
+        // Build nhId → busId(s) map from assignment (split parts point back to parent).
+        // ★ CB-138: a split (oversize) neighborhood's pieces can land on DIFFERENT buses. The old
+        // `busByNh[parentId] = bus.busId` overwrote, so only the last-iterated bus survived in the
+        // record — next season getPriorAssignments saw a single bus and the grandfather diff treated
+        // the other half's campers as "reassigned". Collect ALL buses (ordered, de-duped) per parent.
         const busByNh = {};
         for (const bus of assignment) {
             for (const nhId of bus.neighborhoodIds) {
                 // Split pieces carry 'parentId' via their ID suffix "_pN" — map back
                 const parentId = nhId.replace(/_p\d+$/, '');
-                busByNh[parentId] = bus.busId;
+                if (!busByNh[parentId]) busByNh[parentId] = [];
+                if (busByNh[parentId].indexOf(bus.busId) === -1) busByNh[parentId].push(bus.busId);
             }
         }
 
         for (const nh of result.neighborhoods) {
             const parentId = nh.id.replace(/_p\d+$/, '');
-            const busId = busByNh[parentId];
-            if (!busId) continue;
+            const busIds = busByNh[parentId];
+            if (!busIds || !busIds.length) continue;
+            const busId = busIds[0]; // primary bus — kept for single-bus consumers (getPriorAssignments)
 
             const existing = payload.neighborhoods[parentId] || {
                 id: parentId, history: [],
@@ -130,6 +136,7 @@ window.GoNhPersistence = (function () {
                 mode: nh.mode,
                 segmentIds: nh.segmentIds,
                 lastBusId: busId,
+                lastBusIds: busIds.slice(), // ★ CB-138: full set when this neighborhood was split across buses (single-bus consumers keep using lastBusId)
                 lastAssignedAt: now,
                 lastCamperCount: nh.camperCount,
                 pinned,

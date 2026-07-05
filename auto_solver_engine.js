@@ -118,6 +118,11 @@
         const fieldsBySport = {};
         fields.forEach(f => {
             if (disabled.has(f.name)) return;
+            // ★ Config-level shut-off: a field toggled UNAVAILABLE in Facilities
+            //   (available:false) must never produce sport candidates. solverConfig
+            //   already filters this upstream; keep the gate here too so the engine
+            //   is correct regardless of how its config was assembled.
+            if (f.available === false) return;
             const rawType = f.sharableWith?.type || 'same_division';
             const divs = f.sharableWith?.divisions || [];
             const allowedPairs = f.sharableWith?.allowedPairs || {};
@@ -160,7 +165,10 @@
                     isIndoor: !!f.isIndoor,
                     accessRestrictions,
                     timeRules,
-                    disabledSports: fieldDisabledSports
+                    disabledSports: fieldDisabledSports,
+                    qualityRank: parseInt(f.qualityRank) || null,
+                    fieldGroup: f.fieldGroup || null,
+                    preferences: (f.preferences && f.preferences.enabled) ? f.preferences : null
                 });
             });
         });
@@ -168,22 +176,66 @@
         Object.entries(fieldsBySport).forEach(([sport, fieldList]) => {
             const meta = sportMeta[sport] || {};
             const maxPlayers = parseInt(meta.maxPlayers) || null;
+            // ★ PER-SPORT CONFIGURED DURATION (mirrors specials): when the user
+            //   sets a fixed length for this sport in the Rules tab, the solver
+            //   may only place it into a slot whose length matches — exactly the
+            //   way a special is locked to its configured duration. Canonical
+            //   store is `durations[]`; scalar `duration` is the legacy mirror.
+            //   Empty ⇒ no constraint (slot keeps its layer-derived length).
+            let _sportDurs = [];
+            if (Array.isArray(meta.durations)) {
+                _sportDurs = meta.durations.map(d => parseInt(d, 10)).filter(d => d > 0);
+            }
+            if (!_sportDurs.length && parseInt(meta.duration, 10) > 0) {
+                _sportDurs = [parseInt(meta.duration, 10)];
+            }
+            _sportDurs = Array.from(new Set(_sportDurs)).sort((a, b) => a - b);
+            // ★ SPECIAL-ACTIVITY CAPACITY: when this activity is a configured SPECIAL
+            //   with its own Sharing Rules, the SPECIAL's capacity/share config is
+            //   authoritative — NOT the facility field's. The user sets "max N at a
+            //   time" on the special (activityProperties[name].sharableWith); the
+            //   facility field it happens to occupy may have a looser/default cap, so
+            //   without this the solver fills "Baking"/"VR" to the field's capacity and
+            //   lets >N bunks share a capacity-limited special concurrently (live bug:
+            //   Baking/VR limit=2 but 4 bunks got them at once). Take the special's
+            //   sharing as the override (capacity = min of the two when both exist).
+            const _spSharing = ap[sport] && ap[sport].sharableWith;
+            let _spType = null, _spCap = null, _spDivs = [], _spPairs = {};
+            if (_spSharing && _spSharing.type) {
+                _spType = _spSharing.type;
+                _spCap = parseInt(_spSharing.capacity) || (_spSharing.type === 'not_sharable' ? 1 : 2);
+                _spDivs = _spSharing.type === 'custom' ? (_spSharing.divisions || []) : [];
+                _spPairs = _spSharing.allowedPairs || {};
+            }
             fieldList.forEach(field => {
+                // Effective sharing: special's rules win; capacity is the tighter of
+                // the field cap and the special cap so neither limit is exceeded.
+                const _effType = _spType || field.shareType;
+                const _effCap = (_spCap != null)
+                    ? Math.min(_spCap, field.capacity || _spCap)
+                    : field.capacity;
+                const _effDivs = _spType ? _spDivs : field.allowedDivisions;
+                const _effPairs = _spType ? _spPairs : field.allowedPairs;
                 candidates.push({
                     sport: sport,
                     field: field.name,
                     fieldNorm: normName(field.name),
                     sportNorm: normName(sport),
-                    capacity: field.capacity,
-                    shareType: field.shareType,
-                    allowedDivisions: field.allowedDivisions,
-                    allowedPairs: field.allowedPairs,
-                    gradeShareRules: field.gradeShareRules,
+                    capacity: _effCap,
+                    shareType: _effType,
+                    allowedDivisions: _effDivs,
+                    allowedPairs: _effPairs,
+                    gradeShareRules: _spType ? {} : field.gradeShareRules,
+                    preferences: field.preferences,
                     isIndoor: field.isIndoor,
                     accessRestrictions: field.accessRestrictions,
                     timeRules: field.timeRules,
                     disabledSports: field.disabledSports,
                     maxPlayers,
+                    minPlayers: parseInt(meta.minPlayers) || null,
+                    configuredDurs: _sportDurs,  // [] = no per-sport duration lock
+                    qualityRank: (field.qualityRank != null ? field.qualityRank : null),
+                    fieldGroup: field.fieldGroup || null,
                     _activity: sport  // for scheduleAssignments compatibility
                 });
             });
@@ -357,7 +409,13 @@
         //   bunk size; summed roster must not exceed the sport's maxPlayers.
         if (candidate?.maxPlayers && candidate.maxPlayers > 0) {
             const divs = window.divisions || {};
+            const _bmd = (window.getBunkMetaData && window.getBunkMetaData()) || window.bunkMetaData || {};
             const bunkSize = (b) => {
+                // Canonical bunk size = camper count in bunkMetaData (same source the
+                // manual solver + scheduler_core_utils use). Fall back to the (usually
+                // empty) divisions.bunkSizes so older configs still work.
+                const _ms = parseInt(_bmd[b] && _bmd[b].size);
+                if (_ms) return _ms;
                 for (const g in divs) {
                     const dd = divs[g];
                     if (!dd || !Array.isArray(dd.bunks)) continue;
@@ -370,7 +428,11 @@
             };
             let total = bunkSize(bunk);
             for (const e of overlapping) total += bunkSize(e.bunk);
-            if (total > candidate.maxPlayers) return false;
+            // ★ Absolute combined-player ceiling = maxPlayers + 2. Going over the
+            //   sport max is allowed only as grace: max+1 routine, max+2 last-resort,
+            //   never max+3+. The smallest-overage preference is applied via a score
+            //   penalty in the scorer below; this gate just blocks the hard ceiling.
+            if (total > candidate.maxPlayers + 2) return false;
         }
         // 4. Exact time alignment — MANDATORY for shared slots.
         //    When two or more bunks use the same field at the same time (sharing),
@@ -381,10 +443,35 @@
                 return false; // misaligned occupant — cannot share this field
             }
         }
-        // 5. Combined field mutual exclusion
+        // 5. Combined field mutual exclusion.
+        //    ★ Check the SOLVER's live field index (the same `fieldIndex` used for the
+        //    capacity check above). isBlockedByCombo reads facilities.js's OWN usage
+        //    tracking, which is NOT populated during the auto solve — so it silently
+        //    passed and combo partners (e.g. Baseball Field 1 ⊃ Field 2/3/4) were
+        //    double-booked. Walk each exclusive partner's fieldIndex entries for a time
+        //    overlap (mirrors the manual solver's _comboExclusiveMap + time-index check).
+        if (window.FieldCombos?.getExclusiveFields) {
+            const _partners = window.FieldCombos.getExclusiveFields(fieldName) || [];
+            for (let _pi = 0; _pi < _partners.length; _pi++) {
+                const _pe = fieldIndex.get(normName(_partners[_pi])) || [];
+                if (_pe.some(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk)) return false;
+            }
+        }
+        // (belt-and-suspenders: also honor facilities.js's own combo tracking if present)
         if (window.FieldCombos?.isBlockedByCombo) {
             const combo = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, bunk);
             if (combo?.blocked) return false;
+        }
+        // 6. ★ EXCLUSIVE field preference — a field can be reserved for specific
+        //    divisions (preferences.exclusive). A non-listed division may NEVER use it.
+        //    The auto builder previously ignored field preferences entirely (no refs in
+        //    auto_solver_engine.js / scheduler_core_auto.js); the manual solver enforces
+        //    this in calculatePenaltyCost (L867) + the domain filter. This brings auto to
+        //    parity. Soft (non-exclusive) preference steering is applied in scoring.
+        const _pref = candidate?.preferences;
+        if (_pref && _pref.enabled && _pref.exclusive && Array.isArray(_pref.list)
+            && _pref.list.length > 0 && _pref.list.indexOf(grade) === -1) {
+            return false;
         }
         return true;
     }
@@ -523,9 +610,13 @@
         // Build candidate list
         const { candidates } = buildCandidates(config);
         if (candidates.length === 0) {
-            warn('No candidates available — all blocks will be Free');
-            blocks.forEach(b => writeFree(b));
-            return { filled: 0, free: blocks.length, elapsed: '0.00' };
+            // ★ SPORT-LEAK GATE: with no sport candidates, don't blanket-Free every
+            //   block. Honor each block's pre-chosen special event (sports-free
+            //   camps fill open time from specials); fall back to Free otherwise.
+            warn('No sport candidates available — honoring slot specials, else Free');
+            let _f = 0;
+            blocks.forEach(b => { if (writeSlotEvent(b)) _f++; });
+            return { filled: _f, free: blocks.length - _f, elapsed: '0.00' };
         }
 
         // Build field time index from current state
@@ -757,6 +848,14 @@
             const existing = window.scheduleAssignments?.[bunk]?.[slotIdx];
             if (existing && existing._fixed) continue;
 
+            // ★ SPORT-LEAK GATE: this block's grade has no sport layer — never
+            //   assign a field-catalog sport. Honor its pre-chosen special (or
+            //   leave Free) and move on.
+            if (block._noSport) {
+                if (writeSlotEvent(block)) filled++; else free++;
+                continue;
+            }
+
             // Get this bunk's activities so far
             const doneToday = bunkActivities.get(bunk) || new Set();
 
@@ -796,6 +895,14 @@
 
                 // Field availability (time-based)
                 if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
+
+                // ★ PER-SPORT DURATION LOCK — a sport with a configured length
+                //   may only fill a slot of exactly that length (one of its
+                //   allowed durations). Mirrors specials: the duration is
+                //   absolute, so we'd rather leave the slot for a sport that
+                //   fits than overrun/underrun this one. No config ⇒ no gate.
+                if (cand.configuredDurs && cand.configuredDurs.length &&
+                    !cand.configuredDurs.includes(endMin - startMin)) continue;
 
                 // Rainy day: skip outdoor
                 if (isRainy && !cand.isIndoor) continue;
@@ -889,6 +996,62 @@
                                 score += competingGrades * 300;
                             }
                         }
+                    }
+                }
+
+                // ★ rules.js FIELD QUALITY GROUPS: prefer better-ranked fields.
+                //   Lower qualityRank = better. rank-1 adds 0 (neutral vs ungrouped
+                //   fields); worse ranks get a modest penalty so a higher-ranked field
+                //   in the same group wins when it's free. Fixes ranks being ignored:
+                //   qualityRank was previously never attached to candidates, so the
+                //   tie-break below always saw 999. No-op for ungrouped fields.
+                if (cand.qualityRank != null && cand.qualityRank > 1) {
+                    score += (cand.qualityRank - 1) * 80;
+                }
+                // ★ rules.js FIELD PREFERENCES (soft, non-exclusive): steer the listed
+                //   divisions toward the field; non-listed divisions get a strong penalty
+                //   but are still allowed. Exclusive prefs are hard-gated in canPlace.
+                //   Mirrors the manual scorer (calculatePenaltyCost L1038). Was ignored in
+                //   auto (no preference refs anywhere in the auto path).
+                if (cand.preferences && cand.preferences.enabled && !cand.preferences.exclusive
+                    && Array.isArray(cand.preferences.list) && cand.preferences.list.length > 0) {
+                    var _prefIdx = cand.preferences.list.indexOf(grade);
+                    if (_prefIdx !== -1) score -= (200 - _prefIdx * 20); else score += 8000;
+                }
+                // ★ rules.js SPORT MIN-PLAYERS: softly discourage placing a bunk that's
+                //   smaller than the sport's minimum on that sport (nudge toward pairing
+                //   or a sport it can fill). Only active when bunk sizes are configured
+                //   (size 0 → skip), so it never fires for camps without sizes.
+                if (cand.minPlayers != null && cand.minPlayers > 0) {
+                    var _bmd2 = (window.getBunkMetaData && window.getBunkMetaData()) || window.bunkMetaData || {};
+                    var _bs = parseInt(_bmd2[bunk] && _bmd2[bunk].size) || 0;
+                    if (!_bs) { var _dv = window.divisions || {}; for (var _g in _dv) { var _dd = _dv[_g]; if (_dd && Array.isArray(_dd.bunks) && _dd.bunks.map(String).indexOf(String(bunk)) >= 0) { _bs = parseInt((_dd.bunkSizes || {})[bunk]) || parseInt(_dd.defaultBunkSize) || parseInt(_dd.bunkSize) || 0; break; } } }
+                    if (_bs > 0 && _bs < cand.minPlayers) score += (cand.minPlayers - _bs) * 40;
+                }
+
+                // ★ rules.js SPORT MAX-PLAYERS overage preference. The hard ceiling
+                //   (maxPlayers + 2) is enforced in isFieldAvailableByTime; here we make
+                //   the solver PREFER the smallest overage so it stays at/under max when
+                //   possible, uses max+1 only when helpful, and max+2 only as a last
+                //   resort. Combined headcount = this bunk + same-activity sharers on the
+                //   field. Only active when sizes are configured (size 0 → skip).
+                if (cand.maxPlayers != null && cand.maxPlayers > 0) {
+                    var _bmd3 = (window.getBunkMetaData && window.getBunkMetaData()) || window.bunkMetaData || {};
+                    var _szOf = function (b) {
+                        var _s = parseInt(_bmd3[b] && _bmd3[b].size) || 0;
+                        if (_s) return _s;
+                        var _dv2 = window.divisions || {};
+                        for (var _gg in _dv2) { var _d2 = _dv2[_gg]; if (_d2 && Array.isArray(_d2.bunks) && _d2.bunks.map(String).indexOf(String(b)) >= 0) { return parseInt((_d2.bunkSizes || {})[b]) || parseInt(_d2.defaultBunkSize) || parseInt(_d2.bunkSize) || 0; } }
+                        return 0;
+                    };
+                    var _combined = _szOf(bunk);
+                    for (var _ei = 0; _ei < existing.length; _ei++) { if (existing[_ei].activity === cand.sportNorm) _combined += _szOf(existing[_ei].bunk); }
+                    if (_combined > 0) {
+                        var _over = _combined - cand.maxPlayers;
+                        // Escalating penalty: +1 over is a soft nudge, +2 over is heavily
+                        //   discouraged so it only wins when nothing under-max is feasible.
+                        if (_over === 1) score += 3000;
+                        else if (_over >= 2) score += 9000;
                     }
                 }
 
@@ -1199,6 +1362,20 @@
                 const _sportLower = String(sport).toLowerCase().trim();
                 const _fieldLower = String(fieldName).toLowerCase().trim();
                 const _saAll = window.scheduleAssignments || {};
+                // ★ FN-15: resolve this field's effective sharing rule once (mirrors
+                //   isFieldAvailableByTime: per-grade override > field.sharableWith >
+                //   default 'same_division'). Used below to reject cross-grade
+                //   co-occupancy on a same_division/not_sharable field even when both
+                //   bunks do the same activity at the same time.
+                let _fn15Type = 'same_division', _fn15Pairs = {}, _fn15Divs = [];
+                try {
+                    const _gsF = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
+                    const _fldF = (_gsF.app1?.fields || []).find(f => f && f.name === fieldName);
+                    const _swF = _fldF && (_fldF.sharableWith || _fldF.sharing);
+                    const _goF = _fldF && _fldF.gradeShareRules && _fldF.gradeShareRules[grade];
+                    if (_goF && _goF.type) { _fn15Type = _goF.type; _fn15Pairs = _goF.allowedPairs || {}; _fn15Divs = _goF.divisions || []; }
+                    else if (_swF && _swF.type) { _fn15Type = _swF.type; _fn15Pairs = _swF.allowedPairs || {}; _fn15Divs = _swF.divisions || []; }
+                } catch (_eF) {}
                 // ★ Defense layer: cross-grade AND cross-activity overlap check.
                 //   A physical facility (Soccer Field, Arts Room) can host at most
                 //   one activity at a time. Period. Even if the field is set to
@@ -1226,15 +1403,48 @@
                         if (!_w || _w.continuation) continue;
                         const _wField = String(_w.field || '').toLowerCase().trim();
                         if (_wField !== _fieldLower) continue;
-                        const _ws = _w._startMin, _we = _w._endMin;
+                        let _ws = _w._startMin, _we = _w._endMin;
+                        if (_ws == null || _we == null) {
+                            // ★ FN-15: a real-activity occupant whose times weren't stamped
+                            //   yet was invisible here (null-time blind spot), letting
+                            //   cross-grade/cross-activity field collisions slip through.
+                            //   Resolve from the durable per-bunk grid (same index space as
+                            //   scheduleAssignments). Free/empty slots stay skipped.
+                            const _wA = String(_w._activity || _w.sport || '').toLowerCase().trim();
+                            if (_wA && _wA !== 'free') {
+                                const _slN = window._perBunkSlots?.[_otherGrade]?.[String(_otherBunk)]?.[_oi];
+                                if (_slN) { _ws = _slN.startMin; _we = _slN.endMin; }
+                            }
+                        }
                         if (_ws == null || _we == null) continue;
                         // Overlap? (half-open)
                         if (_ws < eMin && _we > sMin) {
                             const _wAct = String(_w._activity || _w.sport || '').toLowerCase().trim();
                             const sameActivity = (_wAct === _sportLower);
                             const sameWindow = (_ws === sMin && _we === eMin);
-                            // True sharing: same activity AT THE SAME TIME — OK
-                            if (sameActivity && sameWindow) continue;
+                            // True sharing: same activity AT THE SAME TIME.
+                            // ★ FN-15: this is a LEGAL share only for same-grade bunks, or
+                            //   cross-grade under cross_division(allowedPairs)/custom(allowed
+                            //   divisions)/all. On a same_division or not_sharable field,
+                            //   cross-grade co-occupancy is illegal even when same activity +
+                            //   same window. Mirrors isFieldAvailableByTime / canBlockFit (#73).
+                            if (sameActivity && sameWindow) {
+                                if (_otherGrade && _otherGrade !== grade) {
+                                    if (_fn15Type === 'same_division' || _fn15Type === 'not_sharable') {
+                                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — cross-grade share on ' + _fn15Type + ' field with ' + _otherBunk + ' [' + _otherGrade + ']');
+                                        return false;
+                                    }
+                                    if (_fn15Type === 'cross_division' && _fn15Pairs[[grade, _otherGrade].sort().join('|')] !== true) {
+                                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — cross_division pair not allowed with ' + _otherBunk + ' [' + _otherGrade + ']');
+                                        return false;
+                                    }
+                                    if (_fn15Type === 'custom' && _fn15Divs.length > 0 && (!_fn15Divs.includes(grade) || !_fn15Divs.includes(_otherGrade))) {
+                                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — custom-share grade not allowed with ' + _otherBunk + ' [' + _otherGrade + ']');
+                                        return false;
+                                    }
+                                }
+                                continue;
+                            }
                             // Anything else = REJECT
                             const _xg = _otherGrade && _otherGrade !== grade ? ' [cross-grade ' + _otherGrade + ']' : '';
                             const _why = !sameActivity
@@ -1323,6 +1533,34 @@
             _startMin: _sMin ?? null,
             _endMin: _eMin ?? null
         };
+    }
+
+    // ★ SPORT-LEAK GATE: write a slot whose grade has NO sport layer. Such a slot
+    //   must never become a field-catalog sport. Honor the special the open-slot
+    //   materializer already chose (block.event); if there is none, leave it Free.
+    //   Specials placed here are off-field (no field-capacity claim) — the
+    //   required, room-backed specials were already placed by the specials pass;
+    //   these merely fill leftover open time in a sports-free camp.
+    function writeSlotEvent(block) {
+        const bunk = block.bunk;
+        const slotIdx = block.slots?.[0];
+        if (!window.scheduleAssignments?.[bunk]) return false;
+        const ev = block.event;
+        const evNorm = (ev && typeof ev === 'string') ? ev.toLowerCase().trim() : '';
+        if (!evNorm || evNorm === 'free') { writeFree(block); return false; }
+        let _sMin = block.startMin;
+        let _eMin = block.endMin;
+        const _ptm = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        if (_sMin == null && block.startTime && _ptm) _sMin = _ptm(block.startTime);
+        if (_eMin == null && block.endTime && _ptm) _eMin = _ptm(block.endTime);
+        window.scheduleAssignments[bunk][slotIdx] = {
+            field: block._draftField || null, sport: null, _activity: ev,
+            type: 'special', _autoMode: true, _autoSolved: true, _autoSpecial: true,
+            continuation: false,
+            _startMin: _sMin ?? null,
+            _endMin: _eMin ?? null
+        };
+        return true;
     }
 
 
@@ -1764,6 +2002,7 @@
 
         let fixed = 0;
         for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
             let placed = false;
             // Walk every field that has at least one occupant with EXACTLY the same time window
             // (user requirement: shared bunks must have identical start AND end — no partial overlap)
@@ -1824,6 +2063,7 @@
 
             let iterImproved = 0;
             for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
                 if (tryDirectFill(fb, candidates, fieldIndex)) { iterImproved++; continue; }
                 if (trySwapFill(fb, candidates, fieldIndex))   { iterImproved++; }
             }
@@ -2136,6 +2376,7 @@
             let passImproved = 0;
 
             for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
                 // Build what FB's bunk already has today
                 const sa = window.scheduleAssignments || {};
                 const fbDone = new Set();
@@ -2383,6 +2624,7 @@
             let passImproved = 0;
 
             for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
                 const sa = window.scheduleAssignments || {};
 
                 // Build what FB's bunk has already done today

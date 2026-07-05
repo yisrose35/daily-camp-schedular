@@ -116,7 +116,7 @@ window.GoCloudSync = (function () {
         try {
             const { data, error } = await client
                 .from(TABLE)
-                .select('data_type, data')
+                .select('data_type, data, updated_at')   // ★ CB-114: include updated_at for recency
                 .eq('camp_id', campId);
 
             if (error) {
@@ -129,9 +129,17 @@ window.GoCloudSync = (function () {
             }
 
             const result = {};
+            // ★★★ CB-114: surface each row's updated_at (non-enumerable so it never
+            // pollutes the data maps) so loadGoCloudData can prefer a FRESHER cloud
+            // row over a stale-but-nonempty local one instead of only ever filling
+            // empty fields.
+            const _ua = {};
             for (const row of data) {
                 result[row.data_type] = row.data;
+                if (row.updated_at) _ua[row.data_type] = row.updated_at;
             }
+            try { Object.defineProperty(result, '_updatedAt', { value: _ua, enumerable: false }); }
+            catch (_) { result._updatedAt = _ua; }
             console.log('[GoCloud] Loaded data types:', Object.keys(result).join(', '));
             return result;
         } catch (e) {

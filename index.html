@@ -24,10 +24,6 @@
     <div class="page-bg">
         <div class="bg-gradient"></div>
     </div>
-<div class="promo-banner" id="promoBanner">
-  <span><strong>Expo 2026 Special:</strong> Use access code <code>Expo2026</code> at signup for a free 48 hour trial!</span>
-  <button class="promo-banner-close" onclick="document.getElementById('promoBanner').style.display='none'; document.documentElement.style.setProperty('--promo-banner-height','0px')">&times;</button>
-</div>
     <!-- ========================================= -->
     <!-- NAVIGATION -->
     <!-- ========================================= -->
@@ -78,7 +74,7 @@
         <div class="hero-content">
             <div class="hero-badge">
                 <span class="badge-dot"></span>
-                <span>Founding member pricing available now</span>
+                <span>Build your own bundle — pay for just what you need</span>
             </div>
             <h1 class="hero-title">
                 Camp-Tech,<br>
@@ -181,7 +177,7 @@
             </div>
             <!-- ME -->
             <div class="product-card product-me">
-                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-badge">Available Now</div>
                 <div class="product-icon-wrapper">
                     <img src="Me_clean.png" alt="Campistry Me" class="product-logo-img">
                 </div>
@@ -198,8 +194,11 @@
                     <li>Activity sign-ups</li>
                     <li>Daily highlights</li>
                 </ul>
-                <button class="product-cta disabled" disabled>
-                    Coming Summer 2026
+                <button class="product-cta" onclick="openAuthModal('signup')">
+                    Get Started
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
                 </button>
             </div>
             <!-- HEALTH -->
@@ -301,6 +300,29 @@
                     <li>Date &amp; time reminders</li>
                     <li>Trash &amp; restore</li>
                 </ul>
+            </div>
+            <!-- LITE -->
+            <div class="product-card product-lite">
+                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-icon-wrapper">
+                    <img src="Lite_clean.png" alt="Campistry Lite" class="product-logo-img">
+                </div>
+                <h3 class="product-name">Campistry <span>Lite</span></h3>
+                <p class="product-tagline">Camp in Your Pocket</p>
+                <p class="product-desc">
+                    The mobile companion to Campistry. Head staff get a streamlined, on-the-go version of the full app, while every counselor gets their bunk's daily schedule, roster, and league team — plus opt-in daily activity texts sent straight to each person.
+                </p>
+                <ul class="product-features">
+                    <li>Mobile-friendly head staff tools</li>
+                    <li>Counselor portal for every bunk</li>
+                    <li>Daily schedule at a glance</li>
+                    <li>Bunk roster &amp; league teams</li>
+                    <li>Opt-in daily activity texts</li>
+                    <li>Works on any phone</li>
+                </ul>
+                <button class="product-cta disabled" disabled>
+                    Coming Soon
+                </button>
             </div>
         </div>
     </section>
@@ -418,77 +440,52 @@
     <!-- ========================================= -->
     <!-- PRICING SECTION -->
     <!-- ========================================= -->
-    <section id="pricing" class="pricing reveal">
+    <section id="pricing" class="pricing bundle-section reveal">
         <div class="section-header">
             <span class="section-eyebrow">Pricing</span>
-            <h2 class="section-title">Simple, transparent pricing</h2>
-            <p class="section-sub">Founding member pricing available through June 1, 2026</p>
+            <h2 class="section-title">Build your bundle</h2>
+            <p class="section-sub">Pick the products your camp needs and watch your price update instantly — one flat rate per product, per summer.</p>
         </div>
         
-        <div class="pricing-grid pricing-grid-two">
-            <!-- Early Access -->
-            <div class="pricing-card featured">
-                <div class="pricing-popular">Founding Member</div>
-                <div class="pricing-header">
-                    <h3>Founding Member</h3>
-                    <p>Claim your spot today</p>
-                </div>
-                <div class="pricing-price">
-                    <span class="price-currency">$</span>
-                    <span class="price-value">100</span>
-                    <span class="price-period">today</span>
-                </div>
-                <div class="pricing-plus">
-                    <span>+</span>
-                    <div class="pricing-price-secondary">
-                        <span class="price-currency">$</span>
-                        <span class="price-value-small">1,000</span>
-                        <span class="price-period">when camp starts</span>
-                    </div>
-                </div>
-                <ul class="pricing-features">
-                    <li><strong>Immediate access</strong> to Campistry Flow</li>
-                    <li>Get comfortable before summer rush</li>
-                    <li><strong>Direct access to the developer</strong></li>
-                    <li>Shape the product to fit your camp</li>
-                    <li>Priority feature requests</li>
-                    <li>Founding member pricing locked in</li>
-                    <li>Cloud backup &amp; sync included</li>
-                </ul>
-                <button class="pricing-cta primary" onclick="openAuthModal('signup')">
-                    Claim Your Spot
-                </button>
-                <p class="pricing-note">
-                    <strong>Available through June 1, 2026</strong>
+        <div class="bundle-dnd">
+            <!-- Palette: draggable program chips (injected by JS from PRODUCTS) -->
+            <div class="bundle-palette">
+                <p class="bundle-palette-hint">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></svg>
+                    Drag a program into your bundle — or tap to add
                 </p>
+                <div class="bundle-tray" id="bundleTray">
+                    <noscript>
+                        <p style="color:var(--slate-500);">Enable JavaScript to build a custom bundle, or
+                        <a href="mailto:campistryoffice@gmail.com" style="color:var(--camp-green);font-weight:600;">contact us</a> for a quote.</p>
+                    </noscript>
+                </div>
             </div>
-            <!-- Standard -->
-            <div class="pricing-card">
-                <div class="pricing-header">
-                    <h3>Standard</h3>
-                    <p>Full summer access</p>
+
+            <!-- Drop zone + live summary -->
+            <div class="bundle-dropzone" id="bundleDropzone" aria-live="polite">
+                <div class="bundle-drop-empty" id="bundleDropEmpty">
+                    <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13m0 0l-4-4m4 4l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                    <p class="bundle-drop-title">Drop programs here</p>
+                    <span class="bundle-drop-sub">Drag one over, or tap a program on the left</span>
                 </div>
-                <div class="pricing-price">
-                    <span class="price-currency">$</span>
-                    <span class="price-value">1,500</span>
-                    <span class="price-period">/summer</span>
+
+                <div class="bundle-drop-list" id="bundleDropList"></div>
+
+                <div class="bundle-drop-totals" id="bundleDropTotals" hidden>
+                    <div class="bundle-line"><span>Subtotal</span><span id="bundleSubtotal">$0</span></div>
+                    <div class="bundle-line bundle-line-discount" id="bundleDiscountLine" hidden>
+                        <span id="bundleDiscountLabel">Bundle discount</span><span id="bundleDiscount">-$0</span>
+                    </div>
+                    <div class="bundle-line bundle-line-total"><span>Total <small>/ summer</small></span><span id="bundleTotal">$0</span></div>
+                    <button class="pricing-cta primary bundle-cta" onclick="openAuthModal('signup')">Get started</button>
+                    <button class="bundle-reset" type="button" id="bundleReset">Clear bundle</button>
                 </div>
-                <ul class="pricing-features">
-                    <li>Full access to Campistry Flow</li>
-                    <li>All scheduling features</li>
-                    <li>League management</li>
-                    <li>Rainy day mode</li>
-                    <li>Cloud backup &amp; sync</li>
-                    <li>Email support</li>
-                </ul>
-                <button class="pricing-cta" onclick="openAuthModal('signup')">
-                    Get Started
-                </button>
-                <p class="pricing-note">Available after June 1, 2026</p>
             </div>
         </div>
+
         <div class="pricing-contact">
-            <p>Running multiple camps? <a href="mailto:campistryoffice@gmail.com">Contact us</a> for enterprise pricing.</p>
+            <p>Running multiple camps or want a custom quote? <a href="mailto:campistryoffice@gmail.com">Contact us</a>.</p>
             <p class="contact-response">We respond within 5 hours</p>
         </div>
     </section>
@@ -679,6 +676,7 @@ if (window.location.protocol === 'file:') {
 }
 </script>
     <script src="supabase_client.js"></script>
+    <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
     <script src="landing.js"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
@@ -686,5 +684,242 @@ if (window.location.protocol === 'file:') {
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
 <script defer src="/_vercel/insights/script.js"></script>
+<!-- ========================================= -->
+<!-- BUILD YOUR BUNDLE — pricing calculator -->
+<!-- ========================================= -->
+<script>
+/*
+  To change a price or launch a product, edit the PRODUCTS list below:
+    price      = flat cost per summer (USD)
+    available  = true  -> selectable now
+                 false -> shown greyed out as "Coming Soon"
+  DISCOUNT_TIERS gives a multi-product discount (highest matching tier wins).
+  Set DISCOUNT_TIERS = [] to disable bundle discounts entirely.
+*/
+(function () {
+  var PRODUCTS = [
+    { key: 'flow',   name: 'Flow',   tagline: 'Smart Daily Scheduling',    price: 1500, available: true,  logo: 'Flow_clean.png',   color: '#147D91' },
+    { key: 'me',     name: 'Me',     tagline: 'Personal Portals',          price: 0,    available: true,  logo: 'Me_clean.png',     color: '#F59E0B' }, /* price 0 -> shows "Included" */
+    { key: 'go',     name: 'Go',     tagline: 'Transportation Management',  price: 750,  available: false, logo: 'Go_clean.png',     color: '#10B981' },
+    { key: 'health', name: 'Health', tagline: 'Medical Records & Wellness', price: 600,  available: false, logo: 'Health_clean.png', color: '#5F1B8C' },
+    { key: 'live',   name: 'Live',   tagline: 'Daily Attendance Tracking',  price: 400,  available: false, logo: 'Live_clean.png',   color: '#2151B5' },
+    { key: 'snacks', name: 'Snacks', tagline: 'Canteen Management',         price: 500,  available: false, logo: 'Snacks_clean.png', color: '#6A320F' },
+    { key: 'link',   name: 'Link',   tagline: 'Communication Portal',       price: 400,  available: false, logo: 'Link_clean.png',   color: '#2A7A35' },
+    { key: 'lite',   name: 'Lite',   tagline: 'Camp in Your Pocket',        price: 400,  available: false, logo: 'Lite_clean.png',   color: '#EE6A53' }
+  ];
+
+  // N products selected -> percent off. Highest tier whose "min" is met wins.
+  // Empty for now (no bundle discount). To enable, e.g.:
+  //   var DISCOUNT_TIERS = [ { min: 4, pct: 20 }, { min: 3, pct: 15 }, { min: 2, pct: 10 } ];
+  var DISCOUNT_TIERS = [];
+
+  function money(n) {
+    return '$' + Math.round(n).toLocaleString('en-US');
+  }
+
+  function bestTier(count) {
+    var best = null;
+    for (var i = 0; i < DISCOUNT_TIERS.length; i++) {
+      if (count >= DISCOUNT_TIERS[i].min) {
+        if (!best || DISCOUNT_TIERS[i].pct > best.pct) best = DISCOUNT_TIERS[i];
+      }
+    }
+    return best;
+  }
+
+  var CLOSE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  var GRIP_SVG  = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+  var DRAG_THRESHOLD = 6; // px before a press becomes a drag (vs a tap)
+
+  function priceLabel(p) { return p.price === 0 ? 'Included' : money(p.price); }
+
+  function init() {
+    var tray     = document.getElementById('bundleTray');
+    var dropzone = document.getElementById('bundleDropzone');
+    if (!tray || !dropzone) return;
+
+    var byKey = {};
+    PRODUCTS.forEach(function (p) { byKey[p.key] = p; });
+
+    var order = []; // product keys, in the order they were dropped in
+    function inBundle(key) { return order.indexOf(key) > -1; }
+
+    var dropEmpty  = document.getElementById('bundleDropEmpty');
+    var dropList   = document.getElementById('bundleDropList');
+    var totalsBox  = document.getElementById('bundleDropTotals');
+    var subtotalEl = document.getElementById('bundleSubtotal');
+    var discLine   = document.getElementById('bundleDiscountLine');
+    var discLabel  = document.getElementById('bundleDiscountLabel');
+    var discEl     = document.getElementById('bundleDiscount');
+    var totalEl    = document.getElementById('bundleTotal');
+    var resetBtn   = document.getElementById('bundleReset');
+
+    // ---- build the draggable palette chips ----
+    PRODUCTS.forEach(function (p) {
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'bundle-chip' + (p.available ? '' : ' is-disabled');
+      chip.setAttribute('data-key', p.key);
+      chip.style.setProperty('--accent', p.color);
+      if (!p.available) chip.disabled = true;
+
+      var priceHtml = !p.available
+        ? '<span class="bundle-chip-price bundle-chip-soon">Coming soon</span>'
+        : (p.price === 0
+            ? '<span class="bundle-chip-price bundle-chip-incl">Included</span>'
+            : '<span class="bundle-chip-price">' + money(p.price) + '</span>');
+
+      chip.innerHTML =
+        '<span class="bundle-chip-grip" aria-hidden="true">' + GRIP_SVG + '</span>' +
+        '<img class="bundle-chip-logo" src="' + p.logo + '" alt="" loading="lazy">' +
+        '<span class="bundle-chip-name">Campistry <b>' + p.name + '</b></span>' +
+        priceHtml +
+        '<span class="bundle-chip-added" aria-hidden="true">Added</span>';
+
+      tray.appendChild(chip);
+    });
+
+    // ---- state changes ----
+    function add(key) {
+      var p = byKey[key];
+      if (!p || !p.available || inBundle(key)) return;
+      order.push(key);
+      render();
+      pulseDrop();
+    }
+    function remove(key) {
+      var i = order.indexOf(key);
+      if (i > -1) { order.splice(i, 1); render(); }
+    }
+    function toggle(key) { inBundle(key) ? remove(key) : add(key); }
+
+    // ---- render ----
+    function render() {
+      var chosen = order.map(function (k) { return byKey[k]; });
+
+      tray.querySelectorAll('.bundle-chip').forEach(function (chip) {
+        chip.classList.toggle('is-added', inBundle(chip.getAttribute('data-key')));
+      });
+
+      if (!chosen.length) {
+        dropEmpty.hidden = false;
+        dropList.innerHTML = '';
+        totalsBox.hidden = true;
+        return;
+      }
+      dropEmpty.hidden = true;
+
+      dropList.innerHTML = chosen.map(function (p) {
+        return '<div class="bundle-drop-item" style="--accent:' + p.color + '">' +
+                 '<img class="bundle-drop-logo" src="' + p.logo + '" alt="">' +
+                 '<span class="bundle-drop-name">Campistry <b>' + p.name + '</b></span>' +
+                 '<span class="bundle-drop-price">' + priceLabel(p) + '</span>' +
+                 '<button type="button" class="bundle-drop-remove" data-remove="' + p.key + '" ' +
+                   'aria-label="Remove Campistry ' + p.name + ' from bundle">' + CLOSE_SVG + '</button>' +
+               '</div>';
+      }).join('');
+
+      var subtotal = chosen.reduce(function (s, p) { return s + p.price; }, 0);
+      var tier = bestTier(chosen.length);
+      var discount = tier ? subtotal * tier.pct / 100 : 0;
+
+      subtotalEl.textContent = money(subtotal);
+      if (tier) {
+        discLabel.textContent = 'Bundle discount (' + tier.pct + '% off ' + chosen.length + ' programs)';
+        discEl.textContent = '-' + money(discount);
+        discLine.hidden = false;
+      } else {
+        discLine.hidden = true;
+      }
+      totalEl.textContent = money(subtotal - discount);
+      totalsBox.hidden = false;
+    }
+
+    function pulseDrop() {
+      dropzone.classList.remove('is-dropped');
+      void dropzone.offsetWidth; // restart the animation
+      dropzone.classList.add('is-dropped');
+    }
+
+    // ---- remove buttons + reset ----
+    dropList.addEventListener('click', function (e) {
+      var btn = e.target.closest('.bundle-drop-remove');
+      if (btn) remove(btn.getAttribute('data-remove'));
+    });
+    resetBtn.addEventListener('click', function () { order = []; render(); });
+
+    // ---- keyboard: Enter/Space on a focused chip toggles it ----
+    tray.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      var chip = e.target.closest('.bundle-chip');
+      if (!chip || chip.disabled) return;
+      e.preventDefault();
+      toggle(chip.getAttribute('data-key'));
+    });
+
+    // ---- pointer drag (mouse + pen) with tap fallback (works for touch too) ----
+    function isOverDrop(x, y) {
+      var r = dropzone.getBoundingClientRect();
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    }
+
+    tray.addEventListener('pointerdown', function (e) {
+      if (e.button && e.button !== 0) return; // ignore right/middle click
+      var chip = e.target.closest('.bundle-chip');
+      if (!chip || chip.disabled) return;
+
+      var key = chip.getAttribute('data-key');
+      var startX = e.clientX, startY = e.clientY;
+      var dragging = false, ghost = null, gx = 0, gy = 0;
+
+      function move(ev) {
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!dragging) {
+          if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+          dragging = true;
+          chip.classList.add('is-dragging');
+          var p = byKey[key];
+          ghost = document.createElement('div');           // compact pill, not the whole chip
+          ghost.className = 'bundle-drag-ghost';
+          ghost.style.setProperty('--accent', p.color);
+          ghost.innerHTML = '<img src="' + p.logo + '" alt=""><span>Campistry ' + p.name + '</span>';
+          document.body.appendChild(ghost);
+          var gr = ghost.getBoundingClientRect();
+          gx = gr.width / 2; gy = gr.height / 2;            // center the pill on the pointer
+          dropzone.classList.add('is-armed');
+        }
+        ev.preventDefault();
+        ghost.style.left = (ev.clientX - gx) + 'px';
+        ghost.style.top  = (ev.clientY - gy) + 'px';
+        dropzone.classList.toggle('is-over', isOverDrop(ev.clientX, ev.clientY) && !inBundle(key));
+      }
+      function up(ev) {
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
+        dropzone.classList.remove('is-armed', 'is-over');
+        if (ghost) ghost.remove();
+        chip.classList.remove('is-dragging');
+        if (!dragging) {
+          toggle(key);                                  // it was a tap/click
+        } else if (isOverDrop(ev.clientX, ev.clientY)) {
+          add(key);                                     // dropped on the zone
+        }
+      }
+      document.addEventListener('pointermove', move, { passive: false });
+      document.addEventListener('pointerup', up);
+      document.addEventListener('pointercancel', up);
+    });
+
+    render();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
 </body>
 </html>

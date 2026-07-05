@@ -289,8 +289,15 @@
         const overlapping = getOverlappingClaims(fieldName, startMin, endMin, null);
 
         for (const claim of overlapping) {
-            if (claim.lockType === 'exclusive') {
-                // Division locks: skip if caller IS the allowed division
+            if (claim.lockType === 'exclusive' || claim.lockType === 'division') {
+                // ★ FN-7 FIXED: an `exclusive` lock blocks EVERY division; a `division`
+                //   lock blocks only OTHER divisions — the allowed division (the one that
+                //   placed the lock, claim.grade === divisionContext) may still use the
+                //   field. Previously the division-skip below sat inside an
+                //   `=== 'exclusive'` guard, so it was unreachable and a future division
+                //   lock would have wrongly blocked its own division too. No code creates
+                //   'division' locks today, so this is inert now but correct for when the
+                //   feature is added.
                 if (claim.lockType === 'division' && claim.grade === divisionContext) continue;
                 return {
                     lockedBy: claim.lockedBy,
@@ -387,7 +394,12 @@
         const locked = new Set();
         _claims.forEach(c => {
             if (c.startMin >= endMin || c.endMin <= startMin) return;
-            if (c.lockType === 'exclusive') {
+            // ★ CB-54: mirror the FN-7 fix in isFieldLockedByTime. An `exclusive` lock blocks
+            //   EVERY division; a `division` lock blocks only OTHER divisions (the placing
+            //   division may still use the field). The old `c.lockType === 'division'` test sat
+            //   INSIDE the `=== 'exclusive'` guard — unreachable — so a future division lock would
+            //   never surface here at all. Now both types surface, with the same-division skip.
+            if (c.lockType === 'exclusive' || c.lockType === 'division') {
                 if (c.lockType === 'division' && c.grade === divisionContext) return;
                 locked.add(c.field);
             }

@@ -10,7 +10,7 @@ experiences on one page, branched by role:
 | **Viewer** | Today · Roster* | Schedule browsing only (*roster requires `camp_state_kv` read, which viewers don't have) |
 
 It is installable as a PWA ("Add to Home Screen") via `manifest_lite.webmanifest`
-— standalone display, portrait, warm coral theme (`#F0654F`, ramp defined in
+— standalone display, portrait, warm coral theme (`#EE6A53`, ramp defined in
 `campistry_lite.css` as `--coral-50…700`; the counselor role badge across the
 main app uses the same coral).
 

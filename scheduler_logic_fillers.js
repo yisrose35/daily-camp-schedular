@@ -120,6 +120,17 @@
             return true;
         }
 
+        // 1.5 ★ CONFIG-LEVEL shut-off: field toggled UNAVAILABLE in Facilities
+        //     (available:false). `disabledFields` above is the per-date Resource
+        //     disable; this is the PERMANENT analog. activityProperties carries
+        //     the field's `available` flag (buildActivityProperties), so the sport
+        //     fillers that gate through this function (findBestSportsSlot /
+        //     findBestGeneralActivity) never place a sport on a shut-off field.
+        const _cfgProps = window.activityProperties?.[fieldName];
+        if (_cfgProps && _cfgProps.available === false) {
+            return true;
+        }
+
         // 2. ★★★ RAINY DAY CHECK: Outdoor fields unavailable on rainy days ★★★
         const isRainyMode = checkRainyDayMode();
         if (isRainyMode) {

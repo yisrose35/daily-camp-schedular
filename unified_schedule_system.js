@@ -496,6 +496,11 @@ function disableBypassRBACView() {
 }
 
     function shouldShowDivision(divName) {
+    // ★ Per-day presence: hide a division/grade whose column is marked absent on
+    //   the viewed date's weekday (Campistry Me grade editor). No-op when no
+    //   restriction is set or the helper isn't loaded yet.
+    if (typeof window.isDivisionPresentOnDate === 'function'
+        && !window.isDivisionPresentOnDate(divName)) return false;
     return true;
 }
 
@@ -594,9 +599,11 @@ function shouldHighlightBunk(bunkName) {
         let loadedAssignments = false;
         if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
+            window._scheduleAssignmentsDate = dateKey; // bind owner stamp to date-specific load (cross-date corruption guard)
             loadedAssignments = true;
         } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dailyData.scheduleAssignments;
+            window._scheduleAssignmentsDate = dateKey; // bind owner stamp to date-specific load (cross-date corruption guard)
             loadedAssignments = true;
         } else if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
             // No saved data for this date — keep whatever is in memory (last resort).
@@ -628,7 +635,27 @@ function shouldHighlightBunk(bunkName) {
         //   and the new date's grid rendered whatever was left over.
         const cloudLoaded = window._divisionTimesFromCloud === true;
         const _reattachAll = () => {
-            if (!dateData._perBunkSlotsData || !window.divisionTimes) return;
+            if (!window.divisionTimes) return;
+            // ★ MODE ISOLATION (double-lunch fix): per-bunk geometry (_isPerBunk/_perBunkSlots)
+            //   is an AUTO-mode construct (each bunk gets its own rotation grid). The MANUAL
+            //   flat-table renders from the div-level slot array (divisionTimes[div]); if auto
+            //   per-bunk slots drive it — leaked from an auto generation, or a saved
+            //   _perBunkSlotsData restored here — the grid mis-maps activities onto the
+            //   fine-grained per-bunk slots (whose windows cross the pinned Lunch boundary) and
+            //   draws lunch in the wrong columns (looked like a DOUBLE LUNCH). Auto and manual
+            //   display geometry must not contaminate each other: in MANUAL mode, strip any
+            //   per-bunk geometry and never reattach it, so the render uses div-level slots.
+            var _miMode = (window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual';
+            if (_miMode === 'manual') {
+                Object.keys(window.divisionTimes).forEach(function (grade) {
+                    if (window.divisionTimes[grade]) {
+                        delete window.divisionTimes[grade]._perBunkSlots;
+                        delete window.divisionTimes[grade]._isPerBunk;
+                    }
+                });
+                return;
+            }
+            if (!dateData._perBunkSlotsData) return;
             // First, clear any stale _perBunkSlots from grades NOT in this date's data
             Object.keys(window.divisionTimes).forEach(grade => {
                 if (!dateData._perBunkSlotsData[grade]) {
@@ -737,14 +764,46 @@ function shouldHighlightBunk(bunkName) {
     }
 
     function getSkeleton(dateKey) {
+        const dk = dateKey || getDateKey();
         const dailyData = loadDailyData();
-        const dateData = dailyData[dateKey || getDateKey()] || {};
-        return (dateData.manualSkeleton?.length ? dateData.manualSkeleton : null)
+        const dateData = dailyData[dk] || {};
+        let base = (dateData.manualSkeleton?.length ? dateData.manualSkeleton : null)
             || (dateData.skeleton?.length ? dateData.skeleton : null)
             || (window.dailyOverrideSkeleton?.length ? window.dailyOverrideSkeleton : null)
             || (window.manualSkeleton?.length ? window.manualSkeleton : null)
             || window.skeleton
             || [];
+        // ★ Union the authoritative per-date Daily-Adjustments skeleton
+        //   (campManualSkeleton_<date> — exactly what saveDailySkeleton persists, also
+        //   mirrored to window.dailyOverrideSkeleton). dateData.manualSkeleton can lag
+        //   behind it (e.g. a division/tile added or edited ONLY in Daily Adjustments —
+        //   a 7th-grade 5-6pm tile that never made it into the base skeleton). Without
+        //   this, the manual render's divisionTimes rebuild (buildFromSkeleton below)
+        //   drops that division entirely and its bunks render blank on every reload.
+        //   Deduped by division+time+event+bunk so it's a no-op when base already has
+        //   them; read by dateKey from localStorage so it's date-safe (no stale window
+        //   global from another date).
+        try {
+            let daily = null;
+            try { const raw = localStorage.getItem('campManualSkeleton_' + dk); if (raw) daily = JSON.parse(raw); } catch (_eRaw) {}
+            if ((!Array.isArray(daily) || !daily.length)
+                && Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length
+                && (window.currentScheduleDate || getDateKey()) === dk) {
+                daily = window.dailyOverrideSkeleton;
+            }
+            if (Array.isArray(daily) && daily.length) {
+                // ★ The per-date Daily-Adjustments board (campManualSkeleton_<date>) is the
+                //   AUTHORITATIVE, COMPLETE board — saveDailySkeleton writes the entire day to
+                //   it on every edit — so use it AS-IS. We used to UNION it into `base`
+                //   (dateData.manualSkeleton, from campDailyData_v1), but that base can hold a
+                //   STALE day-of-week TEMPLATE; on reload the template's tiles resurfaced and
+                //   merged back in (1 real tile + 39 template tiles = 40 columns never placed).
+                //   Taking `daily` as-is still includes any DA-only tile (it lives in `daily`)
+                //   while dropping the stale template that was only in `base`.
+                base = daily;
+            }
+        } catch (_eMerge) {}
+        return base;
     }
 
     /**
@@ -1151,6 +1210,10 @@ function shouldHighlightBunk(bunkName) {
         if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
         if (myEntry._isDismissal || myEntry._isSnack) return [];
         if (myEntry._pinned) return [];
+        // Trips are off-site events, not a shared field — never annotate "vs Bunk X".
+        // The trip's "field" is just its name, so co-attending bunks would otherwise
+        // get treated as field-sharers and read "Trip – vs Bunk 2, Bunk 3".
+        if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return [];
         const _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
         const _myField = (typeof myEntry.field === 'string' ? myEntry.field
             : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
@@ -1202,6 +1265,38 @@ function shouldHighlightBunk(bunkName) {
         return sharers;
     }
 
+    // ★ Resolve the location/room to DISPLAY next to an activity name. Sports keep
+    //   it in `field`; specials keep it in `_specialLocation`/`_customField`/
+    //   `_location`/`_partLocation` (and `field` may hold the special's NAME). Falls
+    //   back to the special's configured room via getLocationForActivity. Returns ''
+    //   when there's nothing meaningful to show.
+    function resolveEntryLocation(entry) {
+        if (!entry) return '';
+        const name = entry._activity || entry.sport || '';
+        // ★ Sports: entry.field is the AUTHORITATIVE placement (what capacity, field
+        //   locks and share-detection all read). Trust it over any _location left
+        //   behind by a field move — e.g. field-quality re-opt rewrites .field but
+        //   not _location, so a moved bunk would otherwise DISPLAY its pre-move
+        //   field (and read as "playing another bunk on a different field" when
+        //   it's really sharing the new one). A special stores field = its NAME, so
+        //   only override for a REAL field (present, not 'Free', ≠ the activity name).
+        const _fieldReal = fieldLabel(entry.field);
+        if (_fieldReal && _fieldReal !== 'Free' && _fieldReal.toLowerCase() !== String(name).toLowerCase()) {
+            return _fieldReal;
+        }
+        let loc = entry._specialLocation || entry._customField || entry._location || entry._partLocation || '';
+        if (!loc) {
+            const f = fieldLabel(entry.field);
+            if (f && f !== 'Free') loc = f;
+        }
+        // Manual specials store field = the activity name; resolve the configured room.
+        if ((!loc || loc.toLowerCase() === name.toLowerCase()) && name && typeof window.getLocationForActivity === 'function') {
+            try { const cfg = window.getLocationForActivity(name); if (cfg) loc = fieldLabel(cfg) || cfg; } catch (_e) { /* ignore */ }
+        }
+        if (!loc || loc === 'Free') return '';
+        return loc;
+    }
+
     function formatEntry(entry) {
         if (!entry) return '';
         if (entry._isDismissal) return 'Dismissal';
@@ -1216,18 +1311,22 @@ function shouldHighlightBunk(bunkName) {
             const filtered = acts.filter(function (a) { return (a || '').toLowerCase().trim() !== poolLc; });
             return ['Swim'].concat(filtered).join(', ');
         }
-        const activity = entry._activity || '';
         const field = fieldLabel(entry.field);
         const sport = entry.sport || '';
-       if (entry._h2h) return entry._gameLabel || sport || 'League Game';
-// * FIX: Bunk overrides set _fixed but also have a meaningful field — show both
-if (entry._fixed) {
-    if (field && activity && field !== activity) return `${field} – ${activity}`;
-    if (field && sport && field !== sport) return `${field} – ${sport}`;
-    return activity || field;
-}
-if (field && sport && field !== sport) return `${field} – ${sport}`;
-return activity || field || '';    }
+        if (entry._h2h) return entry._gameLabel || sport || 'League Game';
+        // Display-name ALIAS = the EXACT, complete cell text the user typed. Show it
+        // verbatim with no location appended (e.g. "Lake", never "Lake – VR"); if a
+        // room is wanted, the user includes it in the display name itself.
+        if (entry._displayName) return entry._displayName;
+        // ★ Every cell shows "Activity – Location" (activity name FIRST), for sports
+        //   AND specials. Manual specials store field = the activity name, so the real
+        //   room is resolved via resolveEntryLocation (special location / configured
+        //   room). Location is dropped only when it's empty or identical to the name.
+        const name = entry._partLabel || entry._activity || sport || field || '';
+        const loc = resolveEntryLocation(entry);
+        if (name && loc && loc.toLowerCase() !== name.toLowerCase()) return `${name} – ${loc}`;
+        return name || loc || '';
+    }
 
     function getEntryBackground(entry, blockEvent) {
         if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
@@ -1249,9 +1348,27 @@ return activity || field || '';    }
                lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
     }
 
+    // True iff `name` exactly matches a configured league (regular or specialty).
+    // Used to distinguish a real league slot from a custom pin whose name merely
+    // contains the word "league" (e.g. a "Signup Leagues" placeholder tile).
+    window.isConfiguredLeagueName = function (name) {
+        if (!name) return false;
+        var n = String(name).toLowerCase().trim();
+        var gs = (typeof window.loadGlobalSettings === 'function' && window.loadGlobalSettings()) || {};
+        var byName = window.leaguesByName || gs.leaguesByName || {};
+        if (Object.keys(byName).some(function (k) { return String(k).toLowerCase().trim() === n; })) return true;
+        var sp = window.specialtyLeagues || gs.specialtyLeagues || [];
+        var arr = Array.isArray(sp) ? sp : Object.values(sp || {});
+        return arr.some(function (l) { return l && l.name && String(l.name).toLowerCase().trim() === n; });
+    };
+
     function isLeagueBlockType(eventName, blockType) {
         if (blockType === 'league' || blockType === 'specialty_league') return true;
-        return eventName && eventName.toLowerCase().includes('league');
+        // Name fallback for blocks that lost their explicit type — scoped to a
+        // REAL configured league. A custom pin whose name merely contains
+        // "league" (e.g. "Signup Leagues") must NOT render as a league slot, or
+        // it inherits a neighboring league's matchups via the ±2 slot lookup.
+        return !!eventName && window.isConfiguredLeagueName(eventName);
     }
 
     // =========================================================================
@@ -1269,13 +1386,80 @@ return activity || field || '';    }
                 activities: f.activities || []
             });
         });
-        (app1.specialActivities || []).forEach(s => {
-            if (s.name) locations.push({
+        // Specials feed the edit-modal activity dropdown. Reading ONLY
+        // app1.specialActivities left it empty when the specials lived in another
+        // copy (the live list / top-level key). Prefer the canonical live list,
+        // fall back to app1 then top-level, so the dropdown is always populated.
+        let specials = (Array.isArray(app1.specialActivities) && app1.specialActivities.length)
+            ? app1.specialActivities : null;
+        if (!specials) {
+            try {
+                if (typeof window.getAllSpecialActivities === 'function') {
+                    const live = window.getAllSpecialActivities();
+                    if (Array.isArray(live) && live.length) specials = live;
+                }
+            } catch (e) { /* fall through */ }
+        }
+        if (!specials) specials = settings.specialActivities || window.specialActivities || [];
+        (specials || []).forEach(s => {
+            if (s && s.name) locations.push({
                 name: s.name, type: 'special',
                 capacity: s.sharableWith?.capacity || 1,
                 activities: [s.name]
             });
         });
+        // General activities (Facilities editor → "General Activities", e.g.
+        // "Main activity" at the Auditorium) are hosted at a facility, not a
+        // sports field or a special. They were absent from the edit-modal
+        // activity dropdown. Surface each one as a location keyed to its host
+        // facility so picking it resolves to that facility's court the same way
+        // a field sport does. Capacity comes from the facility's sharing config.
+        try {
+            const _gaItems = (typeof window.getGeneralActivityPaletteItems === 'function')
+                ? window.getGeneralActivityPaletteItems() : [];
+            (_gaItems || []).forEach(ga => {
+                if (!ga || !ga.name || !ga.facility) return;
+                let cap = 1;
+                try {
+                    const info = window.getCustomActivitySharingInfo?.(ga.name, ga.facility, null, settings);
+                    if (info && isFinite(info.capacity) && info.capacity > 0) cap = info.capacity;
+                } catch (e) { /* default capacity */ }
+                locations.push({
+                    name: ga.facility, type: 'general',
+                    capacity: cap,
+                    activities: [ga.name]
+                });
+            });
+        } catch (e) { /* general activities optional */ }
+        // Fixed pinned items (Swim, Lunch, Snacks, Dinner, Dismissal …) and
+        // custom pinned tiles (e.g. "Regroup") are pinned events — not field
+        // sports, specials, or general activities — so they were also missing
+        // from the edit-modal dropdown. Source the fixed items from the camp's
+        // Pinned Tile Defaults (which carry each one's default location, e.g.
+        // Swim → Pool) and always offer the standard set; harvest custom
+        // pinned names from the current skeleton. Each is keyed to its default
+        // location so picking it resolves the right court where one exists.
+        try {
+            const _seen = new Set(locations.flatMap(l => (l.activities || []).map(a => String(a).toLowerCase())));
+            const _pushPinned = (name, loc, kind) => {
+                if (!name) return;
+                const k = String(name).toLowerCase();
+                if (_seen.has(k)) return;
+                _seen.add(k);
+                locations.push({ name: loc || name, type: kind, capacity: 1, activities: [name] });
+            };
+            const _ptd = (typeof window.getPinnedTileDefaults === 'function')
+                ? window.getPinnedTileDefaults() : (settings.pinnedTileDefaults || {});
+            Object.entries(_ptd || {}).forEach(([act, loc]) => _pushPinned(act, loc, 'fixed'));
+            ['Swim', 'Lunch', 'Snacks', 'Dinner', 'Dismissal'].forEach(a => _pushPinned(a, null, 'fixed'));
+            let _skel = [];
+            try { _skel = (typeof getSkeleton === 'function') ? (getSkeleton() || []) : []; } catch (e) { _skel = []; }
+            (_skel || []).forEach(t => {
+                if (!t) return;
+                const nm = t.customActivity || ((t.type === 'custom' || t.type === 'pinned') ? t.event : null);
+                if (nm) _pushPinned(nm, t.customField || t.location || null, 'custom');
+            });
+        } catch (e) { /* fixed / custom pinned optional */ }
         return locations;
     }
 
@@ -1295,8 +1479,22 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
     let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
+   // ★ MS-4b: for CONFLICT CLASSIFICATION, "mine" = bunks in my GENERATION
+   // scope (assigned divisions). v3.13 gave schedulers edit access to ALL
+   // bunks, so every cross-user conflict looked "editable" and other users'
+   // bunks were silently auto-reassigned without the notify/bypass/cancel
+   // choice. Owners keep full ownership (their scope is every division).
+   let _conflictOwnScope = null;
+   try {
+       const _gd = window.AccessControl?.getGeneratableDivisions?.();
+       const _allDivCount = Object.keys(window.divisions || {}).length;
+       if (Array.isArray(_gd) && _gd.length > 0 && _allDivCount > 0 && _gd.length < _allDivCount) {
+           _conflictOwnScope = new Set();
+           _gd.forEach(dn => (((window.divisions || {})[dn] || {}).bunks || []).forEach(b => _conflictOwnScope.add(String(b))));
+       }
+   } catch (_eScope) { /* fall back to edit-permission classification */ }
    const editBunksResult = getEditableBunks();
-const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []);
+const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []));
     const conflicts = [], usageBySlot = {};
     
     // *** FIX: Get the ACTUAL time range from the editing bunk's slots ***
@@ -1305,12 +1503,19 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
     const _perBunkData = window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots?.[String(excludeBunk)];
     const excludeBunkSlots = _perBunkData || window.divisionTimes?.[excludeBunkDiv] || [];
     
-    // Build time ranges for the slots being claimed
+    // Build time ranges for the slots being claimed.
+    // MS-5: prefer the editing bunk's entry-stamped times (_startMin/_endMin)
+    // — per-bunk slot tables can be stale/degenerate after merges while the
+    // entries carry the solver's real times; mixing the two coordinate
+    // systems made real cross-division overlaps invisible.
     const claimedTimeRanges = [];
     for (const slotIdx of slots) {
         const slotInfo = excludeBunkSlots[slotIdx];
-        if (slotInfo && slotInfo.startMin !== undefined && slotInfo.endMin !== undefined) {
-            claimedTimeRanges.push({ slotIdx, startMin: slotInfo.startMin, endMin: slotInfo.endMin });
+        const ownEntry = (assignments[excludeBunk] || [])[slotIdx];
+        const cs = (ownEntry && typeof ownEntry._startMin === 'number') ? ownEntry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+        const ce = (ownEntry && typeof ownEntry._endMin === 'number') ? ownEntry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+        if (cs !== undefined && ce !== undefined) {
+            claimedTimeRanges.push({ slotIdx, startMin: cs, endMin: ce });
         }
     }
     
@@ -1349,33 +1554,39 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                 const bunkAssignments = assignments[bunkName];
                 if (!bunkAssignments) continue;
                 
-                // Check each slot in THIS bunk's division for time overlap
-                for (let idx = 0; idx < divSlots.length; idx++) {
+                // Check each slot in THIS bunk's division for time overlap.
+                // MS-5: iterate the full assignment array (entries can exist
+                // past the division table's length) and prefer entry-stamped
+                // times over the table's — same reasoning as the claimed side.
+                const _scanLen = Math.max(divSlots.length, bunkAssignments.length);
+                for (let idx = 0; idx < _scanLen; idx++) {
                     const entry = bunkAssignments[idx];
                     if (!entry || entry.continuation) continue;
-                    
+
                     const entryField = fieldLabel(entry.field);
                     const entryActivity = entry._activity || entryField;
                     const entryLocation = entry._location || entryField;
-                    
+
                     // Check if this entry uses the same location
                     const matchesLocation = entryField?.toLowerCase() === locationName.toLowerCase() ||
                         entryLocation?.toLowerCase() === locationName.toLowerCase() ||
                         entryActivity?.toLowerCase() === locationName.toLowerCase();
-                    
+
                     if (!matchesLocation) continue;
-                    
+
                     // *** KEY FIX: Check TIME OVERLAP, not slot index ***
                     const slotInfo = divSlots[idx];
-                    if (!slotInfo || slotInfo.startMin === undefined) continue;
-                    
+                    const oS = (typeof entry._startMin === 'number') ? entry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+                    const oE = (typeof entry._endMin === 'number') ? entry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+                    if (oS === undefined || oE === undefined) continue;
+
                     for (const claimed of claimedTimeRanges) {
                         // Time overlap: NOT (end1 <= start2 OR start1 >= end2)
-                        const hasOverlap = !(slotInfo.endMin <= claimed.startMin || slotInfo.startMin >= claimed.endMin);
-                        
+                        const hasOverlap = !(oE <= claimed.startMin || oS >= claimed.endMin);
+
                         if (hasOverlap) {
                             if (!usageBySlot[claimed.slotIdx]) usageBySlot[claimed.slotIdx] = [];
-                            
+
                             // Avoid duplicate entries for same bunk in same claimed slot
                             if (!usageBySlot[claimed.slotIdx].find(u => u.bunk === String(bunkName))) {
                                 usageBySlot[claimed.slotIdx].push({
@@ -1385,8 +1596,8 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                                     field: entryField,
                                     canEdit: editBunks.has(String(bunkName)),
                                     theirSlot: idx,
-                                    overlapStart: Math.max(slotInfo.startMin, claimed.startMin),
-                                    overlapEnd: Math.min(slotInfo.endMin, claimed.endMin)
+                                    overlapStart: Math.max(oS, claimed.startMin),
+                                    overlapEnd: Math.min(oE, claimed.endMin)
                                 });
                             }
                         }
@@ -1488,16 +1699,20 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         const settings = window.loadGlobalSettings?.() || {};
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
-        
+        // ★ Config-level shut-off (Facilities AVAILABLE/UNAVAILABLE toggle): a
+        //   disabled field can still appear in fieldsBySport (buildFieldsBySport
+        //   doesn't filter), so guard sports here; specials carry their own flag.
+        const _unavailFields = new Set((app1.fields || []).filter(f => f && f.available === false).map(f => f.name));
+
         for (const [sport, sportFields] of Object.entries(fieldsBySport)) {
             (sportFields || []).forEach(fName => {
-                if (disabledFields.includes(fName) || window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
+                if (_unavailFields.has(fName) || disabledFields.includes(fName) || window.GlobalFieldLocks?.isFieldLocked(fName, slots, divName)) return;
                 const key = `${fName}|${sport}`;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fName, sport, activityName: sport, type: 'sport' }); }
             });
         }
         for (const special of (app1.specialActivities || [])) {
-            if (!special.name || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
+            if (!special.name || special.available === false || disabledFields.includes(special.name) || window.GlobalFieldLocks?.isFieldLocked(special.name, slots, divName)) continue;
             // * DEMO FIX: Filter rainy-day-only specials on normal days
             if (window.__CAMPISTRY_DEMO_MODE__) {
                 const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
@@ -1517,18 +1732,26 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         return options;
     }
 
-    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps) {
+    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps, timeWindow = null) {
         const divName = getDivisionForBunk(bunk);
         if (!divName || slots.length === 0) return false;
-        
-        // Get time range for these slots
+
+        // Get time range for these slots.
+        // MS-5b: when the caller already resolved the real window (entry
+        // times / per-bunk table), use it — the division-level table can be
+        // SHORTER than the bunk's slot index in auto mode, which made the
+        // guard below reject every candidate and park bunks at Free.
         const divSlots = window.divisionTimes?.[divName] || [];
-        if (slots[0] >= divSlots.length) return false;
-        
-        const startMin = divSlots[slots[0]]?.startMin;
-        const endMin = divSlots[slots[slots.length - 1]]?.endMin;
-        
-        if (startMin === undefined || endMin === undefined) return false;
+        let startMin, endMin;
+        if (timeWindow && typeof timeWindow.startMin === 'number' && typeof timeWindow.endMin === 'number') {
+            startMin = timeWindow.startMin;
+            endMin = timeWindow.endMin;
+        } else {
+            if (slots[0] >= divSlots.length) return false;
+            startMin = divSlots[slots[0]]?.startMin;
+            endMin = divSlots[slots[slots.length - 1]]?.endMin;
+            if (startMin === undefined || endMin === undefined) return false;
+        }
         
         // Use time-based availability check
         const props = activityProps[fName] || {};
@@ -1560,7 +1783,9 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
             let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
             if (slotIdx < 0) slotIdx = 0;
-            const seqViolation = window.checkSequenceViolation(bunk, pick?.activityName || pick?._activity || pick?.sport || '', slotIdx, getDivisionForBunk(bunk));
+            // `pick` was never a parameter here — referencing it would throw
+            // a ReferenceError the moment checkSequenceViolation exists.
+            const seqViolation = window.checkSequenceViolation(bunk, fName, slotIdx, getDivisionForBunk(bunk));
             if (seqViolation?.violated) return false;
         }
 
@@ -1721,18 +1946,32 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     // Get the editing bunk's division and time range
     const editingDiv = getDivisionForBunk(bunk);
     const editingDivSlots = window.divisionTimes?.[editingDiv] || [];
-    
+
+    // ★★★ CB-33: when the editing division uses per-bunk geometry (auto mode),
+    // the `slots` indices index into THIS BUNK's _perBunkSlots — not the
+    // division-level slot table. Reading editingDivSlots[slots[i]] then yields
+    // the wrong time window (or undefined, when divisionTimes[div] is the
+    // per-bunk object), producing a wrong field-lock window + wrong smart-regen
+    // mapping. Resolve the claimed window from the bunk's per-bunk slots first,
+    // falling back to the (flat) division table for manual geometry.
+    const _divEntry33 = window.divisionTimes?.[editingDiv];
+    const _perBunkSlots33 =
+        (_divEntry33 && _divEntry33._isPerBunk && _divEntry33._perBunkSlots && _divEntry33._perBunkSlots[bunk]) ||
+        (window._perBunkSlots && window._perBunkSlots[editingDiv] && window._perBunkSlots[editingDiv][bunk]) ||
+        null;
+    const _claimSlots33 = (Array.isArray(_perBunkSlots33) && _perBunkSlots33.length) ? _perBunkSlots33 : editingDivSlots;
+
     // * Capture the actual TIME RANGE being claimed *
     let claimedStartMin = null, claimedEndMin = null;
-    if (slots.length > 0 && editingDivSlots[slots[0]]) {
-        claimedStartMin = editingDivSlots[slots[0]].startMin;
-        claimedEndMin = editingDivSlots[slots[slots.length - 1]].endMin;
+    if (slots.length > 0 && _claimSlots33[slots[0]]) {
+        claimedStartMin = _claimSlots33[slots[0]].startMin;
+        claimedEndMin = _claimSlots33[slots[slots.length - 1]].endMin;
     }
     
     console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
     
     // Apply the primary edit first
-    applyDirectEdit(bunk, slots, activity, location, false, true);
+    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName });
     
     // Lock the field
     if (window.GlobalFieldLocks) {
@@ -1818,7 +2057,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     if (nonEditableConflicts.length > 0) {
         sendSchedulerNotification(
-            [...new Set(nonEditableConflicts.map(c => c.bunk))], 
+            [...new Set(nonEditableConflicts.map(c => c.bunk))],
             location, activity, 'bypassed'
         );
         if (window.showToast) {
@@ -1827,7 +2066,24 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     }
 }
     }
-    
+
+    // ★ MS-4e: the NOTIFY choice must actually notify. With only other-user
+    // conflicts, conflictsToResolve is empty, so the block above never ran —
+    // the double-booking was created silently and no notification was ever
+    // sent. Fire the conflict notification independently of whether any
+    // same-user conflicts needed reassignment.
+    if (!bypassMode && nonEditableConflicts.length > 0) {
+        try {
+            sendSchedulerNotification(
+                [...new Set(nonEditableConflicts.map(c => c.bunk))],
+                location, activity, 'conflict'
+            );
+            if (window.showToast) {
+                window.showToast('Double-booking created — the other scheduler was notified', 'warning');
+            }
+        } catch (eN) { console.warn('[resolveConflictsAndApply] notify failed:', eN); }
+    }
+
     return result;
 }
 
@@ -1866,7 +2122,7 @@ function smartRegenerateConflicts(pinnedBunk, pinnedSlots, pinnedField, pinnedAc
                 });
                 specials.forEach(s => {
                     if (s?.name) activityProperties[s.name] = {
-                        type: 'special', available: true,
+                        type: 'special', available: s.available !== false,
                         sharableWith: s.sharableWith || { type: 'not_sharable', capacity: 1 },
                         rainyDayOnly: s.rainyDayOnly === true,
                         rainyDayExclusive: s.rainyDayExclusive === true
@@ -2073,6 +2329,29 @@ actualSlots.forEach((slotIdx, i) => {
 // =========================================================================
 // HELPER: Find Best Activity (DIVISION-AWARE)
 // =========================================================================
+
+// MS-5b: resolve the real time window for a bunk's slots. Prefer the
+// displaced entry's stamped _startMin/_endMin, then the bunk's per-bunk
+// slot table — the division-level table can disagree with both in auto
+// mode (per-bunk timelines), which stamped smart-regen replacements at
+// the wrong time (observed 850-855 vs the entry's real 905-945 slot).
+function _resolveSlotWindow(bunk, divName, slots) {
+    const first = window.scheduleAssignments?.[bunk]?.[slots[0]];
+    if (first && typeof first._startMin === 'number' && typeof first._endMin === 'number') {
+        const last = window.scheduleAssignments?.[bunk]?.[slots[slots.length - 1]];
+        return {
+            startMin: first._startMin,
+            endMin: (last && typeof last._endMin === 'number') ? last._endMin : first._endMin
+        };
+    }
+    const table = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || window.divisionTimes?.[divName] || [];
+    const s = table[slots[0]], l = table[slots[slots.length - 1]];
+    if (s && typeof s.startMin === 'number') {
+        return { startMin: s.startMin, endMin: (l && typeof l.endMin === 'number') ? l.endMin : s.startMin + 30 };
+    }
+    return { startMin: null, endMin: null };
+}
+
  function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBySlot, activityProperties, avoidFields = []) {
         const disabledFields = window.currentDisabledFields || [];
         const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
@@ -2087,15 +2366,10 @@ actualSlots.forEach((slotIdx, i) => {
         }
 
     
-    // Get time range for these slots
-    const divSlots = window.divisionTimes?.[divName] || [];
-    let startMin = null, endMin = null;
-    
-    if (slots.length > 0 && divSlots[slots[0]]) {
-        startMin = divSlots[slots[0]].startMin;
-        endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
-    }
-    
+    // Get time range for these slots (MS-5b: entry times > per-bunk table > division table)
+    const _win = slots.length > 0 ? _resolveSlotWindow(bunk, divName, slots) : { startMin: null, endMin: null };
+    let startMin = _win.startMin, endMin = _win.endMin;
+
     const candidates = buildCandidateOptions(slots, activityProperties, disabledFields, divName);
     const scoredPicks = [];
     
@@ -2108,8 +2382,8 @@ actualSlots.forEach((slotIdx, i) => {
        // Check field availability by TIME
         if (!checkFieldAvailableByTime(cand.field, startMin, endMin, bunk, activityProperties)) continue;
         
-        // Also check slot-based for backwards compat
-        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
+        // Also check slot-based for backwards compat (MS-5b: pass the real window)
+        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties, { startMin, endMin })) continue;
         
         // *** v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ***
         // Without this, bumped bunks get assigned fields/specials their division can't access
@@ -2223,13 +2497,11 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
 // =========================================================================
 function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySlot, activityProperties, bypassInfo = {}) {
     const divSlots = window.divisionTimes?.[divName] || [];
-    
-    let startMin = null, endMin = null;
-    if (slots.length > 0 && divSlots[slots[0]]) {
-        startMin = divSlots[slots[0]].startMin;
-        const lastSlot = divSlots[slots[slots.length - 1]];
-        endMin = lastSlot ? lastSlot.endMin : (startMin + 30);
-    }
+
+    // MS-5b: read the window BEFORE overwriting the entry below —
+    // the displaced entry's stamped times are the truest source.
+    const _win = slots.length > 0 ? _resolveSlotWindow(bunk, divName, slots) : { startMin: null, endMin: null };
+    let startMin = _win.startMin, endMin = _win.endMin;
     
     const currentUserId = window.AccessControl?.getCurrentUserId?.() || 'unknown';
     const currentUserName = window.AccessControl?.getCurrentUserName?.() || 'Another scheduler';
@@ -2560,23 +2832,101 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
 
     function _buildTimeColumns(increment) {
         var allTimes = [];
+        var boundarySet = {};      // every distinct slot edge across all divisions
         var dt = window.divisionTimes || {};
         Object.keys(dt).forEach(function (divName) {
             (dt[divName] || []).forEach(function (s) {
-                if (typeof s.startMin === 'number') allTimes.push(s.startMin);
-                if (typeof s.endMin === 'number') allTimes.push(s.endMin);
+                if (typeof s.startMin === 'number') { allTimes.push(s.startMin); boundarySet[s.startMin] = true; }
+                if (typeof s.endMin === 'number') { allTimes.push(s.endMin); boundarySet[s.endMin] = true; }
             });
         });
         if (allTimes.length === 0) return [];
         var dayStart = Math.min.apply(null, allTimes);
         var dayEnd = Math.max.apply(null, allTimes);
-        // Snap dayStart down to a clean increment boundary so columns align nicely.
-        dayStart = Math.floor(dayStart / increment) * increment;
+        // ★ Do NOT snap dayStart down to the increment grid. Snapping a 12:20
+        //   camp-wide start to 12:00 fabricated a leading column nobody
+        //   occupies — rendered as a striped "hasn't started" band for every
+        //   bunk. Columns start at the true earliest minute; a day that
+        //   already starts on a clean boundary renders exactly as before.
+        // The renderer point-samples each column at its startMin
+        // (_findSlotIndexAtTime), so a slot shorter than `increment` that
+        // falls BETWEEN two grid ticks (e.g. a 25-min 11:50-12:15 Lunch under a
+        // 40-min increment: ticks at 11:40 and 12:20 both miss it) is sampled
+        // by no column and vanishes entirely. Build the grid from the union of
+        // the regular increment ticks AND every slot boundary, so each slot
+        // always owns at least one column.
+        var pointSet = {};
+        for (var t = dayStart; t < dayEnd; t += increment) pointSet[t] = true;
+        Object.keys(boundarySet).forEach(function (b) {
+            var bn = +b;
+            if (bn >= dayStart && bn < dayEnd) pointSet[bn] = true;
+        });
+        var points = Object.keys(pointSet).map(Number).sort(function (a, b) { return a - b; });
         var cols = [];
-        for (var t = dayStart; t < dayEnd; t += increment) {
-            cols.push({ startMin: t, endMin: t + increment });
+        for (var i = 0; i < points.length; i++) {
+            cols.push({ startMin: points[i], endMin: (i + 1 < points.length) ? points[i + 1] : dayEnd });
         }
         return cols;
+    }
+
+    // ─── Schedule zoom (trackpad pinch / Ctrl+scroll) ────────────────────
+    // Trackpad pinch gestures arrive in the browser as wheel events with
+    // ctrlKey set: pinch-out (spread) → negative deltaY → zoom IN (bigger,
+    // less of the schedule on screen); pinch-in → positive deltaY → zoom
+    // OUT (smaller, more on screen). Ctrl+scroll on a mouse maps to the
+    // same path. Plain two-finger scrolling (no ctrlKey) passes through.
+    var SCHEDULE_ZOOM_KEY = 'campistry_schedule_zoom_v1';
+    function _getScheduleZoom() {
+        try {
+            var z = parseFloat(localStorage.getItem(SCHEDULE_ZOOM_KEY));
+            return (z >= 0.4 && z <= 2.5) ? z : 1;
+        } catch (_) { return 1; }
+    }
+    function _applyScheduleZoom(container) {
+        var z = _getScheduleZoom();
+        container.style.zoom = (z === 1) ? '' : String(z);
+    }
+    function _wireScheduleZoom(container) {
+        if (container._zoomWired) return;
+        container._zoomWired = true;
+        container.addEventListener('wheel', function (e) {
+            // Two ways to zoom the schedule itself (not the page):
+            //   • Ctrl+scroll / trackpad pinch — arrives as a wheel event w/ ctrlKey.
+            //   • Mouse without a trackpad: hold the LEFT button and scroll. During
+            //     a wheel event, e.buttons bit 0 (value 1) means left is held.
+            var _leftHeld = (e.buttons & 1) === 1;
+            if (!e.ctrlKey && !_leftHeld) return;
+            e.preventDefault();   // keep the BROWSER from page-zooming; we zoom the schedule instead
+            var z = _getScheduleZoom();
+            // Exponential step: equal pinch effort = equal relative change,
+            // smooth on trackpads, ~±25% per notch on a ctrl+scroll mouse.
+            // Scroll up (deltaY < 0) → zoom IN; scroll down → zoom OUT.
+            z *= Math.exp(-e.deltaY * 0.0025);
+            z = Math.max(0.4, Math.min(2.5, z));
+            z = Math.round(z * 100) / 100;
+            try { localStorage.setItem(SCHEDULE_ZOOM_KEY, String(z)); } catch (_) {}
+            container.style.zoom = (z === 1) ? '' : String(z);
+        }, { passive: false });
+    }
+
+    // Compact per-grade time ruler — repeated under each division band so
+    // the time axis is visible right next to every grade, not only at the
+    // top of the table.
+    function _buildGradeTimelineRow(timeColumns) {
+        var tr = document.createElement('tr');
+        tr.className = 'grade-timeline-row';
+        var lead = document.createElement('td');
+        lead.textContent = '';
+        lead.style.cssText = 'position: sticky; left: 0; z-index: 1; background: #f8fafc; border-right: 2px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; padding: 2px 12px;';
+        tr.appendChild(lead);
+        timeColumns.forEach(function (col) {
+            var td = document.createElement('td');
+            var isHour = (col.startMin % 60) === 0;
+            td.textContent = minutesToTimeLabel(col.startMin);
+            td.style.cssText = 'padding: 2px 6px; background: #f8fafc; color: ' + (isHour ? '#334155' : '#94a3b8') + '; font-weight: ' + (isHour ? '700' : '500') + '; font-size: 0.68rem; white-space: nowrap; border-left: ' + (isHour ? '2px solid #cbd5e1' : '1px solid #f1f5f9') + '; border-bottom: 1px solid #e5e7eb; text-align: left;';
+            tr.appendChild(td);
+        });
+        return tr;
     }
 
     function _findSlotIndexAtTime(divSlots, colStartMin) {
@@ -2615,32 +2965,135 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return true;
     }
 
-    function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
+    // ★ Off-campus travel badge (render-time, field-based). Any game/activity on
+    //   a field that belongs to an off-campus zone shows a 🚐 travel pill driven by
+    //   the zone's travelTimeMin — independent of how it was placed. Works for
+    //   league overlays AND per-bunk sports, and is per-field so a mixed away tile
+    //   (some games off-campus, some on) badges only the off-campus ones.
+    // ★ Orientation flag: in the transposed view time runs left→right (time =
+    //   columns), so travel bands sit on the LEFT/RIGHT of a cell; in the standard
+    //   table time runs top→bottom, so they sit TOP/BOTTOM. renderBunkCell is shared
+    //   by both views, so it reads this flag set by the active renderer.
+    var _usTransposed = false;
+
+    function _usFieldTravel(fieldName) {
+        if (!fieldName || typeof window.getTravelForField !== 'function') return null;
+        // Try the raw field, then a court-number-stripped name ("TABC Bball (2)"
+        // → "TABC Bball") so per-court game fields still resolve to their zone.
+        var names = [String(fieldName)];
+        var stripped = String(fieldName).replace(/\s*\(\d+\)\s*$/, '').trim();
+        if (stripped && stripped !== names[0]) names.push(stripped);
+        for (var i = 0; i < names.length; i++) {
+            var t = window.getTravelForField(names[i], true)
+                  || (typeof window.getTravelForSpecialActivity === 'function' ? window.getTravelForSpecialActivity(names[i], true) : null);
+            if (t && ((t.preMin || 0) > 0 || (t.postMin || 0) > 0)) return t;
+        }
+        return null;
+    }
+    // Aggregate the off-campus travel for a cell from one or more fields. Returns
+    // { pre, post, zone } using the largest travel found, or null if all on-campus.
+    function _usCellTravel(fields) {
+        var best = null;
+        for (var i = 0; i < (fields || []).length; i++) {
+            var t = _usFieldTravel(fields[i]);
+            if (!t) continue;
+            var mx = Math.max(t.preMin || 0, t.postMin || 0);
+            if (!best || mx > best._mx) best = { pre: t.preMin || 0, post: t.postMin || 0, zone: t.zoneName || '', _mx: mx };
+        }
+        return best;
+    }
+    // A "Travel" band layer (mirrors the swim Change band) shown above/below a cell
+    //   (standard / time-vertical view).
+    function _usTravelBand(ct, pos) {
+        if (!ct) return '';
+        var m = pos === 'pre' ? ct.pre : ct.post;
+        if (!m) return '';
+        var border = pos === 'pre' ? 'border-bottom:1px solid #F59E0B;' : 'border-top:1px solid #F59E0B;';
+        return '<div title="Travel ' + (pos === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" style="background:#FEF3C7;color:#92400E;padding:4px 12px;font-size:11px;font-weight:700;' + border + 'text-align:center;white-space:nowrap;">🚐 Travel ' + m + 'm</div>';
+    }
+    // A full-height "Travel" strip on the LEFT/RIGHT edge of a transposed cell. Width
+    //   is proportional to the travel time's share of the period (passed as widthCss),
+    //   so it visibly consumes that slice of the timeline. Absolutely positioned →
+    //   spans the WHOLE cell height (top→bottom), not just the content.
+    function _usTravelStrip(ct, side, widthCss) {
+        var m = side === 'pre' ? ct.pre : ct.post;
+        if (!m) return '';
+        var edge = side === 'pre' ? 'left:0;border-right:1px solid #FCD34D;' : 'right:0;border-left:1px solid #FCD34D;';
+        return '<div title="Travel ' + (side === 'pre' ? 'to' : 'from') + ' ' + escapeHtml(String(ct.zone)) + ': ' + m + ' min" '
+            + 'style="position:absolute;top:0;bottom:0;' + edge + 'width:' + widthCss + ';'
+            + 'background:linear-gradient(180deg,#FEF3C7 0%,#FDE68A 100%);'
+            + 'display:flex;align-items:center;justify-content:center;color:#B45309;font-size:10px;font-weight:700;white-space:nowrap;pointer-events:none;">'
+            + '<span style="writing-mode:vertical-rl;text-orientation:mixed;">🚐 ' + m + 'm</span></div>';
+    }
+    // Pull a field name out of a rendered matchup line ("Team A vs Team B @ Field
+    // (Sport)") — a fallback for when the matchup is an object whose field lives only
+    // in its display text (no structured .field), so travel lookup still resolves.
+    function _usFieldFromLine(text) {
+        if (!text) return '';
+        var seg = String(text).split(' @ ')[1];
+        if (!seg) return '';
+        seg = seg.trim();
+        // Strip the trailing "(Sport)" — the LAST parenthesized group — WITHOUT
+        // eating parens inside the field name itself (e.g. "TABC bball (ng2)").
+        var pm = seg.match(/^(.*)\([^()]*\)\s*$/);
+        return (pm ? pm[1] : seg).trim();
+    }
+    // Wrap a cell's inner HTML with travel layers in the correct orientation.
+    //   horizontal (transposed): full-height edge strips sized to the travel time's
+    //     share of the period (ct.spanMin); content inset by matching margins.
+    //   vertical (standard table): thin bands above/below (swim-Change style).
+    function _usApplyTravel(td, innerHtml, ct, pad, horizontal) {
+        if (!ct) { td.innerHTML = innerHtml; return; }
+        td.style.padding = '0';
+        if (horizontal) {
+            td.style.position = 'relative';
+            var sp = ct.spanMin || 0;
+            var preW = (sp && ct.pre > 0) ? (ct.pre / sp) * 100 : 0;
+            var postW = (sp && ct.post > 0) ? (ct.post / sp) * 100 : 0;
+            // Keep the game a visible sliver even when travel dominates the period.
+            if (preW + postW > 80) { var k = 80 / (preW + postW); preW *= k; postW *= k; }
+            var preCss = ct.pre > 0 ? (preW ? preW.toFixed(2) + '%' : '16px') : '0';
+            var postCss = ct.post > 0 ? (postW ? postW.toFixed(2) + '%' : '16px') : '0';
+            td.innerHTML = _usTravelStrip(ct, 'pre', preCss)
+                + _usTravelStrip(ct, 'post', postCss)
+                + '<div style="padding:' + pad + ';margin-left:' + preCss + ';margin-right:' + postCss + ';min-height:100%;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;">' + innerHtml + '</div>';
+        } else {
+            td.innerHTML = _usTravelBand(ct, 'pre') + '<div style="padding:' + pad + ';">' + innerHtml + '</div>' + _usTravelBand(ct, 'post');
+        }
+    }
+
+    function _renderTransposedLeagueCell(block, bunk, divName, slotIdx, isEditable) {
         var td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
 
         var leagueInfo = (typeof getLeagueMatchups === 'function') ? getLeagueMatchups(divName, slotIdx) : null;
         if (!leagueInfo) leagueInfo = {};
 
+        // Header is just the game label ("Game 2") — no emoji, no sport. Each
+        // matchup line carries its own sport, so a single header sport is
+        // wrong whenever the game's matchups play different sports.
         var title = leagueInfo.gameLabel || block.event || 'League';
-        if (leagueInfo.sport && title.toLowerCase().indexOf(String(leagueInfo.sport).toLowerCase()) < 0) {
-            title += ' - ' + leagueInfo.sport;
-        }
 
-        var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">🏆 ' + escapeHtml(title) + '</div>';
+        var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">' + escapeHtml(title) + '</div>';
 
         var matchups = leagueInfo.matchups || [];
+        var _tFields = [];
         if (matchups.length > 0) {
             html += '<div style="display: flex; flex-direction: column; gap: 3px;">';
             matchups.forEach(function (m) {
-                var line;
+                var line, _mField = '';
                 if (typeof m === 'string') {
                     line = m;
+                    var _atP = m.split(' @ ');
+                    var _fp = _atP[1] || '';
+                    var _pm = _fp.match(/^(.+?)\s*\((.+?)\)\s*$/);
+                    _mField = _pm ? _pm[1].trim() : _fp.trim();
                 } else if (m && (m.teamA || m.team1)) {
                     var a = m.teamA || m.team1 || '';
                     var b = m.teamB || m.team2 || '';
                     var sport = m.sport || leagueInfo.sport || '';
                     var field = m.field || '';
+                    _mField = field;
                     line = a + ' vs ' + b;
                     if (sport) line += ' — ' + (sport.charAt(0).toUpperCase() + sport.slice(1));
                     if (field) line += ' (' + field + ')';
@@ -2649,17 +3102,90 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 } else {
                     line = JSON.stringify(m);
                 }
+                // Travel field: prefer the authoritative object field, else parse the
+                // field out of the string/display line (handles fields with parens).
+                var _tf = (m && typeof m === 'object' && m.field) ? m.field
+                        : _usFieldFromLine(typeof m === 'string' ? m : line);
+                if (_tf) _tFields.push(_tf);
                 html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
         }
-        td.innerHTML = html;
+        // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
+        //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell. Plus an
+        //   inline badge under the title so travel is legible (edge strips are subtle).
+        var _ctT = _usCellTravel(_tFields);
+        // Period length → sizes the travel strips to their share of the timeline.
+        if (_ctT) _ctT.spanMin = (block && block.endMin > block.startMin) ? (block.endMin - block.startMin) : 0;
+        _usApplyTravel(td, html, _ctT, '8px 10px', true);
+        // ★ Make the transposed-view league/specialty cell clickable → field-change
+        //   modal (this renderer previously wired NO onclick, so leagues couldn't be
+        //   post-edited in the transposed unified view at all).
+        _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, bunk, isEditable);
         return td;
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Scroll preservation across re-render.
+    // The schedule re-renders on a burst of cloud-hydration events (registry
+    // reload + app1 refresh + sync's updateTable, all firing off the throttled
+    // `campistry-cloud-hydrated` event). Each render wipes the table via
+    // innerHTML='' (below): the document height collapses, the browser clamps
+    // window scrollY down to the new max, and the synchronous rebuild restores
+    // the height but NOT the scroll position — so the page "jumps back to the
+    // top" every few seconds while the user is scrolled down. Capture the
+    // scroll position before the wipe and restore it after the rebuild, on
+    // every return path.
+    // ─────────────────────────────────────────────────────────────────────
+    function _usCaptureScroll(el) {
+        return {
+            wx: window.scrollX || window.pageXOffset || 0,
+            wy: window.scrollY || window.pageYOffset || 0,
+            el: el || null,
+            ex: el ? el.scrollLeft : 0,
+            ey: el ? el.scrollTop : 0
+        };
+    }
+    function _usRestoreScroll(s) {
+        if (!s) return;
+        // Defeat html{scroll-behavior:smooth} so the correction is instant, not
+        // an animated scroll the user would see.
+        var de = document.documentElement;
+        var prevBehavior = de.style.scrollBehavior;
+        de.style.scrollBehavior = 'auto';
+        try {
+            var curY = window.scrollY || window.pageYOffset || 0;
+            var curX = window.scrollX || window.pageXOffset || 0;
+            // Only correct a position the render actually disturbed — never
+            // fight a genuine scroll that happened during the render.
+            if (Math.abs(curY - s.wy) > 1 || Math.abs(curX - s.wx) > 1) {
+                window.scrollTo(s.wx, s.wy);
+            }
+            if (s.el && (s.el.scrollTop !== s.ey || s.el.scrollLeft !== s.ex)) {
+                s.el.scrollTop = s.ey;
+                s.el.scrollLeft = s.ex;
+            }
+        } catch (_e) { /* non-fatal */ }
+        de.style.scrollBehavior = prevBehavior;
+    }
+
+    // Thin scroll-preserving wrapper around the real renderer. renderStaggeredView
+    // and updateTable both funnel through here, so this one wrapper covers every
+    // render path (manual flat table AND the auto-grid delegation below).
     function renderTransposedView(container) {
+        var _el = container || document.getElementById('scheduleTable');
+        var _savedScroll = _usCaptureScroll(_el);
+        try {
+            return _renderTransposedViewImpl(container);
+        } finally {
+            _usRestoreScroll(_savedScroll);
+        }
+    }
+
+    function _renderTransposedViewImpl(container) {
+        _usTransposed = true; // time runs left→right here → travel sits left/right
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
 
         // ★★★ PERF FIX: Skip render when the schedule tab is hidden.
@@ -2690,6 +3216,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         });
 
         container.innerHTML = '';
+
+        // Pinch-zoom: wire once (survives re-renders — innerHTML resets don't
+        // clear the container's own listeners) and re-apply the saved factor.
+        // Applies to both the manual flat table and the auto per-division grids.
+        _wireScheduleZoom(container);
+        _applyScheduleZoom(container);
 
         // Empty-state (mirrors the legacy view's check)
         if ((!skeleton || skeleton.length === 0) && Object.keys(divisionTimes).length === 0) {
@@ -2731,6 +3263,72 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
             return;
         }
+
+        // ★ MODE ISOLATION (double-lunch fix — render rebuild): the manual flat-table draws
+        //   from the div-level slot array (divisionTimes[div]). A divisionTimes hydrated from a
+        //   save — or left over from auto mode — can carry AUTO per-bunk geometry (fine-grained
+        //   slot windows that cross the pinned 12:00 lunch), which mis-maps activities onto the
+        //   wrong columns (the "double lunch"); or it can be absent entirely on a cold load.
+        //   Rebuild clean div-level geometry from THIS day's manual skeleton so the manual grid
+        //   is always driven by its own skeleton, never by auto geometry. buildFromSkeleton is
+        //   idempotent for a manual skeleton, and this is gated to manual mode (the auto branch
+        //   returned above), so auto rendering is untouched.
+        //
+        // ★ PAST-DATE FIX (previous schedules render with missing/shifted activities):
+        //   The rebuild above MUST only run when THIS date genuinely has its own skeleton.
+        //   When you go back to a PAST date, its schedule + the grid it was saved against
+        //   (window.divisionTimes) load correctly from the cloud — but that date's skeleton is
+        //   usually NOT in this browser's localStorage. getSkeleton() then falls back to ANOTHER
+        //   date's window.manualSkeleton (or a day-of-week template), so buildFromSkeleton()
+        //   produces a grid whose slot INDICES no longer line up with the saved per-bunk
+        //   scheduleAssignments arrays. Cells look up entries by slot index (renderBunkCell →
+        //   getEntry(bunk, slotIdx)), so the mismatch makes some activities land in the wrong
+        //   column and others disappear entirely ("some come back, some don't"). Detect whether
+        //   the date owns its skeleton; if not, trust the cloud-saved grid as-is (only stripping
+        //   the auto per-bunk geometry the double-lunch fix targets) instead of rebuilding from a
+        //   stale fallback skeleton.
+        var _dateOwnsSkeleton = false;
+        try {
+            var _rawDateSk = localStorage.getItem('campManualSkeleton_' + dateKey);
+            if (_rawDateSk) { var _pDateSk = JSON.parse(_rawDateSk); _dateOwnsSkeleton = Array.isArray(_pDateSk) && _pDateSk.length > 0; }
+        } catch (_eDateSk) {}
+        if (!_dateOwnsSkeleton) {
+            try {
+                var _ddSk = (loadDailyData()[dateKey]) || {};
+                if ((_ddSk.manualSkeleton && _ddSk.manualSkeleton.length) || (_ddSk.skeleton && _ddSk.skeleton.length)) _dateOwnsSkeleton = true;
+            } catch (_eDdSk) {}
+        }
+        var _haveHydratedDivTimes = window.divisionTimes && Object.keys(window.divisionTimes).length > 0;
+        try {
+            if (_dateOwnsSkeleton && skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+                // Active build/edit date: rebuild clean div-level geometry from its own skeleton.
+                var _miRebuilt = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
+                if (_miRebuilt && Object.keys(_miRebuilt).length) {
+                    Object.keys(_miRebuilt).forEach(function (g) {
+                        if (_miRebuilt[g]) { delete _miRebuilt[g]._isPerBunk; delete _miRebuilt[g]._perBunkSlots; }
+                    });
+                    divisionTimes = _miRebuilt;
+                    window.divisionTimes = _miRebuilt;
+                }
+            } else if (_haveHydratedDivTimes) {
+                // Loaded (e.g. PAST) date with no local skeleton of its own: the cloud-saved grid
+                // IS the authoritative geometry for the saved assignments. Use it as-is, only
+                // stripping any leaked auto per-bunk geometry (keeps the double-lunch protection).
+                Object.keys(divisionTimes).forEach(function (g) {
+                    if (divisionTimes[g]) { delete divisionTimes[g]._isPerBunk; delete divisionTimes[g]._perBunkSlots; }
+                });
+            } else if (skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+                // Last resort — no date skeleton AND no hydrated grid: rebuild from whatever we have.
+                var _miFallback = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
+                if (_miFallback && Object.keys(_miFallback).length) {
+                    Object.keys(_miFallback).forEach(function (g) {
+                        if (_miFallback[g]) { delete _miFallback[g]._isPerBunk; delete _miFallback[g]._perBunkSlots; }
+                    });
+                    divisionTimes = _miFallback;
+                    window.divisionTimes = _miFallback;
+                }
+            }
+        } catch (_eMIR) { /* non-fatal — fall back to the existing divisionTimes */ }
 
         // Toolbar with increment picker
         container.appendChild(_renderIncrementPicker());
@@ -2790,9 +3388,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             if (!shouldShowDivision(divName)) return;
             var divInfo = divisions[divName];
             if (!divInfo) return;
-            var bunks = (divInfo.bunks || []).slice().sort(function (a, b) {
-                return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
-            });
+            // ★ FN-49: divInfo.bunks already carries the user's Camp Structure
+            //   order (drag-reorderable on the Me page) — render it as-is.
+            //   The old alphanumeric sort silently discarded custom orders.
+            var bunks = (divInfo.bunks || []).slice();
             if (bunks.length === 0) return;
             var divSlots = divisionTimes[divName] || [];
             var divColor = divInfo.color || '#4b5563';
@@ -2806,6 +3405,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             ghTd.textContent = divName + (isEditable ? '' : ' [LOCKED]');
             ghTr.appendChild(ghTd);
             tbody.appendChild(ghTr);
+
+            // Per-grade time ruler directly under the division band, so the
+            // time axis is readable next to every grade when scrolled down.
+            tbody.appendChild(_buildGradeTimelineRow(timeColumns));
 
             // Pre-compute which slots in this division have identical content
             // for every bunk — those will merge into a single rowspan cell.
@@ -2882,9 +3485,15 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                     };
                     var td;
                     if (isLeagueBlockType(blockObj.event, blockObj.type)) {
-                        td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx);
+                        td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx, isEditable);
                     } else {
-                        td = renderBunkCell(blockObj, bunk, divName, isEditable);
+                        // When this slot is a full-division merge, this single cell
+                        // (drawn on the first bunk's row, rowSpan = bunks.length)
+                        // stands in for every bunk — hand the full list down so a
+                        // click can offer a per-bunk picker instead of silently
+                        // editing only the first bunk.
+                        var _mergedForCell = (mergeSlots[slotIdx] && bunks.length > 1) ? bunks : null;
+                        td = renderBunkCell(blockObj, bunk, divName, isEditable, _mergedForCell);
                     }
                     // Apply the hour-mark left border so the timeline guide
                     // shows up regardless of which renderer produced the cell.
@@ -3007,6 +3616,7 @@ const isAutoSchedule = currentBuilderMode === 'auto';
     }
 
     function renderDivisionTable(divName, divInfo, bunks, skeleton, isEditable) {
+        _usTransposed = false; // standard table → time runs top→bottom → travel top/bottom
         // *** v4.1.0: Use divisionTimes directly ***
         const divSlots = window.divisionTimes?.[divName] || [];
         
@@ -3153,7 +3763,27 @@ divBlocks.forEach((block, blockIdx) => {
     }
 
     if (block.type === 'elective' || block.type === 'swim_elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
-        tr.appendChild(renderFixedBlockCell(block, bunks));
+        // ★ Whole-division fixed/pinned blocks (electives, swim+elective, custom
+        //   pinned reservations like a league holding several fields) used to render
+        //   one full-width cell PER slot-row and return before the rowspan-merge runs
+        //   — so a reservation that spans multiple slots repeated "ABBL – Field x, y, z"
+        //   once per slot. Reuse the continuation span/skip maps already computed for
+        //   the bunk cells (the block is identical across bunks, so sample bunks[0]) to
+        //   merge those slot-rows into ONE cell. No-op when the block sits in a single
+        //   slot (span 1 / not skipped) → identical output for every existing schedule.
+        const _repB = bunks[0];
+        if (_repB && skipMap[_repB] && skipMap[_repB].has(blockIdx)) {
+            // Covered by the rowSpan of this block's first slot — emit the time row only.
+            tbody.appendChild(tr);
+            return;
+        }
+        const fixedCell = renderFixedBlockCell(block, bunks);
+        const _fixedSpan = (_repB && rowspanMap[_repB]) ? (rowspanMap[_repB][blockIdx] || 1) : 1;
+        if (_fixedSpan > 1) {
+            fixedCell.rowSpan = _fixedSpan;
+            fixedCell.style.verticalAlign = 'middle';
+        }
+        tr.appendChild(fixedCell);
         tbody.appendChild(tr);
         return;
     }
@@ -3234,15 +3864,18 @@ divBlocks.forEach((block, blockIdx) => {
         const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
         let leagueInfo = getLeagueMatchups(divName, slotIdx);
         
+        // Header is just the game label ("Game 2") — no emoji, no sport. Each
+        // matchup line carries its own sport, so a single header sport is
+        // wrong whenever the game's matchups play different sports.
         let title = leagueInfo.gameLabel || block.event;
-        if (leagueInfo.sport && !title.toLowerCase().includes(leagueInfo.sport.toLowerCase())) title += ` - ${leagueInfo.sport}`;
+
+        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">${escapeHtml(title)}</div>`;
         
-        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${escapeHtml(title)}</div>`;
-        
+        const _tFields = [];
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             leagueInfo.matchups.forEach(m => {
-                let matchText;
+                let matchText, _mField = '';
                 if (typeof m === 'string') {
                     const atParts = m.split(' @ ');
                     const teams = atParts[0] || '';
@@ -3251,35 +3884,71 @@ divBlocks.forEach((block, blockIdx) => {
                     const parenMatch = fieldPart.match(/^(.+?)\s*\((.+?)\)\s*$/);
                     if (parenMatch) { field = parenMatch[1].trim(); sport = parenMatch[2].trim(); }
                     else { field = fieldPart.trim(); }
+                    _mField = field;
                     matchText = teams + (sport || field ? ' - ' : '') + (sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : '') + (field ? ' (' + field + ')' : '');
                 } else {
                     const sport = m.sport || leagueInfo.sport || '';
                     const field = m.field || '';
+                    _mField = field;
                     matchText = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}${sport || field ? ' - ' : ''}${sport ? sport.charAt(0).toUpperCase() + sport.slice(1) : ''}${field ? ' (' + field + ')' : ''}` : m.display || (m.team1 && m.team2 ? `${m.team1} vs ${m.team2}` : (m.matchup || JSON.stringify(m)));
                 }
+                // Travel field: prefer the authoritative object field, else parse the
+                // field out of the string/display line (handles fields with parens).
+                const _tf = (m && typeof m === 'object' && m.field) ? m.field
+                          : _usFieldFromLine(typeof m === 'string' ? m : matchText);
+                if (_tf) _tFields.push(_tf);
                 html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.875rem; font-style: italic;">No matchups scheduled yet</div>';
         }
+
+        // ★ Off-campus travel layer (mirrors swim Change). Standard table → time
+        //   runs top→bottom, so the bands sit ABOVE/BELOW the cell. Plus an inline
+        //   badge under the title so travel is legible even when bands are missed.
+        const _ctS = _usCellTravel(_tFields);
+        _usApplyTravel(td, html, _ctS, '12px 16px', false);
         
-        td.innerHTML = html;
-        
-        if (isEditable && bunks.length > 0) { 
-            td.style.cursor = 'pointer'; 
-            td.onclick = () => {
-                const firstBunk = bunks[0];
-                const existingEntry = window.scheduleAssignments?.[firstBunk]?.[slotIdx];
-                if (typeof openIntegratedEditModal === 'function') {
-                    openIntegratedEditModal(firstBunk, slotIdx, existingEntry);
-                } else {
-                    enhancedEditCell(firstBunk, block.startMin, block.endMin, block.event);
-                }
-            };
+        if (isEditable && bunks.length > 0) {
+            _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, bunks[0], isEditable);
         }
-        
+
         return td;
+    }
+
+    // Shared: make a unified-view league/specialty cell open the field-change
+    // modal. Both league renderers (standard table renderLeagueCell + the
+    // transposed _renderTransposedLeagueCell) call this so the cell is clickable
+    // in BOTH unified views. Routes straight to PostEditFieldChange with the
+    // already-resolved matchups (independent of per-bunk entry markers or the
+    // fuzzy slot key getLeagueMatchups uses), so the field of a league /
+    // specialty game can be changed post-edit. Falls back to the normal edit
+    // modal only when the module isn't loaded.
+    function _attachLeagueFieldEdit(td, divName, slotIdx, leagueInfo, block, firstBunk, isEditable) {
+        if (!isEditable || !firstBunk) return;
+        td.style.cursor = 'pointer';
+        td.title = "Click to change a game's field";
+        td.onclick = () => {
+            const existingEntry = window.scheduleAssignments?.[firstBunk]?.[slotIdx];
+            const PEFC = window.PostEditFieldChange;
+            if (PEFC?.openFromEntry) {
+                const hint = {
+                    _allMatchups: (leagueInfo && leagueInfo.matchups) || (existingEntry && existingEntry._allMatchups) || [],
+                    sport: (leagueInfo && leagueInfo.sport) || (existingEntry && existingEntry.sport) || '',
+                    _leagueName: (leagueInfo && leagueInfo.leagueName) || (existingEntry && existingEntry._leagueName) || '',
+                    _startMin: block.startMin, _endMin: block.endMin,
+                    _isSpecialtyLeague: !!(existingEntry && existingEntry._isSpecialtyLeague)
+                };
+                PEFC.openFromEntry(firstBunk, slotIdx, hint);
+                return;
+            }
+            if (typeof openIntegratedEditModal === 'function') {
+                openIntegratedEditModal(firstBunk, slotIdx, existingEntry);
+            } else if (typeof enhancedEditCell === 'function') {
+                enhancedEditCell(firstBunk, block.startMin, block.endMin, block.event);
+            }
+        };
     }
 
     function renderFixedBlockCell(block, bunks) {
@@ -3328,7 +3997,53 @@ divBlocks.forEach((block, blockIdx) => {
         return td;
     }
 
-    function renderBunkCell(block, bunk, divName, isEditable) {
+    // ★ Combined-tile per-bunk lanes. In the transposed view, when every bunk in
+    //   a division shares an identical activity at a slot, the renderer merges
+    //   them into ONE cell (rowSpan = bunks.length) drawn from bunks[0] — so the
+    //   activity reads once, but a plain click could only ever post-edit the
+    //   first bunk. Rather than break the combined look, we keep the single tile
+    //   and overlay one transparent lane per bunk, separated by light divider
+    //   lines. Each lane is individually clickable and routes that bunk into the
+    //   normal edit modal, so the user can post-edit a specific bunk directly.
+    function _applyMergedBunkLanes(td, bunks, divName, slotIdx, block, displayText) {
+        td.style.position = 'relative';
+        td.title = 'Combined: ' + bunks.join(', ') + ' — click a bunk’s section to edit just that bunk';
+
+        var overlay = document.createElement('div');
+        overlay.className = 'us-merged-lanes';
+        // Sits on top of the (once-shown) activity content; lanes are transparent
+        // so the label still reads through, and only the light dividers + hover
+        // tint are visible.
+        overlay.style.cssText = 'position:absolute; inset:0; display:flex; flex-direction:column; z-index:2;';
+
+        bunks.forEach(function (b, i) {
+            var lane = document.createElement('div');
+            lane.style.cssText = 'flex:1 1 0; min-height:0; cursor:pointer; position:relative;'
+                + (i > 0 ? ' border-top:1px solid rgba(100,116,139,0.30);' : '');
+            var bunkLabel = /^\d/.test(String(b)) ? 'Bunk ' + b : String(b);
+            lane.title = bunkLabel + ' — click to edit';
+
+            // Faint per-bunk marker so each lane is identifiable without hover.
+            var tag = document.createElement('span');
+            tag.textContent = String(b);
+            tag.style.cssText = 'position:absolute; left:3px; top:1px; font-size:0.58rem; font-weight:700; color:#64748b; opacity:0.65; pointer-events:none; line-height:1; max-width:calc(100% - 6px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+            lane.appendChild(tag);
+
+            lane.onmouseenter = function () { lane.style.background = 'rgba(37,99,235,0.10)'; };
+            lane.onmouseleave = function () { lane.style.background = 'transparent'; };
+            lane.onclick = function (e) {
+                e.stopPropagation();
+                var existingEntry = (window.scheduleAssignments && window.scheduleAssignments[b]) ? window.scheduleAssignments[b][slotIdx] : null;
+                if (typeof openIntegratedEditModal === 'function') openIntegratedEditModal(b, slotIdx, existingEntry);
+                else enhancedEditCell(b, block.startMin, block.endMin, displayText);
+            };
+            overlay.appendChild(lane);
+        });
+
+        td.appendChild(overlay);
+    }
+
+    function renderBunkCell(block, bunk, divName, isEditable, mergedBunks) {
         const td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb;';
         
@@ -3384,11 +4099,11 @@ divBlocks.forEach((block, blockIdx) => {
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
             // ★ Sports only: if other bunks share this field at this time, show
-            //   "vs Bunk 2, Bunk 3" (no extra dash).
+            //   "Activity – Location – vs Bunk 2, Bunk 3".
             const _sharers = findFieldSharers(bunk, slotIdx, divName);
             if (_sharers.length) {
                 const _names = _sharers.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
-                displayText += ' vs ' + _names.join(', ');
+                displayText += ' – vs ' + _names.join(', ');
             }
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed
@@ -3452,7 +4167,15 @@ divBlocks.forEach((block, blockIdx) => {
             td.style.background = bgColor;
             td.style.textAlign = 'left';
         } else {
-            td.textContent = displayText;
+            // ★ Off-campus sports: wrap the cell in 🚐 Travel layers (mirrors the swim
+            //   Change band) when the assigned field sits in an off-campus zone. Side
+            //   follows the active view orientation (transposed → left/right).
+            const _ct = (entry && !entry.continuation && entry.field) ? _usCellTravel([entry.field]) : null;
+            if (_ct) {
+                _usApplyTravel(td, escapeHtml(displayText), _ct, '8px 10px', _usTransposed);
+            } else {
+                td.textContent = displayText;
+            }
             td.style.background = bgColor;
         }
 
@@ -3469,22 +4192,34 @@ if (bypassStatus.highlight) {
     }
 }
         
-        td.dataset.slot = slotIdx; 
-        td.dataset.slotIndex = slotIdx; 
-        td.dataset.bunk = bunk; 
-        td.dataset.division = divName; 
-        td.dataset.startMin = block.startMin; 
+        // ★ Combined tile: this cell stands in for several bunks that share an
+        //   identical activity. We keep the merged look but divide it into light,
+        //   per-bunk lanes (applied below in the editable branch) so the user can
+        //   click a specific bunk's section to post-edit just that bunk.
+        const _isMergedCell = Array.isArray(mergedBunks) && mergedBunks.length > 1;
+
+        td.dataset.slot = slotIdx;
+        td.dataset.slotIndex = slotIdx;
+        td.dataset.bunk = bunk;
+        td.dataset.division = divName;
+        td.dataset.startMin = block.startMin;
         td.dataset.endMin = block.endMin;
-        
-        if (isBlocked) { 
-            td.style.cursor = 'not-allowed'; 
-            td.onclick = () => { 
+        if (_isMergedCell) td.dataset.mergedBunks = mergedBunks.join(',');
+
+        if (isBlocked) {
+            td.style.cursor = 'not-allowed';
+            td.onclick = () => {
                 if (window.showToast) window.showToast(`Cannot edit: ${blockedReason}`, 'error');
-                else alert(`Cannot edit: ${blockedReason}`); 
-            }; 
+                else alert(`Cannot edit: ${blockedReason}`);
+            };
         }
-        else if (isEditable) { 
-            td.style.cursor = 'pointer'; 
+        else if (isEditable && _isMergedCell) {
+            // Keep the combined tile, but overlay one light-divided lane per bunk
+            // so each merged bunk is directly clickable for post-edit.
+            _applyMergedBunkLanes(td, mergedBunks, divName, slotIdx, block, displayText);
+        }
+        else if (isEditable) {
+            td.style.cursor = 'pointer';
             td.onclick = () => {
                 const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
                 if (typeof openIntegratedEditModal === 'function') {
@@ -3570,17 +4305,25 @@ if (bypassStatus.highlight) {
         }
         
         const fieldValue = location ? `${location} – ${activity}` : activity;
+        // Per-cell display-name ALIAS: an optional label shown on the schedule
+        // instead of the real activity (e.g. "Shirt Making" for a Caps Making slot).
+        // _activity stays the real activity so rotation/counting are unaffected.
+        // Kept only when it's a non-empty value that actually differs from the activity.
+        const _dn = (!isClear && opts.displayName && String(opts.displayName).trim()
+            && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+            ? String(opts.displayName).trim() : null;
         slots.forEach((idx, i) => {
-            window.scheduleAssignments[bunk][idx] = { 
-                field: isClear ? 'Free' : fieldValue, 
-                sport: isClear ? null : activity, 
+            window.scheduleAssignments[bunk][idx] = {
+                field: isClear ? 'Free' : fieldValue,
+                sport: isClear ? null : activity,
                 continuation: i > 0,
-                _fixed: !isClear, 
-                _activity: isClear ? 'Free' : activity, 
-                _location: location, 
-                _postEdit: true, 
-                _pinned: shouldPin && !isClear, 
-                _editedAt: Date.now() 
+                _fixed: !isClear,
+                _activity: isClear ? 'Free' : activity,
+                _displayName: _dn,
+                _location: location,
+                _postEdit: true,
+                _pinned: shouldPin && !isClear,
+                _editedAt: Date.now()
             };
         });
         
@@ -3648,10 +4391,7 @@ if (bypassStatus.highlight) {
     // UTILITY: ESCAPE HTML
     // =========================================================================
     
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     // =========================================================================
     // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE
@@ -3680,18 +4420,41 @@ if (bypassStatus.highlight) {
                 }
             }
             if (corruptedBunks.length > 0) {
-                console.warn('[UnifiedSchedule] [BYPASS] Slot count mismatch for ' + corruptedBunks.length + ' bunks — refusing upload:',
-                    corruptedBunks);
-                if (typeof window.showNotification === 'function') {
-                    window.showNotification('Schedule data shape mismatch — save deferred. Refresh recommended.', 'error');
+                // ★ MS-4d: SELF-HEAL instead of refusing. Cross-user merges
+                // can pair a division's content with a different-shaped local
+                // grid (e.g. owner's 10-slot Harmony content vs the
+                // scheduler's 12-slot grid) — the safe padding fixer aligns
+                // them (grow-with-nulls, never truncate real data). Only
+                // refuse if the shapes STILL disagree after the fix.
+                console.warn('[UnifiedSchedule] [BYPASS] Slot count mismatch for ' + corruptedBunks.length + ' bunks — attempting reconcile:', corruptedBunks);
+                try { window.DivisionTimesSystem?.fixAllBunkSlotCounts?.(); } catch (eFix) {}
+                const stillBad = [];
+                for (let i = 0; i < corruptedBunks.length; i++) {
+                    const cb = corruptedBunks[i];
+                    const arr2 = window.scheduleAssignments[cb.bunk];
+                    const divName2 = (typeof getDivisionForBunk === 'function') ? getDivisionForBunk(cb.bunk) : null;
+                    const expected2 = (divName2 && window.divisionTimes?.[divName2]?._perBunkSlots?.[String(cb.bunk)]?.length)
+                                   || window.divisionTimes?.[divName2]?.length
+                                   || (arr2 ? arr2.length : 0);
+                    if (Array.isArray(arr2) && expected2 > 0 && Math.abs(arr2.length - expected2) > 1) {
+                        stillBad.push({ bunk: cb.bunk, expected: expected2, got: arr2.length });
+                    }
                 }
-                return { success: false, error: 'shape-mismatch', corruptedBunks: corruptedBunks };
+                if (stillBad.length > 0) {
+                    console.warn('[UnifiedSchedule] [BYPASS] Shape mismatch persists after reconcile — refusing upload:', stillBad);
+                    if (typeof window.showNotification === 'function') {
+                        window.showNotification('Schedule data shape mismatch — save deferred. Refresh recommended.', 'error');
+                    }
+                    return { success: false, error: 'shape-mismatch', corruptedBunks: stillBad };
+                }
+                console.log('[UnifiedSchedule] [BYPASS] Reconciled — proceeding with save');
             }
         }
         
         // Step 1: Save to localStorage first (immediate backup)
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped write-only `scheduleAssignments_${dateKey}` mirror (never read) —
+            // canonical campDailyData_v1[dateKey] below is the real backup/read path.
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -3921,7 +4684,9 @@ if (bypassStatus.highlight) {
         modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
         overlay.appendChild(modal); 
         document.body.appendChild(overlay);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        let _mdOverlayUnified = false;
+        overlay.addEventListener('mousedown', (e) => { _mdOverlayUnified = (e.target === overlay); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay && _mdOverlayUnified) closeModal(); });
         document.addEventListener('keydown', function escHandler(e) { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } });
         return modal;
     }
@@ -3937,13 +4702,38 @@ if (bypassStatus.highlight) {
         }
         
         const divName = getDivisionForBunk(bunk);
-       const slots = findSlotsForRange(startMin, endMin, divName, bunk);
-        
+
+        // ★ AUTO-MODE SLOT RESOLUTION (gap "+ Add" and cell edit).
+        //   In auto mode the editor is indexed by PER-BUNK slots:
+        //   openIntegratedEditModal reads divisionTimes[div]._perBunkSlots[bunk]
+        //   and scheduleAssignments[bunk] is aligned to it. findSlotsForRange,
+        //   when NO per-bunk slot overlaps the clicked range (a mid-day gap =
+        //   uncovered time), FALLS THROUGH to the division-level slot list and
+        //   returns a DIVISION index — which then points at the WRONG per-bunk
+        //   slot (e.g. click the 11:30 gap → opens the 12:15 swim). So resolve
+        //   strictly against per-bunk slots here, and MATERIALIZE the exact
+        //   clicked range when it's an uncovered gap (the same primitive the
+        //   save flow uses). Manual mode keeps the division-level lookup.
+        const _perBunkSlots = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+        let slots;
+        if (_perBunkSlots && startMin != null && endMin != null) {
+            slots = [];
+            for (let i = 0; i < _perBunkSlots.length; i++) {
+                const s = _perBunkSlots[i];
+                if (!(s.endMin <= startMin || s.startMin >= endMin)) slots.push(i);
+            }
+            if (slots.length === 0) {
+                slots = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin) || [];
+            }
+        } else {
+            slots = findSlotsForRange(startMin, endMin, divName, bunk);
+        }
+
         if (slots.length === 0) {
             alert('Error: Could not find time slots for this block.');
             return;
         }
-        
+
         const slotIdx = slots[0];
         const existingEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
         
@@ -3980,19 +4770,22 @@ if (bypassStatus.highlight) {
         if (!supabase) return;
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
         const userId = window.CampistryDB?.getUserId?.() || null;
-        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        const dateKey = window.currentScheduleDate || window.currentDate || new Date().toISOString().split('T')[0];
         if (!campId) return;
         try {
             const affectedDivisions = new Set();
             const divisions = window.divisions || {};
-            for (const bunk of affectedBunks) { 
-                for (const [divName, divData] of Object.entries(divisions)) { 
-                    if (divData.bunks?.some(b => String(b) === String(bunk))) affectedDivisions.add(divName); 
-                } 
+            for (const bunk of affectedBunks) {
+                for (const [divName, divData] of Object.entries(divisions)) {
+                    if (divData.bunks?.some(b => String(b) === String(bunk))) affectedDivisions.add(divName);
+                }
             }
-            const { data: schedulers } = await supabase.from('camp_users').select('user_id, divisions').eq('camp_id', campId).neq('user_id', userId);
-            if (!schedulers) return;
-            const notifyUsers = schedulers.filter(s => (s.divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
+            // ★ real column is assigned_divisions (selecting `divisions`
+            // errored the query → notifications were never sent)
+            const { data: schedulers } = await supabase.from('camp_users').select('user_id, assigned_divisions').eq('camp_id', campId).neq('user_id', userId);
+            const notifyUsers = (schedulers || []).filter(s => s.user_id && (s.assigned_divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
+            // ★ include the camp owner (not a camp_users row; camp_id is the owner's uid)
+            if (campId && campId !== userId && !notifyUsers.includes(campId)) notifyUsers.push(campId);
             if (notifyUsers.length === 0) return;
             const notifications = notifyUsers.map(targetUserId => ({
                 camp_id: campId, user_id: targetUserId,
@@ -4013,7 +4806,7 @@ if (bypassStatus.highlight) {
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName } = editData;
         const divName = getDivisionForBunk(bunk);
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -4059,18 +4852,18 @@ if (bypassStatus.highlight) {
             if (hasPerBunk && !isClear && startMin != null && endMin != null) {
                 const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
                 if (reshaped.length > 0) {
-                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true);
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName });
                 } else {
-                    applyDirectEdit(bunk, slots, activity, location, isClear, true);
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
                 }
             } else {
-                applyDirectEdit(bunk, slots, activity, location, isClear, true);
+                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
             }
         }
 
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         try {
-            localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped write-only `scheduleAssignments_${currentDate}` mirror (never read).
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
@@ -4140,6 +4933,51 @@ if (bypassStatus.highlight) {
         return result;
     }
 
+    // Scan for facilities reserved by a custom PINNED tile (or hybrid
+    // swim+elective) in the given time range. A pinned tile stores the EVENT
+    // NAME in entry.field/_activity and the REAL facility in _reservedFields[]
+    // (and/or _location). The name-based gates below (checkLocationConflict /
+    // checkFieldAvailableByTime) match only entry.field/_location/_activity, so
+    // a facility reserved via _reservedFields is invisible to them — the picker
+    // would report it as open even though a pin owns it exclusively. Mirrors the
+    // GlobalFieldLocks pinned lock (scheduler_core_main STEP 3) + the free-fill
+    // _fieldPinLocked76 guard. Returns a Set of lowercased reserved field names.
+    function _getPinnedReservedFieldsInTimeRange(startMin, endMin, excludeBunk) {
+        const result = new Set();
+        if (startMin == null || endMin == null) return result;
+        const assignments = window.scheduleAssignments || {};
+        const divisions = window.divisions || {};
+        for (const [divName, divData] of Object.entries(divisions)) {
+            const divSlots = window.divisionTimes?.[divName] || [];
+            for (const bunkName of (divData.bunks || [])) {
+                if (String(bunkName) === String(excludeBunk)) continue;
+                const bunkAssignments = assignments[bunkName];
+                if (!bunkAssignments) continue;
+                const scanLen = Math.max(divSlots.length, bunkAssignments.length);
+                for (let idx = 0; idx < scanLen; idx++) {
+                    const entry = bunkAssignments[idx];
+                    if (!entry || entry.continuation) continue;
+                    // Only custom/pinned/hybrid tiles carry _reservedFields. Normal
+                    // sports/specials store their real field in entry.field, which
+                    // the name-based gates already see — don't over-block those.
+                    const rf = Array.isArray(entry._reservedFields)
+                        ? entry._reservedFields.filter(Boolean) : [];
+                    if (!rf.length) continue;
+                    const slotInfo = divSlots[idx];
+                    const oS = (typeof entry._startMin === 'number') ? entry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+                    const oE = (typeof entry._endMin === 'number') ? entry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+                    if (oS === undefined || oE === undefined) continue;
+                    if (oE <= startMin || oS >= endMin) continue; // no time overlap
+                    rf.forEach(f => result.add(String(f).toLowerCase()));
+                    const loc = (typeof entry._location === 'string' && entry._location.trim())
+                        ? entry._location.trim().toLowerCase() : null;
+                    if (loc) result.add(loc);
+                }
+            }
+        }
+        return result;
+    }
+
     // ── Activity-first field search ─────────────────────────────────────────
     // Returns { open: [{name,capacity,...}], busy: [{name,capacity,conflict,...}] }
     // for fields that support the given activity at the given time range.
@@ -4151,6 +4989,10 @@ if (bypassStatus.highlight) {
         );
         if (matching.length === 0) return { open: [], busy: [], none: true };
         const actProps = getActivityProperties();
+        // Facilities reserved by a custom pinned tile in this window — invisible
+        // to the name-based capacity/conflict gates because a pin files its real
+        // facility under _reservedFields, not entry.field.
+        const pinnedFields = _getPinnedReservedFieldsInTimeRange(startMin, endMin, excludeBunk);
         const open = [], busy = [];
         for (const loc of matching) {
             const props = actProps[loc.name] || actProps[loc.name.toLowerCase()] || {};
@@ -4188,6 +5030,21 @@ if (bypassStatus.highlight) {
                     const comboBlocked = exclusiveFields.some(f => leagueFields.has(f.toLowerCase()));
                     if (comboBlocked) {
                         busy.push({ ...loc, reason: 'league_locked' });
+                        continue;
+                    }
+                }
+
+                // Custom pinned-tile reservation: a pin owns its facility
+                // exclusively for its whole window (nothing else but another pin).
+                const locLowerPin = loc.name.toLowerCase();
+                if (pinnedFields.has(locLowerPin)) {
+                    busy.push({ ...loc, reason: 'pinned_reserved' });
+                    continue;
+                }
+                if (window.FieldCombos?.isInCombo?.(loc.name)) {
+                    const exclusiveFields = window.FieldCombos.getExclusiveFields(loc.name);
+                    if (exclusiveFields.some(f => pinnedFields.has(f.toLowerCase()))) {
+                        busy.push({ ...loc, reason: 'pinned_reserved' });
                         continue;
                     }
                 }
@@ -4432,21 +5289,219 @@ if (bypassStatus.highlight) {
         });
     }
 
+    // ───────────────────────────────────────────────────────────────────────
+    // Auto Change picker (post-edit). Module-level so the live "Auto Change"
+    // button AND window.diagnoseAutoChange() run the EXACT same gate chain —
+    // the diagnostic can never drift from what the button actually does.
+    //
+    // Honors every gate the auto-scheduler enforces, reusing the engine's own
+    // functions instead of re-implementing the rules:
+    //   • calculateRotationPenalty → RotationEngine.calculateRotationScore
+    //     (Infinity = hard-blocked): availableDays weekday gate, frequencyDays
+    //     cooldown, maxUsage (+per-grade), exactFrequency, multiPart,
+    //     rotationCohort, available=false, recency, same-day-before. Ranks too.
+    //   • findFieldsForActivity: capacity & time conflict, access restrictions,
+    //     league locks, field-combo exclusivity.
+    //   • full-day same-day no-repeat; rainy-day gating; bunk/grade access.
+    //
+    // Returns the best {activity, field, penalty} (or null). With opts.verbose,
+    // returns { bunk, divName, slots, startMin, endMin, isRainy, pick, ranked,
+    // candidates } where candidates[] carries each activity's gate verdict.
+    function computeAutoChangeCandidate(bunk, startMin, endMin, opts) {
+        opts = opts || {};
+        const report = [];
+        const divName = getDivisionForBunk(bunk);
+        const hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
+        const result = { bunk, divName, slots, startMin, endMin, isRainy: false, pick: null, ranked: [], candidates: report };
+        if (!slots || slots.length === 0) {
+            result.error = 'no slots resolved for this time range';
+            return opts.verbose ? result : null;
+        }
+
+        const _settings = window.loadGlobalSettings?.() || {};
+        const _app1 = _settings.app1 || {};
+        const _props = getActivityProperties();
+        const _isRainy = window.isRainyDayModeActive?.() || window.isRainyDay === true;
+        result.isRainy = _isRainy;
+
+        // RotationEngine caches "activities done today" per (bunk, slotIndex).
+        // After the user edits this bunk, that cache can be stale, so the very
+        // rotation score we're about to read could carry a phantom same-day
+        // block (an activity the cache thinks is still scheduled today). Drop
+        // this bunk's cache so every candidate is scored against the live day.
+        if (window.RotationEngine?.invalidateBunkTodayCache) {
+            try { window.RotationEngine.invalidateBunkTodayCache(bunk); } catch (_e) {}
+        }
+
+        // Same-day no-repeat across the full day, excluding the slot(s) being edited.
+        const _editedSlots = new Set(slots);
+        const _doneTodayFull = new Set();
+        (window.scheduleAssignments?.[bunk] || []).forEach((entry, i) => {
+            if (!entry || _editedSlots.has(i) || entry.continuation || entry._isTransition) return;
+            const a = (entry._activity || '').toLowerCase().trim();
+            if (a && a !== 'free') _doneTodayFull.add(a);
+        });
+
+        // Rainy-day gate — mirrors findAlternativeForBunk (lines ~5610/5634).
+        function _rainyBlocks(name) {
+            const p = _props[name] || _props[name.toLowerCase()] || {};
+            const sp = window.getSpecialActivityByName?.(name)
+                || (_app1.specialActivities || []).find(s => s.name === name) || {};
+            const rainyOnly = p.rainyDayOnly === true || p.rainyDayExclusive === true
+                || sp.rainyDayOnly === true || sp.rainyDayExclusive === true;
+            if (!_isRainy && rainyOnly) return true;
+            if (_isRainy) {
+                const notRainyOk = p.rainyDayAvailable === false || p.availableOnRainyDay === false || p.isIndoor === false
+                    || sp.rainyDayAvailable === false || sp.availableOnRainyDay === false || sp.isIndoor === false;
+                if (notRainyOk) return true;
+            }
+            return false;
+        }
+
+        // Bunk + grade access gate — mirrors findAlternativeForBunk._isBunkBlockedByAccess.
+        function _accessBlocks(name) {
+            let p = _props[name] || _props[name.toLowerCase()] || {};
+            if (!p.accessRestrictions?.enabled) {
+                const sd = window.getSpecialActivityByName?.(name)
+                    || (_app1.specialActivities || []).find(s => s.name === name);
+                if (sd?.accessRestrictions?.enabled) p = sd; else return false;
+            }
+            const allowed = p.accessRestrictions.divisions || {};
+            if (!(divName in allowed)) return true;
+            const bl = allowed[divName];
+            if (Array.isArray(bl) && bl.length > 0) {
+                const bStr = String(bunk), bNum = parseInt(bunk);
+                if (!bl.some(b => String(b) === bStr || parseInt(b) === bNum)) return true;
+            }
+            return false;
+        }
+
+        const allActivities = [...new Set(getAllLocations().flatMap(l => l.activities || []))].sort();
+        const _seen = new Set();
+        const _cands = [];
+        for (const actName of allActivities) {
+            const al = actName.toLowerCase().trim();
+            if (_seen.has(al)) continue;
+            _seen.add(al);
+            if (!al || al === 'free') continue;
+            if (_doneTodayFull.has(al)) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'already done today' }); continue; }
+            if (_rainyBlocks(actName)) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'rainy-day gate' }); continue; }
+            if (_accessBlocks(actName)) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'access restricted (grade/bunk)' }); continue; }
+            const penalty = calculateRotationPenalty(bunk, actName, slots);
+            if (penalty === Infinity) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'rotation hard-gate (cooldown/availableDays/maxUsage/exactFreq/multiPart/cohort)' }); continue; }
+            const { open, none } = findFieldsForActivity(actName, slots, divName, bunk, startMin, endMin);
+            if (none || open.length === 0) { if (opts.verbose) report.push({ activity: actName, ok: false, reason: 'no open field (capacity/access/league/combo)', penalty }); continue; }
+            const bestField = open.find(f => !f.shared) || open[0];
+            _cands.push({ activity: actName, field: bestField.name, penalty, shared: !!bestField.shared });
+            if (opts.verbose) report.push({ activity: actName, ok: true, reason: bestField.shared ? 'available (shared field)' : 'available', penalty, field: bestField.name });
+        }
+        _cands.sort((a, b) => a.penalty - b.penalty);   // lower rotation score = better
+        result.pick = _cands[0] || null;
+        result.ranked = _cands;
+        return opts.verbose ? result : (_cands[0] || null);
+    }
+
+    // Console diagnostic: verify Auto Change against your live config without
+    // opening the modal. Make a config change → reload → run this → read the
+    // per-activity verdict table.
+    //
+    //   diagnoseAutoChange("נ")               → list that bunk's day (slot times)
+    //   diagnoseAutoChange("נ", 600, 645)      → run gates for 10:00–10:45
+    //   diagnoseAutoChange("נ", "10:00am", "10:45am")  → times as strings
+    window.diagnoseAutoChange = function(bunk, start, end) {
+        if (bunk == null) {
+            console.log('%cdiagnoseAutoChange', 'font-weight:bold', '\n  diagnoseAutoChange("BUNK")                 → list the bunk\'s slots (with times)\n  diagnoseAutoChange("BUNK", 600, 645)        → run gates for that time window\n  diagnoseAutoChange("BUNK", "10:00am", "10:45am")');
+            return;
+        }
+        bunk = String(bunk);
+        const _toMin = (v) => {
+            if (v == null) return null;
+            if (typeof v === 'number') return v;
+            const p = window.SchedulerCoreUtils?.parseTimeToMinutes?.(String(v));
+            return (p == null ? null : p);
+        };
+        const _lbl = (m) => (window.SchedulerCoreUtils?.minutesToTimeLabel?.(m)
+            ?? (m == null ? '?' : `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`));
+
+        // No time window → dump the bunk's day so the user can pick a slot.
+        if (start == null) {
+            const divName = getDivisionForBunk(bunk);
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const times = perBunk || window.divisionTimes?.[divName] || [];
+            const sched = window.scheduleAssignments?.[bunk] || [];
+            const rows = [];
+            for (let i = 0; i < times.length; i++) {
+                const t = times[i] || {};
+                const e = sched[i];
+                if (e && e.continuation) continue;
+                rows.push({ slot: i, time: `${_lbl(t.startMin)}–${_lbl(t.endMin)}`, startMin: t.startMin, endMin: t.endMin, current: e?._activity || (e ? '(empty)' : '—') });
+            }
+            console.log(`%cAuto Change — ${bunk} (${divName}) day. Call diagnoseAutoChange("${bunk}", startMin, endMin) for any row.`, 'font-weight:bold;color:#2563eb');
+            console.table(rows);
+            return rows;
+        }
+
+        const r = computeAutoChangeCandidate(bunk, _toMin(start), _toMin(end), { verbose: true });
+        console.log(`%cAuto Change diagnostic — ${r.bunk} (${r.divName})  ${_lbl(r.startMin)}–${_lbl(r.endMin)}  slots=[${r.slots.join(',')}]  rainy=${r.isRainy}`,
+            'font-weight:bold;color:#2563eb');
+        if (r.error) { console.warn('  ⚠️ ' + r.error); return r; }
+        console.table(r.candidates);
+        if (r.pick) {
+            const fieldTxt = (r.pick.field && r.pick.field !== r.pick.activity) ? ` @ ${r.pick.field}` : '';
+            console.log(`%c  ✅ PICK: ${r.pick.activity}${fieldTxt}  (rotation score ${r.pick.penalty}${r.pick.shared ? ', shared field' : ''})`,
+                'font-weight:bold;color:#16a34a');
+        } else {
+            console.log('%c  ⛔ PICK: none — every activity is gated out (see reasons above).', 'font-weight:bold;color:#dc2626');
+        }
+        return r;
+    };
+
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
         const modal = createModal();
         const locations = getAllLocations();
         const divName = getDivisionForBunk(bunk);
-        let currentActivity = currentValue || '', currentField = '', resolutionChoice = 'notify';
-        const slots = findSlotsForRange(startMin, endMin, divName);
+        const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        let currentActivity = currentValue || '', currentField = '', currentDisplayName = '', resolutionChoice = 'notify';
+        // ★ Pass the bunk in auto mode. Without it findSlotsForRange falls through
+        //   to DIVISION-level slots and returns an index that points at the WRONG
+        //   per-bunk entry — pre-filling the activity box with a stale/foreign
+        //   value, which then filters the activity dropdown down to nothing. For a
+        //   fresh gap this must resolve to the empty materialized slot so the box
+        //   stays blank and the dropdown shows every activity.
+        const slots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
             if (entry) {
                 currentField = fieldLabel(entry.field);
                 currentActivity = entry._activity || currentField || currentValue;
+                currentDisplayName = entry._displayName || '';
             }
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
-        const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+
+        // Field-availability context for the bunk activity report, computed with
+        // the CORRECT per-bunk slots (post_edit's own builder can't resolve those
+        // and would over-report open fields in auto per-bunk mode).
+        const _reportCtx = (() => {
+            const map = {};
+            const norm = window.PostEditReportAvail;
+            for (const loc of locations) {
+                try {
+                    const c = checkLocationConflict(loc.name, slots, bunk);
+                    map[loc.name] = norm ? norm(c)
+                        : { status: c.hasConflict ? (c.canShare ? 'partial' : 'busy') : 'free', usage: c.currentUsage, max: c.maxCapacity, users: [] };
+                } catch (_) { map[loc.name] = { status: 'free', usage: 0, max: 1, users: [] }; }
+            }
+            // Fold in league venues + custom pinned fields (invisible to
+            // checkLocationConflict). Shared with the post_edit report builder.
+            return (typeof window.PostEditReportAugment === 'function')
+                ? window.PostEditReportAugment(bunk, startMin, endMin, locations, map)
+                : { locations, locationAvailMap: map };
+        })();
+
+        // Auto Change runs the module-level computeAutoChangeCandidate (shared
+        // with window.diagnoseAutoChange so the diagnostic never drifts).
 
         modal.innerHTML = `
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
@@ -4457,14 +5512,26 @@ if (bypassStatus.highlight) {
                 <span style="font-weight:600;color:#374151;">${escapeHtml(bunk)}</span>
                 <span style="color:#6b7280;margin-left:8px;">${minutesToTimeLabel(startMin)} – ${minutesToTimeLabel(endMin)}</span>
             </div>
+            ${window.PostEditReport?.panelHtml?.(bunk, divName, startMin, endMin, currentActivity, _reportCtx) || ''}
             <div style="display:flex;flex-direction:column;gap:14px;">
                 <div>
                     <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">What activity?</label>
-                    <input type="text" id="post-edit-activity" list="post-edit-activity-list"
-                        value="${escapeHtml(currentActivity)}" placeholder="e.g., Basketball"
-                        style="width:100%;padding:10px 12px;border:1.5px solid #6366f1;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;">
-                    <datalist id="post-edit-activity-list">${allActivities.map(a => `<option value="${escapeHtml(a)}">`).join('')}</datalist>
-                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Type an activity — the system will find a free court. Enter CLEAR to empty.</div>
+                    <select id="post-edit-activity"
+                        style="width:100%;padding:10px 12px;border:1.5px solid #6366f1;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;cursor:pointer;">
+                        <option value="">— Choose an activity —</option>
+                        ${(currentActivity && currentActivity.toLowerCase() !== 'free' && !allActivities.includes(currentActivity))
+                            ? `<option value="${escapeHtml(currentActivity)}" selected>${escapeHtml(currentActivity)} (current)</option>` : ''}
+                        ${allActivities.map(a => `<option value="${escapeHtml(a)}" ${a === currentActivity ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('')}
+                        <option value="Free">— Leave empty (Free) —</option>
+                    </select>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court.</div>
+                </div>
+                <div>
+                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">Display name <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <input id="post-edit-display-name" type="text" value="${escapeHtml(currentDisplayName)}"
+                        placeholder="e.g. Shirt Making"
+                        style="width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;" />
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shown on the schedule instead of the activity name. Still counts as the chosen activity. Leave blank to use the real name.</div>
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -4476,7 +5543,8 @@ if (bypassStatus.highlight) {
                     </select>
                 </details>
                 <div id="post-edit-conflict" style="display:none;"></div>
-                <div style="display:flex;gap:10px;margin-top:12px;">
+                <button id="post-edit-autochange" style="width:100%;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;margin-top:4px;">⚡ Auto Change</button>
+                <div style="display:flex;gap:10px;margin-top:10px;">
                     <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
                 </div>
@@ -4484,6 +5552,28 @@ if (bypassStatus.highlight) {
 
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
+
+        document.getElementById('post-edit-autochange').onclick = () => {
+            const pick = computeAutoChangeCandidate(bunk, startMin, endMin);
+            if (!pick) {
+                showIntegratedToast('No suitable activity found — all options are unavailable or already done today.', 'warning', 3500);
+                return;
+            }
+            const _autoSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
+            const _fieldVal = (pick.field && pick.field !== pick.activity) ? pick.field : null;
+            const _cc = _fieldVal ? checkLocationConflict(_fieldVal, _autoSlots, bunk) : null;
+            closeModal();
+            onSave({
+                activity: pick.activity, location: _fieldVal,
+                startMin, endMin,
+                hasConflict: !!_cc?.hasConflict,
+                conflicts: _cc?.conflicts || [],
+                editableConflicts: _cc?.editableConflicts || [],
+                nonEditableConflicts: _cc?.nonEditableConflicts || [],
+                resolutionChoice: 'notify'
+            });
+            showIntegratedToast('Auto-filled: ' + pick.activity, 'success', 3000);
+        };
 
         const locationSelect = document.getElementById('post-edit-location');
         const conflictArea  = document.getElementById('post-edit-conflict');
@@ -4502,11 +5592,11 @@ if (bypassStatus.highlight) {
                 let html = allAutoResolvable && !conflictCheck.globalLock
                     ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
                     : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
-                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">Can auto-reassign: ${editableBunks.join(', ')}</div>`;
-                if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.join(', ')}</div>
+                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">Can auto-reassign: ${editableBunks.map(escapeHtml).join(', ')}</div>`;
+                if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.map(escapeHtml).join(', ')}</div>
                     <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
-                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & warn them</div></div></label>
-                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">Bypass & reassign</div><div style="font-size:0.75rem;color:#6b7280;">Override and use smart regeneration</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">Override &amp; flag the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflicting activity is flagged and they're notified</div></div></label>
+                        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">Override &amp; reschedule the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflict is auto-rescheduled and they're notified</div></div></label>
                     </div>`;
                 html += '</div>';
                 conflictArea.innerHTML = html;
@@ -4519,7 +5609,6 @@ if (bypassStatus.highlight) {
         }
 
         // ── Activity-first field search ───────────────────────────────────────
-        let _searchTimer;
         function runActivitySearch() {
             const actVal = actInput.value.trim();
             const isClear = !actVal || ['clear','free'].includes(actVal.toLowerCase());
@@ -4543,7 +5632,7 @@ if (bypassStatus.highlight) {
                 }).join('');
                 const busyNote = busy.length > 0
                     ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => {
-                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : 'in use';
+                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
                         return escapeHtml(b.name) + ' <span style="opacity:0.7">(' + reason + ')</span>';
                     }).join(', ')}</div>`
                     : '';
@@ -4590,11 +5679,21 @@ if (bypassStatus.highlight) {
             }
         }
 
-        actInput.addEventListener('input', () => {
-            clearTimeout(_searchTimer);
-            _searchTimer = setTimeout(runActivitySearch, 380);
-        });
+        // #post-edit-activity is a <select> — react to selection changes directly.
+        // (It used to be a text input + <datalist>, which would not reliably reopen
+        //  after the first use; a real dropdown opens every time.)
+        actInput.addEventListener('change', runActivitySearch);
         locationSelect.addEventListener('change', () => renderConflictArea(locationSelect.value));
+
+        // Live-refresh the bunk activity report to reflect the selected activity.
+        function refreshBunkReport() {
+            const body = document.getElementById('post-edit-report-body');
+            if (!body || !window.PostEditReport?.bodyHtml) return;
+            body.innerHTML = window.PostEditReport.bodyHtml(bunk, divName, startMin, endMin, actInput.value, _reportCtx);
+            // panelHtml scheduled the async cloud load on open; a plain re-render
+            // here (on activity change) reuses whatever cloud snapshot is cached.
+        }
+        actInput.addEventListener('change', refreshBunkReport);
 
         // Run search on open if there's already an activity set
         if (currentActivity && currentActivity.toLowerCase() !== 'free') {
@@ -4606,22 +5705,22 @@ if (bypassStatus.highlight) {
         document.getElementById('post-edit-save').onclick = () => {
             const activity = actInput.value.trim();
             const location = locationSelect.value;
+            const displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
             if (!activity) { alert('Please enter an activity name.'); return; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, startMin, endMin, hasConflict: true,
+                onSave({ activity, location, displayName, startMin, endMin, hasConflict: true,
                     conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, startMin, endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName, startMin, endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };
         actInput.focus();
-        actInput.select();
     }
 
     // =========================================================================
@@ -4891,6 +5990,11 @@ if (bypassStatus.highlight) {
         const app1 = settings.app1 || {};
         const fieldsBySport = settings.fieldsBySport || {};
         const disabledFields = window.currentDisabledFields || [];
+        // ★ Config-level shut-off (Facilities AVAILABLE/UNAVAILABLE toggle). Fields
+        //   are already guarded inline (field.available === false) below, but the
+        //   fieldsBySport sport loop and the special loops were not — a disabled
+        //   field can sit in fieldsBySport, and disabled specials were never gated.
+        const _unavailFields = new Set((app1.fields || []).filter(f => f && f.available === false).map(f => f.name));
 
         // Pre-compute league fields and time range for this slot window
         const divSlots = window.divisionTimes?.[divName] || [];
@@ -5030,6 +6134,7 @@ if (bypassStatus.highlight) {
             // Also add specials
             for (const special of (app1.specialActivities || [])) {
                 if (!special.name) continue;
+                if (special.available === false) continue;
                 if (excludeSet.has(special.name) || disabledSet.has(special.name)) continue;
                 if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(special.name, slots, divName)) continue;
                 if (_isFieldBlockedByLeagueOrCombo(special.name)) continue;
@@ -5076,6 +6181,7 @@ if (bypassStatus.highlight) {
 
             (sportFields || []).forEach(fName => {
                 if (excludeSet.has(fName)) return;
+if (_unavailFields.has(fName)) return;
 if (disabledFields.includes(fName)) return;
 if (window.GlobalFieldLocks?._initialized && window.GlobalFieldLocks.isFieldLocked(fName, slots, divName)) return;
 if (_isFieldBlockedByLeagueOrCombo(fName)) return;
@@ -5105,6 +6211,7 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
        (app1.specialActivities || []).forEach(special => {
             if (!special.name) return;
+            if (special.available === false) return;
             if (_doneToday.has(special.name.toLowerCase().trim())) return;
             if (excludeSet.has(special.name)) return;
             if (disabledFields.includes(special.name)) return;
@@ -5198,6 +6305,15 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
 
    function openIntegratedEditModal(bunk, slotIdx, existingEntry = null) {
         closeIntegratedEditModal();
+
+        // ★ League / specialty-league game → field-change modal (the normal
+        //   activity-edit flow can't reach the field: it lives inside the matchup
+        //   strings, not entry.field). Route to PostEditFieldChange instead.
+        const _leagueEntry = existingEntry || (window.scheduleAssignments?.[bunk]?.[slotIdx]);
+        if (window.PostEditFieldChange?.isLeagueEntry?.(_leagueEntry)) {
+            window.PostEditFieldChange.openFromEntry(bunk, slotIdx, _leagueEntry);
+            return;
+        }
 
         const divName = getDivisionForBunk(bunk);
         const bunksInDivision = getBunksForDivision(divName);
@@ -5465,16 +6581,18 @@ function minutesToTimeString(mins) {
             <div style="display: grid; gap: 14px;">
                 <div>
                     <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">What activity?</label>
-                    <input type="text" id="multi-edit-activity" placeholder="e.g., Basketball, Soccer…"
-                        style="width: 100%; padding: 10px; border: 1.5px solid #6366f1; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem;">
-                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Type an activity — the system will find a free court for all bunks.</div>
+                    <select id="multi-edit-activity"
+                        style="width: 100%; padding: 10px; border: 1.5px solid #6366f1; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem; background:white; cursor:pointer;">
+                        <option value="">— Choose an activity —</option>
+                    </select>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court for all bunks.</div>
                 </div>
                 <div id="multi-field-result" style="display:none;"></div>
                 <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
                     <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">Override field manually</summary>
                     <select id="multi-edit-location" style="width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; margin-top:8px; box-sizing:border-box;">
                         <option value="">-- No specific field --</option>
-                        ${allLocations.map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
+                        ${allLocations.filter(loc => loc.type === 'field' || loc.type === 'special').map(loc => `<option value="${loc.name}">${escapeHtml(loc.name)}</option>`).join('')}
                     </select>
                 </details>
                 <div id="multi-conflict-preview" style="display: none;"></div>
@@ -5510,12 +6628,12 @@ function minutesToTimeString(mins) {
         const multiActInput = document.getElementById('multi-edit-activity');
         const multiFieldResult = document.getElementById('multi-field-result');
         if (multiActInput) {
+            // #multi-edit-activity is a <select> — fill it with the activity options
+            // (a real dropdown reopens every time; the old <datalist> did not).
             const allMultiActs = [...new Set(allLocations.flatMap(l => l.activities || []))].sort();
-            const multiDl = document.createElement('datalist');
-            multiDl.id = 'multi-edit-activity-list';
-            multiDl.innerHTML = allMultiActs.map(a => `<option value="${escapeHtml(a)}">`).join('');
-            multiActInput.setAttribute('list', 'multi-edit-activity-list');
-            multiActInput.after(multiDl);
+            multiActInput.insertAdjacentHTML('beforeend',
+                allMultiActs.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('') +
+                `<option value="Free">— Leave empty (Free) —</option>`);
 
             const { slots: ctxSlots, divName: ctxDiv, timeStartMin: ctxStart, timeEndMin: ctxEnd, isAutoMode: ctxAuto } = _multiBunkEditContext;
             // Use representative slots from first bunk for the search
@@ -5523,7 +6641,6 @@ function minutesToTimeString(mins) {
                 ? findSlotsForRange(ctxStart, ctxEnd, ctxDiv, bunks[0])
                 : (ctxSlots || []);
 
-            let multiSearchTimer;
             function runMultiActivitySearch() {
                 const actVal = multiActInput.value.trim();
                 if (!actVal || ['clear','free'].includes(actVal.toLowerCase())) {
@@ -5587,10 +6704,7 @@ function minutesToTimeString(mins) {
                 }
             }
 
-            multiActInput.addEventListener('input', () => {
-                clearTimeout(multiSearchTimer);
-                multiSearchTimer = setTimeout(runMultiActivitySearch, 380);
-            });
+            multiActInput.addEventListener('change', runMultiActivitySearch);
             if (multiLocSel) multiLocSel.addEventListener('change', () => {
                 if (multiLocSel.value) {
                     previewMultiBunkEdit();
@@ -6407,8 +7521,8 @@ if (softBlocks.length > 0) {
 
             if (!schedulers) return;
 
-            const notifyUsers = schedulers.filter(s => 
-                (s.divisions || []).some(d => proposal.affected_divisions.includes(d))
+            const notifyUsers = schedulers.filter(s =>
+                (s.assigned_divisions || s.divisions || []).some(d => proposal.affected_divisions.includes(d))
             ).map(s => s.user_id);
 
             if (notifyUsers.length === 0) return;
@@ -6841,6 +7955,7 @@ if (softBlocks.length > 0) {
                 let data = selected.schedule_data; 
                 if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
                 window.scheduleAssignments = data.scheduleAssignments || data;
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with loaded version (cross-date guard)
                 // Phase 4: restore segments from the version, or rebuild from assignments.
                 if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
                     window.scheduleSegments = data.scheduleSegments;
@@ -6887,6 +8002,7 @@ if (softBlocks.length > 0) {
                     if (scheduleData.divisionTimes) latestDivisionTimes = scheduleData.divisionTimes;
                 });
                 window.scheduleAssignments = mergedAssignments;
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with merged versions (cross-date guard)
                 if (Object.keys(mergedSegments).length > 0) {
                     window.scheduleSegments = mergedSegments;
                 } else {
@@ -6899,6 +8015,36 @@ if (softBlocks.length > 0) {
                 alert(`Merged ${versions.length} versions (${bunksTouched.size} bunks).`);
                 return { success: true, count: versions.length, bunks: bunksTouched.size };
             } catch (err) { alert('Error: ' + err.message); return { success: false }; }
+        },
+        // Restore a specific saved version by its id (used by the Saved Schedules table UI).
+        // Unlike loadVersion(), this takes no user prompt and (by default) snapshots the
+        // current live schedule first, so an accidental restore is itself recoverable.
+        async restoreVersionById(versionId, { snapshotFirst = true } = {}) {
+            const dateKey = getDateKey();
+            if (!dateKey || !window.ScheduleVersionsDB) { return { success: false, error: 'Version database not available.' }; }
+            try {
+                const row = await window.ScheduleVersionsDB.getVersion(versionId);
+                if (!row) return { success: false, error: 'Saved schedule not found.' };
+                // Safety net: capture the current live state before overwriting it.
+                if (snapshotFirst && Object.keys(window.scheduleAssignments || {}).length > 0) {
+                    const stamp = new Date().toLocaleString();
+                    try { await this.saveVersion(`Auto-backup before restore (${stamp})`, { silent: true }); } catch (_e) {}
+                }
+                let data = row.schedule_data;
+                if (typeof data === 'string') { try { data = JSON.parse(data); } catch (_e) {} }
+                window.scheduleAssignments = data.scheduleAssignments || data;
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with loaded version (cross-date guard)
+                if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
+                    window.scheduleSegments = data.scheduleSegments;
+                } else {
+                    try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+                }
+                if (data.leagueAssignments) window.leagueAssignments = data.leagueAssignments;
+                if (data.divisionTimes) window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
+                saveSchedule();
+                updateTable();
+                return { success: true, name: row.name };
+            } catch (err) { return { success: false, error: err.message }; }
         }
     };
 
@@ -7047,6 +8193,16 @@ window.submitMultiBunkEdit = submitMultiBunkEdit;
     window.checkLocationConflict = checkLocationConflict;
     window.checkCrossDivisionConflict = checkCrossDivisionConflict;
     window.getAllLocations = getAllLocations;
+    // Exposed for PostEditFieldChange: reuse the generator's own field finder
+    // (hosts-the-sport → grade access → league-lock + capacity/time) so the
+    // post-edit field picker offers exactly the fields the solver would allow.
+    window.findFieldsForActivity = findFieldsForActivity;
+
+    // League/pinned field usage (invisible to checkLocationConflict, which only
+    // scans normal entry.field). The bunk activity report uses these to include
+    // league venues + custom pinned facilities in its Open/In-use sections.
+    window.getLeagueFieldsInTimeRange = _getLeagueFieldsInTimeRange;
+    window.getPinnedReservedFieldsInTimeRange = _getPinnedReservedFieldsInTimeRange;
 
     // Smart regeneration
     window.smartRegenerateConflicts = smartRegenerateConflicts;
@@ -7130,6 +8286,7 @@ window.clearMyBypassHighlights = clearMyBypassHighlights;
         findSlotsForRange,
         getLeagueMatchups, 
         getEntryForBlock,
+        getSkeleton,
         getDivisionForBunk,
         getSlotTimeRange,
         buildDivisionTimesFromSkeleton, 

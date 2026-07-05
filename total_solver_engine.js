@@ -237,12 +237,16 @@
             var fieldProps = props[fieldName] || _storedFieldProps[fieldName] || {};
             if (!fieldProps.sharableWith && !fieldProps.sharable && _storedFieldProps[fieldName]) fieldProps = _storedFieldProps[fieldName];
 
-            var capacity = 1, sharingType = 'not_sharable', prefList = null, prefExclusive = false;
+            var capacity = 1, sharingType = 'not_sharable', prefList = null, prefExclusive = false, allowedPairs = null;
             if (fieldProps.sharableWith) {
                 var sw = fieldProps.sharableWith;
                 if (sw.type === 'not_sharable') { capacity = parseInt(sw.capacity) || 1; sharingType = 'not_sharable'; }
                 else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
                 else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
+                // ★ cross_division ("Grade Pairs"): honor the manual builder the same as auto —
+                //   cross-grade sharing is allowed ONLY for grade pairs the user enabled
+                //   (allowedPairs); same-grade always shares; capacity caps total bunks.
+                else if (sw.type === 'cross_division') { capacity = parseInt(sw.capacity) || 999; sharingType = 'cross_division'; allowedPairs = sw.allowedPairs || {}; }
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
                 else { capacity = 2; sharingType = 'same_division'; }
@@ -266,10 +270,14 @@
             //   re-traversing fieldProps on every candidate evaluation.
             var accessRestrictionsCache = null;
             if (fieldProps.accessRestrictions && fieldProps.accessRestrictions.enabled === true) {
-                accessRestrictionsCache = {
-                    enabled: true,
-                    divisions: fieldProps.accessRestrictions.divisions || {}
-                };
+                var _arDivs = fieldProps.accessRestrictions.divisions || {};
+                // ★ Day 11 parity (#V2-15): enabled with EMPTY divisions = misconfig (toggle on,
+                //   no grades picked) → treat as NO restriction, matching auto_solver_engine
+                //   (L134-140). Otherwise the hard-constraint check below returns 999999 for
+                //   EVERY grade, making the field unusable in MANUAL only (auto leaves it open).
+                if (Object.keys(_arDivs).length > 0) {
+                    accessRestrictionsCache = { enabled: true, divisions: _arDivs };
+                }
             }
 
             // ★ Cache timeRules (split by type) so the hard constraint can fire
@@ -303,7 +311,7 @@
                 }
             }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, allowedPairs: allowedPairs, prefList: prefList, prefExclusive: prefExclusive, gradeShareRules: (fieldProps.gradeShareRules && typeof fieldProps.gradeShareRules === 'object' && Object.keys(fieldProps.gradeShareRules).length > 0) ? fieldProps.gradeShareRules : null, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
             if (unavailableRulesCache || availableRulesCache) {
                 v12Log('[TIME-RULES] Cached ' + (unavailableRulesCache ? unavailableRulesCache.length : 0) + ' unavailable + ' + (availableRulesCache ? availableRulesCache.length : 0) + ' available rules for "' + fieldName + '"');
             }
@@ -320,11 +328,18 @@
                 var spec = storedSpecials[si2];
                 if (!spec || !spec.name || _fieldPropertyMap.has(spec.name)) continue;
                 var specSW = spec.sharableWith || {};
-                var specCap = 1, specST = 'not_sharable';
+                var specCap = 1, specST = 'not_sharable', specPairs = null;
                 if (specSW.type === 'same_division') { specCap = parseInt(specSW.capacity) || 2; specST = 'same_division'; }
+                else if (specSW.type === 'cross_division') { specCap = parseInt(specSW.capacity) || 999; specST = 'cross_division'; specPairs = specSW.allowedPairs || {}; }
                 else if (specSW.type === 'custom') { specCap = parseInt(specSW.capacity) || 2; specST = 'custom'; }
                 else if (specSW.type === 'all') { specCap = parseInt(specSW.capacity) || 999; specST = 'all'; }
-                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true });
+                // ★ minBunks floor (sharableWith.minBunks) — the co-attendance MIN
+                //   used by the scorer's co-attendance nudge (calculatePenaltyCost) and
+                //   STEP 7.63. 0 for not_sharable / unset; clamped to [2, capacity].
+                var specMin = parseInt(specSW.minBunks) || 0;
+                if (specST === 'not_sharable') specMin = 0;
+                else if (specMin > 0) { if (specMin < 2) specMin = 0; else if (specMin > specCap) specMin = specCap; }
+                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, allowedPairs: specPairs, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true, _minBunks: specMin });
                 specialsAdded++;
             }
             if (specialsAdded > 0) v12Log('Added ' + specialsAdded + ' specials to _fieldPropertyMap');
@@ -364,19 +379,30 @@
 
         var divisions = window.divisions || {};
         var divNames = Object.keys(divisions);
+        // ★ FN-51: seniority from the canonical age order (Camp Structure order
+        //   + the Me page's "Grade age order" direction) — index 0 = most
+        //   senior. The old grade-number extraction fell back to ALPHABETICAL
+        //   for named grades (Minors/Soloists/Majors), which made seniority
+        //   meaningless. Legacy numeric heuristic kept only as the fallback
+        //   when the helper isn't loaded (node tests).
         var divWithNumbers = [];
-        for (var di = 0; di < divNames.length; di++) {
-            var dn = divNames[di];
-            var m = String(dn).toLowerCase().trim().match(/(\d+)/);
-            var gradeNum = m ? parseInt(m[1], 10) : null;
-            divWithNumbers.push({ name: dn, gradeNum: gradeNum });
+        if (typeof window.getDivisionAgeOrder === 'function') {
+            var _oldFirst = window.getDivisionAgeOrder(divNames);
+            divWithNumbers = _oldFirst.map(function (n) { return { name: n }; });
+        } else {
+            for (var di = 0; di < divNames.length; di++) {
+                var dn = divNames[di];
+                var m = String(dn).toLowerCase().trim().match(/(\d+)/);
+                var gradeNum = m ? parseInt(m[1], 10) : null;
+                divWithNumbers.push({ name: dn, gradeNum: gradeNum });
+            }
+            divWithNumbers.sort(function(a, b) {
+                if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
+                if (a.gradeNum !== null) return -1;
+                if (b.gradeNum !== null) return 1;
+                return a.name.localeCompare(b.name);
+            });
         }
-        divWithNumbers.sort(function(a, b) {
-            if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
-            if (a.gradeNum !== null) return -1;
-            if (b.gradeNum !== null) return 1;
-            return a.name.localeCompare(b.name);
-        });
         for (var si = 0; si < divWithNumbers.length; si++) {
             _divisionSeniorityMap[divWithNumbers[si].name] = si;
         }
@@ -479,12 +505,49 @@
         return result;
     };
 
+    // ★ Mirror auto's isCrossDivAllowed (scheduler_core_auto.js): a grade may join a
+    //   shared field only if, for EVERY grade already present, the sorted pair key
+    //   "A|B" is in allowedPairs. Same-grade always shares its own bunks. Absent/empty
+    //   pairs → only same-grade (so a cross_division field with no cross pairs behaves
+    //   exactly like same_division — no behavior change for the common/default case).
+    function isCrossDivAllowedManual(newGrade, existingGrades, allowedPairs) {
+        var pairs = allowedPairs || {};
+        if (!existingGrades || existingGrades.length === 0) return true;
+        for (var _ica = 0; _ica < existingGrades.length; _ica++) {
+            var eg = existingGrades[_ica];
+            if (!eg || eg === newGrade) continue;
+            if (!pairs[[String(newGrade), String(eg)].sort().join('|')]) return false;
+        }
+        return true;
+    }
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
+        // ★ Player-max co-occupancy gate — applies to every sharing type (runs before
+        //   the cross/same-division logic so an over-max share is rejected regardless).
+        var _pmShare = checkSharedPlayerMaxConflict(fieldNorm, startMin, endMin, excludeBunk);
+        if (_pmShare) return _pmShare;
         // Check the field itself
         var entries = _fieldTimeIndex.get(fieldNorm);
-        if (entries) {
+        // ★ cross_division ("Grade Pairs"): honor the manual builder like auto —
+        //   cross-grade co-occupancy is ALLOWED for the grade pairs the user enabled
+        //   (allowedPairs), capped by total capacity; only non-allowed pairs / over-cap
+        //   block. (same_division/not_sharable/etc. still block ALL cross-grade below.)
+        var _xfp = _fieldPropertyMap.get(fieldName);
+        if (_xfp && _xfp.sharingType === 'cross_division') {
+            if (entries) {
+                var _xUpper = findFirstOverlapIndex(entries, startMin, endMin);
+                var _xGrades = [], _xCount = 0;
+                for (var _xi = 0; _xi < _xUpper; _xi++) {
+                    var _xe = entries[_xi];
+                    if (_xe.bunk === excludeBunk) continue;
+                    if (_xe.endMin > startMin) { _xGrades.push(_xe.divName); _xCount++; }
+                }
+                if (_xfp.capacity && _xCount >= _xfp.capacity) return { conflictingDiv: '(capacity)', capacity: _xfp.capacity, count: _xCount, ourTime: startMin + '-' + endMin };
+                if (!isCrossDivAllowedManual(blockDivName, _xGrades, _xfp.allowedPairs)) return { conflictingDiv: '(pair-not-allowed)', grades: _xGrades, ourTime: startMin + '-' + endMin };
+            }
+            // allowed (or no overlap) → no cross-division conflict; still check combos below.
+        } else if (entries) {
             var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
             for (var i = 0; i < upperBound; i++) {
                 var e = entries[i];
@@ -515,6 +578,37 @@
         var count = 0, upperBound = findFirstOverlapIndex(entries, startMin, endMin);
         for (var i = 0; i < upperBound; i++) { var e = entries[i]; if (e.divName !== divisionName) continue; if (e.bunk === excludeBunk) continue; if (e.endMin > startMin) count++; }
         return count;
+    }
+    // ★ Player-max co-occupancy gate. Field-sharing rules cap how many BUNKS share a
+    //   field (capacity); this caps the combined PLAYERS. When a bunk joins a field
+    //   where the same sport is already being played, the total campers across all
+    //   sharers must not blow past the sport's maxPlayers. Grace is absolute (max+2):
+    //   max is the target, max+1 is a small grace, max+2 is the desperate ceiling,
+    //   max+3+ is blocked — e.g. Football max 24 allows up to 26 but blocks 28. Only
+    //   fires when ≥1 OTHER bunk is already on the field — a lone bunk that is itself
+    //   over max is unavoidable (you can't split a bunk) and is never blocked here.
+    function checkSharedPlayerMaxConflict(fieldNorm, startMin, endMin, excludeBunk) {
+        if (_sportPlayerReqs.size === 0 || startMin === undefined || endMin === undefined) return null;
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return null;
+        var upper = findFirstOverlapIndex(entries, startMin, endMin);
+        var act = null, others = 0, count = 0;
+        for (var i = 0; i < upper; i++) {
+            var e = entries[i];
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin <= startMin) continue;
+            if (!e.activityName) continue;
+            if (act === null) act = e.activityName;
+            else if (e.activityName !== act) continue;
+            others += (_bunkSizeCache.get(e.bunk) || 0);
+            count++;
+        }
+        if (count === 0 || !act) return null;
+        var req = _sportPlayerReqs.get(act);
+        if (!req || !req.max || req.max <= 0) return null;
+        var combined = others + (_bunkSizeCache.get(excludeBunk) || 0);
+        if (combined > req.max + 2) return { conflictingDiv: '(player-max)', sport: act, combined: combined, max: req.max, ourTime: startMin + '-' + endMin };
+        return null;
     }
     function checkSameFieldActivityMismatch(fieldName, startMin, endMin, activityName, excludeBunk) {
         if (!activityName || activityName === 'Free' || activityName === 'free') return null;
@@ -646,8 +740,14 @@
         var options = [], seenKeys = new Set();
         var disabledFields = window.currentDisabledFields || config.disabledFields || [];
         var disabledSet = new Set(disabledFields);
+        // ★ Config-level shut-off set: fields toggled UNAVAILABLE in Facilities.
+        //   The fieldsBySport loop below reads loadAndFilterData(), a separate
+        //   source that must be gated the same way as masterFields.
+        var unavailFieldSet = new Set((config.masterFields || []).filter(function(f){ return f && f.available === false; }).map(function(f){ return f.name; }));
         config.masterFields?.forEach(function(f) {
             if (disabledSet.has(f.name)) return;
+            // ★ Config-level shut-off: field toggled UNAVAILABLE in Facilities.
+            if (f.available === false) return;
             (f.activities || []).forEach(function(sport) {
                 var key = f.name + '|' + sport;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: f.name, sport: sport, activityName: sport, type: 'sport', _fieldNorm: normName(f.name), _actNorm: normName(sport) }); }
@@ -655,8 +755,45 @@
         });
         config.masterSpecials?.forEach(function(s) {
             if (!s.name || disabledSet.has(s.name)) return;
+            // ★ Config-level shut-off: special toggled UNAVAILABLE in Facilities.
+            if (s.available === false) return;
+            // ★ Force + min-bunks specials (e.g. the lake: "always run it" + "min 2
+            //   together") are placed EXCLUSIVELY by the manual generator's
+            //   force-placement pass (scheduler_core_main STEP 7.64), which seats
+            //   ONE proper session (>= minBunks) on the most-due bunks. If the
+            //   opportunistic solver also placed them, it scattered lonely copies
+            //   across other windows that STEP 7.63 then had to drop — and in a
+            //   packed schedule a dropped bunk can be left with a blank period.
+            //   Excluding them here removes that churn at the root: the solver
+            //   fills those bunks with normal sports (never blanks) and 7.64 does
+            //   the placing. MANUAL only — the auto path has no 7.64, so keep the
+            //   candidate there. Tightly gated (force + min>=2) → no effect on any
+            //   other special.
+            var _swMB = s.sharableWith || {};
+            if (s.forcePlacement === true && (parseInt(_swMB.minBunks, 10) || 0) >= 2
+                && window._daBuilderMode !== 'auto') {
+                return;
+            }
             var key = s.name + '|special';
-            if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: s.name, sport: null, activityName: s.name, type: 'special', _fieldNorm: normName(s.name), _actNorm: normName(s.name), _fullGrade: s.fullGrade === true }); }
+            if (seenKeys.has(key)) return;
+            seenKeys.add(key);
+            // ★ Register the special under its PHYSICAL host facility, not its own
+            //   name. When a special's location is a shared field (e.g. "Dodgeball"
+            //   on "Baseball Turf", which also hosts the sport "Baseball"), filing the
+            //   candidate's `field` as the special name left the field-time occupancy
+            //   index blind to the overlap — so a sport double-booked the very turf the
+            //   special was on. Using the real location makes the capacity / cross-
+            //   division gate (applyPickToSchedule) and the occupancy index see the
+            //   special and any sport on that field as sharing the SAME facility.
+            //   `activityName`/`_actNorm` stay the special's name (rotation, same-day-
+            //   repeat, tile-kind are all unchanged). Self-hosted specials whose
+            //   location == name (e.g. Gaga, Playground) resolve to the same value, so
+            //   their behaviour is identical to before.
+            var _loc = (s.location && String(s.location).trim())
+                ? String(s.location).trim()
+                : (window.getLocationForActivity ? (window.getLocationForActivity(s.name) || s.name) : s.name);
+            if (disabledSet.has(_loc)) return;
+            options.push({ field: _loc, sport: null, activityName: s.name, type: 'special', _fieldNorm: normName(_loc), _actNorm: normName(s.name), _fullGrade: s.fullGrade === true });
         });
         var loadedData = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
         var fieldsBySport = loadedData.fieldsBySport || {};
@@ -664,6 +801,7 @@
             (fieldsBySport[sportKey] || []).forEach(function(fieldName) {
                 if (isSportName(fieldName)) return;
                 if (disabledSet.has(fieldName)) return;
+                if (unavailFieldSet.has(fieldName)) return;
                 var key = fieldName + '|' + sportKey;
                 if (!seenKeys.has(key)) { seenKeys.add(key); options.push({ field: fieldName, sport: sportKey, activityName: sportKey, type: 'sport', _fieldNorm: normName(fieldName), _actNorm: normName(sportKey) }); }
             });
@@ -758,7 +896,13 @@
                     _assignedSpecial: pick._type === 'special' ? (pick._activity || pick.field) : null,
                     _specialLocation: pick._type === 'special' ? pick.field : null
                 };
-                if (!window.SchedulingRules.isCandidateAllowed(_cdCand, _cdTemplate, { mode: 'auto' })) {
+                // ★ FIX: pass the ACTUAL builder mode (was hardcoded 'auto'). The manual
+                //   builder runs with _daBuilderMode='manual'; isCandidateAllowed only
+                //   applies a cooldown rule when rule.mode is 'both' OR equals the call
+                //   mode (rules.js L177-178). So a user's mode:'manual' cooldown rule was
+                //   silently skipped in the manual builder. Now manual passes 'manual' →
+                //   'manual'+'both' rules enforced; auto-reached calls still pass 'auto'.
+                if (!window.SchedulingRules.isCandidateAllowed(_cdCand, _cdTemplate, { mode: (window._daBuilderMode === 'auto') ? 'auto' : 'manual' })) {
                     return 999999;
                 }
             }
@@ -768,6 +912,14 @@
             var fp = _fieldPropertyMap.get(fieldName);
             var sType = fp ? fp.sharingType : getSharingType(fieldName);
             var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
+            // ★ PER-GRADE SHARING OVERRIDE (gradeShareRules): a field can TIGHTEN or
+            //   LOOSEN sharing for a specific division (e.g. base same_division/cap2 but
+            //   Minors→not_sharable, or base not_sharable but Majors→same_division/cap3).
+            //   Mirrors canBlockFit (scheduler_core_utils.js L905-911). Apply BEFORE the
+            //   capacity checks so the effective type/cap governs this division. Without
+            //   this the manual scorer used only the field base, ignoring the override.
+            var _gso = (fp && fp.gradeShareRules && blockDivName) ? fp.gradeShareRules[blockDivName] : null;
+            if (_gso) { sType = _gso.type || 'not_sharable'; cap = parseInt(_gso.capacity) || (sType === 'not_sharable' ? 1 : 2); }
             if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
             // Combined field: block if ANY combo partner is in use (same or different division)
             var _cbPartners = _comboExclusiveMap.get(fieldNorm);
@@ -826,6 +978,16 @@
         if (rotationPenalty === Infinity) return 999999;
        var specialRule = activityProperties[act];
         if (specialRule) {
+            // ★ HARD GATE: the special's OWN access restriction (grade + bunk).
+            //   The field-access gate above only checks the HOSTING field — a
+            //   special hosted on a field that admits this grade (e.g. "Basketball
+            //   Clinic" at "Jump Shot") would otherwise be placed for a grade the
+            //   special itself excludes. Duplicate-safe; no-op for non-specials and
+            //   unrestricted specials (isSpecialAvailableForBunk returns true).
+            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                var _accGrade = (block && block._divName) || blockDivName;
+                if (_accGrade != null && !window.isSpecialAvailableForBunk(act, _accGrade, bunk, window.globalSettings || null)) return 999999;
+            }
             // ★ Per-grade cap: use grade-specific override if available
             var _effectiveMax = specialRule.maxUsage || 0;
             var _blockDiv = block?._divName || blockDivName;
@@ -833,16 +995,149 @@
                 _effectiveMax = specialRule.maxUsagePerGrade[_blockDiv];
             }
             if (_effectiveMax > 0) {
-                var hist = getActivityCount(bunk, act);
+                // ★ maxUsagePeriod (manual-audit fix): scope the cap to the configured
+                //   period when set (mirrors auto calculateLimitScore L1015-1018);
+                //   otherwise lifetime, as before. getPeriodActivityCount is the same
+                //   period-aware counter auto uses.
+                var _maxPeriod = specialRule.maxUsagePeriod || 'half';   // mirror auto default ('half')
+                var _gpac = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                var hist = (_maxPeriod && _gpac) ? _gpac(bunk, act, _maxPeriod) : getActivityCount(bunk, act);
                 var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
                 if (hist + todayCount >= _effectiveMax) return 999999;
             }
             // ★ Min frequency: strong bonus when bunk is below the floor
             var _minFreq = parseInt(specialRule.minFrequency) || 0;
             if (_minFreq > 0) {
-                var _curCount = getActivityCount(bunk, act);
+                // ★ minFrequencyPeriod (manual-audit fix): scope to the configured
+                //   period when set (mirrors auto calculateLimitScore L1048-1050,
+                //   incl. the 'week'→'1week' normalization); otherwise lifetime.
+                var _minPeriod = specialRule.minFrequencyPeriod || 'week';   // mirror auto default
+                if (_minPeriod === 'week') _minPeriod = '1week';
+                var _gpacMin = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                var _curCount = (_minPeriod && _gpacMin) ? _gpacMin(bunk, act, _minPeriod) : getActivityCount(bunk, act);
                 var _shortage = _minFreq - _curCount;
-                if (_shortage > 0) penalty -= (_shortage * 8000);
+                if (_shortage > 0) {
+                    // ★ STRONG escalating min boost (user directive: a minimum must be
+                    //   "basically a must"). Doubles each elapsed period-day (getEscalationBonus
+                    //   shape, cooldown-aware), scaled so it OVERRIDES the soft rotation/recency
+                    //   penalty (~25-28k cross-day) from day 1 (~50k×shortage) and grows from
+                    //   there → a below-min special becomes effectively required as the period
+                    //   progresses. Capped at 500k — stays below the 999999 hard-gate band, so
+                    //   access/time/sharing/availableDays/cooldown still win. Same-day / yesterday
+                    //   repeats remain blocked by the rotationPenalty>=50000 floor (L969) + the
+                    //   frequencyDays cooldown gate, so this drives SPACED placements, not dupes.
+                    var _mfEsc = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getEscalationBonus)
+                        ? window.SchedulerCoreUtils.getEscalationBonus(_minPeriod, _shortage, undefined, parseInt(specialRule.frequencyDays) || 0) : 0;
+                    penalty -= Math.min(500000, Math.max((_mfEsc || 0) * 500, _shortage * 50000));
+                }
+            }
+            // ★ exactFrequency (manual-audit fix): acts as BOTH ceiling and floor,
+            //   period-scoped. Mirrors auto calculateLimitScore L1027-1036. Ceiling =
+            //   HARD gate (period+today count >= exactFreq → reject); below the floor
+            //   gets a strong placement bonus so the solver drives toward the exact
+            //   count. Per-grade override mirrors maxUsagePerGrade. Inert unless
+            //   exactFrequency is configured (>0) — no effect on normal configs.
+            var _exactFreq = parseInt(specialRule.exactFrequency) || 0;
+            if (_blockDiv && specialRule.exactFrequencyPerGrade && specialRule.exactFrequencyPerGrade[_blockDiv] > 0) {
+                _exactFreq = specialRule.exactFrequencyPerGrade[_blockDiv];
+            }
+            if (_exactFreq > 0) {
+                var _exactPeriod = specialRule.exactFrequencyPeriod || '1week';
+                var _gpacEx = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                var _exactCount = _gpacEx ? _gpacEx(bunk, act, _exactPeriod) : getActivityCount(bunk, act);
+                var _exactToday = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
+                if (_exactCount + _exactToday >= _exactFreq) return 999999;            // ceiling (hard)
+                var _exShort = _exactFreq - (_exactCount + _exactToday);
+                if (_exShort > 0) {
+                    // ★ ESCALATING floor (mirror auto getEscalationBonus, rotation_engine.js L1039) —
+                    //   doubles each elapsed period-day so the exact target is met by period end.
+                    var _efEsc = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getEscalationBonus)
+                        ? window.SchedulerCoreUtils.getEscalationBonus(_exactPeriod, _exShort, undefined, parseInt(specialRule.frequencyDays) || 0) : 0;
+                    penalty -= Math.min(500000, Math.max((_efEsc || 0) * 500, _exShort * 50000)); // strong floor — exact target near-mandatory
+                }
+            }
+            // ★ frequencyDays (manual-audit fix): "min days between visits" cooldown
+            //   (UI label, facilities.js). Mirrors auto calculateLimitScore L946-951:
+            //   hard-block if the bunk did this activity within the cooldown window.
+            //   Skip same-day (daysSince=0; intra-day handled elsewhere) and never-done
+            //   (null). Inert unless frequencyDays is configured (>0).
+            var _freqDays = parseInt(specialRule.frequencyDays) || 0;
+            if (_freqDays > 0) {
+                var _daysSince = getDaysSinceActivity(bunk, act);
+                if (typeof _daysSince === 'number' && _daysSince > 0 && _daysSince < _freqDays) return 999999;
+            }
+            // ★ availableDays weekday gate (manual-audit fix): a special restricted to
+            //   certain weekdays must NEVER be selected on others. Mirrors auto's
+            //   isSpecialAvailableOnDay. Enforced HERE (the shared solver scorer that the
+            //   MANUAL builder reaches) — calculateLimitScore is NOT in the manual path.
+            //   Requires availableDays propagated into props (scheduler_core_loader.js).
+            if (Array.isArray(specialRule.availableDays) && specialRule.availableDays.length > 0) {
+                var _avd = window.currentScheduleDate;
+                if (_avd) {
+                    var _avpp = String(_avd).split('-');
+                    if (_avpp.length === 3) {
+                        var _avdow = new Date(parseInt(_avpp[0], 10), parseInt(_avpp[1], 10) - 1, parseInt(_avpp[2], 10)).getDay();
+                        if (_avdow >= 0 && _avdow <= 6) {
+                            var _avab = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][_avdow];
+                            var _avfu = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][_avdow];
+                            var _avallow = specialRule.availableDays.map(function (d) { return String(d).toLowerCase(); });
+                            if (_avallow.indexOf(_avab) < 0 && _avallow.indexOf(_avfu) < 0) return 999999;
+                        }
+                    }
+                }
+            }
+            // ★ rotationCohort gate (manual-audit fix; MANUAL-ONLY — auto's planner is
+            //   authoritative for cohort, so don't double-enforce in auto). Skip the
+            //   special for this bunk when its count exceeds the cohort minimum (wait
+            //   for the lagging cohort grades). Mirrors scheduler_core_auto.js:4261-4283.
+            if (window._daBuilderMode !== 'auto' && specialRule.rotationCohort && specialRule.rotationCohort.enabled
+                && Array.isArray(specialRule.rotationCohort.grades) && specialRule.rotationCohort.grades.length > 0) {
+                var _divsRC = window.divisions || {};
+                var _cohortBunks = [];
+                specialRule.rotationCohort.grades.forEach(function (_g) {
+                    var _gd = _divsRC[_g] || _divsRC[String(_g)];
+                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) {
+                        // ★ FN-5: only pool cohort bunks that can RECEIVE this special.
+                        //   An access-restricted cohort member would keep its count at 0,
+                        //   pinning the cohort min at 0 forever and freezing every reachable
+                        //   bunk after one visit (count 1 > min 0 → skipped). Mirrors the
+                        //   auto planner's isSpecialAvailableForBunk filter
+                        //   (scheduler_core_auto.js:4266). Fallback: include the bunk if the
+                        //   helper isn't loaded, so this can only ADD correct filtering.
+                        var _elig = true;
+                        try {
+                            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                                _elig = window.isSpecialAvailableForBunk(act, _g, _b, window.globalSettings || null);
+                            }
+                        } catch (_eElig) { _elig = true; }
+                        if (_elig) _cohortBunks.push(String(_b));
+                    });
+                });
+                if (_cohortBunks.length > 0 && _cohortBunks.indexOf(String(bunk)) >= 0) {
+                    var _myCC = getActivityCount(bunk, act);
+                    var _cmin = Infinity;
+                    for (var _ci = 0; _ci < _cohortBunks.length; _ci++) { var _c = getActivityCount(_cohortBunks[_ci], act); if (_c < _cmin) _cmin = _c; }
+                    if (_myCC > _cmin) return 999999;
+                }
+            }
+            // ★ minBunks co-attendance nudge (proactive "push" for the floor).
+            //   When a special declares sharableWith.minBunks>=2 (e.g. the lake
+            //   needs 2 bunks together), reward JOINING an existing under-floor
+            //   session of it at THIS window so the pair FORMS during the main
+            //   solve — STEP 7.63 then only has to mop up the rare leftover.
+            //   Bonus applies only when a co-attendee is already there and there
+            //   is still room to grow (co-usage < capacity); it never seeds a
+            //   lonely session (co-usage 0 → no bonus), and capacity caps the
+            //   pile-on. Sits below the min-frequency band (≤500k) and the 999999
+            //   hard gate, so every hard constraint still wins. Inert otherwise.
+            var _mbProps = _fieldPropertyMap.get(act);
+            var _mbFloor = _mbProps ? (parseInt(_mbProps._minBunks) || 0) : 0;
+            if (_mbFloor >= 2 && fieldName && fieldName !== 'Free' && blockStart !== undefined && blockEnd !== undefined) {
+                var _mbCap = parseInt(_mbProps.capacity) || 2;
+                var _mbCo = (_mbProps.sharingType === 'cross_division')
+                    ? getFieldUsageFromTimeIndex(fieldNorm, blockStart, blockEnd, bunk)
+                    : countSameDivisionUsage(fieldName, blockDivName, blockStart, blockEnd, bunk);
+                if (_mbCo > 0 && _mbCo < _mbCap) penalty -= 60000;
             }
         }
 
@@ -961,6 +1256,10 @@
         if (_wantOccupancy) {
             var fcFp = _fieldPropertyMap.get(fieldName);
             var fcCap = fcFp ? fcFp.capacity : getFieldCapacity(fieldName);
+            // ★ honor per-grade sharing override so a LOOSENED grade's capacity is
+            //   actively pursued by the fill incentive (not merely permitted by the gate).
+            var _gsoF = (fcFp && fcFp.gradeShareRules && blockDivName) ? fcFp.gradeShareRules[blockDivName] : null;
+            if (_gsoF) { fcCap = parseInt(_gsoF.capacity) || (_gsoF.type === 'not_sharable' ? 1 : 2); }
             if (fcCap > 1 && occSameDivSameAct) {
                 var spotsLeft = fcCap - 1 - occSameDivCount;
                 if (occSameDivCount > 0 && spotsLeft >= 0) { var fillRatio = occSameDivCount / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
@@ -989,7 +1288,14 @@
             }
         }
         // Unique resources
-        if (fieldName && fieldName !== 'Free') { for (var [urAct, urCount] of _uniqueFieldMap) { if (urCount === 1 && normName(urAct) !== actNorm) { var thisFieldHostsUnique = allCandidateOptions.some(function(uc) { return uc.field === fieldName && uc.activityName === urAct; }); if (thisFieldHostsUnique) { var ourFieldCount = _uniqueFieldMap.get(act) || 0; if (ourFieldCount > 1) penalty += 5000; } } } }
+        if (fieldName && fieldName !== 'Free') { for (var [urAct, urCount] of _uniqueFieldMap) { if (urCount === 1 && normName(urAct) !== actNorm) { var thisFieldHostsUnique = allCandidateOptions.some(function(uc) { return uc.field === fieldName && uc.activityName === urAct; }); if (thisFieldHostsUnique) { var ourFieldCount = _uniqueFieldMap.get(act) || 0; if (ourFieldCount > 1) penalty += 20000; } } } }
+        // ★ Reserve a scarce single-home field for its sole occupant: the penalty above
+        //   must beat the field-group QUALITY bonus, or a flexible activity (>1 field) still
+        //   grabs a top-ranked dual-use field (e.g. Baseball the SPORT on "Baseball Turf",
+        //   the only home of the Dodgeball/"3 and 1" SPECIALS) and starves the special to
+        //   Free. Max quality bonus ≈ membersInGroup×1500 (~16.5k), so 20k guarantees the
+        //   flexible activity yields the unique home; still < the 100k Free penalty, so it
+        //   remains a legal last resort when the activity genuinely has no other field.
         // Zone/travel
         if (fieldName && fieldName !== 'Free' && bunk && block.startTime !== undefined) {
             var myZone = window.getZoneForField?.(fieldName);
@@ -1006,19 +1312,36 @@
                 if (_pcMySize > 0) {
                     var _pcProjected = _pcMySize;
                     var _pcOtherCount = 0;
-                    var _pcActEntries = _fieldTimeIndex.get(actNorm) || [];
+                    // ★ Count co-occupants on THIS FIELD playing the SAME sport (the
+                    //   shared-game player total). _fieldTimeIndex is keyed by field, so
+                    //   the old get(actNorm) lookup returned nothing for sports — this
+                    //   penalty was silently dead. Use the candidate's field, same-sport.
+                    var _pcActEntries = _fieldTimeIndex.get(normName(fieldName)) || [];
                     for (var _pci = 0; _pci < _pcActEntries.length; _pci++) {
                         var _pcE = _pcActEntries[_pci];
                         if (_pcE.bunk === bunk) continue;
                         if (_pcE.endMin <= blockStart || _pcE.startMin >= blockEnd) continue;
+                        if (_pcE.activityName && _pcE.activityName !== actNorm) continue;
                         _pcProjected += (_bunkSizeCache.get(_pcE.bunk) || 0);
                         _pcOtherCount++;
                     }
                     if (_pcReq.max > 0 && _pcProjected > _pcReq.max) {
-                        var _pcOverPct = (_pcProjected - _pcReq.max) / _pcReq.max;
-                        if (_pcOverPct > 0.2) return 999999;
-                        else if (_pcOverPct > 0.05) penalty += 20000 + Math.round(_pcOverPct * 50000);
-                        else penalty += 8000;
+                        // ★ Absolute grace, not a %: max is the target, max+1 a small
+                        //   grace, max+2 only-when-desperate, max+3+ infeasible. (e.g.
+                        //   Football max 24: 25 ok, 26 desperate, 28 blocked.)
+                        var _pcOver = _pcProjected - _pcReq.max;
+                        if (_pcOtherCount > 0) {
+                            // Avoidable over-max via SHARING — discourage hard; >max+2 is
+                            // infeasible, mirroring the checkSharedPlayerMaxConflict gate.
+                            if (_pcOver > 2) return 999999;
+                            else if (_pcOver === 2) penalty += 30000;
+                            else penalty += 12000;
+                        } else {
+                            // A lone bunk that is itself over max — unavoidable (can't
+                            // split a bunk), so only a soft nudge toward an uncapped /
+                            // higher-max activity; never infeasible.
+                            penalty += 6000;
+                        }
                     } else if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
                         var _pcUnderPct = (_pcReq.min - _pcProjected) / _pcReq.min;
                         if (_pcUnderPct > 0.35) return 999999;
@@ -1232,6 +1555,10 @@
     // ========================================================================
     function activityFirstPlanner(activityBlocks) {
         _activityPlan.clear(); _scarcityMap.clear();
+        // ★ minBunks floor: tracks which (bunk|special) have been planned a min-bunks
+        //   special in THIS planner run, so a co-attended session formed in one window
+        //   isn't re-seeded for the same bunk in another window (same-day repeat).
+        var _mbPlannedToday = new Set();
         var bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
         var divTimeGroups = {};
         for (var bi = 0; bi < activityBlocks.length; bi++) { var blk = activityBlocks[bi]; if (!blk.divName) blk.divName = getBunkDivision(blk.bunk) || ''; var key = (blk._autoMode ? (blk.bunk + '|') : '') + blk.divName + '|' + (blk.startTime || '?') + '-' + (blk.endTime || '?'); if (!divTimeGroups[key]) divTimeGroups[key] = []; divTimeGroups[key].push(bi); }
@@ -1293,18 +1620,67 @@
                 if (bestPartner) pairedBunks.set(sBunk, bestPartner);
             }
             var allocated = {}, activityUsed = {};
+            // ★★★ minBunks CO-ATTENDANCE PRE-PASS ★★★
+            // A special with sharableWith.minBunks>=2 (e.g. the Lake needs 2 bunks
+            // together) must be planned as ONE co-attended group within a SINGLE
+            // window, never as two lonely sessions in different windows. The normal
+            // allocator below treats supply as field-count (1 Lake field → 1 seat),
+            // so it can only hand the special to one bunk per window and ends up
+            // splitting the floor pair across windows → both fail the floor and get
+            // dropped. Here we seat up to `capacity` bunks (one field hosts capacity
+            // bunks) on the same field at this window, but ONLY if we can reach the
+            // floor; otherwise we don't seed it at all (those bunks fall through to a
+            // sport below — better than a lonely session that gets dropped to Free).
+            // Gated on _minBunks>=2 → completely inert for every other activity.
+            (function planMinBunksFloorSpecials() {
+                var mbWanted = {}; // activity -> [{bunk, need}]
+                for (var _mbk in wishLists) {
+                    var _mws = wishLists[_mbk] || [];
+                    for (var _mwi = 0; _mwi < _mws.length; _mwi++) {
+                        var _mw = _mws[_mwi];
+                        var _mfp = _fieldPropertyMap.get(_mw.activity);
+                        var _mfloor = _mfp ? (parseInt(_mfp._minBunks) || 0) : 0;
+                        if (_mfloor < 2) continue;
+                        if (_mbPlannedToday.has(_mbk + '|' + _mw.activity)) continue; // already seated in another window today
+                        if (!mbWanted[_mw.activity]) mbWanted[_mw.activity] = [];
+                        mbWanted[_mw.activity].push({ bunk: _mbk, need: _mw.need });
+                    }
+                }
+                Object.keys(mbWanted).forEach(function(_mact) {
+                    var _mfp2 = _fieldPropertyMap.get(_mact);
+                    var _mfloor2 = parseInt(_mfp2._minBunks) || 0;
+                    var _mcap = parseInt(_mfp2.capacity) || 2;
+                    var _mpool = mbWanted[_mact].filter(function(c) { return !allocated[c.bunk]; });
+                    _mpool.sort(function(a, b) { return a.need - b.need; }); // strongest pull first
+                    // One co-attended session on a single field: seat between floor and capacity.
+                    var _mtake = Math.min(_mpool.length, _mcap);
+                    if (_mtake < _mfloor2) return; // can't reach the floor — don't seed a doomed session
+                    for (var _mti = 0; _mti < _mtake; _mti++) {
+                        var _mcb = _mpool[_mti].bunk;
+                        allocated[_mcb] = _mact;
+                        activityUsed[_mact] = (activityUsed[_mact] || 0) + 1;
+                        _mbPlannedToday.add(_mcb + '|' + _mact);
+                    }
+                });
+            })();
             var sortedBunks = bunkList.slice().sort(function(a, b) { return (wishLists[a]?.length || 0) - (wishLists[b]?.length || 0); });
             for (var abi = 0; abi < sortedBunks.length; abi++) {
                 var aBunk = sortedBunks[abi]; if (allocated[aBunk]) continue;
                 var wishes2 = wishLists[aBunk] || [];
                 for (var wi = 0; wi < wishes2.length; wi++) {
                     var wish = wishes2[wi];
+                    // ★ minBunks floor specials are handled exclusively by the co-attendance
+                    //   pre-pass above (as a co-attended group). Never let the per-bunk
+                    //   allocator seed one alone here — that produces a lonely session that
+                    //   fails the floor and gets dropped to Free.
+                    var _wmbFp = _fieldPropertyMap.get(wish.activity);
+                    if (_wmbFp && (parseInt(_wmbFp._minBunks) || 0) >= 2) continue;
                     if ((activityUsed[wish.activity] || 0) >= (activitySupply[wish.activity] || 0)) continue;
                     if (wish.needsSharing && pairedBunks.has(aBunk)) { var partner = pairedBunks.get(aBunk); var combinedSize = (bunkSizes[aBunk] || 0) + (bunkSizes[partner] || 0); var combinedCheck = window.SchedulerCoreUtils?.checkPlayerCountForSport?.(wish.activity, combinedSize, false); if (combinedCheck && !combinedCheck.valid && combinedCheck.severity === 'hard') continue; }
                     var projectedPlayers = bunkSizes[aBunk] || 0;
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
-                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers) continue;
+                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers + 2) continue; // ceiling = max+2
                     // ★ Min player check: allow if a partner could be pulled in by the repair pass
                     // Guard: skip enforcement when bunk size data is unconfigured (projectedPlayers === 0)
                     if (projectedPlayers > 0 && maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
@@ -1314,7 +1690,7 @@
                             var _mcB = sortedBunks[_mci];
                             if (_mcB === aBunk || allocated[_mcB]) continue;
                             var _mcTotal = projectedPlayers + (bunkSizes[_mcB] || 0);
-                            if (_mcTotal >= maxReqs.minPlayers && (!maxReqs.maxPlayers || _mcTotal <= maxReqs.maxPlayers)) { _canReachMin = true; break; }
+                            if (_mcTotal >= maxReqs.minPlayers && (!maxReqs.maxPlayers || _mcTotal <= maxReqs.maxPlayers + 2)) { _canReachMin = true; break; }
                         }
                         if (!_canReachMin) continue;
                     }
@@ -1348,7 +1724,7 @@
                     for (var rpUi = 0; rpUi < rpUnalloc.length; rpUi++) {
                         var rpCand = rpUnalloc[rpUi];
                         var rpNew = rpTotal + (bunkSizes[rpCand] || 0);
-                        if (rpReq.max && rpNew > rpReq.max) continue;
+                        if (rpReq.max && rpNew > rpReq.max + 2) continue; // ceiling = max+2 (sort above still prefers <=max)
                         // Check this bunk has the activity in its wish list
                         if (!(wishLists[rpCand] || []).some(function(w) { return w.activity === rpAct2; })) continue;
                         if ((activityUsed[rpAct2] || 0) >= (activitySupply[rpAct2] || 0)) break;
@@ -1439,7 +1815,20 @@
             if (_capSt === 'not_sharable') {
                 _capUse = getFieldUsageFromTimeIndex(_capFn, block.startTime, block.endTime, bunk);
             } else if (_capSt === 'same_division' && block.divName) {
-                _capUse = countSameDivisionUsage(fName, block.divName, block.startTime, block.endTime, bunk);
+                // ★ Cross-division guard (Day 33 fix): a same_division field may ONLY be
+                //   shared within ONE division. A DIFFERENT division holding it at this time
+                //   is never allowed — regardless of that division's own count being under
+                //   cap. Force a downgrade. This backstops a stale-index race in the
+                //   split-tile/batch scoring path that let two different-division bunks pick
+                //   the same field for the same sport (e.g. Majors 3 + Quints 1 both on
+                //   "Baseball Field 2" for Kickball). The commit gate runs sequentially, so
+                //   by the time the 2nd bunk commits, the 1st is already in the time index.
+                if (checkCrossDivisionTimeConflict(fName, block.divName, block.startTime, block.endTime, bunk)) {
+                    if (typeof console !== 'undefined' && console.warn) console.warn('[XDIV-GATE] ' + bunk + ' (' + block.divName + ') blocked from same_division field "' + fName + '" @' + block.startTime + '-' + block.endTime + ' — another division already holds it; downgrading.');
+                    _capUse = _capCap; // force downgrade — cross-division share not allowed on a same_division field
+                } else {
+                    _capUse = countSameDivisionUsage(fName, block.divName, block.startTime, block.endTime, bunk);
+                }
             } else {
                 // custom, all, or missing divName — use total usage as conservative check
                 _capUse = getFieldUsageFromTimeIndex(_capFn, block.startTime, block.endTime, bunk);
@@ -1449,13 +1838,67 @@
                 pick.field = 'Free';
                 pick.sport = null;
                 pick._activity = 'Free';
-            
+
         }
     }
+        // ★ Same-activity-when-sharing gate (last line of defense, mirrors the
+        //   cross-division guard above). A shared field/room hosts ONE activity at a
+        //   time: two DIFFERENT activities overlapping on the same physical field — two
+        //   different specials sharing a room (e.g. Running Bases + Off The Wall on
+        //   "Football Turf"), or a sport + special on one turf — is a double-book even
+        //   when capacity is not exceeded. The scorer rejects it, but batch/sequential
+        //   commits can race it through, so enforce it at the commit gate too.
+        if (fName && fName !== 'Free' && checkSameFieldActivityMismatch(fName, block.startTime, block.endTime, (pick._activity || pick.activityName || pick.sport || fName), bunk)) {
+            fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free';
+        }
     }    var _actName = pick._activity || pick.activityName || pick.sport || fName;
+    // ★ Safety net: enforce a special's OWN access restriction at the single
+    //   write chokepoint every selection path funnels through. The scorer's
+    //   field-access gate doesn't cover a special hosted on a field that admits
+    //   the grade while the SPECIAL excludes it — downgrade to Free here so no
+    //   selection route can leak it. No-op for non-specials / unrestricted.
+    if (fName && fName !== 'Free' && block.divName != null
+        && typeof window.isSpecialAvailableForBunk === 'function'
+        && !window.isSpecialAvailableForBunk(_actName, block.divName, bunk, window.globalSettings || null)) {
+        fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free'; _actName = 'Free';
+    }
+    // ★ Day-19 special features (durations[] best-fit / multiPart part labels /
+    //   prep lead-in) for the manual solver's MAIN write path. This is where
+    //   sports AND specials are written by the solver — fillBlock only handles
+    //   pinned/zone tiles, so the features have to be applied here too or they
+    //   silently no-op for every solver-placed special. Mirrors the same call in
+    //   scheduler_core_main.js fillBlock; computeManualSpecialFeatures is
+    //   gated/no-op for ordinary activities and reads the canonical special
+    //   config directly, so it is robust to whichever activityProperties is live.
+    var _specFeat = (typeof window.computeManualSpecialFeatures === 'function')
+        ? window.computeManualSpecialFeatures(_actName, block.startTime, block.endTime, bunk, window.activityProperties) : null;
+    // ★ multiPart per-part LOCATION: place this part in its own room (and reserve
+    //   it under that room) when the part defines one; else use the base field.
+    var _wField = (_specFeat && _specFeat._partLocation) ? _specFeat._partLocation : fName;
     for (var i = 0; i < slots.length; i++) {
-        window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
-        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || _actName; }
+        var _ent = { field: _wField, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        // ★ Away (off-campus) tile: stamp travel to/from on the lead slot so the
+        //   grids + print render the 🚶 Travel buffers. Field is in the away zone,
+        //   so getTravelForField returns that zone's travel (manual = deduct).
+        if (i === 0 && block._isAway && fName && fName !== 'Free' && typeof window.getTravelForField === 'function') {
+            var _awayTravel = window.getTravelForField(fName, true);
+            if (_awayTravel) {
+                _ent._travelPre = _awayTravel.preMin;
+                _ent._travelPost = _awayTravel.postMin;
+                _ent._travelZone = _awayTravel.zoneName;
+                _ent._travelMode = 'deduct';
+            }
+        }
+        if (_specFeat) {
+            if (_specFeat._partLabel) { _ent._partNumber = _specFeat._partNumber; _ent._totalParts = _specFeat._totalParts; _ent._partLabel = _specFeat._partLabel; }
+            if (_specFeat._partLocation) _ent._partLocation = _specFeat._partLocation;
+            if (i === 0) {
+                if (_specFeat._prepDuration) { _ent._prepDuration = _specFeat._prepDuration; _ent._prepLabel = _specFeat._prepLabel; _ent._prepLocation = _specFeat._prepLocation; }
+                if (_specFeat._endMin && slots.length === 1) { _ent._endMin = _specFeat._endMin; _ent._durationBestFit = _specFeat._durationBestFit; }
+            }
+        }
+        window.scheduleAssignments[bunk][slots[i]] = _ent;
+        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][_wField]) window.fieldUsageBySlot[slots[i]][_wField] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][_wField].count++; window.fieldUsageBySlot[slots[i]][_wField].bunks[bunk] = pick.sport || _actName; }
     }
     // ★★★ v15.1 FIX: Clear stale caches so next penalty check sees this assignment ★★★
     // Without this, _todayCache returns stale "not done today" for this bunk,
@@ -1588,6 +2031,16 @@
         for (var ci = 0; ci < numCands; ci++) { var c = allCands[ci]; if (disabledSet.has(c.field)) continue; if (!actProps[c.field] && !actProps[c.activityName] && c.type !== 'special') continue; var fieldSportBlock = dailyDisabledSports[c.field]; if (fieldSportBlock && fieldSportBlock.length > 0 && c.activityName && fieldSportBlock.indexOf(c.activityName) !== -1) continue; globallyValid[ci] = 1; }
         for (var bi = 0; bi < numBlocks; bi++) {
             var block = activityBlocks[bi]; block._blockIdx = bi;
+            // ★ Sport/Special tile-kind: a Sports tile takes only sports, a Special
+            //   tile only specials, a flexible Activity tile ('any') either. _slotKind
+            //   is stamped at the manual skeleton source; derive it from the event
+            //   label as a fallback (e.g. smart-tile sport-fallback blocks).
+            if (block._slotKind === undefined) {
+                var _bev = String(block.event || '').toLowerCase().trim();
+                block._slotKind = (_bev === 'sports slot' || _bev === 'sport slot') ? 'sport'
+                                : (_bev === 'special activity') ? 'special' : 'any';
+            }
+            var _blkKind = block._slotKind;
             var domain = new Set(), bunk = block.bunk;
             var blockDiv = block.divName || block.division || '';
             if (!blockDiv && bunk) { blockDiv = getBunkDivision(bunk) || ''; if (blockDiv) block.divName = blockDiv; }
@@ -1600,9 +2053,47 @@
            var gk = (startMin||'?')+'-'+(endMin||'?')+'-'+blockDiv;
             if (!slotGroups.has(gk)) slotGroups.set(gk, []);
             slotGroups.get(gk).push(bi);
+            // ★ Specific-activity blocks (smart tiles naming a concrete sport):
+            //   hard-restrict the domain to the named activities. If NOTHING
+            //   feasible hosts them, a second pass drops the restriction so the
+            //   block degrades to a general pick instead of going Free.
+            var _allowSet = null;
+            if (block.allowedActivities && block.allowedActivities.length) {
+                _allowSet = new Set();
+                for (var _aai = 0; _aai < block.allowedActivities.length; _aai++) _allowSet.add(normName(block.allowedActivities[_aai]));
+            }
+            // ★ Away (off-campus) tile: hard-restrict the field domain to the chosen
+            //   zone's fields. Unlike _allowSet this is NEVER dropped — an away tile
+            //   must stay in its zone (it goes Free rather than land on campus).
+            //   In 'mixed' mode the restriction is skipped — the zone's fields are
+            //   still available (and travel still shows per-field), but on-campus
+            //   fields stay in play so games can spill back home.
+            var _awayFieldSet = null;
+            if (block._isAway && block._awayMode !== 'mixed' && block._awayZone && typeof window.getFieldsInZone === 'function') {
+                var _azFields = window.getFieldsInZone(block._awayZone) || [];
+                if (_azFields.length) {
+                    _awayFieldSet = new Set();
+                    for (var _afi = 0; _afi < _azFields.length; _afi++) _awayFieldSet.add(normName(_azFields[_afi]));
+                }
+            }
+            for (var _domPass = 0; _domPass < 2; _domPass++) {
+            if (_domPass === 1) {
+                if (!_allowSet || domain.size > 0) break;
+                console.warn('[SOLVER] Specific activity "' + block.allowedActivities.join(', ') + '" has no feasible field for ' + bunk + ' @' + startMin + ' — dropping the restriction (general pick).');
+                _allowSet = null;
+            }
             for (var ci2 = 0; ci2 < numCands; ci2++) {
                 if (!globallyValid[ci2]) continue;
                 var c2 = allCands[ci2], fn = c2.field, fnorm = c2._fieldNorm;
+                if (_awayFieldSet && !_awayFieldSet.has(fnorm || normName(fn))) continue;
+                // ★ Off-campus zone per-grade availability windows: a grade may only
+                //   use an off-campus facility inside its configured window.
+                if (hasTime && typeof window.isOffCampusFieldAvailableForGrade === 'function'
+                    && !window.isOffCampusFieldAvailableForGrade(fn, blockDiv, startMin, endMin)) continue;
+                if (_allowSet && !_allowSet.has(c2._actNorm)) continue;
+                // ★ Tile-kind gate: Sports tile → sports only, Special tile → specials only.
+                if (_blkKind === 'sport' && c2.type === 'special') continue;
+                if (_blkKind === 'special' && c2.type !== 'special') continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
                 var _dLoc = window.getLocationForActivity?.(c2.activityName||fn) || window.getPinnedTileDefaultLocation?.(c2.activityName||fn);
                 if (_dLoc && typeof _dLoc === 'string' && window.GlobalFieldLocks?.isFieldLocked(_dLoc, slots, blockDiv)) continue;
@@ -1658,6 +2149,7 @@
                 if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
                 domain.add(ci2);
             }
+            } // end _domPass (specific-activity restriction + general fallback)
             // Hard-filter yesterday-repeats if fresher alternatives exist
             if (domain.size > 1) {
                 var freshOpts = new Set();
@@ -1744,7 +2236,25 @@
         var globalFullGradeMap = new Map();
         var allBunks = Object.keys(window.scheduleAssignments || {});
         for (var gbi=0;gbi<allBunks.length;gbi++) { var gb=allBunks[gbi],gbs=window.scheduleAssignments[gb]||[]; for (var gsi=0;gsi<gbs.length;gsi++) { var ge=gbs[gsi]; if (!ge||ge.continuation||ge._isTransition) continue; var ga=normName(ge._activity||ge.sport||ge.field); if (ga&&ga!=='free'&&ga!=='free play'&&ga!=='transition/buffer') { if (!globalBunkActs.has(gb)) globalBunkActs.set(gb,new Set()); globalBunkActs.get(gb).add(ga); } } }
-        var sorted = Array.from(S._slotGroups.entries()).sort(function(a,b){return a[1].length-b[1].length;});
+        // ★ FAIRNESS ROTATION (per-division coverage fix): the pure size-ascending sort
+        //   processed the LARGEST division LAST every day, so for a SCARCE same_division
+        //   shared field (one field, more divisions want it than there are slots) the
+        //   largest division was systematically locked out (e.g. one grade never getting
+        //   a popular special). Rotate the per-division processing priority by DATE so
+        //   every division gets early-pick turns across the period; SIZE stays the
+        //   secondary key (preserves the original packing heuristic within a division).
+        //   This does NOT enable cross-grade sharing — same_division stays same_division;
+        //   it only rotates WHICH division claims a scarce field first on a given day.
+        var _divOfGroup = function (entry) { var bis = entry[1]; for (var _gi = 0; _gi < bis.length; _gi++) { var _b = activityBlocks[bis[_gi]]; if (_b && (_b.divName || _b.division)) return String(_b.divName || _b.division); } return ''; };
+        var _rotDivs = (function () { var seen = {}; for (var _e of S._slotGroups) { var _d = _divOfGroup(_e); if (_d) seen[_d] = true; } return Object.keys(seen).sort(); })();
+        var _rotN = _rotDivs.length || 1;
+        var _rotSeed = (function () { var ds = window.currentScheduleDate; if (typeof ds === 'string') { var p = ds.split('-'); if (p.length === 3) { var dn = Math.floor(Date.UTC(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10)) / 86400000); if (!isNaN(dn)) return dn; } } return 0; })();
+        var _divRank = function (d) { var i = _rotDivs.indexOf(d); return i < 0 ? 9999 : (i + _rotSeed) % _rotN; };
+        var sorted = Array.from(S._slotGroups.entries()).sort(function (a, b) {
+            var ra = _divRank(_divOfGroup(a)), rb = _divRank(_divOfGroup(b));
+            if (ra !== rb) return ra - rb;           // ★ date-rotated division priority (fairness)
+            return a[1].length - b[1].length;         // original size-ascending heuristic (secondary)
+        });
         for (var [,blockIndices] of sorted) {
             S._todayCache.clear();
             var unassigned = blockIndices.filter(function(bi){return !S._assignedBlocks.has(bi);});
@@ -1838,6 +2348,11 @@
                 }
                var fn2=c2._fieldNorm, fName=c2.field;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
+                // ★ PER-GRADE SHARING OVERRIDE (gradeShareRules) — mirror the scorer gate
+                //   (calculatePenaltyCost) so the group solver's batch placement also honors
+                //   per-division tighten/loosen instead of only the field base.
+                var _gsoG = (fp && fp.gradeShareRules && b2.divName) ? fp.gradeShareRules[b2.divName] : null;
+                if (_gsoG) { st = _gsoG.type || 'not_sharable'; cap = parseInt(_gsoG.capacity) || (st === 'not_sharable' ? 1 : 2); }
                var liveUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?(st==='not_sharable'?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)):0;
                 var canFit=false;
                if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(liveUse+_nsBatchUse<cap); }
@@ -1903,7 +2418,7 @@
                         }
                         // Guard: skip enforcement when bunk size data is unconfigured (_pcTotal === 0)
                         if (_pcTotal > 0) {
-                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers) canFit = false;
+                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers + 2) canFit = false; // ceiling = max+2
                             if (canFit && _pcSReqs.minPlayers && _pcTotal < _pcSReqs.minPlayers) {
                                 if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.2) canFit = false;
                             }
@@ -2005,6 +2520,12 @@
     // ========================================================================
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
+        // ★ Tile-kind gate (mirrors the domain filter) — also guards the empty-domain
+        //   and deepFreeResolution fallbacks, which scan ALL candidates via this fn.
+        //   A Sports tile never takes a special; a Special tile never takes a sport.
+        var _bk = block._slotKind;
+        if (_bk === 'sport' && cand.type === 'special') return false;
+        if (_bk === 'special' && cand.type !== 'special') return false;
         if (sM===undefined||eM===undefined) return true;
         var slots=block.slots||[];
         if (window.GlobalFieldLocks?.isFieldLocked(fn,slots,bDiv)) return false;
@@ -2014,6 +2535,9 @@
         if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(slots); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
+        // ★ PER-GRADE SHARING OVERRIDE (gradeShareRules) — same as the scorer/group-solver gates.
+        var _gsoV=(fp&&fp.gradeShareRules&&bDiv)?fp.gradeShareRules[bDiv]:null;
+        if (_gsoV) { st=_gsoV.type||'not_sharable'; cap=parseInt(_gsoV.capacity)||(st==='not_sharable'?1:2); }
         if (S.checkCrossDivisionTimeConflict(fn,bDiv,sM,eM,bunk)) return false;
         // Combined field: block if any combo partner is in use
         var _vpPartners = S._comboExclusiveMap.get(fnorm);
@@ -2083,21 +2607,107 @@
         for (var idx=0;idx<freeIdx.length;idx++) {
             var bi=freeIdx[idx],blk=activityBlocks[bi],bunk=blk.bunk,bDiv=blk.divName||'',sM=blk.startTime,eM=blk.endTime,slots=blk.slots||[];
             if (sM===undefined||eM===undefined) continue; S._todayCache.clear();
-            var fresh=[];
+            // ★ REGEN LAST-RESORT (fill quality): a regen tile whose window is
+            //   saturated used to fall to the first-legal STEP 7.5 fallback (which
+            //   ignores min-players entirely). Instead, keep two graded reserves:
+            //   _lr2 = passed EVERY hard gate, only the penalty cost >=900k (e.g.
+            //         another grade's preferred-exclusive field) — fully legal.
+            //   _lr3 = failed ONLY the sport min-player check (forceLeague=true
+            //         relaxes exactly that and nothing else) — same trade-off the
+            //         fallback makes blindly, but cost-ranked with all other rules.
+            //   Kill switch: window.__regenLastResort = false.
+            var fresh=[], _lr2=[], _lr3=[];
+            var _regenLR = window.__regenSlotScope && window.__regenLastResort !== false;
             for (var ci=0;ci<allCands.length;ci++) {
                 var c=allCands[ci];
+                // ★ Tile-kind gate: a Sports tile never takes a special, a Special tile
+                //   never takes a sport — enforced HERE too because deep free-resolution
+                //   scans allCands directly, bypassing the domain filter + isPickStillValid.
+                if (blk._slotKind === 'sport' && c.type === 'special') continue;
+                if (blk._slotKind === 'special' && c.type !== 'special') continue;
                 if (disabled.indexOf(c.field)!==-1) continue;
-                if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
+                // ★ REGEN FILL-QUALITY FIX: the index fast-path in isFieldLocked is
+                //   time-blind — a lock stored at this slot INDEX may belong to a
+                //   non-overlapping wall-clock window on another grid (e.g. an ABBL
+                //   pin @890-970 blocking an 805-870 query). During partial regen,
+                //   ignore an indexed lock whose explicit times don't overlap this
+                //   block; genuine overlaps are still caught here AND by the
+                //   isFieldLockedByTime gate right below.
+                //   Kill switch: window.__regenIndexLockTimeCheck = false.
+                if (window.__regenSlotScope && window.__regenIndexLockTimeCheck !== false) {
+                    var _dfIL = window.GlobalFieldLocks?.isFieldLocked(c.field,slots,bDiv);
+                    if (_dfIL && !(_dfIL.startMin!=null && _dfIL.endMin!=null && !(_dfIL.startMin<eM && _dfIL.endMin>sM))) continue;
+                } else if (window.GlobalFieldLocks?.isFieldLocked(c.field,slots)) continue;
                 if (S.isFieldLockedByTime(c.field,sM,eM,bDiv)) continue;
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var _dfCombo = S._comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
+                var _gsoD=(fp&&fp.gradeShareRules&&bDiv)?fp.gradeShareRules[bDiv]:null; if (_gsoD) { st=_gsoD.type||'not_sharable'; cap=parseInt(_gsoD.capacity)||(st==='not_sharable'?1:2); } // ★ per-grade sharing override
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
-                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
-                S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
+                if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) {
+                    if (_regenLR && window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,true)) {
+                        S.setScratchPick(c); var _lrC=S.calculatePenaltyCost(blk,S.setScratchPick(c));
+                        if (_lrC<Infinity) _lr3.push({ci:ci,cost:_lrC});
+                    }
+                    continue;
+                }
+                S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c));
+                if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
+                else if (_regenLR && dfCost<Infinity) _lr2.push({ci:ci,cost:dfCost});
             }
             if (fresh.length>0) { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
+            if (_regenLR && (_lr2.length>0 || _lr3.length>0)) {
+                var _lr=_lr2.length>0?_lr2:_lr3;
+                _lr.sort(function(a,b){return a.cost-b.cost;});
+                var _lrCand=allCands[_lr[0].ci];
+                console.warn('[SOLVER-REGEN] ⚠ last-resort ('+(_lr2.length>0?'legal high-penalty':'relaxed min-players')+'): "'+bunk+'" @'+sM+'-'+eM+' → "'+(_lrCand.activityName||_lrCand.field)+'@'+_lrCand.field+'" cost='+_lr[0].cost+' ('+_lr.length+' option(s))');
+                var _lrPk=S.clonePick(_lrCand); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:_lr[0].ci,pick:_lrPk,cost:_lr[0].cost}); S.applyPickToSchedule(blk,_lrPk); var _lrFn=normName(_lrPk.field); S.addToFieldTimeIndex(_lrFn,sM,eM,bunk,bDiv,normName(_lrPk._activity)); var _lrAn=normName(_lrPk._activity); if (_lrAn&&_lrAn!==_lrFn) S.addToFieldTimeIndex(_lrAn,sM,eM,bunk,bDiv,_lrAn); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue;
+            }
+            // ★ REGEN FILL-QUALITY DIAGNOSTIC — a per-tile regen block with ZERO
+            //   candidates falls through to the first-legal STEP 7.5 fallback. Tally
+            //   the FIRST gate that rejected each candidate so the live log says WHY
+            //   (locks vs capacity vs canBlockFit vs rotation-penalty). Regen-only
+            //   (tiny runs), purely additive — the hot path above is untouched.
+            if (window.__regenSlotScope) {
+                try {
+                    var _dgTally={}, _dgSamples=[];
+                    var _dgAdd=function(gate,c){ _dgTally[gate]=(_dgTally[gate]||0)+1; if (_dgSamples.length<20) _dgSamples.push((c.activityName||c.field)+'@'+c.field+'→'+gate); };
+                    for (var _dgi=0;_dgi<allCands.length;_dgi++) {
+                        var dc=allCands[_dgi];
+                        if (blk._slotKind==='sport' && dc.type==='special') { _dgAdd('slotKind',dc); continue; }
+                        if (blk._slotKind==='special' && dc.type!=='special') { _dgAdd('slotKind',dc); continue; }
+                        if (disabled.indexOf(dc.field)!==-1) { _dgAdd('disabledField',dc); continue; }
+                        if (window.__regenIndexLockTimeCheck !== false) {
+                            var _dgIL=window.GlobalFieldLocks?.isFieldLocked(dc.field,slots,bDiv);
+                            if (_dgIL) {
+                                if (_dgIL.startMin!=null && _dgIL.endMin!=null && !(_dgIL.startMin<eM && _dgIL.endMin>sM)) { /* time-disjoint index collision — ignored, fall through */ }
+                                else { _dgAdd('indexLock',dc); continue; }
+                            }
+                        } else if (window.GlobalFieldLocks?.isFieldLocked(dc.field,slots)) { _dgAdd('indexLock',dc); continue; }
+                        if (S.isFieldLockedByTime(dc.field,sM,eM,bDiv)) { _dgAdd('timeLock',dc); continue; }
+                        if (S.checkCrossDivisionTimeConflict(dc.field,bDiv,sM,eM,bunk)) { _dgAdd('xdivTimeConflict',dc); continue; }
+                        var _dgCombo=S._comboExclusiveMap.get(dc._fieldNorm); if (_dgCombo){var _dgB=false;for(var _dgc=0;_dgc<_dgCombo.length;_dgc++){if(S.getFieldUsageFromTimeIndex(_dgCombo[_dgc],sM,eM,bunk)>0){_dgB=true;break;}}if(_dgB){_dgAdd('comboExclusive',dc);continue;}}
+                        var _dgFp=S._fieldPropertyMap.get(dc.field),_dgCap=_dgFp?_dgFp.capacity:S.getFieldCapacity(dc.field),_dgSt=_dgFp?_dgFp.sharingType:S.getSharingType(dc.field);
+                        var _dgGso=(_dgFp&&_dgFp.gradeShareRules&&bDiv)?_dgFp.gradeShareRules[bDiv]:null; if(_dgGso){_dgSt=_dgGso.type||'not_sharable';_dgCap=parseInt(_dgGso.capacity)||(_dgSt==='not_sharable'?1:2);}
+                        if (_dgSt==='not_sharable'){ if (S.getFieldUsageFromTimeIndex(dc._fieldNorm,sM,eM,bunk)>=_dgCap){_dgAdd('capacityTime',dc);continue;} } else { if (S.countSameDivisionUsage(dc.field,bDiv,sM,eM,bunk)>=_dgCap){_dgAdd('capacitySameDiv',dc);continue;} }
+                        var _dgTd=S.getActivitiesDoneToday(bunk,slots[0]??999),_dgAn=normName(dc.activityName); if(_dgAn&&_dgAn!=='free'&&_dgAn!=='free play'&&_dgTd.has(_dgAn)){_dgAdd('doneToday',dc);continue;}
+                        if (!actProps[dc.field]&&!actProps[dc.activityName]&&dc.type!=='special'){_dgAdd('noActProps',dc);continue;}
+                        if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(dc.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,dc.field,actProps,null,dc.activityName,false)) {
+                            _dgAdd('canBlockFit',dc);
+                            // Re-run ONCE with [FIT] debug logging on so the console
+                            // prints the exact internal gate that rejected this candidate.
+                            if (!window.__regenDiagFitOff) { try { if (window.SchedulerCoreUtils._setDebugFits) { window.SchedulerCoreUtils._setDebugFits(true); window.SchedulerCoreUtils.canBlockFit(blk,dc.field,actProps,null,dc.activityName,false); window.SchedulerCoreUtils._setDebugFits(false); } } catch(_eF){ try { window.SchedulerCoreUtils._setDebugFits(false); } catch(_eF2){} } }
+                            continue;
+                        }
+                        S.setScratchPick(dc); var _dgCost=S.calculatePenaltyCost(blk,S.setScratchPick(dc));
+                        if (_dgCost>=900000) { _dgAdd(_dgCost===Infinity?'rotationGate(Infinity)':'penalty>=900k',dc); continue; }
+                        _dgAdd('WOULD-PASS?!',dc);
+                    }
+                    console.warn('[SOLVER-REGEN-DIAG] "'+bunk+'" @'+sM+'-'+eM+' (kind='+(blk._slotKind||'any')+'): 0/'+allCands.length+' candidates survived. Rejections: '+JSON.stringify(_dgTally));
+                    console.warn('[SOLVER-REGEN-DIAG] samples: '+_dgSamples.join(' | '));
+                } catch(_eDg) { console.warn('[SOLVER-REGEN-DIAG] failed:', _eDg); }
+            }
             // Phase 2: Displacement
             for (var obi=0;obi<activityBlocks.length;obi++) {
                 var ob=activityBlocks[obi]; if (obi===bi||ob.divName!==bDiv||ob.bunk===bunk) continue;
@@ -2111,7 +2721,7 @@
                 var saved={candIdx:oa.candIdx,pick:oa.pick,cost:oa.cost};
                 S.undoPickFromSchedule(ob,oa.pick); var ap=S.clonePick(alts[0].cand); S._assignments.set(obi,{candIdx:alts[0].ci,pick:ap,cost:alts[0].cost}); S.applyPickToSchedule(ob,ap);
                 S.addToFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(ap._activity)); S.removeFromFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear();
-                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (disabled.indexOf(pc.field)!==-1) continue; if (window.GlobalFieldLocks?.isFieldLocked(pc.field,slots)) continue; var _pLoc=window.getLocationForActivity?.(pc.activityName||pc.field)||window.getPinnedTileDefaultLocation?.(pc.activityName||pc.field); if (_pLoc&&typeof _pLoc==='string'&&window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots)) continue; if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
+                var pf2=[]; for (var pci=0;pci<allCands.length;pci++) { var pc=allCands[pci]; if (blk._slotKind === 'sport' && pc.type === 'special') continue; if (blk._slotKind === 'special' && pc.type !== 'special') continue; if (disabled.indexOf(pc.field)!==-1) continue; var _pIL=(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false)?window.GlobalFieldLocks?.isFieldLocked(pc.field,slots,bDiv):window.GlobalFieldLocks?.isFieldLocked(pc.field,slots); if (_pIL&&!(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false&&_pIL.startMin!=null&&_pIL.endMin!=null&&!(_pIL.startMin<eM&&_pIL.endMin>sM))) continue; var _pLoc=window.getLocationForActivity?.(pc.activityName||pc.field)||window.getPinnedTileDefaultLocation?.(pc.activityName||pc.field); if (_pLoc&&typeof _pLoc==='string'){ var _pIL2=(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false)?window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots,bDiv):window.GlobalFieldLocks?.isFieldLocked(_pLoc,slots); if (_pIL2&&!(window.__regenSlotScope&&window.__regenIndexLockTimeCheck!==false&&_pIL2.startMin!=null&&_pIL2.endMin!=null&&!(_pIL2.startMin<eM&&_pIL2.endMin>sM))) continue; } if (S.isFieldLockedByTime(pc.field,sM,eM,bDiv)) continue; if (S.checkCrossDivisionTimeConflict(pc.field,bDiv,sM,eM,bunk)) continue; var pfp=S._fieldPropertyMap.get(pc.field),pcap=pfp?pfp.capacity:S.getFieldCapacity(pc.field),pst=pfp?pfp.sharingType:S.getSharingType(pc.field); if (pst==='not_sharable') { if (S.getFieldUsageFromTimeIndex(pc._fieldNorm,sM,eM,bunk)>=pcap) continue; } else { if (S.countSameDivisionUsage(pc.field,bDiv,sM,eM,bunk)>=pcap) continue; } var ptd=S.getActivitiesDoneToday(bunk,slots[0]??999),pAn=normName(pc.activityName); if (pAn&&pAn!=='free'&&pAn!=='free play'&&ptd.has(pAn)) continue; if (!actProps[pc.field]&&!actProps[pc.activityName]&&pc.type!=='special') continue; S.setScratchPick(pc); var pCost=S.calculatePenaltyCost(blk,S.setScratchPick(pc)); if (pCost<900000) pf2.push({ci:pci,cost:pCost}); }
                 if (pf2.length>0) { pf2.sort(function(a,b){return a.cost-b.cost;}); var opk=S.clonePick(allCands[pf2[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:pf2[0].ci,pick:opk,cost:pf2[0].cost}); S.applyPickToSchedule(blk,opk); S.addToFieldTimeIndex(normName(opk.field),sM,eM,bunk,bDiv,normName(opk._activity)); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; break; }
                 else { S.undoPickFromSchedule(ob,ap); S.removeFromFieldTimeIndex(normName(ap.field),ob.startTime,ob.endTime,ob.bunk); S._assignments.set(obi,saved); S.applyPickToSchedule(ob,saved.pick); S.addToFieldTimeIndex(cfn,ob.startTime,ob.endTime,ob.bunk,ob.divName,normName(saved.pick._activity)); S.invalidateRotationCacheForBunk(ob.bunk); S._todayCache.clear(); }
             }
@@ -2217,6 +2827,108 @@
     }
 
     // ========================================================================
+    // ★ RECENCY-AWARE SCARCE-FIELD SWAP (rotation fairness, v16)
+    // A single-capacity, single-sport field (e.g. one soccer field tied to a
+    // fixed coach — "Soccer with Rabbi H." on "Touchdown Park") becomes the
+    // forced overflow for whichever bunk the greedy group-matching places
+    // LAST. Because the processing order is deterministic, it is the SAME
+    // low-seniority bunk every day, so that bunk gets the same sport many days
+    // running while its peers rotate freely. The recency penalty can't prevent
+    // it: once peers claim the other single-cap fields, the repeat is the
+    // bunk's ONLY feasible option (everything else scores 999999), so a
+    // penalised-but-feasible repeat still wins.
+    //
+    // This post-pass rotates the burden. When a bunk is stuck on a sport it
+    // ALSO had in the last 1-2 real days, it looks for a same-period,
+    // same-division peer on its own single-cap sport field and swaps the two
+    // — but ONLY when the trade is strictly fresher for both AND the solver's
+    // own hard-feasibility gate (calculatePenaltyCost < 900000: field access,
+    // capacity, cross-division, cooldown, same-day-dup, timeRules, prefs,
+    // maxUsage) clears BOTH new placements. If no valid peer exists the bunk
+    // keeps the repeat (a real activity beats a Free slot). Recency is read
+    // from saved history (prior dates), so it is stable across the pass — no
+    // oscillation. Kill switch: window.__recencyScarceSwap = false.
+    // ========================================================================
+    function _rssApplyIndex(bi, blk, pick, candIdx, cost) {
+        S.applyPickToSchedule(blk, pick);
+        if (blk.startTime !== undefined && blk.endTime !== undefined) {
+            var fn = normName(pick.field), an = normName(pick._activity);
+            S.addToFieldTimeIndex(fn, blk.startTime, blk.endTime, blk.bunk, blk.divName || '', an || fn);
+            if (an && an !== fn) S.addToFieldTimeIndex(an, blk.startTime, blk.endTime, blk.bunk, blk.divName || '', an);
+        }
+        S._assignments.set(bi, { candIdx: candIdx, pick: pick, cost: cost });
+        S.invalidateRotationCacheForBunk(blk.bunk);
+    }
+    function recencyScarceSwap(activityBlocks) {
+        if (window.__recencyScarceSwap === false) return 0;
+        var RECENT = 2;   // a sport done within this many days counts as a repeat
+        var swaps = 0;
+        var _dsi = function (bunk, act) {
+            var d = S.getDaysSinceActivity ? S.getDaysSinceActivity(bunk, act) : null;
+            return (d == null) ? Infinity : d;
+        };
+        var _eligible = function (bi) {
+            var asg = S._assignments.get(bi);
+            if (!asg || asg.candIdx === -1 || !asg.pick) return false;
+            var pk = asg.pick;
+            if (pk._type !== 'sport' || pk._fullGrade) return false;   // rotation sports only
+            var blk = activityBlocks[bi];
+            if (!blk || blk.startTime === undefined || blk.endTime === undefined || !blk.divName) return false;
+            var actN = normName(pk._activity);
+            if (!actN || actN === 'free' || actN === 'free play') return false;
+            // The bunk must be the SOLE occupant of its field at this window so the
+            // exchange is a clean 1:1 (capacity is trivially preserved).
+            if (S.getFieldUsageFromTimeIndex(normName(pk.field), blk.startTime, blk.endTime, blk.bunk) !== 0) return false;
+            return true;
+        };
+        for (var ai = 0; ai < activityBlocks.length; ai++) {
+            if (!_eligible(ai)) continue;
+            var aAsg = S._assignments.get(ai), aBlk = activityBlocks[ai], aPick = aAsg.pick;
+            var aAct = aPick._activity, aActN = normName(aAct);
+            var aStuck = _dsi(aBlk.bunk, aAct);
+            if (aStuck < 1 || aStuck > RECENT) continue;   // only break genuine recent repeats
+            for (var bj = 0; bj < activityBlocks.length; bj++) {
+                if (bj === ai || !_eligible(bj)) continue;
+                var bBlk = activityBlocks[bj];
+                if (bBlk.bunk === aBlk.bunk) continue;
+                if (String(bBlk.divName) !== String(aBlk.divName)) continue;        // same division
+                if (bBlk.startTime !== aBlk.startTime || bBlk.endTime !== aBlk.endTime) continue; // same window
+                var bAsg = S._assignments.get(bj), bPick = bAsg.pick;
+                var bAct = bPick._activity, bActN = normName(bAct);
+                if (!bActN || bActN === aActN) continue;     // must be a DIFFERENT sport
+                // The trade must strictly help: A must not just hit another recent
+                // repeat, and B must be fresher for A's sport than A is.
+                if (_dsi(aBlk.bunk, bAct) <= RECENT) continue;
+                if (_dsi(bBlk.bunk, aAct) <= aStuck) continue;
+                // Tentatively pull both, then validate the swapped placements with the
+                // solver's own hard-feasibility gate.
+                S.undoPickFromSchedule(aBlk, aPick);
+                S.undoPickFromSchedule(bBlk, bPick);
+                S._todayCache.clear();
+                var pickAnew = { field: bPick.field, sport: bPick.sport, _activity: bPick._activity, _type: bPick._type, _fullGrade: false };
+                var pickBnew = { field: aPick.field, sport: aPick.sport, _activity: aPick._activity, _type: aPick._type, _fullGrade: false };
+                var costA = S.calculatePenaltyCost(aBlk, pickAnew);
+                var costB = S.calculatePenaltyCost(bBlk, pickBnew);
+                if (costA < 900000 && costB < 900000) {
+                    _rssApplyIndex(ai, aBlk, pickAnew, bAsg.candIdx, costA);
+                    _rssApplyIndex(bj, bBlk, pickBnew, aAsg.candIdx, costB);
+                    S._todayCache.clear();
+                    swaps++;
+                    console.log('[RECENCY-SWAP] ' + aBlk.bunk + ' "' + aAct + '" (repeat ' + aStuck + 'd) ⇄ ' + bBlk.bunk + ' "' + bAct + '" @' + aBlk.startTime);
+                    break;   // this block is resolved
+                } else {
+                    _rssApplyIndex(ai, aBlk, aPick, aAsg.candIdx, aAsg.cost);
+                    _rssApplyIndex(bj, bBlk, bPick, bAsg.candIdx, bAsg.cost);
+                    S._todayCache.clear();
+                }
+            }
+        }
+        if (swaps > 0) console.log('[RECENCY-SWAP] rotated ' + swaps + ' stuck repeat(s) off the scarce field');
+        return swaps;
+    }
+    Solver.recencyScarceSwap = recencyScarceSwap;
+
+    // ========================================================================
     // ★★★ v15.5: FIELD-QUALITY RE-OPTIMIZATION ★★★
     // After all heuristic phases, sweep through every assignment whose field
     // belongs to a quality group and try to swap it onto the best free
@@ -2254,6 +2966,15 @@
         var candFp = S._fieldPropertyMap.get(candName);
         if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
             if (!(blk.divName in candFp.accessRestrictions.divisions)) return rej('accessRestrictions: division "' + blk.divName + '" not allowed');
+        }
+        // ★ Respect EXCLUSIVE field preference (mirrors the domain filter L1805 +
+        //   scorer L867). The field-quality reoptimizer pulls blocks to higher-ranked
+        //   fields by walking field-group members directly — OUTSIDE the candidate
+        //   domain — so without this guard it could move a block onto a premium field
+        //   whose exclusive preference list excludes the block's division (e.g. a
+        //   Majors-only field), silently overriding the user's preference.
+        if (candFp && candFp.prefExclusive && candFp.prefList && blk.divName && candFp.prefList.indexOf(blk.divName) === -1) {
+            return rej('exclusive field preference excludes division "' + blk.divName + '"');
         }
         if (S.isFieldLockedByTime(candName, sM, eM, blk.divName)) return rej('time-based field lock');
 
@@ -2421,6 +3142,18 @@
                 }
             }
 
+            // ★ A field hosts ONE division at a time (same_division sharing). The
+            //   bijection above can split a same-grade share and assign two DIFFERENT
+            //   divisions to one field — a cross-division conflict the validator later
+            //   has to repair by dropping a placement. Reject any re-pair that would
+            //   co-locate different divisions on the same target field.
+            var divByFieldB = {};
+            for (var cgi = 0; cgi < swaps.length; cgi++) {
+                var nfB = swaps[cgi].newField, dvB = swaps[cgi].p.blk.divName;
+                if (divByFieldB[nfB] === undefined) divByFieldB[nfB] = dvB;
+                else if (divByFieldB[nfB] !== dvB) return;
+            }
+
             // Apply atomically: undo all olds first, then apply all news.
             swaps.forEach(function(sp) {
                 if (sp.p.currentField === sp.newField) return;
@@ -2435,7 +3168,143 @@
         });
         S._todayCache.clear();
 
-        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
+        // ★ FN-52 PHASE C — staggered-overlap seniority swap. Phase B only
+        //   re-pairs EXACT windows; grouped placements that merely OVERLAP
+        //   stayed misranked even when swapping the two fields was perfectly
+        //   legal (windows stay put — only the fields trade). Both sides must
+        //   re-validate on the freed state; restored verbatim otherwise.
+        var overlapSwaps = 0;
+        try {
+            var groupedAll = [];
+            for (var bi3 = 0; bi3 < activityBlocks.length; bi3++) {
+                if (!S._assignedBlocks.has(bi3)) continue;
+                var asgn3 = S._assignments.get(bi3);
+                if (!asgn3 || !asgn3.pick || !asgn3.pick.field || asgn3.pick.field === 'Free') continue;
+                var fg3 = fgMap[asgn3.pick.field];
+                if (!fg3) continue;
+                var blk3 = activityBlocks[bi3];
+                if (blk3.startTime === undefined || blk3.endTime === undefined) continue;
+                groupedAll.push({ bi: bi3, blk: blk3, asgn: asgn3, group: fg3.groupName });
+            }
+            var senOf = function (divName) { var s = seniorityMap && seniorityMap[divName]; return (s === undefined) ? Infinity : s; };
+            var passC = 0, improvedC = true;
+            while (improvedC && passC++ < 4) {
+                improvedC = false;
+                for (var ia = 0; ia < groupedAll.length; ia++) {
+                    for (var ib = 0; ib < groupedAll.length; ib++) {
+                        var A = groupedAll[ia], B = groupedAll[ib];
+                        if (A === B || A.group !== B.group) continue;
+                        var aS = A.blk.startTime, aE = A.blk.endTime, bS = B.blk.startTime, bE = B.blk.endTime;
+                        if (!(aS < bE && bS < aE)) continue;                       // must overlap
+                        if (aS === bS && aE === bE) continue;                      // exact → Phase B's job
+                        if (senOf(A.blk.divName) >= senOf(B.blk.divName)) continue; // A strictly senior (lower index)
+                        var fa = A.asgn.pick.field, fb = B.asgn.pick.field;
+                        var raC = (fgMap[fa] && fgMap[fa].qualityRank) || 999;
+                        var rbC = (fgMap[fb] && fgMap[fb].qualityRank) || 999;
+                        if (raC <= rbC) continue;                                  // already correctly ranked
+                        var actA = A.asgn.pick._activity || fa, actB = B.asgn.pick._activity || fb;
+                        S.undoPickFromSchedule(A.blk, A.asgn.pick);
+                        S.removeFromFieldTimeIndex(normName(fa), aS, aE, A.blk.bunk);
+                        S.undoPickFromSchedule(B.blk, B.asgn.pick);
+                        S.removeFromFieldTimeIndex(normName(fb), bS, bE, B.blk.bunk);
+                        var okA = _fqValidSwap(A.blk, fb, actA, A.blk.bunk);
+                        var okB = _fqValidSwap(B.blk, fa, actB, B.blk.bunk);
+                        if (okA && okB) {
+                            _fqApplySwap(A.bi, A.blk, A.asgn, fb);
+                            _fqApplySwap(B.bi, B.blk, B.asgn, fa);
+                            overlapSwaps++; improvedC = true;
+                        } else {
+                            _fqApplySwap(A.bi, A.blk, A.asgn, fa);
+                            _fqApplySwap(B.bi, B.blk, B.asgn, fb);
+                        }
+                    }
+                }
+            }
+            S._todayCache.clear();
+        } catch (eC) { console.warn('[v15.5 C] overlap swap error:', eC && eC.message); }
+
+        // ★ PHASE D — whole-field group swap (parity with field_quality_reopt.js).
+        //   Phases A-C move/swap atomic blocks keyed by a single window, so they
+        //   cannot fix the common cross-division case where a senior block (one
+        //   long period, e.g. 740-815) spans a boundary at which a better-ranked
+        //   field hands off between two SEQUENTIAL junior occupants (740-805 then
+        //   805-870): every candidate move collides with the second occupant, so
+        //   nothing moves. Exchange the ENTIRE block set of two same-group fields
+        //   at once when the WORSE-ranked field holds a more-senior division than
+        //   the better-ranked one. Wholesale movement preserves each field's
+        //   internal time structure + same-grade shares; _fqValidSwap re-checks
+        //   host/access/locks/cross-div, and (as blocks are tentatively re-indexed
+        //   during validation) capacity for every moved block.
+        var fieldSwaps = 0;
+        try {
+            var senOfD = function (divName) { var s = seniorityMap && seniorityMap[divName]; return (s === undefined) ? Infinity : s; };
+            var rebuildBBF = function () {
+                var m = {};
+                for (var bi4 = 0; bi4 < activityBlocks.length; bi4++) {
+                    if (!S._assignedBlocks.has(bi4)) continue;
+                    var a4 = S._assignments.get(bi4);
+                    if (!a4 || !a4.pick || !a4.pick.field || a4.pick.field === 'Free') continue;
+                    if (!fgMap[a4.pick.field]) continue;
+                    var b4 = activityBlocks[bi4];
+                    if (b4.startTime === undefined || b4.endTime === undefined) continue;
+                    (m[a4.pick.field] = m[a4.pick.field] || []).push({ bi: bi4, blk: b4, asgn: a4 });
+                }
+                return m;
+            };
+            var mostSeniorD = function (bbf, field) {
+                var arr = bbf[field] || [], best = Infinity;
+                for (var mi = 0; mi < arr.length; mi++) { var s = senOfD(arr[mi].blk.divName); if (s < best) best = s; }
+                return best;
+            };
+            var groupNamesD = Object.keys(fgGroups);
+            var passD = 0, improvedD = true, bbfD = rebuildBBF();
+            while (improvedD && passD++ < 8) {
+                improvedD = false;
+                for (var gd = 0; gd < groupNamesD.length; gd++) {
+                    var membersD = fgGroups[groupNamesD[gd]].slice().sort(function (a, b) { return a.qualityRank - b.qualityRank; });
+                    for (var id = 0; id < membersD.length; id++) {
+                        for (var jd = id + 1; jd < membersD.length; jd++) {
+                            var fiD = membersD[id].name, fjD = membersD[jd].name; // fiD better-ranked
+                            var aB = bbfD[fiD] || [], bB = bbfD[fjD] || [];
+                            if (!aB.length || !bB.length) continue;
+                            if (!(mostSeniorD(bbfD, fjD) < mostSeniorD(bbfD, fiD))) continue; // worse field must hold a MORE senior div
+                            // detach both sets from schedule + index
+                            aB.forEach(function (x) { S.undoPickFromSchedule(x.blk, x.asgn.pick); S.removeFromFieldTimeIndex(normName(fiD), x.blk.startTime, x.blk.endTime, x.blk.bunk); });
+                            bB.forEach(function (x) { S.undoPickFromSchedule(x.blk, x.asgn.pick); S.removeFromFieldTimeIndex(normName(fjD), x.blk.startTime, x.blk.endTime, x.blk.bunk); });
+                            // validate with accumulation: add each tentatively so a same-field
+                            // share's 2nd block sees the 1st (correct capacity counting).
+                            var trialD = [], okD = true;
+                            var tryPlaceD = function (blocks, target) {
+                                for (var k = 0; k < blocks.length; k++) {
+                                    var x = blocks[k];
+                                    var act = x.asgn.pick._activity || x.asgn.pick.field;
+                                    if (_fqValidSwap(x.blk, target, act, x.blk.bunk)) {
+                                        S.addToFieldTimeIndex(normName(target), x.blk.startTime, x.blk.endTime, x.blk.bunk, x.blk.divName, normName(act));
+                                        trialD.push({ f: normName(target), blk: x.blk });
+                                    } else { okD = false; return; }
+                                }
+                            };
+                            tryPlaceD(aB, fjD);
+                            if (okD) tryPlaceD(bB, fiD);
+                            // drop tentative index entries; _fqApplySwap re-adds cleanly
+                            trialD.forEach(function (t) { S.removeFromFieldTimeIndex(t.f, t.blk.startTime, t.blk.endTime, t.blk.bunk); });
+                            if (okD) {
+                                aB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fjD); });
+                                bB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fiD); });
+                                fieldSwaps++; improvedD = true;
+                            } else {
+                                aB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fiD); });
+                                bB.forEach(function (x) { _fqApplySwap(x.bi, x.blk, x.asgn, fjD); });
+                            }
+                            bbfD = rebuildBBF(); // refs are stale after _fqApplySwap → refresh
+                        }
+                    }
+                }
+            }
+            S._todayCache.clear();
+        } catch (eD) { console.warn('[v15.5 D] whole-field swap error:', eD && eD.message); }
+
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s), ' + overlapSwaps + ' staggered-overlap swap(s), ' + fieldSwaps + ' whole-field swap(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
         if (blocksWithBetterCandidate > improved) {
             console.log('[v15.5]    ' + (blocksWithBetterCandidate - improved) + ' block(s) had a higher-ranked candidate but the swap was rejected. Set window.DEBUG_FQ_REOPT = true and regenerate to see why.');
         }
@@ -2456,7 +3325,7 @@
         }
         if (violations.length === 0) return 0;
         console.log('[v14.1] 🔧 Cross-division violations: ' + violations.length);
-        var resolved = 0;
+        var resolved = 0, demoted = 0;
         for (var vi = 0; vi < violations.length; vi++) {
             var v = violations[vi], bi = v.blockIdx, blk2 = v.block;
             S._todayCache.clear();
@@ -2477,10 +3346,25 @@
                 S.addToFieldTimeIndex(fn, blk2.startTime, blk2.endTime, blk2.bunk, blk2.divName, normName(pk._activity));
                 S.invalidateRotationCacheForBunk(blk2.bunk); S._todayCache.clear();
                 resolved++;
+            } else {
+                // ★ FN-53: no legal alternative — DEMOTE TO FREE. An illegal
+                //   cross-division share must never survive to the final
+                //   schedule (live repro: Soloists + Quints sharing the
+                //   same_division 'Belts' field — the re-solve found the
+                //   violation, had no alternative, and silently kept it).
+                //   Free is honest; later fill passes may refill it legally.
+                S.undoPickFromSchedule(blk2, v.assignment.pick);
+                S.removeFromFieldTimeIndex(normName(v.assignment.pick.field), blk2.startTime, blk2.endTime, blk2.bunk);
+                var freePick = { field: 'Free', sport: null, _activity: 'Free' };
+                S._assignments.set(bi, { candIdx: -1, pick: freePick, cost: 0 });
+                S.applyPickToSchedule(blk2, freePick);
+                S.invalidateRotationCacheForBunk(blk2.bunk); S._todayCache.clear();
+                demoted++;
+                console.warn('[v14.1] ⛔ ' + blk2.bunk + ' (' + blk2.divName + ') demoted to Free — illegal share on "' + v.assignment.pick.field + '" @' + blk2.startTime + '-' + blk2.endTime + ' had no legal alternative');
             }
         }
-        console.log('[v14.1] 🔧 Resolved: ' + resolved + '/' + violations.length);
-        return resolved;
+        console.log('[v14.1] 🔧 Resolved: ' + resolved + '/' + violations.length + (demoted ? ' (+' + demoted + ' demoted to Free — no legal alternative)' : ''));
+        return resolved + demoted;
     }
 
     // ========================================================================
@@ -2571,6 +3455,21 @@
         //        better-ranked one in the same group is genuinely free. Sweep
         //        once at the end and swap upward where every constraint allows.
         fieldQualityReoptimize(activityBlocks);
+
+        // ★ v16: Recency-aware scarce-field swap — rotate a bunk off a sport it
+        //   was stuck repeating (single-cap/single-sport overflow field) onto a
+        //   same-period, same-division peer for whom the trade is fresher. Runs
+        //   BEFORE the final cross-division sweep so that backstop re-checks it
+        //   (swaps are same-division, so they never introduce a cross-div share).
+        recencyScarceSwap(activityBlocks);
+
+        // ★ FN-53: FINAL cross-division invariant sweep — the duplicate sweep
+        //   and quality passes above move blocks AFTER the first re-solve, so
+        //   they can create fresh violations nothing re-checked. Run the
+        //   re-solve once more as the LAST field-mutating pass; with the
+        //   demote-to-Free fallback it always ends at zero illegal shares.
+        S.buildFieldTimeIndex();
+        crossDivisionReSolve(activityBlocks);
 
         // Final stats
         var freeCount = 0;

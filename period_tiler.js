@@ -1,3 +1,4 @@
+
 /**
  * period_tiler.js — Phase −0.5 PeriodTiler (P1: pure function only)
  * =================================================================
@@ -107,6 +108,26 @@
     var bestLayout = null;
     var bestLeftover = -1;
     var bestShiftDist = Infinity;
+    var bestRank = null;
+
+    // Rank a candidate layout. Lower is better, compared field-by-field:
+    //   bucket: 0 = perfect tile (no leftover), 1 = sport-fillable leftover
+    //           (>= minSportDMin), 2 = leaves an unfillable sliver.
+    //   For an unsolvable bucket (2) we then minimize the wasted sliver.
+    //   Finally, among otherwise-equal layouts, minimize how far pieces were
+    //   shifted from their configured starts (least disruption wins). This
+    //   replaces the old logic, which accepted the LAST ok permutation seen and
+    //   so could pick a heavily-shifted layout over an equivalent zero-shift one.
+    function _rankOf(ok, leftover, shiftDist) {
+      var bucket = ok ? (leftover === 0 ? 0 : 1) : 2;
+      return { bucket: bucket, leftover: leftover, shiftDist: shiftDist };
+    }
+    function _isBetter(a, b) {
+      if (!b) return true;
+      if (a.bucket !== b.bucket) return a.bucket < b.bucket;
+      if (a.bucket === 2 && a.leftover !== b.leftover) return a.leftover < b.leftover;
+      return a.shiftDist < b.shiftDist;
+    }
 
     function tryPermutation(perm) {
       // All items in display order = fixed (in their configured order) merged with perm.
@@ -116,11 +137,17 @@
 
       // 1. Build a timeline of fixed items (sorted by start). Reject if any fixed item
       //    overlaps the period boundary or another fixed item.
+      //    ★ A fixed item's footprint is its REAL duration (configuredDur), not dMin.
+      //    Using dMin here let a block longer than its dMin overflow the period
+      //    boundary or overlap its neighbour while the gap math (which uses
+      //    configuredDur) silently disagreed — producing layouts that ran past
+      //    the period end. Measure both checks by the same footprint as the gaps.
       var fixedSorted = _sortBy(fixed, 'configuredStart');
+      var _foot = function (x) { return (x.configuredDur != null ? x.configuredDur : x.dMin); };
       for (var i = 0; i < fixedSorted.length; i++) {
         var f = fixedSorted[i];
-        if (f.configuredStart < period.startMin || f.configuredStart + f.dMin > period.endMin) return;
-        if (i > 0 && fixedSorted[i].configuredStart < fixedSorted[i - 1].configuredStart + fixedSorted[i - 1].dMin) return;
+        if (f.configuredStart < period.startMin || f.configuredStart + _foot(f) > period.endMin) return;
+        if (i > 0 && fixedSorted[i].configuredStart < fixedSorted[i - 1].configuredStart + _foot(fixedSorted[i - 1])) return;
       }
 
       // 2. Compute the gaps between fixed items (within the period).
@@ -205,16 +232,12 @@
         }
       });
 
-      var betterLeftover = false;
-      if (ok && bestLeftover !== 0) betterLeftover = true;       // prefer ok solutions
-      else if (ok && leftover === 0 && bestLeftover !== 0) betterLeftover = true;
-      else if (ok && leftover === bestLeftover && shiftDist < bestShiftDist) betterLeftover = true;
-      else if (!bestLayout) betterLeftover = true;
-
-      if (betterLeftover) {
+      var rank = _rankOf(ok, leftover, shiftDist);
+      if (_isBetter(rank, bestRank)) {
         bestLayout = placements;
         bestLeftover = leftover;
         bestShiftDist = shiftDist;
+        bestRank = rank;
       }
     }
 
@@ -280,6 +303,8 @@
               name: ref.name,
               bunk: input.bunk,
               period: period.name,
+              periodStart: period.startMin,
+              periodEnd: period.endMin,
               oldStart: oldStart,
               newStart: p.start,
               oldDur: oldDur,
@@ -380,7 +405,7 @@
     });
 
     var allPass = results.every(function (r) { return r.pass; });
-    if (window.console && console.log) {
+    if (typeof console !== 'undefined' && console.log) {
       console.log('[PeriodTiler P1] Smoke tests:', allPass ? 'PASS' : 'FAIL');
       results.forEach(function (r) {
         console.log('  - ' + r.name + ': ' + (r.pass ? 'OK' : 'FAIL'),
@@ -390,16 +415,150 @@
     return { allPass: allPass, results: results };
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // fitBunkRegion — per-bunk "fit math" + region packing.
+  //
+  // The human scheduler's loop for the davening→wall gap (e.g. 11:50→2:20):
+  //   region = wall_start - davening_end                       (150 min)
+  //   budget = region - sum(windowed fixed walls: Morning 40, Lunch 20)  (90)
+  //   pick the specials this bunk is DUE for, at their CONFIGURED durations,
+  //   so they sum to the budget; place everything so it abuts (zero slivers),
+  //   honouring each wall's window and NEVER resizing a configured duration.
+  //
+  // Verdict (the "math that makes sure it fits"):
+  //   'fit'   sum(due) == budget   → place all, no slack
+  //   'slack' sum(due) <  budget   → place all; leftover is a sport (>= floor,
+  //                                  if allowed) / an extra due pick / honest gap
+  //   'over'  sum(due) >  budget   → can't fit all at their real durations; keep
+  //                                  highest-priority until budget, DEFER the rest
+  //                                  and report them — never shrink a special
+  //
+  // Non-greedy: it keeps the slack as ONE consolidated block rather than
+  // scattering pieces, so shared fields/time stay open for the other bunks to
+  // tile their own regions (the cross-bunk layer aligns those shared blocks).
+  //
+  // INPUT:
+  //   { regionStart, regionEnd,
+  //     walls: [{ name, dur, earliestStart, latestStart }],   // windowed fixed walls
+  //     due:   [{ name, dur, priority }],                     // higher priority kept first
+  //     minSportDMin = 25, sportsAllowed = false, gridStep = 5 }
+  //
+  // OUTPUT:
+  //   { verdict, region, budget, dueTotal, slackMin,
+  //     layout: [{ name, kind, start, end, dur }],            // contiguous, sorted
+  //     placed: [name...], unplaced: [name...], debug }
+  // ─────────────────────────────────────────────────────────────
+  function fitBunkRegion(input) {
+    var S = input.regionStart, E = input.regionEnd;
+    var region = Math.max(0, E - S);
+    var minSport = input.minSportDMin != null ? input.minSportDMin : 25;
+    var sportsAllowed = !!input.sportsAllowed;
+
+    var walls = (input.walls || []).map(function (w) {
+      return {
+        name: w.name, dur: w.dur, kind: 'wall',
+        es: (w.earliestStart != null ? w.earliestStart : S),
+        ls: (w.latestStart != null ? w.latestStart : (E - w.dur))
+      };
+    });
+    var wallTotal = walls.reduce(function (s, w) { return s + w.dur; }, 0);
+    var budget = region - wallTotal;
+
+    var due = (input.due || []).map(function (d) {
+      return { name: d.name, dur: d.dur, priority: (d.priority != null ? d.priority : 0) };
+    });
+    var dueTotal = due.reduce(function (s, d) { return s + d.dur; }, 0);
+
+    // ── Verdict + selection ──
+    var verdict, selected = [], unplaced = [];
+    if (budget < 0) {
+      verdict = 'over';                 // walls alone overflow — structurally infeasible
+      due.forEach(function (d) { unplaced.push(d.name); });
+    } else if (dueTotal === budget) {
+      verdict = 'fit'; selected = due.slice();
+    } else if (dueTotal < budget) {
+      verdict = 'slack'; selected = due.slice();
+    } else {
+      verdict = 'over';                 // keep highest-priority until budget; defer the rest
+      var byPri = due.slice().sort(function (a, b) { return b.priority - a.priority; });
+      var running = 0;
+      byPri.forEach(function (d) {
+        if (running + d.dur <= budget) { selected.push(d); running += d.dur; }
+        else unplaced.push(d.name);
+      });
+    }
+
+    var selTotal = selected.reduce(function (s, d) { return s + d.dur; }, 0);
+    var slackMin = Math.max(0, budget - selTotal);
+
+    // ── Build the piece set to pack (sums to the region exactly when budget>=0) ──
+    var pieces = [];
+    walls.forEach(function (w) { pieces.push({ name: w.name, dur: w.dur, kind: 'wall', es: w.es, ls: w.ls }); });
+    selected.forEach(function (d) { pieces.push({ name: d.name, dur: d.dur, kind: 'special', es: S, ls: E - d.dur }); });
+    if (slackMin > 0) {
+      var slackKind = (sportsAllowed && slackMin >= minSport) ? 'sport' : 'gap';
+      pieces.push({ name: slackKind === 'sport' ? 'Sport' : 'Free', dur: slackMin, kind: slackKind, es: S, ls: E - slackMin, _slack: true });
+    }
+
+    // ── Pack: place an ordering left-to-right from S; a wall clamps to its
+    //    window. Score by (least gap+overflow), then least wall shift. Try all
+    //    orderings (<=7 pieces) else a single greedy walls-by-deadline order. ──
+    var best = null;
+    function tryOrder(order) {
+      var cursor = S, lay = [], internalGap = 0, shift = 0, okOrder = true;
+      for (var i = 0; i < order.length; i++) {
+        var p = order[i], start = cursor;
+        if (p.kind === 'wall') {
+          if (cursor < p.es) { internalGap += (p.es - cursor); start = p.es; }
+          if (start > p.ls) { okOrder = false; break; }
+          shift += Math.abs(start - p.es);
+        }
+        var end = start + p.dur;
+        if (end > E) { okOrder = false; break; }
+        lay.push({ name: p.name, kind: p.kind, start: start, end: end, dur: p.dur, _slack: !!p._slack });
+        cursor = end;
+      }
+      if (!okOrder) return;
+      var totalGap = internalGap + (E - cursor);
+      if (!best || totalGap < best.totalGap || (totalGap === best.totalGap && shift < best.shift)) {
+        best = { layout: lay, totalGap: totalGap, shift: shift };
+      }
+    }
+    if (pieces.length <= 7) {
+      _permute(pieces, [], tryOrder);
+    } else {
+      tryOrder(pieces.slice().sort(function (a, b) {
+        return (a.kind === 'wall' ? a.ls : Infinity) - (b.kind === 'wall' ? b.ls : Infinity);
+      }));
+    }
+
+    var layout = best ? best.layout.slice().sort(function (a, b) { return a.start - b.start; }) : [];
+    return {
+      verdict: verdict, region: region, budget: budget, dueTotal: dueTotal, slackMin: slackMin,
+      layout: layout,
+      placed: selected.map(function (d) { return d.name; }),
+      unplaced: unplaced,
+      debug: { wallTotal: wallTotal, selTotal: selTotal, gap: best ? best.totalGap : null, pieceCount: pieces.length }
+    };
+  }
+
   // Expose API
-  window.PeriodTiler = {
+  var api = {
     tileBunkDay: tileBunkDay,
     tilePeriod: tilePeriod,
+    fitBunkRegion: fitBunkRegion,
     _smokeTest: _smokeTest
   };
+  if (typeof window !== 'undefined') {
+    window.PeriodTiler = api;
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = api;
+  }
 
   // Auto-run smoke test on load (only logs; no side effects)
   try {
-    if (window.location && /[?&]tilerSmoke=1/.test(window.location.search)) {
+    if (typeof window !== 'undefined' && window.location && /[?&]tilerSmoke=1/.test(window.location.search)) {
       _smokeTest();
     }
   } catch (e) {}

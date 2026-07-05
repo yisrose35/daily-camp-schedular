@@ -17,7 +17,31 @@
     // (and iterate 864+ rainy-only entries) on every single block.
     let _specialsCache = null;
     let _specialsCacheRainyMode = null;
-    window.invalidateSmartLogicSpecialsCache = function() { _specialsCache = null; _specialsCacheRainyMode = null; };
+    let _validLocCache = null;   // Set of lowercased facility+field names (orphan-facility gate)
+    window.invalidateSmartLogicSpecialsCache = function() { _specialsCache = null; _specialsCacheRainyMode = null; _validLocCache = null; };
+
+    // ★ A special whose configured `location` is not a real facility/field has nowhere
+    //   to be held (e.g. "Canteen"/"Gameroom" with no such facility). The scheduler's
+    //   loader filters these out, but the SmartTile pre-allocator builds its pool from
+    //   getAvailableSpecialsForTimeBlock, so without the same gate it keeps emitting
+    //   them. Returns true if the special should be DROPPED. Fail-open: if the facility
+    //   registry can't be read, the cache stays empty and nothing is dropped.
+    function _specialFacilityMissing(special, props) {
+        if (_validLocCache === null) {
+            try {
+                const facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+                const facNames = Array.isArray(facs) ? facs.map(f => (f && f.name) || f) : (facs ? Object.keys(facs) : []);
+                const app1 = ((window.loadGlobalSettings && window.loadGlobalSettings()) || {}).app1 || {};
+                const fieldNames = (app1.fields || []).map(f => (f && f.name) || f);
+                const names = facNames.concat(fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
+                _validLocCache = new Set(names);
+            } catch (_e) { _validLocCache = new Set(); }
+        }
+        if (_validLocCache.size === 0) return false; // registry unavailable → fail open
+        const loc = (props && props.location) || (special && special.location);
+        if (!loc || !String(loc).trim()) return false;        // no location requirement → keep
+        return !_validLocCache.has(String(loc).trim().toLowerCase());
+    }
 
     // =========================================================================
     // STORAGE KEYS
@@ -67,7 +91,10 @@
     const DEBUG_SMART_TILE = window.DEBUG_SMART_TILE || false;
 
     function log(...args) {
-        if (DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
+        // Read window.DEBUG_SMART_TILE LIVE so the trace can be toggled at runtime
+        // (set window.DEBUG_SMART_TILE = true, then regenerate) — it was previously
+        // captured once at load, so the flag could only be set before page load.
+        if (window.DEBUG_SMART_TILE || DEBUG_SMART_TILE) console.log("[SmartTile]", ...args);
     }
 
     // =========================================================================
@@ -140,13 +167,24 @@
         // Check accessRestrictions restrictions
         if (props.accessRestrictions?.enabled) {
             const allowedDivisions = props.accessRestrictions.divisions || {};
-            
+
             // If accessRestrictions is enabled, division must be in the allowed list
             if (!(divisionName in allowedDivisions)) {
                 return false;
             }
         }
-        
+
+        // ★ Duplicate-safe gate. `props` is resolved from ONE entry's properties,
+        //   but this camp duplicates specials by case ("Sushi"/"sushi") and the
+        //   duplicate may carry no restriction — so the props-based check above
+        //   can miss a restriction living on the other copy. The authoritative
+        //   check (scheduler_core_auto.js) considers EVERY copy of the name and
+        //   fails closed. Fail-open only if it isn't loaded yet.
+        if (typeof window.isSpecialAvailableForDivision === 'function'
+            && !window.isSpecialAvailableForDivision(specialName, divisionName, window.loadGlobalSettings?.())) {
+            return false;
+        }
+
         // Check preferences.exclusive
         if (props.preferences?.enabled && props.preferences?.exclusive) {
             const preferredList = props.preferences.list || [];
@@ -256,7 +294,12 @@
                     if (isRainyMode && (props.rainyDayAvailable === false || props.availableOnRainyDay === false)) {
                         return; // Skip non-rainy-available on rainy days
                     }
-                    if (!allSpecials.find(s => s.name === name)) {
+                    // ★ Case-INSENSITIVE existence check. This camp duplicates every
+                    //   special cap/lowercase; activityProperties is keyed by the
+                    //   lowercased activity name, so a case-sensitive `s.name === name`
+                    //   never matches the proper-case config entry and injects a bogus
+                    //   lowercase TWIN ("Lake" config + "lake" props) into the pool.
+                    if (!allSpecials.find(s => isSame(s.name, name))) {
                         propsSpecials.push({ name, ...props });
                     }
                 }
@@ -265,6 +308,38 @@
         
         const combinedSpecials = [...allSpecials, ...propsSpecials];
         const available = [];
+
+        // ★ Per-date Resource disables (Daily Adjustments → Resources). A special whose
+        //   facility was toggled off today is added to disabledSpecials (cascade) and its
+        //   location to currentDisabledFields — neither is reflected in the global config
+        //   this reads, so without this gate the SmartTile/special distribution still
+        //   schedules it. (The total solver already excludes them via config.masterSpecials.)
+        const _resDaily = window.loadCurrentDailyData?.() || {};
+        const _disabledSpecialsSet = new Set((((_resDaily.overrides || {}).disabledSpecials) || []).map(n => String(n).toLowerCase().trim()));
+        const _disabledLocSet = new Set([...(window.currentDisabledFields || []), ...(((_resDaily.overrides || {}).disabledFields) || [])].map(n => String(n).toLowerCase().trim()));
+
+        // ★ CONFIG-LEVEL facility shut-off (Facilities tab → AVAILABLE/UNAVAILABLE switch).
+        //   The PERMANENT analog of the per-date Resource disable above: the switch writes
+        //   available:false onto the room's backing field entry (app1.fields, matched by
+        //   name). The total solver honors it for SPORTS via canBlockFit (field props
+        //   available===false → rejected), but specials are pooled by NAME and never check
+        //   their HOST facility's availability — so a special hosted in a shut-off room kept
+        //   getting distributed by smart tiles. Resolve each special's facility robustly
+        //   (case-insensitive scan for the first dup carrying a .location — this camp
+        //   duplicates specials cap/lowercase with blank-location dups) and drop it when the
+        //   host room is unavailable.
+        const _cfg = window.loadGlobalSettings?.() || {};
+        const _unavailFieldsLc = new Set((((_cfg.app1 || {}).fields) || [])
+            .filter(f => f && f.name && f.available === false)
+            .map(f => String(f.name).toLowerCase().trim()));
+        const _resolveHostLoc = (nm) => {
+            const _nl = String(nm).toLowerCase();
+            for (const _s of combinedSpecials) {
+                if (_s && String(_s.name).toLowerCase() === _nl && _s.location) return _s.location;
+            }
+            const _p = activityProps && activityProps[nm];
+            return (_p && _p.location) || (window.getLocationForActivity && window.getLocationForActivity(nm)) || '';
+        };
 
         log(`\n  Checking specials for ${divisionName} at ${startMin}-${endMin}:`);
         log(`  Found ${combinedSpecials.length} total specials to check (after rainy day filter)`);
@@ -280,6 +355,39 @@
             const specialName = special.name;
             const props = activityProps?.[specialName] || special;
 
+            // 0. Skip specials whose configured facility doesn't exist (parity with the
+            //    scheduler loader — Canteen/Gameroom etc. with no matching facility).
+            if (_specialFacilityMissing(special, props)) {
+                log(`    ❌ ${specialName}: facility "${(props && props.location) || special.location}" does not exist — skipping`);
+                return;
+            }
+
+            // 0.5 Per-date Resource disable: toggling a facility off today in Resources
+            //     adds the special to disabledSpecials (cascade) and its location to
+            //     currentDisabledFields. The total solver honors this via config.masterSpecials;
+            //     this is the parity gate for the SmartTile/special-distribution pool.
+            if (_disabledSpecialsSet.has(String(specialName).toLowerCase().trim())) {
+                log(`    ❌ ${specialName}: disabled today in Resources`);
+                return;
+            }
+            {
+                const _specLoc = (props && props.location) || special.location || specialName;
+                if (_disabledLocSet.has(String(_specLoc).toLowerCase().trim())) {
+                    log(`    ❌ ${specialName}: location "${_specLoc}" disabled today in Resources`);
+                    return;
+                }
+            }
+
+            // 0.6 CONFIG facility shut-off: the special's host room was toggled UNAVAILABLE
+            //     in the Facilities tab (available:false on its backing field entry).
+            {
+                const _hostLoc = _resolveHostLoc(specialName);
+                if (_hostLoc && _unavailFieldsLc.has(String(_hostLoc).toLowerCase().trim())) {
+                    log(`    ❌ ${specialName}: host facility "${_hostLoc}" is shut off (Facilities → Unavailable)`);
+                    return;
+                }
+            }
+
             // 1. Check if globally enabled
             if (props.available === false) {
                 log(`    ❌ ${specialName}: globally disabled`);
@@ -292,9 +400,46 @@
                 return;
             }
 
-            // 3. Check daily overrides (from daily_adjustments.js)
-            const dailyRules = dailyFieldAvailability?.[specialName] || [];
-            
+            // 3. Check daily overrides (Resources panel → per-date field availability).
+            //    ★ Rules are keyed by the RESOURCE the user toggled — for a special that is
+            //    its FACILITY (e.g. "Arts & Crafts Shack"), NOT the special's own name.
+            //    Self-named specials (facility === name) match by name, but specials hosted
+            //    in a shared room under a different name (Arts & Crafts / Leather → "Arts &
+            //    Crafts Shack") only have a rule under the facility key. TWO gotchas this
+            //    camp exposed: (a) every special is DUPLICATED cap/lowercase ("Arts &
+            //    Crafts" + "arts & crafts") and the duplicate's own `.location` is often
+            //    blank → can't trust `special.location` alone; resolve the facility by a
+            //    CASE-INSENSITIVE name scan over the special list, taking the first entry
+            //    that actually carries a location (same resolution getLocationForActivity /
+            //    the field-lock system use). (b) a stored location's casing may differ from
+            //    the rule key → match dailyFieldAvailability keys case-insensitively too.
+            //    Union the name- and facility-keyed rules so a closed/limited room blocks
+            //    EVERY special hosted there. (Mirrors the facility-keyed model the total
+            //    solver already honors via activityProperties[facility].timeRules.)
+            const _dfaRulesFor = (k) => {
+                if (!k || !dailyFieldAvailability) return [];
+                if (dailyFieldAvailability[k]) return dailyFieldAvailability[k];
+                const _kl = String(k).toLowerCase();
+                for (const _dk in dailyFieldAvailability) {
+                    if (String(_dk).toLowerCase() === _kl) return dailyFieldAvailability[_dk] || [];
+                }
+                return [];
+            };
+            let _specLoc = '';
+            {
+                const _nl = String(specialName).toLowerCase();
+                for (const _s of combinedSpecials) {
+                    if (_s && String(_s.name).toLowerCase() === _nl && _s.location) { _specLoc = _s.location; break; }
+                }
+                if (!_specLoc) _specLoc = (props && props.location) || special.location
+                    || (window.getLocationForActivity && window.getLocationForActivity(specialName)) || '';
+            }
+            const _nameRules = _dfaRulesFor(specialName);
+            const _locRules = (_specLoc && String(_specLoc).toLowerCase() !== String(specialName).toLowerCase())
+                ? _dfaRulesFor(_specLoc)
+                : [];
+            const dailyRules = [..._nameRules, ..._locRules];
+
            // 4. Check time rules (daily override takes precedence over global)
             // ★ Rainy day: bypass time rules if rainyDayAvailableAllDay is set
             const bypassTimeRules = isRainyMode && props.rainyDayAvailableAllDay === true;
@@ -345,9 +490,43 @@
             });
         });
 
-        const totalCap = available.reduce((s, a) => s + a.capacity, 0);
-        log(`  TOTAL FOR ${divisionName}: ${available.length} specials, ${totalCap} slots`);
-        return available;
+        // ★ CASE-DUP COLLAPSE — the actual fix for "plenty of specials free but
+        //   bunks get the Swim fallback". This camp stores every special TWICE,
+        //   cap + lowercase ("Lake" + "lake", "VR" + "vr", "Arts & Crafts" + "arts
+        //   & crafts"). Both survive into the pool because the two sources
+        //   (getGlobalSpecialActivities + activityProperties) merge case-sensitively.
+        //   Two pool entries for ONE physical room then:
+        //     (a) DOUBLE the apparent special capacity the pre-allocator budgets, and
+        //     (b) block each other on the shared facility claim key — a room reserved
+        //         under the lowercase twin reads "full" to the proper-case one (and to
+        //         the very division it was reserved for), so the rotation's "Special"
+        //         step finds every candidate taken and falls through to Swim while the
+        //         room sits empty. Collapsing also stops the lowercase placements that
+        //         evaded the case-sensitive cooldown/maxUsage ledger.
+        //   Collapse is by special NAME (case-insensitive) — different specials that
+        //   merely SHARE a room (e.g. "Arts & Crafts" + "Leather" → one shack) have
+        //   distinct names and are never merged. Within a case-variant group keep the
+        //   canonical (non-all-lowercase) name; tie-break on richer capacity.
+        const _canonByLcName = new Map();
+        available.forEach(a => {
+            const k = String(a.name).toLowerCase().trim();
+            const prev = _canonByLcName.get(k);
+            if (!prev) { _canonByLcName.set(k, a); return; }
+            const aUpper = a.name !== a.name.toLowerCase();
+            const pUpper = prev.name !== prev.name.toLowerCase();
+            let keep;
+            if (aUpper !== pUpper) keep = aUpper ? a : prev;          // canonical case wins
+            else keep = (a.capacity > prev.capacity) ? a : prev;       // else richer config
+            _canonByLcName.set(k, keep);
+        });
+        const deduped = [..._canonByLcName.values()];
+        if (deduped.length !== available.length) {
+            log(`  ⚖️ Collapsed ${available.length - deduped.length} case-duplicate special(s) → ${deduped.length} canonical`);
+        }
+
+        const totalCap = deduped.reduce((s, a) => s + a.capacity, 0);
+        log(`  TOTAL FOR ${divisionName}: ${deduped.length} specials, ${totalCap} slots`);
+        return deduped;
     }
 
     /**
@@ -369,7 +548,9 @@
             endMin: parseTime(r.end) ?? r.endMin
         }));
 
-        const availableRules = parsedRules.filter(r => r.type === "Available");
+        // ★ Case-insensitive type match (parity with the field fit-check + auto):
+        //   tolerate lowercase 'available'/'unavailable' on special-activity timeRules.
+        const availableRules = parsedRules.filter(r => String(r.type).toLowerCase() === "available");
         if (availableRules.length > 0) {
             const inAvailable = availableRules.some(r =>
                 startMin >= r.startMin && endMin <= r.endMin
@@ -377,7 +558,7 @@
             if (!inAvailable) return false;
         }
 
-        const unavailableRules = parsedRules.filter(r => r.type === "Unavailable");
+        const unavailableRules = parsedRules.filter(r => String(r.type).toLowerCase() === "unavailable");
         for (const rule of unavailableRules) {
             if (startMin < rule.endMin && endMin > rule.startMin) {
                 return false;
@@ -449,7 +630,27 @@
             log(`      ${bunk}: blocked from ${special.name} (hasn't completed Part 1)`);
             return false;
         }
-        
+
+        // ★ Manual rotation gates — single source of truth (rotation_engine.js).
+        //   Every OTHER manual special-placement path scores candidates through
+        //   RotationEngine.calculateLimitScore, which hard-blocks (Infinity) a
+        //   special that is inside its frequencyDays cooldown, on a disallowed
+        //   availableDays weekday, inside a multiPart daysBetween gap (or past
+        //   totalParts), ahead of its rotationCohort minimum, or over its
+        //   maxUsage / exactFrequency ceiling. The Smart Tile selection bypassed
+        //   it, so smart-placed specials ignored all of those. Re-use the same
+        //   gate here so the swap path matches the rest of the builder. Fail-open
+        //   (only block on an explicit Infinity) so nothing is dropped if the
+        //   engine isn't loaded.
+        if (window.RotationEngine && typeof window.RotationEngine.calculateLimitScore === 'function') {
+            try {
+                if (window.RotationEngine.calculateLimitScore(bunk, special.name, activityProps, divisionName) === Infinity) {
+                    log(`      ${bunk}: blocked from ${special.name} (rotation gate: cooldown/availableDays/multiPart/cohort/ceiling)`);
+                    return false;
+                }
+            } catch (_eGate) { /* fail-open */ }
+        }
+
         return true;
     }
 
@@ -470,29 +671,48 @@
         if (usableSpecials.length === 0) return null;
         
         const bunkHistory = historicalCounts[bunk] || {};
-        
+
+        // ★ FN-30 (manual): PERIOD-SCOPED floor deficit. historicalCounts is all-time
+        //   cumulative; the ceilings in canBunkUseSpecial already use period-scoped
+        //   getPeriodActivityCount, but the floor boost previously used the all-time
+        //   count — so once a bunk's lifetime count passed the floor the boost died,
+        //   and a bunk sitting at 0 in a FRESH period never got re-prioritized. Compute
+        //   the min/exact shortage from the period count (each on its own period) so the
+        //   escalation re-fires every period. Precomputed once per special (not inside
+        //   the comparator) to avoid O(n log n) getPeriodActivityCount scans.
+        const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        const _floorEsc = {}; // special name -> escalation bonus from period-scoped floor deficit
+        usableSpecials.forEach(sp => {
+            const props = activityProps?.[sp.name] || sp;
+            const minF = parseInt(props.minFrequency) || 0;
+            const exactF = parseInt(props.exactFrequency) || 0;
+            if (minF <= 0 && exactF <= 0) { _floorEsc[sp.name] = 0; return; }
+            const allTime = bunkHistory[sp.name] || 0;
+            const minP = (props.minFrequencyPeriod === 'week' ? '1week' : props.minFrequencyPeriod) || '1week';
+            const exactP = props.exactFrequencyPeriod || '1week';
+            const minCnt = minF > 0 ? (_gpc ? _gpc(bunk, sp.name, minP) : allTime) : 0;
+            const exactCnt = exactF > 0 ? (_gpc ? _gpc(bunk, sp.name, exactP) : allTime) : 0;
+            const minShort = minF > 0 ? Math.max(minF - minCnt, 0) : 0;
+            const exactShort = exactF > 0 ? Math.max(exactF - exactCnt, 0) : 0;
+            let shortage, period;
+            if (exactShort >= minShort) { shortage = exactShort; period = exactP; }
+            else { shortage = minShort; period = minP; }
+            _floorEsc[sp.name] = shortage > 0
+                ? (window.SchedulerCoreUtils?.getEscalationBonus?.(period, shortage) || shortage * 100)
+                : 0;
+        });
+
         const sorted = [...usableSpecials].sort((a, b) => {
+            // Base score = all-time usage (least-used-first = variety). Below-floor
+            // specials get a strong negative escalation pull (period-scoped) so they
+            // sort ahead of every non-floor special — floors are near-mandatory.
             const countA = bunkHistory[a.name] || 0;
             const countB = bunkHistory[b.name] || 0;
-            // ★ Min frequency boost: activities where this bunk is below the floor
-            // are scored as if they have been used fewer times (higher priority)
-            const propsA = activityProps?.[a.name] || a;
-            const propsB = activityProps?.[b.name] || b;
-            const minFA = parseInt(propsA.minFrequency) || 0;
-            const minFB = parseInt(propsB.minFrequency) || 0;
-            const exactFA = parseInt(propsA.exactFrequency) || 0;
-            const exactFB = parseInt(propsB.exactFrequency) || 0;
-            const shortageA = Math.max(minFA - countA, exactFA - countA, 0);
-            const shortageB = Math.max(minFB - countB, exactFB - countB, 0);
-            const periodA = propsA.exactFrequencyPeriod || propsA.minFrequencyPeriod || '1week';
-            const periodB = propsB.exactFrequencyPeriod || propsB.minFrequencyPeriod || '1week';
-            const escA = shortageA > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodA, shortageA) || shortageA * 100) : 0;
-            const escB = shortageB > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodB, shortageB) || shortageB * 100) : 0;
-            const scoreA = countA - escA;
-            const scoreB = countB - escB;
+            const scoreA = countA - (_floorEsc[a.name] || 0);
+            const scoreB = countB - (_floorEsc[b.name] || 0);
             if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
-        });   
+        });
         return sorted[0];
     }
 
@@ -547,33 +767,69 @@
 
             Object.keys(byDiv).forEach(div => {
                 const tiles = byDiv[div].sort((a, b) => parseTime(a.startTime) - parseTime(b.startTime));
-                
-                for (let i = 0; i < tiles.length; i += 2) {
-                    const A = tiles[i];
-                    const B = tiles[i + 1];
+
+                // ★ CONNECTED TILES: tiles the user LINKED into the same "pair group"
+                //   (smartData.pairGroup) form a coordinated ROTATION. Each connected
+                //   tile is emitted as its OWN job tagged with groupIndex; the rotation
+                //   (scheduler_core_main) offsets each tile by its index so every bunk
+                //   walks through ALL the configured options (e.g. Sports / Special /
+                //   Swim), one per tile, with no option repeated across the group.
+                //   Ungrouped tiles keep the classic adjacent (i, i+1) A/B pairing, so
+                //   existing skeletons are unchanged.
+                const groups = {};   // pairGroup -> [tiles] (time-sorted)
+                const auto = [];     // ungrouped tiles
+                tiles.forEach(t => {
+                    const g = t.smartData && t.smartData.pairGroup;
+                    if (g != null && String(g).trim() !== '' && String(g).toLowerCase() !== 'auto') {
+                        (groups[g] = groups[g] || []).push(t);
+                    } else {
+                        auto.push(t);
+                    }
+                });
+
+                const _mkBlock = t => ({ startMin: parseTime(t.startTime), endMin: parseTime(t.endTime), division: div });
+                const _emit = (A, B, extra) => {
                     const sd = A.smartData || {};
-
-                    const job = {
+                    jobs.push(Object.assign({
                         division: div,
-                        main1: sd.main1,
-                        main2: sd.main2,
-                        fallbackFor: sd.fallbackFor,
-                        fallbackActivity: sd.fallbackActivity,
-                        blockA: {
-                            startMin: parseTime(A.startTime),
-                            endMin: parseTime(A.endTime),
-                            division: div
-                        },
-                        blockB: B ? {
-                            startMin: parseTime(B.startTime),
-                            endMin: parseTime(B.endTime),
-                            division: div
-                        } : null
-                    };
+                        main1: sd.main1, main2: sd.main2,
+                        fallbackFor: sd.fallbackFor, fallbackActivity: sd.fallbackActivity,
+                        guaranteeSwap: !!sd.guaranteeSwap,
+                        pairGroup: sd.pairGroup || null,
+                        blockA: _mkBlock(A),
+                        blockB: B ? _mkBlock(B) : null
+                    }, extra || {}));
+                    log(`Created job for ${div} [group ${sd.pairGroup || 'auto'}${extra && extra.groupIndex != null ? ' #' + extra.groupIndex : ''}]: ${sd.main1}/${sd.main2}`);
+                };
 
-                    jobs.push(job);
-                    log(`Created job for ${div}: ${sd.main1}/${sd.main2} (fallback: ${sd.fallbackActivity} for ${sd.fallbackFor})`);
-                }
+                // Connected groups → how the user wants the linked tiles handled:
+                //   • guaranteeSwap + EXACTLY 2 tiles → emit as ONE A/B pair so the
+                //     hard guaranteed-swap pre-pass runs on the user-CHOSEN pair.
+                //     This is how you guarantee-swap two tiles that AREN'T adjacent
+                //     by time (e.g. link tile 1 ↔ tile 3 via the same pair group);
+                //     "Auto" can only pair neighbors (1&2, 3&4). blockB present →
+                //     _rotationOptions() returns null → _isGuaranteedSwapPair() true.
+                //   • guaranteeSwap + 3+ tiles → each tile emitted as a single-block
+                //     "multiGuarantee" job sharing a group id; a dedicated pre-pass
+                //     (scheduler_core_main) seats ONE special per bunk across ALL the
+                //     group's periods so everyone gets a special no matter how many
+                //     tiles are connected (the rest of the periods become the sport).
+                //   • connected but NO guarantee → one ROTATION job per tile (each
+                //     bunk walks through every option).
+                Object.keys(groups).forEach(g => {
+                    const gt = groups[g];
+                    const wantGuarantee = gt.some(t => t.smartData && t.smartData.guaranteeSwap);
+                    if (gt.length === 2 && wantGuarantee) {
+                        _emit(gt[0], gt[1], { guaranteeSwap: true });   // gt is time-sorted: A = earlier, B = later
+                    } else if (gt.length > 2 && wantGuarantee) {
+                        const gid = div + '|' + g;
+                        gt.forEach(t => _emit(t, null, { guaranteeSwap: true, multiGuarantee: true, guaranteeGroupId: gid, groupSize: gt.length }));
+                    } else {
+                        gt.forEach((t, idx) => _emit(t, null, { groupIndex: idx, groupSize: gt.length }));
+                    }
+                });
+                // Ungrouped → classic 2-at-a-time A/B pairs.
+                for (let i = 0; i < auto.length; i += 2) _emit(auto[i], auto[i + 1] || null, null);
             });
 
             return jobs;
@@ -770,6 +1026,18 @@
             const divPriority = priorityQueue[divisionName] || [];
 
             function getSpecialUsageCount(bunk) {
+                // ★ Within-division fairness = specials this bunk has had THIS PERIOD (default
+                //   this week), not lifetime — matches the cross-division need-first ordering so
+                //   a bunk well-served earlier doesn't stay deprioritized all week. Kill switch
+                //   window.__smartTileNeedFirst = false → lifetime (legacy). Period tunable via
+                //   window.__smartTileNeedPeriod (default '1week').
+                // ★ PERF: reuse the ONE memoized period count exposed by scheduler_core_main
+                //   instead of re-scanning history here. This runs inside sort comparators —
+                //   calling getPeriodActivityCount per comparator blew generation up to ~45s.
+                //   The shared memo caps it to one compute per bunk.
+                if (window.__smartTileNeedFirst !== false && typeof window.__smartTileNeedCount === 'function') {
+                    try { return window.__smartTileNeedCount(bunk); } catch (_) {}
+                }
                 let sum = 0;
                 const bunkHist = historical[bunk] || {};
                 allAvailableSpecials.forEach(s => {
@@ -873,6 +1141,50 @@
                     bunks.forEach(b => specialWinnersA.add(b));
                 }
             }
+            // ★ PREFER-MAIN1 leftover fill (Block A / tile 1) — kill-switch
+            //   window.__smartTilePreferMain1=false. The cross-division pre-allocation can
+            //   UNDER-fill a division's special rooms (a junior division loses the special
+            //   budget under window contention), so its bunks were handed the open activity
+            //   (main2 / Swim) in tile 1 while a special room sat FREE. Recompute the
+            //   division's TRUE remaining capacity from the actual placements and upgrade any
+            //   open-activity bunk to a still-free special it can lawfully use — so nobody
+            //   gets main2/fallback in tile 1 while main1 is available. Only ever turns
+            //   open→special (never the reverse); remainingSlots (net of other divisions via
+            //   the V44.3 capacity subtraction) guarantees no over-allocation.
+            if (!effectiveA.allFallback && window.__smartTilePreferMain1 !== false) {
+                specialsBlockA.forEach(s => {
+                    const used = Object.values(block1).filter(a => isSame(a, s.name)).length;
+                    s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
+                });
+                // ★ LEAST-SERVED-FIRST: a free room goes to the bunk with the FEWEST
+                //   specials so far — yesterday's bumped-to-fallback bunks (divPriority) first,
+                //   then by cumulative special usage ascending — so the SAME bunks don't grab
+                //   the scarce special day after day. (sortedEligible already carries this order;
+                //   re-sorting here makes it explicit and robust to upstream changes.)
+                // ★ Include INELIGIBLE bunks too: STEP 3 screens eligibility against the
+                //   COMBINED block A+B slots, so a bunk whose only open special is locked in
+                //   its OTHER block (e.g. block B overlaps a senior division's special window)
+                //   is dropped from sortedEligible — even though that special is FREE in THIS
+                //   block. getUsableSpecialsForBunk re-validates against slotsA (block A only),
+                //   so a genuinely-unusable bunk is still skipped; one free here is upgraded.
+                [...sortedEligible, ...ineligibleBunks]
+                    .filter(b => !specialWinnersA.has(b) && isSame(block1[b], effectiveA.open))
+                    .sort((a, b) => {
+                        const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
+                        if (pa !== pb) return pb - pa;
+                        return getSpecialUsageCount(a) - getSpecialUsageCount(b);
+                    })
+                    .forEach(bunk => {
+                        const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockA, historical, activityProps, slotsA);
+                        const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                        if (chosen && chosen.remainingSlots > 0) {
+                            block1[bunk] = chosen.name;
+                            specialWinnersA.add(bunk);
+                            chosen.remainingSlots--;
+                            log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room, was ${effectiveA.open})`);
+                        }
+                    });
+            }
             // ★ V44.3: Record Block A consumption for other divisions
             Object.entries(block1).forEach(([bunk, act]) => {
                 if (!act || isSame(act, fbAct) || isSame(act, effectiveA.open)) return;
@@ -959,6 +1271,37 @@
                         log(`\n  ★ FULL GRADE OVERRIDE (Block B): "${fullGradeActB}" → ALL ${bunks.length} bunks`);
                         bunks.forEach(bunk => { block2[bunk] = fullGradeActB; });
                     }
+                }
+                // ★ PREFER-MAIN1 leftover fill (Block B / tile 2): a loser-from-A sitting on
+                //   the fallback (Sport) takes a still-free special in tile 2 rather than
+                //   wasting the room. Winners-from-A keep their main2 (Swim) complement.
+                if (!effectiveB.allFallback && window.__smartTilePreferMain1 !== false) {
+                    specialsBlockB.forEach(s => {
+                        const used = Object.values(block2).filter(a => isSame(a, s.name)).length;
+                        s.remainingSlots = Math.max(0, (s.capacity || 0) - used);
+                    });
+                    // ★ LEAST-SERVED-FIRST (same as Block A): free Block-B rooms go to the
+                    //   fewest-served fallback bunks so the scarce special rotates across days.
+                    // ★ Include INELIGIBLE bunks (see Block A note): screened against the
+                    //   combined A+B window, they may still take a special FREE in block B.
+                    //   getUsableSpecialsForBunk re-validates against slotsB (block B only).
+                    [...sortedEligible, ...ineligibleBunks]
+                        .filter(b => !specialWinnersA.has(b) && isSame(block2[b], fbAct))
+                        .sort((a, b) => {
+                            const pa = divPriority.includes(a) ? 1 : 0, pb = divPriority.includes(b) ? 1 : 0;
+                            if (pa !== pb) return pb - pa;
+                            return getSpecialUsageCount(a) - getSpecialUsageCount(b);
+                        })
+                        .forEach(bunk => {
+                            const usable = getUsableSpecialsForBunk(bunk, divisionName, specialsBlockB, historical, activityProps, slotsB);
+                            const chosen = pickBestSpecialForBunk(bunk, usable, historical, activityProps);
+                            if (chosen && chosen.remainingSlots > 0) {
+                                block2[bunk] = chosen.name;
+                                chosen.remainingSlots--;
+                                nextDayPriority = nextDayPriority.filter(p => p !== bunk);
+                                log(`  ${bunk} -> ${chosen.name} ⭐ (prefer-main1: filled FREE room in B, was ${fbAct})`);
+                            }
+                        });
                 }
                 // ★ V44.3: Record Block B consumption for other divisions
                 Object.entries(block2).forEach(([bunk, act]) => {
@@ -1069,5 +1412,5 @@
         return available;
     };
 
-    console.log("[SmartTile] V44.3 loaded (cross-division capacity tracking)");
+    console.log("[SmartTile] V44.5 loaded (need-first this-week fairness; perf: shared memoized period count)");
 })();

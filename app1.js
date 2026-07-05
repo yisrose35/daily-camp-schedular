@@ -1,4 +1,3 @@
-
 // =================================================================
 // app1.js — v5.2: Grades Are The Scheduling Units (Clean UI)
 //
@@ -90,25 +89,7 @@
         return result ?? defaultVal;
     }
     
-    function parseTimeToMinutes(str) {
-        if (!str || typeof str !== "string") return null;
-        let s = str.trim().toLowerCase();
-        let meridiem = null;
-        if (s.endsWith("am") || s.endsWith("pm")) {
-            meridiem = s.endsWith("am") ? "am" : "pm";
-            s = s.replace(/am|pm/gi, "").trim();
-        }
-        const match = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!match) return null;
-        let hours = parseInt(match[1], 10);
-        const minutes = parseInt(match[2], 10);
-        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-        if (meridiem) {
-            if (hours === 12) hours = meridiem === "am" ? 0 : 12;
-            else if (meridiem === "pm" && hours < 12) hours += 12;
-        }
-        return hours * 60 + minutes;
-    }
+    function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
     
     function compareBunks(a, b) {
         return String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
@@ -119,66 +100,199 @@
         arr.sort(compareBunks);
     }
 
-    // Globally-available helper: return division keys ordered by the user's
-    // drag-and-drop preferences in Campistry Me / flow.html.
-    //   1) gs.app1.manualColumnOrder (set by drag-reorder of grade columns)
-    //   2) gs.campStructure key order via parentDivision lookup
-    //   3) Numeric-then-alphabetic fallback
-    // Use this everywhere a list of division/grade keys is rendered to keep
-    // the order consistent across the entire site.
-    window.getUserDivisionOrder = function (keys) {
+    // Globally-available helper: return division/grade keys in the user's
+    // Campistry Me order. Used everywhere a list of grade columns is rendered
+    // (Daily Adjustments, Master Builder, analytics, print, calendar) so the
+    // column order is identical across the whole site.
+    //
+    // ★ FN-50 / JSONB-order fix: the Campistry Me grade order is the single
+    //   source of truth, BUT campStructure is stored as JSONB in the cloud and
+    //   JSONB does NOT preserve object key order — it normalizes (shortest key
+    //   first, then byte order). So Object.keys(campStructure) is an unreliable
+    //   PARENT-division order after any cloud round-trip (it would, e.g., hoist
+    //   "Seniors" ahead of "Day Camp" purely because the name is shorter). We
+    //   therefore order parents by the number of their first grade — exactly
+    //   like the Me / Flow Divisions view — and lean on each division's
+    //   gradeOrder array (order-stable in JSONB) for the grades within it.
+    //   AND: a grade NAME that repeats across divisions becomes a QUALIFIED
+    //   column key ("Day Camp > 4") in window.divisions (see gradeBasedDivisions
+    //   below). We rebuild those same qualified keys here so the lookup matches;
+    //   otherwise every duplicated-name grade silently dropped out of the user's
+    //   order and clumped at the back by number.
+    // ★ PRIORITY / logic order — the pure Camp-Structure (Me) order. This is the
+    //   single source of truth for the SOLVER (field-quality seniority via
+    //   getDivisionAgeOrder + the division processing order in state.availableDivisions).
+    //   It deliberately does NOT honor the UI-only column reorder (app1.viewColumnOrder);
+    //   that reorder is display-only, applied on top by getUserDivisionOrder below. So a
+    //   user can make the schedule LOOK like 3-2-1 while priority stays 1-2-3.
+    window._getMeDivisionOrder = function (keys) {
         if (!Array.isArray(keys) || keys.length === 0) return keys || [];
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
-        var manualOrder = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : null;
-        var structureOrder = Object.keys(gs.campStructure || {});
         var cs = gs.campStructure || {};
         var divs = window.divisions || {};
 
-        // Build a flat grade order from campStructure gradeOrder arrays
-        // This preserves the user's drag-reorder on the Me page
-        var _csGradeOrder = [];
-        structureOrder.forEach(function (divName) {
-            var go = cs[divName] && Array.isArray(cs[divName].gradeOrder) ? cs[divName].gradeOrder : Object.keys((cs[divName] && cs[divName].grades) || {});
-            go.forEach(function (g) { _csGradeOrder.push(g); });
+        // Mirror gradeBasedDivisions' qualifier basis: count grade NAMES across
+        // divisions from each division's grades object (NOT gradeOrder).
+        var gradeNameCounts = {};
+        Object.keys(cs).forEach(function (divName) {
+            var d = cs[divName];
+            if (!d || typeof d !== 'object') return;
+            Object.keys(d.grades || {}).forEach(function (g) {
+                gradeNameCounts[g] = (gradeNameCounts[g] || 0) + 1;
+            });
+        });
+
+        // Resolve a division's grade order the same way the build does:
+        // gradeOrder (filtered to existing grades) + any leftover grades.
+        var gradesInOrder = function (divName) {
+            var d = cs[divName] || {};
+            var grades = d.grades || {};
+            var all = Object.keys(grades);
+            var ord = d.gradeOrder;
+            return (Array.isArray(ord) && ord.length)
+                ? ord.filter(function (g) { return g in grades; })
+                     .concat(all.filter(function (g) { return ord.indexOf(g) < 0; }))
+                : all;
+        };
+
+        // Parent-division order — MIRRORS the Camp Structure (Me) page exactly
+        // (campistry_me.js _sortedDivisions), so Flow / print / analytics column order
+        // COPIES what the user sees and arranges in Campistry Me. Me is the single
+        // source of truth for order:
+        //   • explicit PARENT-level manualColumnOrder positions lead (the Me up/down
+        //     arrange order), then
+        //   • when ANY manual order list exists, the rest is alphabetical by parent
+        //     NAME; only when NO manual order exists at all do we fall back to a numeric
+        //     parent-NAME sort — byte-for-byte the same rule as _sortedDivisions.
+        // (The OLD `firstGradeNum` heuristic ordered parents by the number inside their
+        //  first grade — which DIVERGED from the Me page's alphabetical order for named
+        //  divisions like Camp Agudah / Day Camp. That Me↔Flow mismatch is the bug this
+        //  removes. To set a non-alphabetical parent order, arrange divisions in Me; both
+        //  Me and Flow then follow it.)
+        // The Me page's division order lives in the DEDICATED app1.divisionOrder key
+        // (parent names only — written exclusively by Me reorders, so Flow's
+        // schedule-column order can't clobber it). Legacy parent-level entries in
+        // app1.manualColumnOrder are honored next; otherwise alphabetical. This is the
+        // exact same source campistry_me _getDivisionOrder reads, so Me and Flow agree.
+        var divOrd = (gs.app1 && Array.isArray(gs.app1.divisionOrder)) ? gs.app1.divisionOrder : [];
+        var manualOrd = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : [];
+        var parentManualPos = {};
+        divOrd.forEach(function (k) { if (cs[k] != null && parentManualPos[k] == null) parentManualPos[k] = Object.keys(parentManualPos).length; });
+        manualOrd.forEach(function (k) { if (cs[k] != null && parentManualPos[k] == null) parentManualPos[k] = Object.keys(parentManualPos).length; });
+        var hasAnyOrderList = divOrd.length > 0 || manualOrd.length > 0;
+        var parents = Object.keys(cs).slice().sort(function (a, b) {
+            var pa = parentManualPos[a], pb = parentManualPos[b];
+            if (pa != null && pb != null && pa !== pb) return pa - pb;
+            if (pa != null && pb == null) return -1;   // user-positioned parents lead
+            if (pa == null && pb != null) return 1;
+            if (!hasAnyOrderList) {                     // mirror _sortedDivisions' else-branch
+                var na = parseInt(a, 10), nb = parseInt(b, 10);
+                if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            }
+            return String(a).localeCompare(String(b));
+        });
+
+        // Flat, QUALIFIED canonical column order → position map.
+        var pos = {};
+        var idx = 0;
+        parents.forEach(function (divName) {
+            gradesInOrder(divName).forEach(function (g) {
+                var key = gradeNameCounts[g] > 1 ? (divName + ' > ' + g) : g;
+                if (pos[key] == null) pos[key] = idx++;
+            });
         });
 
         return keys.slice().sort(function (a, b) {
-            // Primary: campStructure gradeOrder (user's Me page drag order)
-            if (_csGradeOrder.length > 0) {
-                var agi = _csGradeOrder.indexOf(a);
-                var bgi = _csGradeOrder.indexOf(b);
-                if (agi >= 0 && bgi >= 0) return agi - bgi;
-                if (agi >= 0) return -1;
-                if (bgi >= 0) return 1;
-            }
-            // Fallback: manualColumnOrder (Flow page column reorder)
-            if (manualOrder) {
-                var ai = manualOrder.indexOf(a);
-                var bi = manualOrder.indexOf(b);
-                if (ai >= 0 && bi >= 0) return ai - bi;
-                if (ai >= 0) return -1;
-                if (bi >= 0) return 1;
-            }
-            if (structureOrder.length > 0) {
-                var aParent = (divs[a] && divs[a].parentDivision) || a;
-                var bParent = (divs[b] && divs[b].parentDivision) || b;
-                var ai2 = structureOrder.indexOf(aParent);
-                var bi2 = structureOrder.indexOf(bParent);
-                if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
-            }
-            var na = parseInt(String(a).match(/(\d+)/) ? String(a).match(/(\d+)/)[1] : '');
-            var nb = parseInt(String(b).match(/(\d+)/) ? String(b).match(/(\d+)/)[1] : '');
-            if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            var ai = pos[a] == null ? 1e9 : pos[a];
+            var bi = pos[b] == null ? 1e9 : pos[b];
+            if (ai !== bi) return ai - bi;
+            // Keys not in campStructure (transient/legacy): parent, then numeric, then alpha.
+            var aParent = (divs[a] && divs[a].parentDivision) || a;
+            var bParent = (divs[b] && divs[b].parentDivision) || b;
+            var pai = parents.indexOf(aParent), pbi = parents.indexOf(bParent);
+            if (pai >= 0 && pbi >= 0 && pai !== pbi) return pai - pbi;
+            var ma = String(a).match(/(\d+)/), mb = String(b).match(/(\d+)/);
+            var xa = ma ? parseInt(ma[1], 10) : NaN, xb = mb ? parseInt(mb[1], 10) : NaN;
+            if (!isNaN(xa) && !isNaN(xb) && xa !== xb) return xa - xb;
             return String(a).localeCompare(String(b));
         });
     };
-    
-    function escapeHtml(str) {
-        if (!str) return "";
-        const div = document.createElement("div");
-        div.textContent = str;
-        return div.innerHTML;
-    }
+
+    // ★ UI-ONLY column reorder (app1.viewColumnOrder). The user can drag grade
+    //   columns in Daily Adjustments / the Manual (Master Schedule) Builder to set
+    //   how the schedule LOOKS, independent of the Me priority order. Given a list
+    //   already in Me order, re-sequence it to follow the saved view order; columns
+    //   absent from the view order keep their Me-relative position at the end (so a
+    //   newly-added grade still shows up). Empty/absent view order → returns the Me
+    //   order unchanged, so a camp that never touches this is byte-identical to before.
+    window._applyViewColumnOrder = function (meOrdered) {
+        if (!Array.isArray(meOrdered) || meOrdered.length === 0) return meOrdered || [];
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var vco = (gs.app1 && Array.isArray(gs.app1.viewColumnOrder)) ? gs.app1.viewColumnOrder : [];
+        if (!vco.length) return meOrdered;
+        var posV = {};
+        vco.forEach(function (k, i) { if (posV[k] == null) posV[k] = i; });
+        return meOrdered.map(function (k, i) { return { k: k, i: i }; }).sort(function (a, b) {
+            var pa = posV[a.k], pb = posV[b.k];
+            if (pa != null && pb != null) return pa !== pb ? pa - pb : a.i - b.i;
+            if (pa != null) return -1;   // columns the user explicitly ordered lead
+            if (pb != null) return 1;
+            return a.i - b.i;            // both absent → keep Me order
+        }).map(function (o) { return o.k; });
+    };
+
+    // ★ DISPLAY column order = Me order + the UI-only view reorder on top. Single
+    //   source of truth for how grade columns are SEQUENCED in every view that shows
+    //   the schedule (Daily Adjustments, Manual Builder grid, print, calendar,
+    //   analytics). The PRIORITY order (field quality + solver) does NOT pass through
+    //   here — it calls _getMeDivisionOrder directly — so the look can differ from the
+    //   priority. When no viewColumnOrder is set this is identical to the Me order.
+    window.getUserDivisionOrder = function (keys) {
+        return window._applyViewColumnOrder(window._getMeDivisionOrder(keys));
+    };
+
+    // ★ Per-day division/grade presence. A grade can be marked present only on
+    //   certain weekdays (Campistry Me grade editor → daysPresent). On a date
+    //   when it's absent, its column is dropped from the date-specific schedule
+    //   views (Master Scheduler, Unified, Daily, Print). daysPresent absent or
+    //   non-array → present every day (backward compatible). [] → present no day.
+    window.isDivisionPresentOnDate = function (divKey, dateStr) {
+        try {
+            var d = (window.divisions || {})[divKey];
+            var dp = d && d.daysPresent;
+            if (!Array.isArray(dp)) return true;            // no restriction
+            var ds = dateStr || window.currentScheduleDate || '';
+            var p = String(ds).split('-').map(Number);
+            if (!(p[0] && p[1] && p[2])) return true;        // unknown date → show
+            var dow = new Date(p[0], p[1] - 1, p[2]).getDay();
+            var names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            return dp.indexOf(names[dow]) !== -1;
+        } catch (e) { return true; }
+    };
+    window.filterDivisionsByDate = function (keys, dateStr) {
+        if (!Array.isArray(keys)) return keys;
+        return keys.filter(function (k) { return window.isDivisionPresentOnDate(k, dateStr); });
+    };
+
+    // ★ FN-51: canonical AGE order for Field Quality seniority — index 0 = most
+    //   senior = gets the rank-1 field. It is EXACTLY the Camp Structure (Me) PRIORITY
+    //   order (_getMeDivisionOrder), just flipped for the "Grade age order" toggle
+    //   (app1.divisionAgeDirection). It uses _getMeDivisionOrder — NOT the display
+    //   getUserDivisionOrder — so the UI-only column reorder (app1.viewColumnOrder)
+    //   can never shift field-quality seniority: the schedule may LOOK 3-2-1 while the
+    //   solver still prioritizes by the Me order 1-2-3. Single source of truth for
+    //   priority: whatever the user arranges in Campistry Me.
+    window.getDivisionAgeOrder = function (names) {
+        var keys = Array.isArray(names) && names.length ? names.slice() : Object.keys(window.divisions || {});
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var ordered = (typeof window._getMeDivisionOrder === 'function')
+            ? window._getMeDivisionOrder(keys) : keys.slice();
+        var dir = (gs.app1 && gs.app1.divisionAgeDirection) || 'youngToOld';
+        // youngToOld = the Me list runs top(young) → bottom(old), so oldest-first = reversed
+        return dir === 'oldToYoung' ? ordered.slice() : ordered.slice().reverse();
+    };
+
+    function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     // ==================== SYNC SPINE ====================
     
@@ -605,12 +719,24 @@
         
         const fragment = document.createDocumentFragment();
         
-       const groupOrder = Object.keys(state.divisionGroups).sort((a, b) => {
-            const gradesA = state.divisionGroups[a]?.grades || [];
-            const gradesB = state.divisionGroups[b]?.grades || [];
-            const numA = parseInt(String(gradesA[0] || '').match(/(\d+)/)?.[1]) || 999;
-            const numB = parseInt(String(gradesB[0] || '').match(/(\d+)/)?.[1]) || 999;
-            return numA - numB;
+       // Parent-group order = the Me page order. Derive it from getUserDivisionOrder
+       // (the single source of truth for column order) so this "Scheduling Grades"
+       // view matches Camp Structure exactly instead of re-sorting parents by the
+       // number inside their first grade (which diverged from Me for named divisions
+       // like Camp Agudah / Day Camp). state.divisions is already keyed in
+       // getUserDivisionOrder order; dedupe its parents to get the group order.
+        const _orderedGradeKeys = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(Object.keys(state.divisions))
+            : Object.keys(state.divisions);
+        const _seenParents = new Set();
+        const groupOrder = [];
+        _orderedGradeKeys.forEach(gradeKey => {
+            const parent = (state.divisions[gradeKey] && state.divisions[gradeKey].parentDivision) || 'All';
+            if (!_seenParents.has(parent)) { _seenParents.add(parent); groupOrder.push(parent); }
+        });
+        // Defensive: include any groups that have no grades in state.divisions.
+        Object.keys(state.divisionGroups).forEach(p => {
+            if (!_seenParents.has(p)) { _seenParents.add(p); groupOrder.push(p); }
         });
         
         groupOrder.forEach(parentDivName => {
@@ -972,6 +1098,12 @@
                             color: parentColor,
                             parentDivision: divName
                         };
+                        // ★ Per-day presence (set per grade in the Campistry Me grade
+                        //   editor). When present, the grade's column is hidden in the
+                        //   date-specific schedule views on weekdays not in the list.
+                        if (Array.isArray(gradeData.daysPresent)) {
+                            gradeBasedDivisions[key].daysPresent = gradeData.daysPresent.slice();
+                        }
 
                         divGroups[divName].grades.push(key);
                     });
@@ -1039,34 +1171,17 @@
                 }
             }
             
-           // Rebuild divisions object honoring user-defined order:
-            //   1) gs.app1.manualColumnOrder if present (set via drag in Campistry Me)
-            //   2) Otherwise, the natural campStructure key order (also user-defined)
-            //   3) Numeric/alphabetic sort only for keys not in either source
-            const _gs2 = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
-            const _manualOrder = (_gs2.app1 && Array.isArray(_gs2.app1.manualColumnOrder)) ? _gs2.app1.manualColumnOrder : null;
-            const _structureOrder = Object.keys(_gs2.campStructure || {});
-            const sortedDivKeys = Object.keys(state.divisions).slice().sort((a, b) => {
-                if (_manualOrder) {
-                    const ai = _manualOrder.indexOf(a);
-                    const bi = _manualOrder.indexOf(b);
-                    if (ai >= 0 && bi >= 0) return ai - bi;
-                    if (ai >= 0) return -1;
-                    if (bi >= 0) return 1;
-                }
-                if (_structureOrder.length > 0) {
-                    // Try matching the parentDivision in structure order
-                    const aParent = (state.divisions[a] && state.divisions[a].parentDivision) || a;
-                    const bParent = (state.divisions[b] && state.divisions[b].parentDivision) || b;
-                    const ai2 = _structureOrder.indexOf(aParent);
-                    const bi2 = _structureOrder.indexOf(bParent);
-                    if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
-                }
-                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                if (numA !== numB) return numA - numB;
-                return String(a).localeCompare(String(b));
-            });
+            // Order the grade-keyed scheduling units by the user's Campistry Me
+            // PRIORITY order — this is the canonical base state.availableDivisions
+            // that drives the solver's division processing order, so it must stay on
+            // _getMeDivisionOrder (NOT the display getUserDivisionOrder). The UI-only
+            // column reorder (app1.viewColumnOrder) is applied per-view at render time
+            // by getUserDivisionOrder, so it never shifts the solver's processing
+            // order. _getMeDivisionOrder is parent-order-stable against JSONB key
+            // normalization and rebuilds qualified "Parent > Grade" keys.
+            const sortedDivKeys = (typeof window._getMeDivisionOrder === 'function')
+                ? window._getMeDivisionOrder(Object.keys(state.divisions))
+                : Object.keys(state.divisions);
             const sortedDivisions = {};
             sortedDivKeys.forEach(k => { sortedDivisions[k] = state.divisions[k]; });
             state.divisions = sortedDivisions;
@@ -1112,6 +1227,16 @@
                     }
                 });
             }
+
+            // Apply manually-entered kid counts. A manual count always overrides
+            // the roster-derived count so the user can correct the number without
+            // re-importing a CSV. Bunks with no manual count fall back to roster.
+            const bunkManualCounts = (globalData.campistryMe || {}).bunkManualCounts || {};
+            Object.entries(bunkManualCounts).forEach(([bunk, count]) => {
+                if (typeof count !== 'number') return;
+                if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
+                state.bunkMetaData[bunk].size = count;
+            });
 
             const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
             if (orphanedBunks.length > 0) {
@@ -1335,14 +1460,15 @@
         // ★ Defensive dedupe. Previously cloud-sync races could produce
         //   thousands of duplicate rows for the same special (one user hit
         //   216× per rainy-only entry). De-dup by name here so corruption
-        //   can't survive a save round-trip. First occurrence wins.
+        //   can't survive a save round-trip.
+        //   ★ Now CASE-INSENSITIVE (shared helper) so a casing-drift duplicate
+        //   ("Sushi"/"sushi") is healed too — the old exact-name dedupe let both
+        //   survive and the unrestricted phantom copy defeated the user's access
+        //   restriction. The helper prefers the restricted/real row.
         const _input = Array.isArray(updatedActivities) ? updatedActivities : [];
-        const _seen = new Map();
-        for (const a of _input) {
-            if (!a || !a.name) continue;
-            if (!_seen.has(a.name)) _seen.set(a.name, a);
-        }
-        const cleaned = [..._seen.values()];
+        const cleaned = window.dedupeSpecialsByName
+            ? window.dedupeSpecialsByName(_input)
+            : (() => { const m = new Map(); for (const a of _input) { if (a && a.name) { const k = String(a.name).trim().toLowerCase(); if (!m.has(k)) m.set(k, a); } } return [...m.values()]; })();
         if (cleaned.length !== _input.length) {
             console.warn('[saveGlobalSpecialActivities] de-duplicated', _input.length - cleaned.length, 'rows');
         }

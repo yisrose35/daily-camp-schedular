@@ -47,10 +47,7 @@
         return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
     }
 
-    function esc(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    function esc(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     function snapToIncrement(min, inc) {
         return Math.round(min / inc) * inc;
@@ -154,8 +151,24 @@
     // ─────────────────────────────────────────────
     // ACTIVITY COLOR PALETTE
     // ─────────────────────────────────────────────
-    function blockStyle(entry) {
+    // MS-4g: grid re-renders rebuild entry objects, so an in-memory
+    // _conflictFlagged mark dies with them. The notification receiver keeps
+    // window.__conflictFlagMap (dateKey|bunk|location → true) built from
+    // unread conflict notifications; consulting it keeps the red flag alive
+    // across repaints.
+    function _msConflictFlagged(entry, bunk) {
+        var m = window.__conflictFlagMap;
+        if (!m || !bunk) return false;
+        var f = (typeof entry.field === 'object') ? (entry.field && entry.field.name) : entry.field;
+        var dk = window.currentScheduleDate;
+        return !!(f && dk && m[dk + '|' + bunk + '|' + f]);
+    }
+
+    function blockStyle(entry, bunk) {
         if (!entry) return { bg: '#f3f4f6', border: '#d1d5db', text: '#9ca3af', label: 'Free' };
+        // Cross-scheduler conflict flag (MS-4) — another user double-booked
+        // this entry's location and chose "notify"; outranks all other styles
+        if (entry._conflictFlagged || _msConflictFlagged(entry, bunk)) return { bg: '#fef2f2', border: '#dc2626', text: '#991b1b', accent: '#ef4444' };
         var act = (entry._activity || entry.field || '').toLowerCase();
 
         // Trip — green theme (off-campus)
@@ -213,7 +226,11 @@
                 }
             }
             if (needsRealign) {
-                var realigned = new Array(divSlots.length).fill(null);
+                // Size to the LONGER of the two — a date switch can rebuild a
+                // _perBunkSlots grid shorter than scheduleAssignments; sizing to
+                // divSlots.length here would TRUNCATE (and then persist) the
+                // afternoon entries. Max-length keeps every entry.
+                var realigned = new Array(Math.max(divSlots.length, assignments.length)).fill(null);
                 for (var _i = 0; _i < assignments.length; _i++) {
                     var _e = assignments[_i];
                     if (!_e) continue;
@@ -239,8 +256,14 @@
         var segmentsByBunk = (window.scheduleSegments || {})[bunk];
         var toRenderEntry = window.AutoSegmentModel?.toRenderEntry || (function (s) { return s?._source || s || null; });
 
+        // ★ Iterate ALL assignments — NOT capped at divSlots.length. The renderer
+        //   positions blocks by each entry's own _startMin/_endMin (time-based), so
+        //   it does not need a matching slot. Capping at divSlots.length dropped
+        //   every entry past a SHORT/reverted _perBunkSlots grid (e.g. after a date
+        //   switch), leaving a full schedule rendered as "+ Add" gaps even though
+        //   scheduleAssignments still held all the activities.
         var out = [], i = 0;
-        while (i < assignments.length && i < divSlots.length) {
+        while (i < assignments.length) {
             var slotSegs = Array.isArray(segmentsByBunk?.[i]) ? segmentsByBunk[i] : null;
 
             // Multi-segment period — emit one block per segment, no cross-slot merge.
@@ -249,8 +272,12 @@
                     var seg = slotSegs[s];
                     var segEntry = toRenderEntry(seg);
                     if (!segEntry || segEntry._isTransition) continue;
-                    var segStart = (seg.startMin != null) ? seg.startMin : divSlots[i].startMin;
-                    var segEnd   = (seg.endMin   != null) ? seg.endMin   : divSlots[i].endMin;
+                    // ★ Free / empty is not a real activity — never render it as a block
+                    //   (a no-layer grade is all-Free; it must show as nothing, not "Free").
+                    if (segEntry.field === 'Free' || segEntry._activity === 'Free' || segEntry.event === 'Free') continue;
+                    var segStart = (seg.startMin != null) ? seg.startMin : (divSlots[i] ? divSlots[i].startMin : segEntry._startMin);
+                    var segEnd   = (seg.endMin   != null) ? seg.endMin   : (divSlots[i] ? divSlots[i].endMin   : segEntry._endMin);
+                    if (segStart == null || segEnd == null) continue;
                     out.push({
                         startMin: segStart,
                         endMin:   segEnd,
@@ -268,22 +295,27 @@
             // Single-segment / empty slot — legacy merge-continuation path.
             var entry = assignments[i];
             if (!entry || entry._isTransition || entry.continuation) { i++; continue; }
+            // ★ Free / empty is not a real activity — skip it so it never renders as a
+            //   "Free" block. A grade with no layers is all-Free and must show as nothing.
+            if (entry.field === 'Free' || entry._activity === 'Free' || entry.event === 'Free') { i++; continue; }
 
             var end = i;
-            while (end + 1 < assignments.length && end + 1 < divSlots.length && assignments[end + 1]?.continuation) end++;
+            while (end + 1 < assignments.length && assignments[end + 1]?.continuation) end++;
 
-            if (!divSlots[i] || !divSlots[end]) { i = end + 1; continue; }
-
-            // ★★★ FIX: Prefer entry's own _startMin/_endMin over divSlot times.
+            // ★★★ Prefer the entry's own _startMin/_endMin over divSlot times.
             // The bell-schedule slot grid is fixed period boundaries; pinned
             // walls (lunch, change, swim) and SA-placed activities carry their
             // OWN absolute times. Reading from divSlots paints the block at the
-            // period boundary instead of where the activity actually is, which
-            // makes lunch (13:00) appear under the 12:20 column when its slot
-            // index happens to be the Period 3 slot. Fall back to divSlots
-            // only when the entry doesn't carry explicit times.
-            var entryStart = (typeof entry._startMin === 'number') ? entry._startMin : divSlots[i].startMin;
-            var entryEnd   = (typeof entry._endMin   === 'number') ? entry._endMin   : divSlots[end].endMin;
+            // period boundary instead of where the activity actually is.
+            // Fall back to divSlots ONLY when the entry lacks times AND a slot
+            // exists. Previously this bailed (`continue`) whenever divSlots[i]
+            // was missing — which, with a short/reverted _perBunkSlots grid,
+            // dropped every afternoon entry that had no slot, rendering a full
+            // schedule as "+ Add". Now we draw it from its own times instead.
+            var _dsI = divSlots[i], _dsE = divSlots[end];
+            var entryStart = (typeof entry._startMin === 'number') ? entry._startMin : (_dsI ? _dsI.startMin : null);
+            var entryEnd   = (typeof entry._endMin   === 'number') ? entry._endMin   : (_dsE ? _dsE.endMin   : null);
+            if (entryStart == null || entryEnd == null) { i = end + 1; continue; }
 
             out.push({
                 startMin: entryStart,
@@ -356,7 +388,11 @@
                         matchups:  matchups,
                         gameLabel: gameLabel,
                         leagueName: leagueName,
-                        sport:     sport
+                        sport:     sport,
+                        // ★ For the post-edit field-change modal: where this game
+                        //   lives (leagueAssignments key) + whether it's a specialty.
+                        slotIdx:   idx,
+                        isSpecialty: !!(a._isSpecialtyLeague || (entry && (entry.isSpecialtyLeague || entry._isSpecialtyLeague)))
                     });
                 }
             });
@@ -402,6 +438,25 @@
         return { teams: text, sport: fallbackSport || '', field: '' };
     }
 
+    // Make a league/specialty matchup card clickable → opens the post-edit
+    // field-change modal for THAT game. No-op when the grid is read-only, the
+    // matchup has no field (bye/chinuch), or the module isn't loaded.
+    function attachFieldChange(card, ls, raw, divName, isEditable) {
+        var PEFC = window.PostEditFieldChange;
+        if (!isEditable || !PEFC || ls.slotIdx == null) return;
+        var seed = PEFC.normalizeGame(raw, ls.sport, ls.isSpecialty);
+        if (!PEFC.isEditableMatchup(seed)) return; // skip bye / chinuch / unknown
+        card.style.cursor = 'pointer';
+        card.title = 'Click to change this game\'s field';
+        card.addEventListener('click', function (e) {
+            e.stopPropagation();
+            PEFC.openGame(divName, ls.slotIdx, seed, {
+                _startMin: ls.startMin, _endMin: ls.endMin, _allMatchups: ls.matchups,
+                sport: ls.sport, _leagueName: ls.leagueName, _isSpecialtyLeague: ls.isSpecialty
+            });
+        });
+    }
+
     // ─────────────────────────────────────────────
     // ★★★ v2.1: COMPUTE FREE GAPS FOR A BUNK ★★★
     // Returns array of { startMin, endMin } for unoccupied time.
@@ -409,6 +464,10 @@
     // ─────────────────────────────────────────────
     function computeFreeGaps(bunk, divName, dayStart, dayEnd) {
         var activities = getBunkActivities(bunk, divName);
+        // ★ A bunk with NO real activities (e.g. a grade with no layers) must render
+        //   blank — not a full day of clickable "Free" stripes. Only paint Free gaps
+        //   between/around actual scheduled activities.
+        if (!activities.length) return [];
         var gaps = [];
         var cursor = dayStart;
 
@@ -879,7 +938,7 @@
 
                 if (act.duration < 1) return;
 
-                var style = blockStyle(act.entry);
+                var style = blockStyle(act.entry, bunk);
                 var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
@@ -1009,6 +1068,7 @@
                     card.className = 'asg-tx-matchup-card';
                     card.innerHTML = '<div class="asg-tx-matchup-teams">' + esc(mu.teams) + '</div>'
                         + (mu.sport ? '<div class="asg-tx-matchup-sub">' + esc(mu.sport) + (mu.field ? ' • ' + esc(mu.field) : '') + '</div>' : (mu.field ? '<div class="asg-tx-matchup-sub">' + esc(mu.field) + '</div>' : ''));
+                    attachFieldChange(card, ls, raw, divName, isEditable);
                     muList.appendChild(card);
                 });
             }
@@ -1336,7 +1396,7 @@
                 var blockH   = act.duration * PX_PER_MIN;
                 if (blockH < 2) return;
 
-                var style = blockStyle(act.entry);
+                var style = blockStyle(act.entry, bunk);
                 var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
@@ -1587,6 +1647,7 @@
                     }
 
                     card.appendChild(body);
+                    attachFieldChange(card, ls, raw, divName, isEditable);
                     muGrid.appendChild(card);
                 });
             }

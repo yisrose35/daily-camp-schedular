@@ -60,6 +60,16 @@
         Object.keys(sched).forEach(function(bunk) {
             (sched[bunk] || []).forEach(function(entry) {
                 if (!entry || entry.continuation || entry._isTransition) return;
+                // ★ Don't count LEAGUE games as rotation activities. A league entry
+                //   has _activity "League: X"/"League Game" (not a valid activity)
+                //   but also carries a real `sport` (e.g. "Basketball"); the
+                //   entry.sport fallback below would otherwise count a phantom
+                //   Basketball rotation — diverging from the LOCAL rebuild
+                //   (scheduler_core_utils.rebuildHistoricalCounts reads _activity
+                //   only, no sport fallback, so it skips league entries). League
+                //   play is tracked via standings, not rotation variety. Skipping
+                //   here keeps cloud rotation_counts == local historicalCounts.
+                if (entry._h2h || entry._leagueName || entry._isSpecialtyLeague || entry._league) return;
                 var actName = entry._activity || entry.sport || '';
                 if (!actName) return;
                 if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
@@ -295,6 +305,126 @@
     }
 
     // =====================================================================
+    // RENAME ACTIVITY: Move all counts from oldName → newName across every
+    // date, MERGING into any existing newName rows (so renaming onto a name
+    // that already has history sums the two), then delete the old-name rows.
+    // Used when a facility/special/general activity is renamed so its rotation
+    // history follows the new name instead of orphaning under the old one.
+    // =====================================================================
+    function renameActivityCounts(oldName, newName) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !oldName || !newName || oldName === newName) {
+            return Promise.resolve(false);
+        }
+
+        // 1) Read every old-name row, plus every existing new-name row to merge.
+        return Promise.all([
+            client.from(TABLE).select('date_key,bunk,count').eq('camp_id', campId).eq('activity', oldName),
+            client.from(TABLE).select('date_key,bunk,count').eq('camp_id', campId).eq('activity', newName)
+        ]).then(function(results) {
+            var oldRes = results[0], newRes = results[1];
+            if (oldRes.error) { console.error('[RotationCloud] rename read(old) error:', oldRes.error.message); return false; }
+            if (newRes.error) { console.error('[RotationCloud] rename read(new) error:', newRes.error.message); return false; }
+            var oldRows = oldRes.data || [];
+            if (oldRows.length === 0) return true; // nothing to migrate
+
+            // Merge counts per (date_key, bunk): existing new-name count + old count.
+            var merged = {};
+            (newRes.data || []).forEach(function(r) { merged[r.date_key + '|' + r.bunk] = r.count; });
+            oldRows.forEach(function(r) {
+                var k = r.date_key + '|' + r.bunk;
+                merged[k] = (merged[k] || 0) + r.count;
+            });
+
+            var nowIso = new Date().toISOString();
+            var rows = Object.keys(merged).map(function(k) {
+                var p = k.split('|');
+                return { camp_id: campId, date_key: p[0], bunk: p[1], activity: newName, count: merged[k], updated_at: nowIso };
+            });
+
+            // 2) Upsert merged new-name rows, THEN delete the old-name rows.
+            return client.from(TABLE)
+                .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' })
+                .then(function(up) {
+                    if (up.error) { console.error('[RotationCloud] rename upsert error:', up.error.message); return false; }
+                    return client.from(TABLE).delete().eq('camp_id', campId).eq('activity', oldName)
+                        .then(function(del) {
+                            if (del.error) { console.error('[RotationCloud] rename delete(old) error:', del.error.message); return false; }
+                            _cache = null;
+                            _loadGen++;
+                            console.log('[RotationCloud] Renamed activity "' + oldName + '" → "' + newName + '" (' + rows.length + ' rows)');
+                            return true;
+                        });
+                });
+        }).catch(function(e) {
+            console.error('[RotationCloud] rename failed:', e);
+            return false;
+        });
+    }
+
+    // =====================================================================
+    // RENAME BUNK: Move all counts from oldBunk → newBunk across every date +
+    // activity, MERGING into any existing newBunk rows, then delete the old-bunk
+    // rows. Mirrors renameActivityCounts but on the `bunk` column. Used when a
+    // bunk is renamed in Campistry Me so its rotation history follows the new
+    // name instead of orphaning under the old one (which would make the renamed
+    // bunk look like it has no history and skew fairness).
+    // =====================================================================
+    function renameBunkCounts(oldBunk, newBunk) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !oldBunk || !newBunk || oldBunk === newBunk) {
+            return Promise.resolve(false);
+        }
+
+        // 1) Read every old-bunk row, plus every existing new-bunk row to merge.
+        return Promise.all([
+            client.from(TABLE).select('date_key,activity,count').eq('camp_id', campId).eq('bunk', oldBunk),
+            client.from(TABLE).select('date_key,activity,count').eq('camp_id', campId).eq('bunk', newBunk)
+        ]).then(function(results) {
+            var oldRes = results[0], newRes = results[1];
+            if (oldRes.error) { console.error('[RotationCloud] bunk-rename read(old) error:', oldRes.error.message); return false; }
+            if (newRes.error) { console.error('[RotationCloud] bunk-rename read(new) error:', newRes.error.message); return false; }
+            var oldRows = oldRes.data || [];
+            if (oldRows.length === 0) return true; // nothing to migrate
+
+            // Merge counts per (date_key, activity): existing new-bunk count + old count.
+            // Split on the FIRST '|' only — activity names may contain '|', date_key never does.
+            var merged = {};
+            (newRes.data || []).forEach(function(r) { merged[r.date_key + '|' + r.activity] = r.count; });
+            oldRows.forEach(function(r) {
+                var k = r.date_key + '|' + r.activity;
+                merged[k] = (merged[k] || 0) + r.count;
+            });
+
+            var nowIso = new Date().toISOString();
+            var rows = Object.keys(merged).map(function(k) {
+                var i = k.indexOf('|');
+                return { camp_id: campId, date_key: k.slice(0, i), bunk: newBunk, activity: k.slice(i + 1), count: merged[k], updated_at: nowIso };
+            });
+
+            // 2) Upsert merged new-bunk rows, THEN delete the old-bunk rows.
+            return client.from(TABLE)
+                .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' })
+                .then(function(up) {
+                    if (up.error) { console.error('[RotationCloud] bunk-rename upsert error:', up.error.message); return false; }
+                    return client.from(TABLE).delete().eq('camp_id', campId).eq('bunk', oldBunk)
+                        .then(function(del) {
+                            if (del.error) { console.error('[RotationCloud] bunk-rename delete(old) error:', del.error.message); return false; }
+                            _cache = null;
+                            _loadGen++;
+                            console.log('[RotationCloud] Renamed bunk "' + oldBunk + '" → "' + newBunk + '" (' + rows.length + ' rows)');
+                            return true;
+                        });
+                });
+        }).catch(function(e) {
+            console.error('[RotationCloud] bunk-rename failed:', e);
+            return false;
+        });
+    }
+
+    // =====================================================================
     // CLEAR ALL: Remove all rotation data for this camp (used on half reset)
     // =====================================================================
     function clearAllRotationCounts() {
@@ -353,6 +483,13 @@
         _loadGen++;
     }
 
+    // ★★★ CB-66: synchronous read of the already-loaded per-date counts (no fetch,
+    // no promise). Lets the solver's period-cap enforcement consult cloud
+    // rotation_counts without becoming async. Returns null if nothing is cached.
+    function getCachedCountsByDate() {
+        return (_cache && _cache.countsByDate) ? _cache.countsByDate : null;
+    }
+
     // =====================================================================
     // EXPOSE
     // =====================================================================
@@ -361,9 +498,12 @@
         load: loadRotationCounts,
         deleteDate: deleteRotationCounts,
         deleteActivity: deleteActivityCounts,
+        renameActivity: renameActivityCounts,
+        renameBunk: renameBunkCounts,
         clearAll: clearAllRotationCounts,
         clearForBunks: clearForBunks,
-        invalidateCache: invalidateCache
+        invalidateCache: invalidateCache,
+        getCachedCountsByDate: getCachedCountsByDate // ★ CB-66: sync per-date counts for period-cap enforcement
     };
 
     console.log('[RotationCloud] Module ready');

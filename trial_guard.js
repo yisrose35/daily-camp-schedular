@@ -100,8 +100,10 @@
         document.getElementById('trial-upgrade-popup-close').addEventListener('click', function() {
             popup.remove();
         });
+        let _mdPopup = false;
+        popup.addEventListener('mousedown', function(e) { _mdPopup = (e.target === popup); });
         popup.addEventListener('click', function(e) {
-            if (e.target === popup) popup.remove();
+            if (e.target === popup && _mdPopup) popup.remove();
         });
     }
 

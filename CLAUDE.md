@@ -9,11 +9,23 @@
 
 ## Active Mission
 
-**⏸️ 40-day polish plan PAUSED at end of Day 15.** Reason: the v1 solver is a strict forward pipeline with no backtracking — Phase 0 decisions box in Phase 3, producing visible holes in the schedule that iter-patches can only mask, not eliminate. Continuing the polish plan on v1 hits diminishing returns.
+**🟢 ACTIVE: 40-Day Deep Adversarial Audit (v2) — full plan + daily tasks in `AUDIT_PLAN_V2.md`.**
+When the user says "day X", read Day X in **`AUDIT_PLAN_V2.md`** (NOT the v1 "40-Day Plan" further below).
+v2 is an adversarial, find-the-bugs sweep of every page / function / logic / action / UI / UX + stress testing.
+The **v1 feature-verification audit** (the "40-Day Plan" section further below) is **COMPLETE and shipped to `main`**.
 
-**🟢 ACTIVE: Solver v2 re-architecture (Option B).** Replace the greedy forward pipeline with a greedy-seed + simulated-annealing local-search optimizer that can revisit any choice during the gen. Design: `docs/SOLVER_V2_DESIGN.md`. Phased rollout (X1 → X4). v1 stays live via `globalSettings.app1.solverVersion` feature flag until v2 hits parity.
+_Historical engine note (still applies):_ polish runs on the consolidated v1 engine.
+The two-engine v1+v2 architecture was retired on 2026-05-28 (commit `9cfecb35`):
+all v2 post-passes (active pairing, time-reloc, drop-refill, FQ pair-lock guard,
+pairing-reopt, pair-infeasibility filtering at the planner) were inlined into v1.
+The SA layer was dropped — its ~10% gap reduction wasn't worth the architectural
+cost (two engines shuffling `window.*` state, warm-regen confusion, two sets of
+post-passes to keep in sync). `scheduler_core_solver_v2.js`, `solver_version_switch.js`,
+and the `globalSettings.app1.solverVersion` flag are GONE. `runAutoScheduler`
+(defined in `scheduler_core_auto.js`) is now the single source of truth.
 
-The audits we already did (Days 1-15) are NOT wasted — they're the constraint catalog v2 will enforce. The 40-day plan will resume after Phase X4 (likely at Day 16) with v2 as the engine under audit.
+The audits we already did (Days 1-15) are NOT wasted — they're the constraint
+catalog the consolidated solver enforces.
 
 40-day plan progress tracker (paused): https://github.com/yisrose35/daily-camp-schedular/issues/66
 

@@ -40,6 +40,15 @@
         return `${h}${m > 0 ? ':' + (m < 10 ? '0' + m : m) : ''}${ap}`;
     }
 
+    // ★ #V2-20: HTML-escape user-controlled strings before innerHTML interpolation.
+    //   analytics.js renders bunk / activity / division / field names and the
+    //   activity-filter text into many template-literal innerHTML blocks and into
+    //   double-quoted attributes (data-bunk=, data-act=, title=, <option value=>)
+    //   with NO escaping — a name like <img src=x onerror=...> or " onfocus=... "
+    //   executed on render (stored XSS; names are user-controlled, cross-user in
+    //   multi-scheduler). Escape both angle brackets AND quotes (attribute-safe).
+    function escapeHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
+
     function getCampTimes() {
         const gs = window.loadGlobalSettings?.() || {};
         const app1 = gs.app1 || window.app1 || {};
@@ -102,7 +111,10 @@
         try {
             const g = window.loadGlobalSettings?.() || {};
             divisionsDat = window.divisions || {};
-            availableDivisions = (window.availableDivisions || Object.keys(divisionsDat)).sort();
+            // ★ FN-50: Camp Structure order, not alphabetical
+            const _rawDivsA = (window.availableDivisions || Object.keys(divisionsDat)).slice();
+            availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+                ? window.getUserDivisionOrder(_rawDivsA) : _rawDivsA;
             allFieldsDat = g.app1?.fields || [];
             const specials = g.app1?.specialActivities || [];
             // ★ Day 18 fix: respect each item's actual `type` field from
@@ -118,9 +130,17 @@
                 if (k === 'general' || k === 'generals') return 'general';
                 return fallback;
             }
+            // ★ Sports carry their own usage limits in sportMetaData (Facilities →
+            //   Usage Limits), including per-grade overrides — surface them here so
+            //   the report's Limit column + "At Limit" flag reflect them, not ∞.
+            const _sportMeta = g.app1?.sportMetaData || {};
+            const _pgObj = pg => (pg && typeof pg === 'object' && Object.keys(pg).some(k => (parseInt(pg[k]) || 0) > 0)) ? pg : null;
             allActivities = [
-                ...allFieldsDat.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
-                ...specials.map(s => ({ name: s.name, type: _normType(s.type, 'special'), max: s.maxUsage || 0 }))
+                ...allFieldsDat.flatMap(f => (f.activities || []).map(a => {
+                    const sm = _sportMeta[a] || {};
+                    return { name: a, type: 'sport', max: parseInt(sm.maxUsage) || 0, maxPerGrade: _pgObj(sm.maxUsagePerGrade) };
+                })),
+                ...specials.map(s => ({ name: s.name, type: _normType(s.type, 'special'), max: s.maxUsage || 0, maxPerGrade: _pgObj(s.maxUsagePerGrade) }))
             ];
             const seen = new Set();
             allActivities = allActivities.filter(a => { if (seen.has(a.name)) return false; seen.add(a.name); return true; });
@@ -131,13 +151,29 @@
     }
 
     function getDivisionColor(divName) {
-        const names = Object.keys(divisionsDat).sort();
+        // ★ FN-50: index by the Camp Structure order so chart colors line up
+        //   with the displayed division order
+        const _rawN = Object.keys(divisionsDat);
+        const names = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(_rawN.slice()) : _rawN;
         const idx = names.indexOf(divName);
         return DIV_COLORS[Math.max(0, idx) % DIV_COLORS.length];
     }
 
     function isSpecialByName(name) {
         return allActivities.some(a => a.name === name && a.type === 'special');
+    }
+
+    // Effective usage limit for a bunk: a >0 per-grade override for the bunk's
+    // grade wins over the activity's base max (mirrors calculateLimitScore).
+    // Returns 0 for "no limit".
+    function effectiveMax(act, bunk) {
+        if (act && act.maxPerGrade) {
+            const gr = getDivisionForBunk(bunk);
+            const gv = parseInt(act.maxPerGrade[gr]) || 0;
+            if (gv > 0) return gv;
+        }
+        return (act && parseInt(act.max)) || 0;
     }
 
     function getDivisionForBunk(bunkName) {
@@ -158,8 +194,14 @@
         let assignments;
         // Prefer live in-memory state for the current date so freshly generated
         // schedules (manual or auto) show immediately without a save round-trip.
-        if (dateKey && dateKey === liveDate && window.scheduleAssignments &&
-            Object.keys(window.scheduleAssignments).length) {
+        // ★★★ CB-77: require the _scheduleAssignmentsDate coherence stamp too (the
+        // rotation table in this same file already does, L1383). Without it, a
+        // transient load error on date-nav leaves window.scheduleAssignments
+        // holding the PRIOR date's data (its non-empty length passes), so the
+        // Field Availability gantt showed a different date's field usage on the
+        // selected date.
+        if (dateKey && dateKey === liveDate && window._scheduleAssignmentsDate === liveDate &&
+            window.scheduleAssignments && Object.keys(window.scheduleAssignments).length) {
             assignments = window.scheduleAssignments;
         } else if (dateKey && allDaily[dateKey]?.scheduleAssignments) {
             assignments = allDaily[dateKey].scheduleAssignments;
@@ -175,11 +217,32 @@
             ? allDaily[dateKey].divisionTimes
             : (window.divisionTimes || {});
         const items = [];
+        // Dedupe reserved-field usages: a pinned tile fills every bunk in the division
+        // with the SAME field reservation, so without this we'd push N identical bars.
+        const _reservedSeen = new Set();
+        // Set of REAL configured field names. Used to tell a normal sport/special
+        // (entry.field IS a real field → trust it) apart from an event-name placeholder
+        // tile (entry.field is the tile's NAME, e.g. "Signup leagues"/"AVL" → the real
+        // fields live on _reservedFields). We only expand reserved fields for the latter,
+        // so a normal sport that happens to carry a stray candidate field isn't given a
+        // phantom second booking.
+        const _realFieldSet = new Set(
+            ((window.loadGlobalSettings?.() || {}).app1?.fields || [])
+                .map(f => (f && f.name ? String(f.name).trim().toLowerCase() : '')).filter(Boolean)
+        );
 
         Object.entries(assignments).forEach(([bunk, schedule]) => {
             if (!Array.isArray(schedule)) return;
             const divName = getDivisionForBunk(bunk) || 'Unknown';
-            const times = dTimes[divName] || [];
+            // ★ CB-106: prefer the bunk's OWN per-bunk slot geometry over the flat division-level
+            // array. In auto mode window.divisionTimes[div] carries a ._perBunkSlots[bunk] map whose
+            // index can differ from the division array (e.g. an injected leading slot), so resolving
+            // a missing-time entry by raw division index mis-timed the block in the Gantt. Resolve
+            // from the SAME source as dTimes (snapshot for historical, window._perBunkSlots for live).
+            const _pbs = (dTimes[divName] && dTimes[divName]._perBunkSlots && dTimes[divName]._perBunkSlots[String(bunk)])
+                || (dTimes === window.divisionTimes && window._perBunkSlots && window._perBunkSlots[divName] && window._perBunkSlots[divName][String(bunk)])
+                || null;
+            const times = _pbs || dTimes[divName] || [];
 
             schedule.forEach((entry, idx) => {
                 if (!entry || entry.continuation || entry._isTransition) return;
@@ -217,6 +280,35 @@
                 const hasField = fName && fName !== 'Free' && fName !== 'No Field';
 
                 items.push({ bunk, division: divName, field: hasField ? fName : null, activity, startMin, endMin, isSpecial: isSpecialByName(activity) });
+
+                // ★ Custom pinned tiles (and Swim+Elective blocks) RESERVE real fields,
+                //   but store them on _reservedFields/_location while entry.field holds
+                //   the tile's event NAME. The push above therefore credits usage to the
+                //   event name (which isn't a real field), leaving the actual reserved
+                //   field looking FREE in the availability report. Surface every reserved
+                //   field as its own "taken" usage so the report marks it occupied.
+                //   Gate: only when entry.field is NOT itself a real configured field —
+                //   a normal sport/special already credits its real field above, and may
+                //   carry stray candidate fields we must NOT mark as booked.
+                const _fieldIsReal = hasField && _realFieldSet.size > 0 && _realFieldSet.has(fName.trim().toLowerCase());
+                if (!_fieldIsReal) {
+                    const _resvSrc = [];
+                    const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
+                    if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
+                    if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
+                    if (typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
+                    _resvSrc.forEach(raw => {
+                        let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
+                        if (n.includes(' – ')) n = n.split(' – ')[0].trim();
+                        else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
+                        if (!n || n === 'Free' || n === 'No Field') return;
+                        if (fName && n.toLowerCase() === fName.toLowerCase()) return; // already credited above
+                        const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
+                        if (_reservedSeen.has(k)) return;
+                        _reservedSeen.add(k);
+                        items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
+                    });
+                }
             });
         });
 
@@ -331,7 +423,7 @@
             ? dates.map(d => `<option value="${d}" ${d === selectedDate ? 'selected' : ''}>${formatDateDisplay(d)}</option>`).join('')
             : `<option value="${selectedDate}">${formatDateDisplay(selectedDate)}</option>`;
 
-        const divOptions = availableDivisions.map(d => `<option value="${d}">${d}</option>`).join('');
+        const divOptions = availableDivisions.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
 
         wrapper.innerHTML = `
             <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">
@@ -534,7 +626,7 @@
             html += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;background:${c.bg};
                                  display:flex;align-items:center;justify-content:center;
                                  border-right:1px solid rgba(148,163,184,0.35);overflow:hidden;">
-                         <span style="font-size:0.63rem;font-weight:700;color:${c.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 5px;">${p.name}</span>
+                         <span style="font-size:0.63rem;font-weight:700;color:${c.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 5px;">${escapeHtml(p.name)}</span>
                      </div>`;
         });
         html += '</div>';
@@ -647,8 +739,8 @@
                 <div class="gantt-label" data-row="${rk}" style="width:168px;min-width:168px;padding:0 14px;display:flex;align-items:center;
                             font-size:0.8rem;font-weight:500;color:#374151;letter-spacing:0.01em;
                             border-right:1px solid #e9ecef;background:${rowBg};flex-shrink:0;overflow:hidden;
-                            position:sticky;left:0;z-index:4;cursor:pointer;" title="${leftLabel}">
-                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
+                            position:sticky;left:0;z-index:4;cursor:pointer;" title="${escapeHtml(leftLabel)}">
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(leftLabel)}</span>
                 </div>
                 <div class="gantt-track" data-row="${rk}" style="flex:1;position:relative;background:#f8fafc;overflow:hidden;">
                     ${trackHtml}
@@ -798,11 +890,11 @@
                     <div style="display:flex;gap:20px;flex-wrap:wrap;">
                         <div style="flex:1;min-width:130px;">
                             <div style="font-size:0.69rem;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Free (${free.length})</div>
-                            ${free.length ? free.map(f => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${f}</div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
+                            ${free.length ? free.map(f => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${escapeHtml(f)}</div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
                         </div>
                         <div style="flex:1;min-width:130px;">
                             <div style="font-size:0.69rem;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Taken (${taken.length})</div>
-                            ${taken.length ? taken.map(t => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${t.name} <span style="color:#94a3b8;font-size:0.72rem;">— ${t.by}</span></div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
+                            ${taken.length ? taken.map(t => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${escapeHtml(t.name)} <span style="color:#94a3b8;font-size:0.72rem;">— ${escapeHtml(t.by)}</span></div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
                         </div>
                     </div>
                 </div>`;
@@ -814,7 +906,7 @@
                         <span style="font-size:0.83rem;font-weight:700;color:#1e293b;">Snapshot at ${timeLabel}</span>${closeBtn}
                     </div>
                     <div style="display:flex;flex-wrap:wrap;gap:5px;">
-                        ${active.length ? active.map(a => `<span style="padding:3px 9px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1e40af;">${a.bunk} — ${a.activity}${a.field ? ' @ ' + a.field : ''}</span>`).join('') : '<span style="font-size:0.78rem;color:#94a3b8;">All bunks free at this time</span>'}
+                        ${active.length ? active.map(a => `<span style="padding:3px 9px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1e40af;">${escapeHtml(a.bunk)} — ${escapeHtml(a.activity)}${a.field ? ' @ ' + escapeHtml(a.field) : ''}</span>`).join('') : '<span style="font-size:0.78rem;color:#94a3b8;">All bunks free at this time</span>'}
                     </div>
                 </div>`;
         }
@@ -861,7 +953,7 @@
         if (!windows.length) { cont.innerHTML = `<div style="padding:8px 0;color:#94a3b8;font-size:0.82rem;text-align:center;">No fields have a free ${dur}-minute window.</div>`; return; }
         cont.innerHTML = windows.map(w => `
             <div style="padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:5px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;background:#fff;">
-                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${w.field}</span>
+                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${escapeHtml(w.field)}</span>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;">
                     ${w.gaps.map(g => `<span style="padding:2px 8px;background:#dcfce7;border:1px solid #86efac;border-radius:999px;font-size:0.72rem;color:#15803d;font-weight:600;">${minutesToTimeLabel(g.start)} – ${minutesToTimeLabel(g.end)} (${g.end - g.start}m)</span>`).join('')}
                 </div>
@@ -871,7 +963,7 @@
     function buildLegendItem(color, label) {
         return `<span style="display:inline-flex;align-items:center;gap:7px;">
                     <span style="width:14px;height:14px;background:${color};border-radius:3px;flex-shrink:0;box-shadow:inset 0 1px 0 rgba(255,255,255,0.2);"></span>
-                    <span style="font-size:0.78rem;font-weight:500;color:#374151;">${label}</span>
+                    <span style="font-size:0.78rem;font-weight:500;color:#374151;">${escapeHtml(label)}</span>
                 </span>`;
     }
 
@@ -903,7 +995,7 @@
         if (!resources.length) {
             area.innerHTML = `
                 <div style="padding:40px;text-align:center;color:#94a3b8;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:6px;">
-                    <div style="font-size:0.9rem;font-weight:600;color:#64748b;">No fields match "${activityFilter}"</div>
+                    <div style="font-size:0.9rem;font-weight:600;color:#64748b;">No fields match "${escapeHtml(activityFilter)}"</div>
                     <div style="font-size:0.8rem;margin-top:4px;">Try a different activity name.</div>
                 </div>`;
             return;
@@ -932,7 +1024,7 @@
                </span>`
             : '';
         const filterBadge = activityFilter
-            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${escapeHtml(activityFilter)}</span>`
             : '<span style="font-size:0.73rem;color:#94a3b8;">Hover or click timeline for details</span>';
         const freeNowBtn = showNow
             ? `<button id="gantt-free-now-btn" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;font-size:0.74rem;font-weight:600;cursor:pointer;white-space:nowrap;">What's free now?</button>`
@@ -1030,7 +1122,7 @@
             anyBunk = true;
 
             rows += `<div style="display:flex;border-bottom:1px solid #f1f5f9;">
-                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;position:sticky;left:0;z-index:4;">${divName}</div>
+                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;position:sticky;left:0;z-index:4;">${escapeHtml(divName)}</div>
                 <div style="flex:1;background:#fafafa;"></div>
             </div>`;
 
@@ -1056,7 +1148,7 @@
                </span>`
             : '';
         const filterBadge = activityFilter
-            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${escapeHtml(activityFilter)}</span>`
             : '<span style="font-size:0.73rem;color:#94a3b8;">Click a bunk label to focus it</span>';
 
         const keyBar = `
@@ -1151,7 +1243,7 @@
         `;
 
         const divSelect = document.getElementById('rotation-div-select');
-        availableDivisions.forEach(d => { divSelect.innerHTML += `<option value="${d}">${d}</option>`; });
+        availableDivisions.forEach(d => { divSelect.innerHTML += `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`; });
         divSelect.onchange = () => { populateRotationBunkFilter(divSelect.value); renderRotationTable(divSelect.value); };
         document.getElementById('rotation-type-filter').onchange = () => renderRotationTable(divSelect.value);
         document.getElementById('rotation-bunk-filter').onchange = () => renderRotationTable(divSelect.value);
@@ -1177,7 +1269,7 @@
         if (!sel) return;
         sel.innerHTML = '<option value="">All Bunks</option>';
         if (!divName) return;
-        (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${b}">${b}</option>`; });
+        (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`; });
     }
 
     function renderRotationTable(divName, forceRefresh) {
@@ -1352,12 +1444,29 @@
         //   subtract+add produces an undercount. Use scheduleSegments first
         //   (always complete) and fall back to scheduleAssignments only if
         //   segments aren't loaded.
-        const memTodaySegs = liveDate && window.scheduleSegments &&
-            Object.keys(window.scheduleSegments).length
+        // ★ COHERENCE GUARD: only count in-memory as "today" when it actually
+        //   belongs to liveDate. window._scheduleAssignmentsDate is the
+        //   authoritative owner stamp (kept coherent by the date-nav fix), and
+        //   it tracks window.scheduleAssignments. window.scheduleSegments is a
+        //   SEPARATE global that can LAG — it isn't cleared when navigating to a
+        //   date with no schedule, so it keeps the prior date's data. We trust
+        //   segments ONLY when (a) the owner stamp says memory is today's AND
+        //   (b) scheduleAssignments actually has today's data; otherwise stale
+        //   prior-date segments would be miscounted as "today" and inflate the
+        //   viewed date's rotation counts (e.g. an empty date showed the
+        //   last-generated day's schedule). Falls back to the date-correct
+        //   localStorage blob for liveDate when memory isn't today's.
+        const _memIsToday = !!liveDate && window._scheduleAssignmentsDate === liveDate;
+        const _assignHasToday = _memIsToday && window.scheduleAssignments &&
+            Object.keys(window.scheduleAssignments).some(function (b) {
+                var a = window.scheduleAssignments[b];
+                return Array.isArray(a) && a.some(Boolean);
+            });
+        const memTodaySegs = (_assignHasToday && window.scheduleSegments &&
+            Object.keys(window.scheduleSegments).length)
             ? window.scheduleSegments : null;
         const todaySched = memTodaySegs
-            || ((liveDate && window.scheduleAssignments &&
-                Object.keys(window.scheduleAssignments).length)
+            || (_assignHasToday
                 ? window.scheduleAssignments
                 : (allDaily[liveDate]?.scheduleAssignments || {}));
         const todayCounted = !!(liveDate && countedDates[liveDate]);
@@ -1468,7 +1577,24 @@
             return;
         }
 
-        // Merge rotation history as a secondary source for lastDone
+        // Merge rotation history as a LAST-RESORT, gap-filling source for lastDone.
+        //
+        // The rotation-history blob (window.loadRotationHistory) is a flat
+        // bunk→activity→timestamp map that is written append-only on every
+        // generation (scheduler_core_main.js STEP 8, integration_hooks.js) and
+        // is NEVER pruned. So when a regenerate drops an activity from a bunk,
+        // its timestamp lingers — and worse, that lingering timestamp can be
+        // MORE RECENT than the activity's true last-done date (it was stamped by
+        // the gen that was later regenerated away). The authoritative, regen-safe
+        // sources are cloud rotation_counts (seeded above) and the allDaily
+        // schedule scan (Step 3) — both already populated into lastDone by now.
+        //
+        // Therefore the blob may ONLY fill a (bunk, activity) gap that the
+        // authoritative sources left empty; it must never OVERRIDE an existing
+        // authoritative date with its own (possibly stale-recent) value. That
+        // would otherwise show a too-recent "Last Done" after a regen.
+        // (Combined with the hist>0 gate at render time, a stale blob entry for
+        // an activity the bunk no longer has any count for is hidden entirely.)
         const rotHist = window.loadRotationHistory?.() || { bunks: {} };
         bunks.forEach(bunk => {
             const bunkRotHist = rotHist.bunks?.[bunk] || {};
@@ -1479,7 +1605,8 @@
                     const d = new Date(ts).toISOString().split('T')[0];
                     const canon = _canonName(act);
                     lastDone[bunk] = lastDone[bunk] || {};
-                    if (!lastDone[bunk][canon] || d > lastDone[bunk][canon]) lastDone[bunk][canon] = d;
+                    // Fill-if-absent only — never override an authoritative date.
+                    if (!lastDone[bunk][canon]) lastDone[bunk][canon] = d;
                 } catch (_) {}
             });
         });
@@ -1509,16 +1636,33 @@
                 const hist = liveCounts[bunk]?.[act.name] || 0;
                 const offset = manualOffsets[bunk]?.[act.name] || 0;
                 const total = Math.max(0, hist + offset);
-                const limit = act.max > 0 ? act.max : '∞';
-                const lastDate = lastDone[bunk]?.[act.name] || '';
+                const effMax = effectiveMax(act, bunk);
+                const isPerGrade = act.maxPerGrade && (parseInt(act.maxPerGrade[getDivisionForBunk(bunk)]) || 0) > 0;
+                const limit = effMax > 0 ? (isPerGrade ? effMax + '*' : effMax) : '∞';
+                // Only surface a "Last Done" date when the bunk actually has a
+                // recorded occurrence (Count > 0). The lastDone map merges an
+                // extra source — the cumulative rotation-history blob
+                // (window.loadRotationHistory) — which is a flat
+                // bunk→activity→timestamp map with NO date attribution and is
+                // NEVER pruned when a day is regenerated. So after a regen drops
+                // an activity from a bunk, rotation_counts (the Count source) is
+                // correctly re-cleared to 0 but the stale rotation-history
+                // timestamp lingers, producing a contradictory "Count 0 but Last
+                // Done <date>" row (the bunk that "didn't get the activity" still
+                // showing "last played on xyz"). Gating on hist keeps the two
+                // columns consistent: no count ⇒ no last-done.
+                const lastDate = hist > 0 ? (lastDone[bunk]?.[act.name] || '') : '';
                 const lastDateFormatted = lastDate ? formatDateDisplay(lastDate) : '—';
                 let daysSince = '';
                 if (lastDate) {
                     const diff = Math.floor((new Date() - new Date(lastDate)) / 86400000);
-                    daysSince = diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : `${diff}d ago`;
+                    // ★ #V2-21: a future-dated last-done (e.g. a schedule built for a
+                    //   future date) yields a negative diff → guard so it reads "upcoming"
+                    //   instead of a nonsensical "-4d ago".
+                    daysSince = diff < 0 ? 'upcoming' : diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : `${diff}d ago`;
                 }
                 let rowBg = bunkBg, totalStyle = 'font-weight:600;';
-                if (act.max > 0 && total >= act.max) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
+                if (effMax > 0 && total >= effMax) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
                 else if (total === 0) totalStyle += 'color:#d97706;';
 
                 // ★ Day 18: 4 distinct type buckets.
@@ -1535,17 +1679,17 @@
 
                 html += `
                     <tr style="background:${rowBg};">
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;position:sticky;left:0;background:${rowBg};font-weight:${isFirstRow ? '600' : '400'};color:#111827;">${isFirstRow ? bunk : ''}</td>
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">${act.name}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;position:sticky;left:0;background:${rowBg};font-weight:${isFirstRow ? '600' : '400'};color:#111827;">${isFirstRow ? escapeHtml(bunk) : ''}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">${escapeHtml(act.name)}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;">${typeLabel}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${hist}</td>
                         <td style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center;">
-                            <input type="number" class="rotation-adj-input" data-bunk="${bunk}" data-act="${act.name}" value="${offset}"
+                            <input type="number" class="rotation-adj-input" data-bunk="${escapeHtml(bunk)}" data-act="${escapeHtml(act.name)}" value="${offset}"
                                 style="width:45px;text-align:center;padding:4px;border:1px solid #d1d5db;border-radius:999px;font-size:0.8rem;" />
                         </td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${totalStyle}">${total}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;font-size:0.85em;">${lastDateFormatted} <span style="color:#9ca3af;font-size:0.85em;">${daysSince}</span></td>
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${act.max > 0 && total >= act.max ? 'color:#b91c1c;font-weight:600;' : 'color:#6b7280;'}">${limit}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${effMax > 0 && total >= effMax ? 'color:#b91c1c;font-weight:600;' : 'color:#6b7280;'}"${isPerGrade ? ' title="Per-grade limit for ' + escapeHtml(getDivisionForBunk(bunk) || '') + '"' : ''}>${limit}</td>
                     </tr>`;
                 isFirstRow = false;
             });
@@ -1557,6 +1701,22 @@
 
         cont.querySelectorAll('.rotation-adj-input').forEach(inp => {
             inp.onchange = (e) => {
+                // ★★★ CB-79 / rotation-adjust role gate.
+                // manualUsageOffsets lives in camp_state_kv. Since LG-2 + migration 009,
+                // schedulers CAN write camp_state_kv (_canWriteCampState allows
+                // owner/admin/scheduler), so they may adjust rotation offsets too. Only
+                // VIEWERS stay blocked — they're read-only and RLS-blocked from
+                // camp_state_kv, so letting a viewer type here would just silently fail
+                // at the cloud. (camp_state_kv writes are whole-key/last-writer-wins, so
+                // concurrent editors can still clobber each other's offsets map.)
+                const _rotRole = window.AccessControl?.getCurrentRole?.() ||
+                                 window.CampistryDB?.getRole?.() ||
+                                 localStorage.getItem('campistry_role') || 'viewer';
+                if (_rotRole === 'viewer') {
+                    (window.daShowAlert || window.alert)('Viewers cannot adjust rotation offsets.');
+                    renderRotationTable(divName);
+                    return;
+                }
                 const b = e.target.dataset.bunk, a = e.target.dataset.act;
                 const val = parseInt(e.target.value) || 0;
                 const gs = window.loadGlobalSettings?.() || {};
@@ -1576,7 +1736,8 @@
             activities.forEach(act => {
                 const total = Math.max(0, (rawCounts[bunk]?.[act.name] || 0) + (manualOffsets[bunk]?.[act.name] || 0));
                 if (total === 0) neverDone.push({ bunk, activity: act.name });
-                if (act.max > 0 && total >= act.max) atLimit.push({ bunk, activity: act.name });
+                const em = effectiveMax(act, bunk);
+                if (em > 0 && total >= em) atLimit.push({ bunk, activity: act.name });
             });
         });
 
@@ -1589,7 +1750,7 @@
         html += neverDone.length > 0
             ? `<div style="margin-bottom:10px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;">
                 <strong style="color:#92400e;">Never Done (${neverDone.length}):</strong>
-                <span style="font-size:0.85em;color:#78350f;margin-left:6px;">${neverDone.slice(0, 8).map(n => `${n.bunk} → ${n.activity}`).join(', ')}${neverDone.length > 8 ? '…' : ''}</span>
+                <span style="font-size:0.85em;color:#78350f;margin-left:6px;">${neverDone.slice(0, 8).map(n => `${escapeHtml(n.bunk)} → ${escapeHtml(n.activity)}`).join(', ')}${neverDone.length > 8 ? '…' : ''}</span>
                </div>`
             : `<div style="margin-bottom:10px;padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:999px;">
                 <strong style="color:#047857;">All bunks have done all activities at least once.</strong>
@@ -1598,7 +1759,7 @@
         if (atLimit.length > 0) {
             html += `<div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:999px;">
                 <strong style="color:#b91c1c;">At Limit (${atLimit.length}):</strong>
-                <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">${atLimit.map(a => `${a.bunk} → ${a.activity}`).join(', ')}</span>
+                <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">${atLimit.map(a => `${escapeHtml(a.bunk)} → ${escapeHtml(a.activity)}`).join(', ')}</span>
              </div>`;
         }
 

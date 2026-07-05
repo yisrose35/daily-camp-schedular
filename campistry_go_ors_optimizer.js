@@ -633,7 +633,15 @@ window.GoOrsOptimizer = (function () {
                 if (vehicles[vi].busId === route.busId) { v = vehicles[vi]; break; }
             }
             // Skip routes that are already at capacity
-            if (v && route.camperCount + stop.campers.length > v.capacity) continue;
+            // ★ CB-140: compare against REAL capacity (minus reserved monitor/counselor seats), not
+            // raw v.capacity. The sibling paths (_recursiveSplit, _singleRequest) all subtract
+            // reserved seats; this unassigned-fallback path didn't, so it overfilled a bus whose
+            // monitor + counselors already consumed seats — producing routes getCapacityWarnings flags.
+            if (v) {
+                var _reserved = (v.monitor ? 1 : 0) + ((v.counselors && v.counselors.length) ? v.counselors.length : 0);
+                var _realCap  = Math.max(1, (v.capacity || 44) - _reserved);
+                if (route.camperCount + stop.campers.length > _realCap) continue;
+            }
 
             for (var i = 0; i <= route.stops.length; i++) {
                 var prev = route.stops[i - 1] || null;

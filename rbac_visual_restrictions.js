@@ -668,13 +668,20 @@
     }
 
     function createTabBanner(title, message) {
+        // ★ CB-135: escape title/message before innerHTML — callers pass division names (user data).
+        // The path is presently dead (shadowed by the v3.13 scheduler-edits-everything bypass), but if
+        // field-level restrictions are ever restored this becomes a live stored-XSS sink. Delegate to
+        // CampUtils.escapeHtml with a complete &<>"' fallback (this module has no escaper of its own).
+        const _esc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+            ? window.CampUtils.escapeHtml(s)
+            : String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         const banner = document.createElement('div');
         banner.className = 'rbac-tab-banner';
         banner.innerHTML = `
             <span style="font-size: 1.2rem;">👁️</span>
             <div>
-                <strong>${title}</strong>
-                <div style="font-size: 0.85rem; opacity: 0.9;">${message}</div>
+                <strong>${_esc(title)}</strong>
+                <div style="font-size: 0.85rem; opacity: 0.9;">${_esc(message)}</div>
             </div>
         `;
         return banner;

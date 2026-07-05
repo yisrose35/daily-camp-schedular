@@ -57,40 +57,9 @@ const PINNED_EVENTS = ['lunch', 'snack', 'snacks', 'dismissal', 'arrival', 'dave
 // UTILITY FUNCTIONS
 // =========================================================================
 
-function parseTimeToMinutes(str) {
-    if (typeof str === 'number') return str;
-    if (!str || typeof str !== 'string') return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith('am') || s.endsWith('pm')) {
-        mer = s.endsWith('am') ? 'am' : 'pm';
-        s = s.replace(/am|pm/g, '').trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === 'am' ? 0 : 12;
-        else if (mer === 'pm') hh += 12;
-    }
-    // ★ Handle 24h format (no am/pm) — from <input type="time"> or ISO parsing
-    // If no meridiem was found, treat as 24h if hh <= 23
-    if (!mer && hh >= 0 && hh <= 23) {
-        return hh * 60 + mm;
-    }
-    if (!mer) return null; // Invalid — no am/pm and invalid hour
-    return hh * 60 + mm;
-}
+function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; bare<=24h literal, equivalence harness-proven)
 
-function minutesToTime(min) {
-    let h = Math.floor(min / 60);
-    let m = min % 60;
-    const ap = h >= 12 ? 'pm' : 'am';
-    h = h % 12 || 12;
-    return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 function minutesToISO(min, referenceDate) {
     // Build an ISO string using a reference date (today)
@@ -1043,6 +1012,60 @@ function applyResourceOverrides(overrides, isRainStarting) {
 }
 
 // =========================================================================
+// ★★★ CB-34: reliable restore of pre-rainy field overrides.
+// applyResourceOverrides() clears field.timeRules=[] (and bumps capacity) and
+// cloud-syncs the change. The ONLY restore was the manual "rain cleared" click
+// (handleMidDayRainClear → applyResourceOverrides(_, false)). If the user
+// changed date / reloaded / closed the tab without clicking it, the camp config
+// kept timeRules=[] for EVERY future generation — silently dropping a field's
+// time restrictions (e.g. "Pool only 9-11am" became all-day). The true rules
+// are preserved durably in field._preRainyTimeRules (it serializes with the
+// field), so this idempotent revert brings the config back. Safe to over-call:
+// an actively-rainy date re-applies its override during the rainy generation,
+// and the already-saved rainy schedule is unaffected (only future RE-gen reads
+// the field config).
+// =========================================================================
+function restoreResourceOverrides() {
+    const g = window.loadGlobalSettings?.() || {};
+    const fields = g.app1?.fields || [];
+    let changed = false;
+    for (const field of fields) {
+        if (field._preRainyCapacity != null) {
+            if (field.sharableWith) field.sharableWith.capacity = field._preRainyCapacity;
+            delete field._preRainyCapacity;
+            changed = true;
+        }
+        if (field._preRainyTimeRules) {
+            field.timeRules = field._preRainyTimeRules;
+            delete field._preRainyTimeRules;
+            changed = true;
+        }
+    }
+    if (changed) {
+        window.saveGlobalSettings?.('app1', g.app1);
+        window.forceSyncToCloud?.();
+        console.log('[RainStacker] CB-34: restored pre-rainy field overrides (config had been left cleared)');
+    }
+    return changed;
+}
+
+// Auto-restore when the loaded date is NOT an active rainy day. Runs on date
+// change and once shortly after load. Reads the per-date persisted rainy flag
+// (not the volatile window.isRainyDay) so it doesn't fight an in-progress rainy
+// generation; also bails while a mid-day rain generation is running.
+function _cb34MaybeRestoreOverrides() {
+    try {
+        if (window._midDayRainGenerationInProgress) return;
+        const dd = window.loadCurrentDailyData?.() || {};
+        const dateIsRainy = dd.rainyDayMode === true || dd.isRainyDay === true;
+        if (!dateIsRainy) restoreResourceOverrides();
+    } catch (e) { /* non-fatal */ }
+}
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('campistry-date-changed', _cb34MaybeRestoreOverrides);
+}
+
+// =========================================================================
 // CONVENIENCE WRAPPERS (v2.0 — morning preserved via _pinned)
 // =========================================================================
 
@@ -1907,7 +1930,9 @@ function showRainClearsModal() {
     
     document.getElementById('rain-clears-close').onclick = () => modal.remove();
     document.getElementById('rain-clears-cancel').onclick = () => modal.remove();
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    let _mdRainModal = false;
+    modal.addEventListener('mousedown', (e) => { _mdRainModal = (e.target === modal); });
+    modal.onclick = (e) => { if (e.target === modal && _mdRainModal) modal.remove(); };
     
     document.getElementById('rain-clears-confirm').onclick = () => {
         const timeInput = document.getElementById('rain-clears-time');
@@ -2021,6 +2046,7 @@ window.MidDayRainStacker = {
     // Helpers
     calculateEffectiveStart,
     applyResourceOverrides,
+    restoreResourceOverrides, // ★ CB-34: idempotent revert (also auto-runs on non-rainy date load)
     buildRainyDayResourceOverrides,
     getFlexRange,
     

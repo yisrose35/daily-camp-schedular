@@ -110,9 +110,9 @@ function validateSpecialActivity(activity, activityName) {
     } catch (e) { validDivisions = null; }
 
    let sharableWith = activity.sharableWith;
-    if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 }; }
+    if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2, minBunks: 0 }; }
     else {
-        if (!['not_sharable','same_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
+        if (!['not_sharable','same_division','cross_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
         if (!Array.isArray(sharableWith.divisions)) sharableWith.divisions = [];
         else if (validDivisions && validDivisions.size > 0) {
             const ol = sharableWith.divisions.length;
@@ -123,6 +123,25 @@ function validateSpecialActivity(activity, activityName) {
         if (sharableWith.type === 'custom' && sharableWith.divisions.length === 0) sharableWith.type = 'same_division';
         if (sharableWith.type === 'all') sharableWith.type = 'same_division';
         sharableWith.capacity = parseInt(sharableWith.capacity, 10) || 2;
+        // ★ Day 19: 'not_sharable' means exactly 1 bunk at a time. The UI shows
+        // "1 bunk at a time" for not_sharable and the toggle sets capacity=1, but
+        // createDefaultActivity + this validator default capacity to 2 — so a
+        // never-toggled not_sharable special carried capacity:2, which the
+        // capacity-first placement checks honored and let 2 bunks share it
+        // (contradicting the displayed "1 bunk"). Force capacity=1 so every
+        // downstream reader (type-first or capacity-first) agrees on 1.
+        if (sharableWith.type === 'not_sharable') sharableWith.capacity = 1;
+        // ★ minBunks: the MINIMUM number of bunks that must attend together
+        //   whenever this special runs (the floor, opposite of capacity's ceiling).
+        //   0 = no minimum (default — behaves exactly as before). Only meaningful
+        //   for sharable types; clamped to [2, capacity]. not_sharable can never
+        //   host 2 bunks, so its floor is forced off.
+        sharableWith.minBunks = parseInt(sharableWith.minBunks, 10) || 0;
+        if (sharableWith.type === 'not_sharable') sharableWith.minBunks = 0;
+        else if (sharableWith.minBunks > 0) {
+            if (sharableWith.minBunks < 2) sharableWith.minBunks = 2;
+            if (sharableWith.minBunks > sharableWith.capacity) sharableWith.minBunks = sharableWith.capacity;
+        }
         // Normalize allowedPairs for cross_division
         if (sharableWith.type === 'cross_division') {
             if (!sharableWith.allowedPairs || typeof sharableWith.allowedPairs !== 'object') { sharableWith.allowedPairs = {}; }
@@ -158,9 +177,16 @@ function validateSpecialActivity(activity, activityName) {
     //   Trimmed; canonical case preserved as the user typed it.
     const _subcategoryRaw = (typeof activity.subcategory === 'string') ? activity.subcategory.trim() : '';
 
+    // ★ Instructor: the person who runs this activity. Two activities tagged
+    //   with the same instructor (across specials + general activities) are
+    //   mutex at any slot — the same person can't be in two places at once.
+    //   Empty = no instructor tag = no constraint.
+    const _instructorRaw = (typeof activity.instructor === 'string') ? activity.instructor.trim() : '';
+
     return {
-        name: activity.name || activityName || 'Unknown', type: 'Special', available: activity.available !== false,
+        name: _saNormalizeName(activity.name || activityName) || 'Unknown', type: 'Special', available: activity.available !== false,
         subcategory: _subcategoryRaw,
+        instructor: _instructorRaw,
         sharableWith, accessRestrictions, timeRules,
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
         maxUsagePeriod: activity.maxUsagePeriod || 'half',
@@ -175,7 +201,17 @@ function validateSpecialActivity(activity, activityName) {
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
        fullGrade: activity.fullGrade === true,
+        // ★ forcePlacement: "must run every generation". When true, the manual
+        //   generator guarantees at least one session of this special (>= its
+        //   minBunks floor, or 1) is placed each build, seating the most-due
+        //   eligible bunks. Default false → no change to normal specials.
+        forcePlacement: activity.forcePlacement === true,
         fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
+        // ★ consecutiveBunks: auto-only. When ON, the auto solver schedules each
+        //   bunk in the grade sequentially (one slot after another). Per-bunk
+        //   duration = the activity's `duration`; capacity-aware sharing groups
+        //   bunks into the same slot when sharableWith.capacity > 1.
+        consecutiveBunks: activity.consecutiveBunks === true,
         // ★ v3.7: Multi-Part Special support (simple N parts)
 
 
@@ -236,11 +272,11 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', subcategory: '', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name: _saNormalizeName(name) || 'Unknown', type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2, minBunks: 0 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
-        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
+        rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false, forcePlacement: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
         minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, minFrequencyPerGrade: {},
         exactFrequency: null, exactFrequencyPeriod: '1week', exactFrequencyPerGrade: {}, availableDays: [] };
@@ -344,6 +380,58 @@ function initSpecialActivitiesTab() {
     console.log("[SPECIAL_ACTIVITIES] Initialized:", { specials: specialActivities.length, rainyDay: rainyDayActivities.length });
 }
 
+// ═══ DELETION TOMBSTONES ═════════════════════════════════════════════
+// Deleting a special used to be represented only by ABSENCE from the
+// arrays. The load path UNIONS both storage copies (top-level +
+// app1.specialActivities) to protect against blank-copy data loss, so a
+// deleted special resurrected whenever ANY stale copy (another device, an
+// old tab, the IDB snapshot) still contained it. Tombstones record the
+// deletion as a FACT: name (case-insensitive) → deletion epoch-ms, stored
+// in BOTH copies (gs.deletedSpecials + gs.app1.deletedSpecials,
+// union-on-read) so the marker survives whichever copy syncs. The
+// union-on-load keeps its anti-wipe behavior but drops tombstoned names;
+// re-creating a special with the same name clears its tombstone (saveData).
+// ★ Name normalization: collapse runs of whitespace and trim. Intentionally does
+//   NOT change case (so "VR", "Arts & Crafts" keep their casing — case-folding here
+//   would corrupt legitimate names). Stops trailing-space / double-space variants
+//   from creating distinct specials.
+function _saNormalizeName(n) { return String(n || '').replace(/\s+/g, ' ').trim(); }
+function _saTombKey(n) { return String(n || '').trim().toLowerCase(); }
+function _saReadTombstones(settings) {
+    const out = {};
+    const s = settings || window.loadGlobalSettings?.() || {};
+    [s.deletedSpecials, s.app1 && s.app1.deletedSpecials].forEach(m => {
+        if (!m || typeof m !== 'object') return;
+        Object.keys(m).forEach(k => {
+            const t = Number(m[k]) || 0;
+            const kk = _saTombKey(k);
+            if (kk && t > (out[kk] || 0)) out[kk] = t;
+        });
+    });
+    return out;
+}
+function _saWriteTombstones(tombs) {
+    try {
+        const gs = window.loadGlobalSettings?.() || {};
+        if (!gs.app1) gs.app1 = {};
+        gs.app1.deletedSpecials = tombs;
+        window.saveGlobalSettings?.('deletedSpecials', tombs);
+        window.saveGlobalSettings?.('app1', gs.app1);
+    } catch (e) { console.warn('[SPECIAL_ACTIVITIES] tombstone save failed:', e); }
+}
+window.recordSpecialDeletion = function (name) {
+    if (!name) return;
+    const tombs = _saReadTombstones();
+    tombs[_saTombKey(name)] = Date.now();
+    _saWriteTombstones(tombs);
+};
+window.clearSpecialTombstone = function (name) {
+    if (!name) return;
+    const tombs = _saReadTombstones();
+    const k = _saTombKey(name);
+    if (k in tombs) { delete tombs[k]; _saWriteTombstones(tombs); }
+};
+
 function loadData() {
     try {
         const settings = window.loadGlobalSettings?.() || {};
@@ -361,15 +449,44 @@ function loadData() {
         //   duplicate exists, PREFER the row that carries a subcategory tag so a
         //   blank copy can never shadow a tagged one (the tag-wipe bug).
         const _hasSub = (s) => (s && typeof s.subcategory === 'string' && s.subcategory.trim() !== '');
+        // ★ Duplicate quality score — when a case-insensitive collision happens, keep
+        //   the BETTER row so a junk copy (lowercase name / blank location) can never
+        //   shadow the real one. Subcategory tag stays the dominant signal (preserves
+        //   the tag-wipe fix); a real location and a proper-cased name break ties.
+        const _quality = (s) => {
+            if (!s) return -1;
+            let q = 0;
+            if (_hasSub(s)) q += 4;
+            if (s.location && String(s.location).trim()) q += 2;
+            const nm = String(s.name || '');
+            if (nm && nm !== nm.toLowerCase()) q += 1;
+            return q;
+        };
+        // Keyed case-insensitively so "Canteen"/"canteen" can't both survive.
         const _seenNames = new Map();
         for (const s of allActivities) {
             if (!s || !s.name) continue;
-            const ex = _seenNames.get(s.name);
-            if (!ex) { _seenNames.set(s.name, s); continue; }
-            // Upgrade the kept row to a tagged duplicate if the kept one is blank.
-            if (!_hasSub(ex) && _hasSub(s)) _seenNames.set(s.name, s);
+            const _key = _saTombKey(s.name);
+            const ex = _seenNames.get(_key);
+            if (!ex) { _seenNames.set(_key, s); continue; }
+            // Keep the higher-quality duplicate (first-seen wins on a tie).
+            if (_quality(s) > _quality(ex)) _seenNames.set(_key, s);
         }
-        const dedupedActivities = [..._seenNames.values()];
+        let dedupedActivities = [..._seenNames.values()];
+        // ★ Tombstone filter: a deleted special stays deleted even when a stale
+        //   copy still carries it — drop tombstoned names from the union.
+        const _tombs = _saReadTombstones(settings);
+        if (Object.keys(_tombs).length > 0) {
+            const _dropped = [];
+            dedupedActivities = dedupedActivities.filter(s => {
+                const dead = _saTombKey(s.name) in _tombs;
+                if (dead) _dropped.push(s.name);
+                return !dead;
+            });
+            if (_dropped.length > 0) {
+                console.warn(`[SPECIAL_ACTIVITIES] loadData: dropped ${_dropped.length} tombstoned (deleted) special(s): ${_dropped.join(', ')}`);
+            }
+        }
         const _rawMax = Math.max(_topActs.length, _app1Acts.length);
         if (dedupedActivities.length < _rawMax) {
             console.warn(`[SPECIAL_ACTIVITIES] loadData: healed duplicates within a copy (max copy ${_rawMax} → ${dedupedActivities.length} unique)`);
@@ -401,6 +518,18 @@ function saveData() {
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
+        // ★ Re-creating a special with a tombstoned name clears its tombstone.
+        //   Tombstoned names are filtered out on load, so one can only be live
+        //   here via an explicit add/rename this session — honor that intent.
+        try {
+            const _tombs = _saReadTombstones();
+            let _cleared = false;
+            [...specialActivities, ...rainyDayActivities].forEach(s => {
+                const k = _saTombKey(s && s.name);
+                if (k && (k in _tombs)) { delete _tombs[k]; _cleared = true; }
+            });
+            if (_cleared) _saWriteTombstones(_tombs);
+        } catch (_) {}
         window.saveGlobalSpecialActivities?.([...specialActivities, ...rainyDayActivities]);
         if (typeof window.forceSyncToCloud === 'function') {
             if (window._specialActivitiesSyncTimeout) clearTimeout(window._specialActivitiesSyncTimeout);
@@ -587,6 +716,7 @@ function renderDetailPane() {
 
     // ── WHO ───────────────────────────────────────────────────────────────────
     detailPaneEl.appendChild(sectionGroup('Who', [
+        section('Instructor', summaryInstructor(item), () => renderInstructor(item)),
         section('Subcategory', summarySubcategory(item), () => renderSubcategory(item)),
         section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
@@ -670,6 +800,28 @@ function getAllSubcategories() {
     loadSubcategoryRegistry().forEach(push);
     (specialActivities || []).forEach(a => push(a?.subcategory));
     (rainyDayActivities || []).forEach(a => push(a?.subcategory));
+    // ★ Robustness (2026-06-18): the module-local `specialActivities` can be stale
+    //   or empty when another page's editor (e.g. the auto layer subcategory grid in
+    //   master_schedule_builder) reads this. That silently collapsed the per-layer
+    //   grid to ONLY "Uncategorized", so tagged buckets (Food/Shiur/Theme) never
+    //   appeared and a layer could not demand them — leaving those subcategories
+    //   unschedulable. Also union the AUTHORITATIVE live config so every subcategory
+    //   that exists on a real special is always offerable. Pure superset → safe.
+    try {
+        // The in-memory window.globalSettings.app1 is HOLLOW on the builder/flow page
+        // (and mid/post-gen) — the authoritative copy is the durable saved config that
+        // loadGlobalSettings() reads from localStorage. Prefer live if populated, else
+        // fall back to durable, so the bucket list is never empty when specials exist.
+        let _liveSpecials = [];
+        const _gs = (typeof window !== 'undefined' && window.globalSettings) ? window.globalSettings : null;
+        if (_gs && _gs.app1 && Array.isArray(_gs.app1.specialActivities) && _gs.app1.specialActivities.length) {
+            _liveSpecials = _gs.app1.specialActivities;
+        } else if (typeof window !== 'undefined' && typeof window.loadGlobalSettings === 'function') {
+            const _L = window.loadGlobalSettings();
+            if (_L && _L.app1 && Array.isArray(_L.app1.specialActivities)) _liveSpecials = _L.app1.specialActivities;
+        }
+        _liveSpecials.forEach(a => push(a && a.subcategory));
+    } catch (_e) {}
     return out.sort((a, b) => a.localeCompare(b));
 }
 window.getSpecialSubcategories = getAllSubcategories;
@@ -755,6 +907,255 @@ function renderSubcategory(item) {
 }
 
 // =========================================================================
+// INSTRUCTOR HELPERS
+// =========================================================================
+// "Instructor" is a free-text tag on each activity (special or general)
+// naming the person who runs it. The solver treats two activities sharing
+// the same instructor (case-insensitive) as mutex at any slot — the same
+// person can't be in two places at once. Empty = no constraint.
+
+function getAllInstructors() {
+    const seen = new Set();
+    const out = [];
+    const push = (s) => {
+        const v = (typeof s === 'string') ? s.trim() : '';
+        if (!v) return;
+        const key = v.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(v);
+    };
+    (specialActivities || []).forEach(a => push(a?.instructor));
+    (rainyDayActivities || []).forEach(a => push(a?.instructor));
+    // Also pull from general activities configured in facilities.
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        (settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(ga => push(ga?.instructor)));
+    } catch {}
+    return out.sort((a, b) => a.localeCompare(b));
+}
+window.getSpecialInstructors = getAllInstructors;
+
+function summaryInstructor(item) {
+    const v = (typeof item.instructor === 'string') ? item.instructor.trim() : '';
+    return v ? v : 'No instructor set';
+}
+
+function renderInstructor(item) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
+    desc.textContent = 'Name the person who runs this activity. If the same instructor also runs another activity (special or general), the scheduler will keep them from being placed at the same time.';
+    wrap.appendChild(desc);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+
+    const dl = document.createElement('datalist');
+    const dlId = 'sa-instructor-list';
+    dl.id = dlId;
+    getAllInstructors().forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        dl.appendChild(opt);
+    });
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'No instructor set';
+    input.value = (typeof item.instructor === 'string') ? item.instructor : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((item.instructor || '') === v) return;
+        item.instructor = v;
+        saveData();
+        renderDetailPane();
+    });
+
+    row.appendChild(input);
+    row.appendChild(dl);
+    wrap.appendChild(row);
+
+    // Also-runs picker: interactive checklist of other activities the same
+    //   instructor runs. Toggling a checkbox writes/clears the instructor on
+    //   the target activity via the shared cross-write helpers.
+    const _aBlock = window.buildAlsoRunsChecklist?.(item.instructor, { specialName: item.name });
+    if (_aBlock) wrap.appendChild(_aBlock);
+
+    return wrap;
+}
+
+// =========================================================================
+// CROSS-WRITE HELPERS — Instructor links between activities
+// =========================================================================
+// Used by the "Also runs" checklist to set / clear the instructor tag on a
+// target activity from either side (specials or facilities). Each helper
+// updates the canonical store for its own data type, then persists.
+
+window.setSpecialInstructor = function(activityName, instructor) {
+    if (!activityName) return false;
+    const norm = String(activityName);
+    let touched = false;
+    (specialActivities || []).forEach(s => { if (s && s.name === norm) { s.instructor = String(instructor || ''); touched = true; }});
+    (rainyDayActivities || []).forEach(s => { if (s && s.name === norm) { s.instructor = String(instructor || ''); touched = true; }});
+    if (touched) {
+        saveData();
+        if (_isInitialized) {
+            if (typeof renderMasterList === 'function') renderMasterList();
+            if (typeof renderRainyDayList === 'function') renderRainyDayList();
+            if (typeof renderDetailPane === 'function') renderDetailPane();
+        }
+    }
+    return touched;
+};
+
+// Render a "Connected to" subsection — declare what other activities this
+//   instructor also runs. Returns a DOM node.
+//   - Empty instructor → hint message.
+//   - Otherwise: list of current connections (each removable) + a single
+//     dropdown to add a new one. Cross-writes via the public setters.
+// `exclude` filters out self so an activity doesn't link to itself.
+//   { specialName?: string, facilityName?: string, generalName?: string }
+window.buildAlsoRunsChecklist = function(currentInstructor, exclude) {
+    exclude = exclude || {};
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-top:12px; padding-top:10px; border-top:1px dashed #E5E7EB;';
+
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:0.85rem; font-weight:600; color:#374151;';
+    heading.textContent = 'Connected to:';
+    wrap.appendChild(heading);
+
+    const raw = (typeof currentInstructor === 'string') ? currentInstructor.trim() : '';
+    if (!raw) {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:0.78rem; color:#9CA3AF; font-style:italic;';
+        hint.textContent = 'Type an instructor name above to link this person to other activities they also run.';
+        wrap.appendChild(hint);
+        return wrap;
+    }
+    const curLower = raw.toLowerCase();
+
+    // Collect every activity across the camp (other than self).
+    const candidates = [];
+    const allSpecials = (window.getAllSpecialActivities && window.getAllSpecialActivities()) || [];
+    allSpecials.forEach(sp => {
+        if (!sp || !sp.name) return;
+        if (exclude.specialName && sp.name === exclude.specialName) return;
+        candidates.push({
+            label: sp.name + ' (Special)',
+            name: sp.name,
+            isSpecial: true,
+            currentInstructor: (typeof sp.instructor === 'string' ? sp.instructor : '').trim()
+        });
+    });
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        (settings.facilities || []).forEach(f => {
+            if (!f || !f.name) return;
+            (f.generalActivities || []).forEach(ga => {
+                if (!ga || !ga.name) return;
+                // Skip self when called from the same general activity edit.
+                if (exclude.facilityName && f.name === exclude.facilityName
+                    && exclude.generalName && ga.name === exclude.generalName) return;
+                // When called from a facility-level edit with no specific general
+                // activity, exclude all general activities at that facility.
+                if (exclude.facilityName && !exclude.generalName && f.name === exclude.facilityName) return;
+                candidates.push({
+                    label: ga.name + ' @ ' + f.name,
+                    name: ga.name,
+                    isSpecial: false,
+                    currentInstructor: (typeof ga.instructor === 'string' ? ga.instructor : '').trim()
+                });
+            });
+        });
+    } catch {}
+
+    const connected = candidates.filter(c => c.currentInstructor.toLowerCase() === curLower);
+    const available = candidates.filter(c => c.currentInstructor.toLowerCase() !== curLower);
+
+    // Render current connections.
+    if (connected.length === 0) {
+        const none = document.createElement('div');
+        none.style.cssText = 'font-size:0.78rem; color:#9CA3AF;';
+        none.textContent = 'No other activities linked yet.';
+        wrap.appendChild(none);
+    } else {
+        const list = document.createElement('div');
+        list.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+        connected.forEach(c => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 10px; background:#e6f4f7; border:1px solid #147D91; border-radius:6px;';
+            const txt = document.createElement('span');
+            txt.style.cssText = 'flex:1; font-size:0.85rem; font-weight:500; color:#0A4A56;';
+            txt.textContent = c.label;
+            row.appendChild(txt);
+            const rm = document.createElement('button');
+            rm.type = 'button';
+            rm.textContent = '✕';
+            rm.title = 'Unlink (clears the instructor on this activity)';
+            rm.style.cssText = 'background:none; border:none; color:#DC2626; cursor:pointer; font-size:1rem; padding:0 4px;';
+            rm.addEventListener('click', () => {
+                if (c.isSpecial) window.setSpecialInstructor?.(c.name, '');
+                else window.setGeneralActivityInstructor?.(c.name, '');
+            });
+            row.appendChild(rm);
+            list.appendChild(row);
+        });
+        wrap.appendChild(list);
+    }
+
+    // Add-connection dropdown (skipped if nothing left to link).
+    if (available.length === 0) {
+        if (connected.length > 0) {
+            const allLinked = document.createElement('div');
+            allLinked.style.cssText = 'font-size:0.78rem; color:#9CA3AF; font-style:italic;';
+            allLinked.textContent = 'All other activities are already linked.';
+            wrap.appendChild(allLinked);
+        }
+        return wrap;
+    }
+
+    const addRow = document.createElement('div');
+    addRow.style.cssText = 'display:flex; align-items:center; gap:8px;';
+    const select = document.createElement('select');
+    select.style.cssText = 'flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '+ Add connection — pick an activity…';
+    select.appendChild(defaultOpt);
+    available.forEach((c, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = c.label + (c.currentInstructor ? ' — currently: ' + c.currentInstructor : '');
+        select.appendChild(opt);
+    });
+    select.addEventListener('change', () => {
+        const idx = parseInt(select.value, 10);
+        if (isNaN(idx)) return;
+        const c = available[idx];
+        if (!c) return;
+        if (c.currentInstructor && c.currentInstructor.toLowerCase() !== curLower) {
+            if (!confirm(`"${c.label}" is currently tagged "${c.currentInstructor}". Overwrite with "${raw}"?`)) {
+                select.value = '';
+                return;
+            }
+        }
+        if (c.isSpecial) window.setSpecialInstructor?.(c.name, raw);
+        else window.setGeneralActivityInstructor?.(c.name, raw);
+    });
+    addRow.appendChild(select);
+    wrap.appendChild(addRow);
+
+    return wrap;
+};
+
+// =========================================================================
 // SUMMARY HELPERS
 // =========================================================================
 function summaryMaxUsage(item) {
@@ -784,10 +1185,12 @@ function summarySharing(item) {
     var sw = item.sharableWith;
     if (!sw || sw.type === 'not_sharable') return '1 bunk at a time';
     var cap = parseInt(sw.capacity, 10) || 2;
-    if (sw.type === 'same_division') return 'Up to ' + cap + ' bunks (same grade)';
+    var mb = (parseInt(sw.minBunks, 10) || 0);
+    var minStr = (mb >= 2) ? ', min ' + mb : '';
+    if (sw.type === 'same_division') return 'Up to ' + cap + ' bunks (same grade)' + minStr;
     if (sw.type === 'cross_division') {
         var pc = Object.keys(sw.allowedPairs || {}).filter(function(k) { return sw.allowedPairs[k]; }).length;
-        return 'Grade pairs — ' + (pc > 0 ? pc + ' pair' + (pc !== 1 ? 's' : '') : 'no pairs set') + ', max ' + cap;
+        return 'Grade pairs — ' + (pc > 0 ? pc + ' pair' + (pc !== 1 ? 's' : '') : 'no pairs set') + ', max ' + cap + minStr;
     }
     return 'Up to ' + cap + ' bunks at once';
 }
@@ -1679,6 +2082,31 @@ function renderSharing(item) {
         capRow.appendChild(capLbl); capRow.appendChild(capIn);
         det.appendChild(capRow);
 
+        // Minimum-bunks row (the floor). 0 / blank = no minimum.
+        var minRow = document.createElement('div');
+        minRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px;';
+        var minLbl = document.createElement('span'); minLbl.style.cssText = 'font-size:0.85rem; color:#374151;';
+        minLbl.textContent = 'Min bunks together:';
+        var minIn = document.createElement('input');
+        minIn.type = 'number'; minIn.min = '0'; minIn.max = String(rules.capacity || 2);
+        minIn.value = (rules.minBunks && rules.minBunks >= 2) ? rules.minBunks : '';
+        minIn.placeholder = 'none';
+        minIn.style.cssText = 'width:60px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+        minIn.onchange = function() {
+            var v = parseInt(minIn.value, 10);
+            if (!v || v < 2) { rules.minBunks = 0; minIn.value = ''; }
+            else { rules.minBunks = Math.min(rules.capacity || 2, v); minIn.value = rules.minBunks; }
+            item.sharableWith = rules; saveData(); updateSummary();
+        };
+        minRow.appendChild(minLbl); minRow.appendChild(minIn);
+        det.appendChild(minRow);
+        var minNote = document.createElement('div');
+        minNote.style.cssText = 'color:#6B7280; font-size:0.78rem; padding:0 0 12px 0; line-height:1.4;';
+        minNote.innerHTML = (rules.minBunks && rules.minBunks >= 2)
+            ? 'This activity will only run when at least <strong>' + rules.minBunks + '</strong> bunks attend together — the scheduler pulls in a partner bunk, and drops it if none can be found.'
+            : 'Leave blank to allow a single bunk. Set to 2+ to require bunks to go together (e.g. the lake always needs 2 bunks).';
+        det.appendChild(minNote);
+
         if (rules.type === 'same_division') {
             var sdNote = document.createElement('div');
             sdNote.style.cssText = 'color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;';
@@ -2369,6 +2797,10 @@ function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('a
 
 function cleanupDeletedSpecialActivity(name) {
     if (!name) return;
+    // ★ Record the deletion as a tombstone BEFORE purging references, so a
+    //   stale copy of the arrays (another device/tab, the IDB snapshot) can
+    //   never resurrect this special through the union-on-load merge.
+    try { window.recordSpecialDeletion?.(name); } catch (_) {}
     try {
         const s = window.loadGlobalSettings?.() || {};
         const ds = s.daily_schedules || {};
@@ -2592,9 +3024,9 @@ function propagateSpecialActivityRename(oldN, newN) {
     }
 }
 
-function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 function makeEditable(el,save) { if(!el)return; el.ondblclick=()=>{ const inp=document.createElement("input"); inp.value=el.textContent; inp.style.cssText="font-size:inherit;font-weight:inherit;border:1px solid #147D91;outline:none;border-radius:4px;padding:2px 6px;width:"+Math.max(100,el.offsetWidth+20)+"px;"; el.replaceWith(inp); inp.focus(); inp.select(); const finish=()=>{const v=inp.value.trim();if(v&&v!==el.textContent)save(v);else if(inp.parentNode)inp.replaceWith(el);}; inp.onblur=finish; inp.onkeyup=e=>{if(e.key==="Enter")finish();if(e.key==="Escape")inp.replaceWith(el);}; }; }
-function parseTimeToMinutes(str) { if(!str||typeof str!=="string")return null; let s=str.trim().toLowerCase(); let mer=null; if(s.endsWith("am")||s.endsWith("pm")){mer=s.endsWith("am")?"am":"pm";s=s.replace(/am|pm/g,"").trim();} const m=s.match(/^(\d{1,2})\s*:\s*(\d{2})$/); if(!m)return null; let hh=parseInt(m[1],10); const mm=parseInt(m[2],10); if(Number.isNaN(hh)||Number.isNaN(mm)||mm<0||mm>59)return null; if(mer){if(hh===12)hh=mer==="am"?0:12;else if(mer==="pm")hh+=12;} return hh*60+mm; }
+function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
 window.initSpecialActivitiesTab = initSpecialActivitiesTab;
 Object.defineProperty(window,'specialActivities',{get:()=>specialActivities,set:v=>{specialActivities=v;},configurable:true});
@@ -2611,12 +3043,23 @@ window.getAllSpecialActivities = function() {
         // array. That made every special temporarily disappear (and let
         // saveGlobalSpecialActivities clobber the populated copy on the
         // next save). Pick the first source that actually has entries.
-        const _topArr=Array.isArray(settings.specialActivities)?settings.specialActivities:null;
-        const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:null;
-        const allActivities=(_topArr&&_topArr.length>0)?_topArr:((_app1Arr&&_app1Arr.length>0)?_app1Arr:[]);
+        const _topArr=Array.isArray(settings.specialActivities)?settings.specialActivities:[];
+        const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:[];
+        // ★ UNION both stores (matching loadData), then collapse case-variant
+        //   duplicates. The old code picked ONE store; when the two drifted in
+        //   casing, facilities.js (which reads this) couldn't match by exact name
+        //   and reconstructed a phantom "Sushi"/"sushi" — the source of the
+        //   duplicate-special access leak. Prefer the restricted/real row.
+        const _unioned=[..._app1Arr,..._topArr];
+        const allActivities=window.dedupeSpecialsByName
+            ?window.dedupeSpecialsByName(_unioned)
+            :(()=>{const m=new Map();_unioned.forEach(a=>{if(a&&a.name){const k=String(a.name).trim().toLowerCase();if(!m.has(k))m.set(k,a);}});return[...m.values()];})();
         if(allActivities.length>0){
+            // ★ Same tombstone filter as loadData — a deleted special must not
+            //   resurrect through this fallback loader either.
+            const _tombs=_saReadTombstones(settings);
             specialActivities=[];rainyDayActivities=[];
-            allActivities.forEach(s=>{const v=validateSpecialActivity(s,s?.name);if(v.rainyDayExclusive||v.rainyDayOnly)rainyDayActivities.push(v);else specialActivities.push(v);});
+            allActivities.forEach(s=>{if(s&&s.name&&(_saTombKey(s.name) in _tombs))return;const v=validateSpecialActivity(s,s?.name);if(v.rainyDayExclusive||v.rainyDayOnly)rainyDayActivities.push(v);else specialActivities.push(v);});
             console.log(`[SPECIAL_ACTIVITIES] Auto-loaded ${specialActivities.length} regular + ${rainyDayActivities.length} rainy-only`);
         }
     }

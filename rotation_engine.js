@@ -167,6 +167,7 @@ LOW_COVERAGE_BONUS: -3500,             // Bunk has tried <50% of activities
     // =========================================================================
 
     let _historyCache = new Map();
+    let _fairShareFloorCache = new Map();   // activityName(lower) -> fair-share floor (per gen)
     let _historyCacheDate = null;
 // ★★★ v2.3: Activity-done-today cache ★★★
 var _todayActivityCache = new Map();
@@ -309,6 +310,7 @@ var _todayCacheGeneration = 0;
      */
    RotationEngine.clearHistoryCache = function() {
     _historyCache.clear();
+    _fairShareFloorCache.clear();
     _todayActivityCache.clear();
     _todayCacheGeneration++;
     console.log('[RotationEngine] History + today cache cleared (gen ' + _todayCacheGeneration + ')');
@@ -349,6 +351,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     RotationEngine.rebuildAllHistory = function() {
     console.log('[RotationEngine] Rebuilding all history...');
     _historyCache.clear();
+    _fairShareFloorCache.clear();
     _todayActivityCache.clear();
     _historyCacheDate = null;
     _todayCacheGeneration++;
@@ -582,6 +585,38 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var count = RotationEngine.getActivityCount(bunkName, activityName);
         var average = RotationEngine.getBunkAverageActivityCount(bunkName, allActivities);
         return count - average;
+    };
+
+    /**
+     * ★ Fair-share floor: the LOWEST activity-count among bunks that have actually
+     *   done this activity (count >= 1). calculateLimitScore's hard cap blocks any
+     *   bunk sitting 2+ above this floor, so no one laps the field on a scarce /
+     *   contended activity. The pool is "bunks that have done it" rather than every
+     *   camp bunk, so divisions that never touch it (access/structure) don't pin the
+     *   floor at 0 and false-block everyone; never-done bunks are still favoured by
+     *   the existing NEVER_DONE bonus. Returns null when fewer than 2 bunks have done
+     *   it (no real distribution yet) or when disabled. Cached per generation.
+     *   Kill switch: window.__fairShareHardCap = false.
+     */
+    RotationEngine.getFairShareFloor = function(activityName) {
+        if (window.__fairShareHardCap === false) return null;
+        var key = (activityName || '').toLowerCase().trim();
+        if (!key) return null;
+        if (_fairShareFloorCache.has(key)) return _fairShareFloorCache.get(key);
+        var divisions = window.divisions || {};
+        var min = Infinity, doers = 0;
+        for (var dn in divisions) {
+            if (!Object.prototype.hasOwnProperty.call(divisions, dn)) continue;
+            var dv = divisions[dn];
+            var bunks = (dv && dv.bunks) || [];
+            for (var i = 0; i < bunks.length; i++) {
+                var c = RotationEngine.getActivityCount(bunks[i], activityName);
+                if (c >= 1) { doers++; if (c < min) min = c; }
+            }
+        }
+        var floor = (doers >= 2 && min !== Infinity) ? min : null;
+        _fairShareFloorCache.set(key, floor);
+        return floor;
     };
 
     /**
@@ -929,8 +964,150 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
+        // ★ available=false hard gate: a globally-disabled special must never be
+        //   scheduled. canBlockFit also rejects available===false, but some manual
+        //   solver placement paths score candidates via this function without going
+        //   through canBlockFit — so a disabled special could still be selected and
+        //   written. Block it here (the shared rotation-scoring choke point) so a
+        //   disabled special is never picked. activityProperties carries `available`
+        //   for every special (buildActivityProperties copies it), so props is reliable.
+        if (props.available === false) return Infinity;
+        // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
+        //   Auto rotation gate for special/sport targets (matches by activity name).
+        //   Facility targets are enforced in the field gate (isFieldAvailable).
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return Infinity;
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
+
+        // ★★★ DAY 17 FIX: frequencyDays as a real cooldown hard-gate ★★★
+        // The UI labels this "Min days between visits:" (facilities.js:3262)
+        // and existing usage in scheduler config treats it as a cooldown.
+        // Previously the engine only used _cdForEsc as a modulation parameter
+        // for getEscalationBonus when min/exact frequency was set — no hard
+        // gate at all. Live-observed: Quints 7 got Triple Fun on 5/28 and
+        // 5/29 with frequencyDays=3 (only 1-day gap).
+        //
+        // Hard-block if the bunk did this activity within the cooldown window.
+        // Skip daysSince=0 (same-day; variety score handles intra-day dup).
+        // Skip null/undefined (never done; nothing to cooldown from).
+        if (_cdForEsc > 0) {
+            var _daysSinceCD = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+            // ★ A cooldown requires an ACTUAL prior occurrence. Guard on getActivityCount > 0
+            //   (the schedule-derived count the user sees) so a stale lastDone with a zero
+            //   count — cloud rotation_counts diverging from the rebuilt history — can never
+            //   block a special the bunk has never done and force it to the Swim fallback.
+            if (typeof _daysSinceCD === 'number' && _daysSinceCD > 0 && _daysSinceCD < _cdForEsc
+                && RotationEngine.getActivityCount(bunkName, activityName) > 0) {
+                return Infinity;
+            }
+        }
+
+        // ★ multiPart daysBetween + totalParts gate (manual-audit fix; mirrors
+        //   auto scheduler_core_auto.js:4306-4338). AUTO pre-gates multiPart
+        //   specials in its planner — the gap since the previous part must be
+        //   >= daysBetween, and it refuses to place once all totalParts are done.
+        //   The shared rotation path never checked either, so the MANUAL builder
+        //   ignored multiPart entirely (placed it as an ordinary repeating
+        //   special). Gate here → fixes manual; harmless for auto (its planner
+        //   already pre-filters with the identical rule). Counting by the base
+        //   activity name matches the writer, which keeps _activity as the base.
+        //   Gated to non-auto (like rotationCohort below): AUTO's planner is the
+        //   single authority and uses its own allDailyData count source, so we
+        //   never want to double-enforce here with getActivityCount's source.
+        var _mp = props.multiPart;
+        // Robust read: if the (possibly rebuilt/whitelisted) activityProperties
+        // dropped multiPart, fall back to the canonical special config store —
+        // same reason computeManualSpecialFeatures reads it directly.
+        if (!_mp && typeof window.getSpecialActivityByName === 'function') {
+            try { var _spCfg = window.getSpecialActivityByName(activityName); if (_spCfg) _mp = _spCfg.multiPart; } catch (e) {}
+        }
+        if (window._daBuilderMode !== 'auto' && _mp && _mp.enabled) {
+            var _mpTotal = parseInt(_mp.totalParts) || 0;
+            var _mpPrior = (typeof RotationEngine.getActivityCount === 'function')
+                ? (RotationEngine.getActivityCount(bunkName, activityName) || 0) : 0;
+            // All parts already placed → never schedule this special again.
+            if (_mpTotal > 0 && _mpPrior >= _mpTotal) return Infinity;
+            // daysBetween: minimum gap since the previous part must elapse.
+            var _mpGap = parseInt(_mp.daysBetween) || 0;
+            if (_mpGap > 0) {
+                var _mpSince = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+                if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return Infinity;
+            }
+        }
+
+        // ★ availableDays weekday gate (manual-audit fix): mirror auto's
+        //   isSpecialAvailableOnDay (scheduler_core_auto.js:382-383). A special
+        //   restricted to certain weekdays must NEVER be selected on others.
+        //   This was AUTO-ONLY (the auto planner pre-gated it); the shared
+        //   solver/rotation path never checked weekday, so the MANUAL builder
+        //   placed weekday-restricted specials on disallowed days. Hard-block on
+        //   the shared path → fixes manual + harmless for auto (which already
+        //   pre-filters by day). Matches auto: case-insensitive, accepts 3-letter
+        //   ('Wed') or full ('Wednesday') day names.
+        if (Array.isArray(props.availableDays) && props.availableDays.length > 0) {
+            var _avDate = window.currentScheduleDate;
+            if (_avDate) {
+                var _avp = String(_avDate).split('-');
+                if (_avp.length === 3) {
+                    var _avDow = new Date(parseInt(_avp[0], 10), parseInt(_avp[1], 10) - 1, parseInt(_avp[2], 10)).getDay();
+                    if (_avDow >= 0 && _avDow <= 6) {
+                        var _avAbbr = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][_avDow];
+                        var _avFull = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][_avDow];
+                        var _avAllowed = props.availableDays.map(function (d) { return String(d).toLowerCase(); });
+                        if (_avAllowed.indexOf(_avAbbr) < 0 && _avAllowed.indexOf(_avFull) < 0) {
+                            return Infinity;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ★ rotationCohort: pooled cross-grade fairness (manual-audit fix).
+        //   AUTO enforces this in its planner (scheduler_core_auto.js:4261-4283);
+        //   the MANUAL builder has no planner, so it's enforced here. Gated to
+        //   non-auto so auto's planner stays the single authority (avoids any
+        //   double-enforcement with a different count source). Skip the special
+        //   for this bunk when its count exceeds the cohort minimum (i.e. wait
+        //   for the lagging bunks in the cohort to catch up). Mirrors the auto
+        //   "skip if count > cohort min" rule.
+        if (window._daBuilderMode !== 'auto') {
+            var _rc = props.rotationCohort;
+            if (_rc && _rc.enabled && Array.isArray(_rc.grades) && _rc.grades.length > 0) {
+                var _divsRC = window.divisions || {};
+                var _cohortBunks = [];
+                _rc.grades.forEach(function (_g) {
+                    var _gd = _divsRC[_g] || _divsRC[String(_g)];
+                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) {
+                        // ★ FN-5: only pool cohort bunks that can actually RECEIVE this
+                        //   special. Without this filter, a cohort member that's
+                        //   access-restricted away from the special keeps its count
+                        //   pinned at 0, so _cohortMin stays 0 forever and every
+                        //   reachable bunk freezes after one visit (count 1 > min 0 →
+                        //   skipped). The AUTO planner filters with
+                        //   isSpecialAvailableForBunk (scheduler_core_auto.js:4266);
+                        //   reuse that exact check here for parity. Fallback: if the
+                        //   helper isn't loaded, include the bunk (prior behavior) so
+                        //   this can only ADD correct filtering, never break.
+                        var _elig = true;
+                        try {
+                            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                                _elig = window.isSpecialAvailableForBunk(activityName, _g, _b, window.globalSettings || null);
+                            }
+                        } catch (_eElig) { _elig = true; }
+                        if (_elig) _cohortBunks.push(String(_b));
+                    });
+                });
+                if (_cohortBunks.length > 0 && _cohortBunks.indexOf(String(bunkName)) >= 0) {
+                    var _myCohortCount = RotationEngine.getActivityCount(String(bunkName), activityName);
+                    var _cohortMin = Infinity;
+                    for (var _rci = 0; _rci < _cohortBunks.length; _rci++) {
+                        var _cc = RotationEngine.getActivityCount(_cohortBunks[_rci], activityName);
+                        if (_cc < _cohortMin) _cohortMin = _cc;
+                    }
+                    if (_myCohortCount > _cohortMin) return Infinity;
+                }
+            }
+        }
 
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
@@ -979,6 +1156,22 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage, undefined, _cdForEsc);
                 return -(_mfEsc || (shortage * 8000));
             }
+        }
+
+        // ★ FAIR-SHARE HARD CAP: a bunk that has done this activity 2+ more times
+        //   than the least-served participant is BLOCKED until the laggards catch up
+        //   — stops one bunk lapping the field on a scarce/contended activity even
+        //   when the soft frequency/distribution penalties get overridden by field
+        //   contention. Placed LAST so an explicit maxUsage/exactFrequency ceiling or
+        //   a below-floor min-frequency pull always wins; this only governs activities
+        //   no per-bunk limit rule already decided. Counts are from saved history
+        //   (stable within a gen). Trade-off: a capped bunk with no other feasible
+        //   option gets a Free slot. Kill switch: window.__fairShareHardCap = false;
+        //   gap override: window.__fairShareGap (default 2).
+        var _fsFloor = RotationEngine.getFairShareFloor(activityName);
+        if (_fsFloor !== null) {
+            var _fsGap = (typeof window.__fairShareGap === 'number' && window.__fairShareGap > 0) ? window.__fairShareGap : 2;
+            if (RotationEngine.getActivityCount(bunkName, activityName) >= _fsFloor + _fsGap) return Infinity;
         }
 
         return 0;
@@ -1333,11 +1526,17 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 if (!local) {
                     // Activity not seen in local 14-day scan — cloud fills the gap
                     var daysSince = null;
-                    if (cloudLastDate && cloudLastDate < today) {
+                    // ★ Only carry a recency (daysSinceLast) when the cloud actually has a
+                    //   POSITIVE count. A stray lastDone date with a ZERO net count (e.g. the
+                    //   occurrence was regenerated away but rotation_counts' lastDone wasn't
+                    //   cleared) must NOT impose a daysSinceLast — otherwise getDaysSinceActivity
+                    //   reports "done yesterday" for an activity getActivityCount says is 0, and
+                    //   the frequencyDays cooldown wrongly blocks a never-done special (→ Swim).
+                    if (cloudCount > 0 && cloudLastDate && cloudLastDate < today) {
                         daysSince = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
                     }
                     history.byActivity[actLower] = {
-                        dates: cloudLastDate ? [{ dateKey: cloudLastDate, daysAgo: daysSince || 14 }] : [],
+                        dates: (daysSince !== null) ? [{ dateKey: cloudLastDate, daysAgo: daysSince }] : [],
                         count: cloudCount,
                         daysSinceLast: daysSince
                     };
@@ -1349,6 +1548,22 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                     if (cloudCount > local.count) {
                         history.totalActivities += (cloudCount - local.count);
                         local.count = cloudCount;
+                    } else if (cloudCount < local.count && cloudLastDate) {
+                        // ★★★ CB-62: cloud rotation_counts is the cumulative AUTHORITY.
+                        // The merge previously only ever RAISED the local 14-day-scan
+                        // count, so a cross-device delete/decrement (cloud total
+                        // dropped) was silently ignored → stale-high counts forever.
+                        // Lower to the cloud total, but ONLY when cloud is fully
+                        // caught up: its last-done date is no older than local's most
+                        // recent occurrence (cloudDays <= local.daysSinceLast). If
+                        // local has a MORE recent occurrence than cloud knows about, it
+                        // may be just-generated unsynced data, so keep the higher count.
+                        var _cloudDays62 = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
+                        var _localRecent62 = (local.daysSinceLast == null) ? Infinity : local.daysSinceLast;
+                        if (_cloudDays62 <= _localRecent62) {
+                            history.totalActivities -= (local.count - cloudCount);
+                            local.count = cloudCount;
+                        }
                     }
                     // Cloud may have a more recent lastDone than local's 14-day window
                     if (cloudLastDate && cloudLastDate < today) {
