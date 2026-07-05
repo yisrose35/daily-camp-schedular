@@ -2188,6 +2188,7 @@ var FB_TYPES = [
     { t: 'radio',      label: 'Multiple Choice', icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="3"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="3"/><line x1="13" y1="7" x2="21" y2="7"/><line x1="13" y1="17" x2="21" y2="17"/></svg>', opts: true },
     { t: 'checkboxes', label: 'Checkboxes',      icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="7" height="7" rx="1.5"/><polyline points="6 7.5 7.2 8.7 9.2 6.3"/><rect x="4" y="14" width="7" height="7" rx="1.5"/><line x1="14" y1="7.5" x2="21" y2="7.5"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg>', opts: true },
     { t: 'yesno',      label: 'Yes / No',        icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 12 8 16 12 9"/><line x1="16" y1="8" x2="21" y2="13"/><line x1="21" y1="8" x2="16" y2="13"/></svg>' },
+    { t: 'checkbox',   label: 'Agreement Box',   icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="8 12 11 15 16 9"/></svg>' },
     { t: 'signature',  label: 'Signature',       icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>' },
     { t: 'heading',    label: 'Section Heading', icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 4v16M18 4v16M6 12h12"/></svg>', static: true },
     { t: 'paragraph',  label: 'Paragraph Text',  icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4v16M17 4v16M19 4H9.5a4.5 4.5 0 0 0 0 9H13"/></svg>', static: true }
@@ -2322,6 +2323,8 @@ function renderFbPreview() {
                 return wrap(f, opts.map(function(o) { return '<label style="display:flex;align-items:center;gap:7px;font-size:.84rem;padding:4px 0;color:var(--slate-700);"><input type="' + it + '" disabled> ' + esc(o) + '</label>'; }).join('') || '<span style="font-size:.76rem;color:var(--text-muted);">No options yet</span>');
             case 'yesno':
                 return wrap(f, '<label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;margin-right:18px;color:var(--slate-700);"><input type="radio" disabled> Yes</label><label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;color:var(--slate-700);"><input type="radio" disabled> No</label>');
+            case 'checkbox':
+                return wrap(f, '<label style="display:inline-flex;align-items:center;gap:7px;font-size:.84rem;color:var(--slate-700);"><input type="checkbox" disabled> I confirm and agree</label>');
             case 'signature':
                 return wrap(f, '<div style="border:1.5px dashed var(--border-light);border-radius:8px;height:64px;display:flex;align-items:center;justify-content:center;font-size:.78rem;color:var(--text-muted);background:var(--slate-50);">Sign here</div>');
             default:
