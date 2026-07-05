@@ -632,7 +632,7 @@
             admin: '#2563EB',
             scheduler: '#059669',
             viewer: '#6B7280',
-            counselor: '#147D91'
+            counselor: '#F0654F'
         };
         return colors[role] || '#6B7280';
     }

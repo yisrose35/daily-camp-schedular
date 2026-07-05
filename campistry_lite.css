@@ -1,13 +1,23 @@
 /* ============================================================================
    Campistry Lite — mobile-first companion app
-   Loads after campistry-unified.css and leans on its tokens (--product-*,
-   --bg-*, --text-*, fonts). data-product="lite" keeps the default teal ramp.
+   Loads after campistry-unified.css and leans on its neutral tokens
+   (--bg-*, --text-*, fonts). Lite has its OWN accent: the new warm coral
+   brand color (ramp defined below) — deliberately NOT the shared teal
+   --product-* ramp, so Lite stays coral even where the main app is teal.
    ============================================================================ */
 
 :root {
-    --lite-accent: var(--product-500, #147D91);
-    --lite-accent-dark: var(--product-600, #0F5F6E);
-    --lite-accent-tint: var(--product-50, #e6f4f7);
+    /* Warm coral ramp (Lite brand) */
+    --coral-50:  #FEF1EE;
+    --coral-100: #FDDFD8;
+    --coral-300: #F79C8D;
+    --coral-500: #F0654F;   /* primary warm coral */
+    --coral-600: #D94A35;   /* pressed / text-on-light */
+    --coral-700: #B23A28;
+
+    --lite-accent: var(--coral-500);
+    --lite-accent-dark: var(--coral-600);
+    --lite-accent-tint: var(--coral-50);
     --lite-bg: var(--bg-page, #FAFBFC);
     --lite-card: var(--bg-card, #FFFFFF);
     --lite-text: var(--text-primary, #0F172A);

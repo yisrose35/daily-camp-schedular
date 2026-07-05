@@ -7,7 +7,7 @@
     "display": "standalone",
     "orientation": "portrait",
     "background_color": "#FAFBFC",
-    "theme_color": "#147D91",
+    "theme_color": "#F0654F",
     "icons": [
         {
             "src": "Campistry_logo.png",
