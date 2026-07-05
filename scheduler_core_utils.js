@@ -23,7 +23,7 @@
     window.TRANSITION_TYPE = TRANSITION_TYPE;
 
     // DEBUG MODE - Set to true to see why canBlockFit fails
-    const DEBUG_FITS = false;
+    let DEBUG_FITS = false; // runtime toggle via SchedulerCoreUtils._setDebugFits(true) — used by SOLVER-REGEN-DIAG
 
     const Utils = {};
 
@@ -724,6 +724,8 @@
      * 7. Player requirements (soft check)
      * =========================================================================
      */
+    Utils._setDebugFits = function (v) { DEBUG_FITS = !!v; };
+
     Utils.canBlockFit = function (block, fieldName, activityProperties, fieldUsageBySlot, actName, forceLeague = false) {
         if (!fieldUsageBySlot) fieldUsageBySlot = window.fieldUsageBySlot || {};
         if (!fieldName) {

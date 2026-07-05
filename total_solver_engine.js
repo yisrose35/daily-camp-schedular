@@ -2668,7 +2668,13 @@
                         if (_dgSt==='not_sharable'){ if (S.getFieldUsageFromTimeIndex(dc._fieldNorm,sM,eM,bunk)>=_dgCap){_dgAdd('capacityTime',dc);continue;} } else { if (S.countSameDivisionUsage(dc.field,bDiv,sM,eM,bunk)>=_dgCap){_dgAdd('capacitySameDiv',dc);continue;} }
                         var _dgTd=S.getActivitiesDoneToday(bunk,slots[0]??999),_dgAn=normName(dc.activityName); if(_dgAn&&_dgAn!=='free'&&_dgAn!=='free play'&&_dgTd.has(_dgAn)){_dgAdd('doneToday',dc);continue;}
                         if (!actProps[dc.field]&&!actProps[dc.activityName]&&dc.type!=='special'){_dgAdd('noActProps',dc);continue;}
-                        if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(dc.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,dc.field,actProps,null,dc.activityName,false)) { _dgAdd('canBlockFit',dc); continue; }
+                        if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(dc.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,dc.field,actProps,null,dc.activityName,false)) {
+                            _dgAdd('canBlockFit',dc);
+                            // Re-run ONCE with [FIT] debug logging on so the console
+                            // prints the exact internal gate that rejected this candidate.
+                            if (!window.__regenDiagFitOff) { try { if (window.SchedulerCoreUtils._setDebugFits) { window.SchedulerCoreUtils._setDebugFits(true); window.SchedulerCoreUtils.canBlockFit(blk,dc.field,actProps,null,dc.activityName,false); window.SchedulerCoreUtils._setDebugFits(false); } } catch(_eF){ try { window.SchedulerCoreUtils._setDebugFits(false); } catch(_eF2){} } }
+                            continue;
+                        }
                         S.setScratchPick(dc); var _dgCost=S.calculatePenaltyCost(blk,S.setScratchPick(dc));
                         if (_dgCost>=900000) { _dgAdd(_dgCost===Infinity?'rotationGate(Infinity)':'penalty>=900k',dc); continue; }
                         _dgAdd('WOULD-PASS?!',dc);
