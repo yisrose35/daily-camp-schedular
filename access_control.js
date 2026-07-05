@@ -76,15 +76,22 @@
         OWNER: 'owner',
         ADMIN: 'admin',
         SCHEDULER: 'scheduler',
-        VIEWER: 'viewer'
+        VIEWER: 'viewer',
+        COUNSELOR: 'counselor'   // Campistry Lite: read-only bunk-level staff
     };
 
     const ROLE_HIERARCHY = {
         owner: 4,
         admin: 3,
         scheduler: 2,
-        viewer: 1
+        viewer: 1,
+        counselor: 1   // same trust level as viewer (read-only)
     };
+
+    // Roles that can never write schedule/camp data (fail-closed set).
+    function isReadOnlyRole(role) {
+        return role === ROLES.VIEWER || role === ROLES.COUNSELOR;
+    }
 
     const SUBDIVISION_COLORS = [
         '#6366F1', '#8B5CF6', '#EC4899', '#F43F5E', '#F97316', '#EAB308',
@@ -852,7 +859,7 @@
             return;
         }
         
-        if (_currentRole === ROLES.VIEWER) {
+        if (isReadOnlyRole(_currentRole)) {
             _editableDivisions = [];
             console.log("🔐 View-only access");
             return;
@@ -999,7 +1006,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass — schedulers have full edit access ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
+        if (isReadOnlyRole(_currentRole)) return false;
         return _editableDivisions.includes(divisionName);
     }
 
@@ -1008,8 +1015,8 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass — schedulers have full edit access ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
-        
+        if (isReadOnlyRole(_currentRole)) return false;
+
         const divisions = window.divisions || {};
         for (const [divName, divInfo] of Object.entries(divisions)) {
             if (divInfo.bunks && divInfo.bunks.includes(bunkName)) {
@@ -1136,7 +1143,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
+        if (isReadOnlyRole(_currentRole)) return false;
         return _editableDivisions.length > 0;
     }
 
@@ -1144,7 +1151,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        return _currentRole !== ROLES.VIEWER;
+        return !isReadOnlyRole(_currentRole);
     }
 
     function canGenerateDivision(divisionName) {
@@ -1158,7 +1165,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
+        if (isReadOnlyRole(_currentRole)) return false;
         return _editableDivisions.length > 0;
     }
 
@@ -1265,11 +1272,17 @@
     }
 
     function isViewer() {
-        return _currentRole === ROLES.VIEWER;
+        // Counselors are treated as viewers by every UI lockdown path —
+        // they are read-only on the main app (their home is Campistry Lite).
+        return isReadOnlyRole(_currentRole);
     }
 
     function isScheduler() {
         return _currentRole === ROLES.SCHEDULER;
+    }
+
+    function isCounselor() {
+        return _currentRole === ROLES.COUNSELOR;
     }
 
     function getSubdivisions() {
@@ -1381,6 +1394,10 @@
             return 'View-only access (can print and lookup campers)';
         }
 
+        if (_currentRole === ROLES.COUNSELOR) {
+            return 'Counselor access (Campistry Lite: bunk schedule, roster, leagues)';
+        }
+
         if (_currentRole === ROLES.SCHEDULER) {
             if (_editableDivisions.length === 0) {
                 return 'Full editing access (no divisions assigned for generation - contact owner)';
@@ -1421,21 +1438,24 @@
             owner: 'Owner',
             admin: 'Administrator',
             scheduler: 'Scheduler',
-            viewer: 'Viewer'
+            viewer: 'Viewer',
+            counselor: 'Counselor'
         };
-        
+
         const roleColors = {
             owner: '#7C3AED',
             admin: '#2563EB',
             scheduler: '#059669',
-            viewer: '#6B7280'
+            viewer: '#6B7280',
+            counselor: '#147D91'
         };
-        
+
         const roleDescriptions = {
             owner: 'Full access to all features and team management',
             admin: 'Full editing access to all divisions (no team management)',
             scheduler: 'Full editing access — generates assigned divisions only',
-            viewer: 'View-only access (can print and lookup campers)'
+            viewer: 'View-only access (can print and lookup campers)',
+            counselor: 'Campistry Lite access — bunk schedule, roster and leagues'
         };
         
         return {
@@ -1469,6 +1489,11 @@
             permissions.push({ icon: '🖨️', text: 'Print Center access' });
             permissions.push({ icon: '🔍', text: 'Camper Locator access' });
             permissions.push({ icon: '🖨️', text: 'Print schedules with saved templates' });
+        } else if (_currentRole === ROLES.COUNSELOR) {
+            permissions.push({ icon: '📱', text: 'Campistry Lite (mobile companion)' });
+            permissions.push({ icon: '📅', text: "View your bunk's daily schedule" });
+            permissions.push({ icon: '🧒', text: 'View your bunk roster' });
+            permissions.push({ icon: '🏆', text: 'View your league teams and matchups' });
         }
         
         return permissions;
@@ -1493,7 +1518,8 @@
             owner: 'Owner',
             admin: 'Admin',
             scheduler: 'Scheduler',
-            viewer: 'Viewer'
+            viewer: 'Viewer',
+            counselor: 'Counselor'
         };
         return names[role] || role;
     }
@@ -1503,7 +1529,8 @@
             owner: '#7C3AED',
             admin: '#2563EB',
             scheduler: '#059669',
-            viewer: '#6B7280'
+            viewer: '#6B7280',
+            counselor: '#147D91'
         };
         return colors[role] || '#6B7280';
     }
@@ -2309,6 +2336,7 @@
         isAdmin,
         isViewer,
         isScheduler,
+        isCounselor,
         isTeamMember,
         
         getEditableDivisions,

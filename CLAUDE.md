@@ -53,6 +53,7 @@ When the user says **"day X"** or **"let's do day X"**:
 | Leagues | `leagues.js`, `scheduler_core_leagues.js`, `specialty_leagues.js` |
 | Special Activities | `special_activities.js` |
 | Integration Hub | `integration_hooks.js` |
+| Campistry Lite (mobile companion) | `campistry_lite.html/.js/.css`, `manifest_lite.webmanifest`, `supabase/functions/send-sms/`, `migrations/018_*.sql` — docs in `CAMPISTRY_LITE.md` |
 
 ---
 

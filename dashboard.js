@@ -144,7 +144,14 @@
             
             // ★★★ v2.4: Cache RBAC context so Flow/Me pages load instantly ★★★
             cacheRBACContext();
-            
+
+            // ★ Campistry Lite: counselors have no business on the admin
+            // dashboard — their home is the mobile companion.
+            if (userRole === 'counselor') {
+                window.location.replace('campistry_lite.html');
+                return;
+            }
+
             // Load dashboard data
             await loadDashboardData();
             
@@ -613,17 +620,19 @@
             owner: 'Owner',
             admin: 'Admin',
             scheduler: 'Scheduler',
-            viewer: 'Viewer'
+            viewer: 'Viewer',
+            counselor: 'Counselor'
         };
         return names[role] || role || 'Unknown';
     }
-    
+
     function getRoleColor(role) {
         const colors = {
             owner: '#7C3AED',
             admin: '#2563EB',
             scheduler: '#059669',
-            viewer: '#6B7280'
+            viewer: '#6B7280',
+            counselor: '#147D91'
         };
         return colors[role] || '#6B7280';
     }
