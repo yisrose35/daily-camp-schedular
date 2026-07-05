@@ -91,6 +91,22 @@ describe('per-sport frequency limits', () => {
         assert.deepEqual(props['Soccer'].maxUsagePerGrade, { D: 1 });
     });
 
+    it('base max applies to grades WITHOUT an override; a per-grade value replaces it (base 3, 8th=2)', () => {
+        const win = boot({ Soccer: { maxUsage: 3, maxUsagePeriod: 'week', maxUsagePerGrade: { '8th': 2 } } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        assert.equal(props['Soccer'].maxUsage, 3, 'base max preserved');
+        assert.deepEqual(props['Soccer'].maxUsagePerGrade, { '8th': 2 });
+        // 8th grade → override 2: blocked at 2
+        win.RotationEngine.getActivityCount = () => 2; win.RotationEngine.clearHistoryCache();
+        assert.equal(win.RotationEngine.calculateLimitScore('b8', 'Soccer', props, '8th'), Infinity, '8th capped at 2');
+        // any other grade at 2 → base is 3, so still allowed
+        win.RotationEngine.clearHistoryCache();
+        assert.notEqual(win.RotationEngine.calculateLimitScore('b5', 'Soccer', props, '5th'), Infinity, '5th allowed at 2 (base 3)');
+        // other grade at 3 → hits base 3
+        win.RotationEngine.getActivityCount = () => 3; win.RotationEngine.clearHistoryCache();
+        assert.equal(win.RotationEngine.calculateLimitScore('b5', 'Soccer', props, '5th'), Infinity, '5th capped at 3 (base)');
+    });
+
     it('ENFORCEMENT: a per-grade override caps that grade and leaves others uncapped', () => {
         const win = boot({ Soccer: { maxUsagePerGrade: { D: 1 } } });
         const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
