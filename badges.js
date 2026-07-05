@@ -236,7 +236,9 @@ async function collectStats(campId) {
 // AWARD ENGINE
 // =========================================================================
 let _campId = null;
-let _state = null;          // { earned: {id: iso} }
+let _userId = null;
+let _state = null;          // { earned: {id: iso} } — camp-level, cloud
+let _seen = null;           // { id: true } — per-user, cloud ∪ local cache
 let _initPromise = null;
 
 async function ensureInit() {
@@ -252,7 +254,18 @@ async function ensureInit() {
                 if (!_campId) await new Promise(r => setTimeout(r, 500));
             }
             if (!_campId) return false;
+            try {
+                const { data } = await window.supabase.auth.getUser();
+                _userId = data?.user?.id || null;
+            } catch (_) {}
             _state = await loadState(_campId);
+            // seen = cloud (per user, survives cache clears) ∪ local cache;
+            // push the union back up so pre-upgrade local-only entries migrate
+            const localSeen = readLocalSeen(_campId);
+            const cloudSeen = await loadCloudSeen(_campId, _userId);
+            _seen = Object.assign({}, cloudSeen, localSeen);
+            writeLocalSeen(_campId, _seen);
+            if (Object.keys(localSeen).some(k => !cloudSeen[k])) persistCloudSeen();
             return true;
         })();
     }
@@ -268,24 +281,59 @@ function isEarned(id) { return !!(_state && _state.earned && _state.earned[id]);
 // when another device triggered the actual award. ----
 const _unseenThisView = new Set();   // drives the NEW markers this page view
 
-function readSeen(campId) {
+function readLocalSeen(campId) {
     try { return JSON.parse(localStorage.getItem(SEEN_PREFIX + campId) || "null") || {}; }
     catch (_) { return {}; }
 }
 
-function markSeen(ids) {
-    if (!_campId || !ids.length) return;
-    const seen = readSeen(_campId);
-    ids.forEach(id => { seen[id] = true; _unseenThisView.add(id); });
-    try { localStorage.setItem(SEEN_PREFIX + _campId, JSON.stringify(seen)); } catch (_) {}
+function writeLocalSeen(campId, seen) {
+    try { localStorage.setItem(SEEN_PREFIX + campId, JSON.stringify(seen)); } catch (_) {}
 }
 
-// Replay the award moment for anything earned but never seen on this device.
+// Cloud copy of the per-USER seen set (camp_state_kv key campBadgesSeen:<uid>)
+// so clearing the browser cache — or switching devices — never replays
+// already-seen badges. localStorage is just a fast local cache of it.
+async function loadCloudSeen(campId, userId) {
+    if (!userId) return {};
+    try {
+        const { data, error } = await window.supabase
+            .from("camp_state_kv")
+            .select("value")
+            .eq("camp_id", campId)
+            .eq("key", "campBadgesSeen:" + userId);
+        if (error) return {};
+        return (data && data[0] && data[0].value && data[0].value.seen) || {};
+    } catch (_) { return {}; }
+}
+
+// Add-only union write, re-merged against the cloud right before writing so
+// the user's other devices can never lose seen entries.
+async function persistCloudSeen() {
+    if (!_userId || !_campId || !_seen) return;
+    try {
+        const cloud = await loadCloudSeen(_campId, _userId);
+        const merged = Object.assign({}, cloud, _seen);
+        await window.supabase.from("camp_state_kv").upsert(
+            { camp_id: _campId, key: "campBadgesSeen:" + _userId, value: { seen: merged }, updated_at: new Date().toISOString() },
+            { onConflict: "camp_id,key" }
+        );
+    } catch (_) {}
+}
+
+function markSeen(ids) {
+    if (!_campId || !ids.length) return;
+    if (!_seen) _seen = readLocalSeen(_campId);
+    ids.forEach(id => { _seen[id] = true; _unseenThisView.add(id); });
+    writeLocalSeen(_campId, _seen);
+    persistCloudSeen();   // fire-and-forget; failures self-heal on the next mark
+}
+
+// Replay the award moment for anything earned but never seen by this USER.
 function celebrateUnseen() {
     if (window.__campBadges === false) return;
     if (!_state || !_campId) return;
-    const seen = readSeen(_campId);
-    const unseen = BADGE_DEFS.filter(d => _state.earned[d.id] && !seen[d.id]);
+    if (!_seen) _seen = readLocalSeen(_campId);
+    const unseen = BADGE_DEFS.filter(d => _state.earned[d.id] && !_seen[d.id]);
     if (!unseen.length) return;
     markSeen(unseen.map(d => d.id));
     queueToast(unseen);
