@@ -424,6 +424,7 @@
                             <option value="admin">Admin - Full access to all divisions</option>
                             <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
+                            <option value="counselor">Counselor - Campistry Lite mobile app only</option>
                         </select>
                     </div>
                     <div class="form-group" id="subdivisions-group" style="display: none;">
@@ -520,6 +521,7 @@
                             <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
                             <option value="scheduler" ${member.role === 'scheduler' ? 'selected' : ''}>Scheduler</option>
                             <option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+                            <option value="counselor" ${member.role === 'counselor' ? 'selected' : ''}>Counselor</option>
                         </select>
                     </div>
                     <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
