@@ -2628,6 +2628,38 @@
                 S.setScratchPick(c); var dfCost=S.calculatePenaltyCost(blk,S.setScratchPick(c)); if (dfCost<900000) fresh.push({ci:ci,cost:dfCost});
             }
             if (fresh.length>0) { fresh.sort(function(a,b){return a.cost-b.cost;}); var pk=S.clonePick(allCands[fresh[0].ci]); S.undoPickFromSchedule(blk,S._assignments.get(bi).pick); S._assignments.set(bi,{candIdx:fresh[0].ci,pick:pk,cost:fresh[0].cost}); S.applyPickToSchedule(blk,pk); var pfn=normName(pk.field); S.addToFieldTimeIndex(pfn,sM,eM,bunk,bDiv,normName(pk._activity)); var pan=normName(pk._activity); if (pan&&pan!==pfn) S.addToFieldTimeIndex(pan,sM,eM,bunk,bDiv,pan); S.invalidateRotationCacheForBunk(bunk); S._todayCache.clear(); resolved++; continue; }
+            // ★ REGEN FILL-QUALITY DIAGNOSTIC — a per-tile regen block with ZERO
+            //   candidates falls through to the first-legal STEP 7.5 fallback. Tally
+            //   the FIRST gate that rejected each candidate so the live log says WHY
+            //   (locks vs capacity vs canBlockFit vs rotation-penalty). Regen-only
+            //   (tiny runs), purely additive — the hot path above is untouched.
+            if (window.__regenSlotScope) {
+                try {
+                    var _dgTally={}, _dgSamples=[];
+                    var _dgAdd=function(gate,c){ _dgTally[gate]=(_dgTally[gate]||0)+1; if (_dgSamples.length<12) _dgSamples.push((c.activityName||c.field)+'@'+c.field+'→'+gate); };
+                    for (var _dgi=0;_dgi<allCands.length;_dgi++) {
+                        var dc=allCands[_dgi];
+                        if (blk._slotKind==='sport' && dc.type==='special') { _dgAdd('slotKind',dc); continue; }
+                        if (blk._slotKind==='special' && dc.type!=='special') { _dgAdd('slotKind',dc); continue; }
+                        if (disabled.indexOf(dc.field)!==-1) { _dgAdd('disabledField',dc); continue; }
+                        if (window.GlobalFieldLocks?.isFieldLocked(dc.field,slots)) { _dgAdd('indexLock',dc); continue; }
+                        if (S.isFieldLockedByTime(dc.field,sM,eM,bDiv)) { _dgAdd('timeLock',dc); continue; }
+                        if (S.checkCrossDivisionTimeConflict(dc.field,bDiv,sM,eM,bunk)) { _dgAdd('xdivTimeConflict',dc); continue; }
+                        var _dgCombo=S._comboExclusiveMap.get(dc._fieldNorm); if (_dgCombo){var _dgB=false;for(var _dgc=0;_dgc<_dgCombo.length;_dgc++){if(S.getFieldUsageFromTimeIndex(_dgCombo[_dgc],sM,eM,bunk)>0){_dgB=true;break;}}if(_dgB){_dgAdd('comboExclusive',dc);continue;}}
+                        var _dgFp=S._fieldPropertyMap.get(dc.field),_dgCap=_dgFp?_dgFp.capacity:S.getFieldCapacity(dc.field),_dgSt=_dgFp?_dgFp.sharingType:S.getSharingType(dc.field);
+                        var _dgGso=(_dgFp&&_dgFp.gradeShareRules&&bDiv)?_dgFp.gradeShareRules[bDiv]:null; if(_dgGso){_dgSt=_dgGso.type||'not_sharable';_dgCap=parseInt(_dgGso.capacity)||(_dgSt==='not_sharable'?1:2);}
+                        if (_dgSt==='not_sharable'){ if (S.getFieldUsageFromTimeIndex(dc._fieldNorm,sM,eM,bunk)>=_dgCap){_dgAdd('capacityTime',dc);continue;} } else { if (S.countSameDivisionUsage(dc.field,bDiv,sM,eM,bunk)>=_dgCap){_dgAdd('capacitySameDiv',dc);continue;} }
+                        var _dgTd=S.getActivitiesDoneToday(bunk,slots[0]??999),_dgAn=normName(dc.activityName); if(_dgAn&&_dgAn!=='free'&&_dgAn!=='free play'&&_dgTd.has(_dgAn)){_dgAdd('doneToday',dc);continue;}
+                        if (!actProps[dc.field]&&!actProps[dc.activityName]&&dc.type!=='special'){_dgAdd('noActProps',dc);continue;}
+                        if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(dc.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,dc.field,actProps,null,dc.activityName,false)) { _dgAdd('canBlockFit',dc); continue; }
+                        S.setScratchPick(dc); var _dgCost=S.calculatePenaltyCost(blk,S.setScratchPick(dc));
+                        if (_dgCost>=900000) { _dgAdd(_dgCost===Infinity?'rotationGate(Infinity)':'penalty>=900k',dc); continue; }
+                        _dgAdd('WOULD-PASS?!',dc);
+                    }
+                    console.warn('[SOLVER-REGEN-DIAG] "'+bunk+'" @'+sM+'-'+eM+' (kind='+(blk._slotKind||'any')+'): 0/'+allCands.length+' candidates survived. Rejections: '+JSON.stringify(_dgTally));
+                    console.warn('[SOLVER-REGEN-DIAG] samples: '+_dgSamples.join(' | '));
+                } catch(_eDg) { console.warn('[SOLVER-REGEN-DIAG] failed:', _eDg); }
+            }
             // Phase 2: Displacement
             for (var obi=0;obi<activityBlocks.length;obi++) {
                 var ob=activityBlocks[obi]; if (obi===bi||ob.divName!==bDiv||ob.bunk===bunk) continue;
