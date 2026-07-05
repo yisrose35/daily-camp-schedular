@@ -1,10 +1,11 @@
 // ============================================================================
-// easter_egg.js — CAMPISTRY EASTER EGG v1.0
+// easter_egg.js — CAMPISTRY EASTER EGG v2.0
 // ============================================================================
 // Purely cosmetic. Two hidden triggers, one celebration:
 //   1. Click the Flow logo in the header 7 times quickly
 //   2. The Konami code (↑ ↑ ↓ ↓ ← → ← → B A) anywhere outside a text field
-// Fires a confetti burst + a camp-themed message, then cleans itself up.
+// Fires a fireworks + confetti show and an "achievement unlocked" card with
+// a contact-us button (mailto). Dismiss via button, backdrop, Esc, or 25s.
 // Touches NO scheduling logic, NO data, NO cloud — display only.
 // Kill switch: window.__campistryEasterEgg = false
 // ============================================================================
@@ -13,19 +14,19 @@
 
 const LOGO_CLICKS_NEEDED = 7;
 const LOGO_CLICK_WINDOW_MS = 1500;   // max gap between consecutive clicks
-const SHOW_MS = 4500;
+const AUTO_DISMISS_MS = 25000;
+const CONTACT_EMAIL = "campistryoffice@gmail.com";
 
-const MESSAGES = [
-    "🏕️ You found the secret campfire!",
+const TAGLINES = [
+    "🏕️ Secret campfire status: unlocked.",
     "🎉 COLOR WAR BREAKOUT!!!",
     "🍫 You've earned a s'more. Go get one.",
     "📣 Announcements, announcements, annOUNCEments!",
-    "🛶 Free swim for everyone! (schedule not affected)",
+    "🛶 Legend says only the best head counselors find this.",
     "🌟 Best. Scheduler. Ever. Pass it on.",
-    "🦟 May your days be sunny and your bunks be even.",
 ];
 
-const CONFETTI_COLORS = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#5f27cd", "#ff9ff3", "#ffa502"];
+const FIREWORK_COLORS = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#5f27cd", "#ff9ff3", "#ffa502", "#ffd700", "#7bed9f"];
 
 let running = false;
 
@@ -84,96 +85,250 @@ function celebrate() {
     running = true;
 
     const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const message = MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
 
-    const toast = buildToast(message);
-    document.body.appendChild(toast);
+    const style = buildStyle();
+    document.head.appendChild(style);
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "cegg-backdrop";
+    document.body.appendChild(backdrop);
 
     let canvas = null;
-    let stopConfetti = null;
+    let stopShow = null;
     if (!reducedMotion) {
-        canvas = buildCanvas();
+        canvas = document.createElement("canvas");
+        canvas.className = "cegg-canvas";
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
         document.body.appendChild(canvas);
-        stopConfetti = runConfetti(canvas);
+        stopShow = runFireworks(canvas);
     }
 
+    const card = buildCard(reducedMotion);
+    document.body.appendChild(card);
+
+    let dismissed = false;
+    const onEsc = (e) => { if (e.key === "Escape") { e.stopPropagation(); cleanup(); } };
     const cleanup = () => {
-        if (stopConfetti) stopConfetti();
+        if (dismissed) return;
+        dismissed = true;
+        if (stopShow) stopShow();
+        backdrop.remove();
         if (canvas) canvas.remove();
-        toast.remove();
+        card.remove();
+        style.remove();
+        document.removeEventListener("keydown", onEsc, true);
         running = false;
     };
-    toast.addEventListener("click", cleanup);
-    setTimeout(cleanup, SHOW_MS);
+
+    backdrop.addEventListener("click", cleanup);
+    card.querySelector(".cegg-dismiss").addEventListener("click", cleanup);
+    document.addEventListener("keydown", onEsc, true);
+    setTimeout(cleanup, AUTO_DISMISS_MS);
 }
 
-function buildToast(message) {
-    const toast = document.createElement("div");
-    toast.textContent = message;
-    toast.setAttribute("role", "status");
-    toast.style.cssText = [
-        "position:fixed", "top:18%", "left:50%", "transform:translateX(-50%) scale(0.8)",
-        "background:rgba(20,24,40,0.92)", "color:#fff", "padding:16px 28px",
-        "border-radius:14px", "font-size:1.25rem", "font-weight:700",
-        "box-shadow:0 8px 32px rgba(0,0,0,0.35)", "z-index:99999",
-        "cursor:pointer", "opacity:0", "transition:opacity .25s ease, transform .25s ease",
-        "max-width:90vw", "text-align:center",
-    ].join(";");
-    requestAnimationFrame(() => {
-        toast.style.opacity = "1";
-        toast.style.transform = "translateX(-50%) scale(1)";
-    });
-    return toast;
+// =========================================================================
+// ACHIEVEMENT CARD
+// =========================================================================
+function buildCard(reducedMotion) {
+    const tagline = TAGLINES[Math.floor(Math.random() * TAGLINES.length)];
+    const subject = encodeURIComponent("I found the Campistry easter egg! 🥚");
+    const body = encodeURIComponent("Hi Campistry team!\n\nI discovered the hidden celebration in Campistry Flow. 🎆\n\n— Sent from the secret campfire");
+
+    const card = document.createElement("div");
+    card.className = "cegg-card" + (reducedMotion ? " cegg-noanim" : "");
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-label", "You found the easter egg");
+    card.innerHTML = [
+        '<div class="cegg-egg">🥚</div>',
+        '<div class="cegg-kicker">✨ ACHIEVEMENT UNLOCKED ✨</div>',
+        '<div class="cegg-title">You found the easter egg!</div>',
+        '<div class="cegg-tagline"></div>',
+        '<div class="cegg-sub">You\'re one of the very few who\'ve ever seen this.<br>Contact us and let us know — we\'d love to hear from you!</div>',
+        '<div class="cegg-actions">',
+        `  <a class="cegg-contact" href="mailto:${CONTACT_EMAIL}?subject=${subject}&body=${body}">📣 Tell us you found it</a>`,
+        '  <button type="button" class="cegg-dismiss">🤫 Keep it secret</button>',
+        '</div>',
+    ].join("");
+    card.querySelector(".cegg-tagline").textContent = tagline;
+    card.addEventListener("click", (e) => e.stopPropagation());
+    return card;
 }
 
-function buildCanvas() {
-    const canvas = document.createElement("canvas");
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    canvas.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:99998;";
-    return canvas;
+function buildStyle() {
+    const style = document.createElement("style");
+    style.textContent = `
+.cegg-backdrop {
+    position: fixed; inset: 0; z-index: 99997;
+    background: radial-gradient(ellipse at center, rgba(10,14,35,0.55) 0%, rgba(5,7,20,0.82) 100%);
+    animation: ceggFade .4s ease;
+}
+.cegg-canvas { position: fixed; inset: 0; z-index: 99998; pointer-events: none; }
+.cegg-card {
+    position: fixed; top: 50%; left: 50%; z-index: 99999;
+    transform: translate(-50%, -50%);
+    width: min(440px, 92vw);
+    padding: 34px 30px 28px;
+    text-align: center;
+    color: #fff;
+    background: linear-gradient(160deg, #1b2148 0%, #131735 55%, #1f1440 100%);
+    border-radius: 22px;
+    box-shadow: 0 0 0 2px rgba(255,215,0,.65), 0 0 42px rgba(255,215,0,.30), 0 24px 70px rgba(0,0,0,.55);
+    animation: ceggPop .55s cubic-bezier(.2,1.6,.35,1);
+    font-family: inherit;
+}
+.cegg-egg {
+    font-size: 58px; line-height: 1;
+    filter: drop-shadow(0 0 14px rgba(255,215,0,.75));
+    animation: ceggWobble 2.2s ease-in-out infinite;
+}
+.cegg-kicker {
+    margin-top: 12px;
+    font-size: .78rem; font-weight: 800; letter-spacing: .22em;
+    background: linear-gradient(90deg, #ffd700, #fff3b0, #ffd700);
+    background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: ceggShimmer 2.4s linear infinite;
+}
+.cegg-title { margin-top: 8px; font-size: 1.65rem; font-weight: 800; }
+.cegg-tagline { margin-top: 10px; font-size: 1.02rem; font-weight: 600; color: #ffe27a; }
+.cegg-sub { margin-top: 12px; font-size: .95rem; line-height: 1.5; color: #cdd3f2; }
+.cegg-actions {
+    margin-top: 22px;
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+}
+.cegg-contact {
+    display: inline-block; padding: 12px 22px;
+    background: linear-gradient(135deg, #ffd700, #ff9f1a);
+    color: #22160a; font-weight: 800; font-size: .98rem;
+    border-radius: 999px; text-decoration: none;
+    box-shadow: 0 6px 20px rgba(255,170,0,.45);
+    transition: transform .15s ease, box-shadow .15s ease;
+}
+.cegg-contact:hover { transform: translateY(-2px) scale(1.03); box-shadow: 0 10px 26px rgba(255,170,0,.6); color: #22160a; }
+.cegg-dismiss {
+    padding: 12px 20px;
+    background: rgba(255,255,255,.10);
+    color: #dfe4ff; font-weight: 700; font-size: .95rem;
+    border: 1px solid rgba(255,255,255,.22);
+    border-radius: 999px; cursor: pointer;
+    transition: background .15s ease;
+}
+.cegg-dismiss:hover { background: rgba(255,255,255,.18); }
+.cegg-noanim, .cegg-noanim .cegg-egg, .cegg-noanim .cegg-kicker { animation: none; }
+@keyframes ceggFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ceggPop {
+    0% { transform: translate(-50%, -50%) scale(.4) rotate(-6deg); opacity: 0; }
+    100% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
+}
+@keyframes ceggWobble {
+    0%, 100% { transform: rotate(-7deg) translateY(0); }
+    50% { transform: rotate(7deg) translateY(-6px); }
+}
+@keyframes ceggShimmer { to { background-position: 200% center; } }
+`;
+    return style;
 }
 
-function runConfetti(canvas) {
+// =========================================================================
+// FIREWORKS + CONFETTI SHOW
+// =========================================================================
+function runFireworks(canvas) {
     const ctx = canvas.getContext("2d");
     const W = canvas.width, H = canvas.height;
-    const pieces = [];
-    for (let i = 0; i < 160; i++) {
-        const angle = (Math.random() * Math.PI) - Math.PI;       // upward fan
-        const speed = 6 + Math.random() * 9;
-        pieces.push({
-            x: W / 2 + (Math.random() - 0.5) * 80,
-            y: H * 0.55,
-            vx: Math.cos(angle) * speed * (Math.random() < 0.5 ? 1 : -1),
-            vy: Math.sin(angle) * speed - 4,
+    const particles = [];   // firework sparks
+    const streamers = [];   // falling confetti
+
+    function spawnBurst(x, y) {
+        const color = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
+        const color2 = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
+        const count = 60 + Math.floor(Math.random() * 40);
+        for (let i = 0; i < count; i++) {
+            const angle = (Math.PI * 2 * i) / count + Math.random() * 0.1;
+            const speed = 2 + Math.random() * 5.5;
+            particles.push({
+                x, y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 1,
+                decay: 0.012 + Math.random() * 0.012,
+                size: 1.6 + Math.random() * 2.2,
+                color: Math.random() < 0.5 ? color : color2,
+            });
+        }
+    }
+
+    function spawnStreamer() {
+        streamers.push({
+            x: Math.random() * W,
+            y: -12,
+            vy: 1.6 + Math.random() * 2.4,
+            sway: Math.random() * Math.PI * 2,
+            swaySpeed: 0.03 + Math.random() * 0.05,
             size: 5 + Math.random() * 6,
-            color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
             rot: Math.random() * Math.PI * 2,
-            vr: (Math.random() - 0.5) * 0.3,
+            vr: (Math.random() - 0.5) * 0.25,
+            color: FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)],
         });
     }
+
+    // opening salvo, then a burst every ~650ms + steady confetti
+    spawnBurst(W * 0.5, H * 0.35);
+    spawnBurst(W * 0.25, H * 0.3);
+    spawnBurst(W * 0.75, H * 0.3);
+    const burstTimer = setInterval(() => {
+        spawnBurst(W * (0.12 + Math.random() * 0.76), H * (0.12 + Math.random() * 0.45));
+    }, 650);
+    const streamTimer = setInterval(() => {
+        for (let i = 0; i < 3; i++) spawnStreamer();
+    }, 90);
+
     let rafId = null;
     function frame() {
         ctx.clearRect(0, 0, W, H);
-        let alive = 0;
-        for (const p of pieces) {
-            p.vy += 0.25;                 // gravity
-            p.vx *= 0.99;
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.vy += 0.045;          // gravity
+            p.vx *= 0.985;          // drag
+            p.vy *= 0.985;
             p.x += p.vx;
             p.y += p.vy;
-            p.rot += p.vr;
-            if (p.y < H + 20) alive++;
-            ctx.save();
-            ctx.translate(p.x, p.y);
-            ctx.rotate(p.rot);
+            p.life -= p.decay;
+            if (p.life <= 0) { particles.splice(i, 1); continue; }
+            ctx.globalAlpha = Math.max(0, p.life) * (0.75 + Math.random() * 0.25); // twinkle
             ctx.fillStyle = p.color;
-            ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.globalAlpha = 1;
+        for (let i = streamers.length - 1; i >= 0; i--) {
+            const s = streamers[i];
+            s.sway += s.swaySpeed;
+            s.x += Math.sin(s.sway) * 1.4;
+            s.y += s.vy;
+            s.rot += s.vr;
+            if (s.y > H + 20) { streamers.splice(i, 1); continue; }
+            ctx.save();
+            ctx.translate(s.x, s.y);
+            ctx.rotate(s.rot);
+            ctx.fillStyle = s.color;
+            ctx.fillRect(-s.size / 2, -s.size / 2, s.size, s.size * 0.6);
             ctx.restore();
         }
-        if (alive > 0) rafId = requestAnimationFrame(frame);
+
+        rafId = requestAnimationFrame(frame);
     }
     rafId = requestAnimationFrame(frame);
-    return () => { if (rafId) cancelAnimationFrame(rafId); };
+
+    return () => {
+        clearInterval(burstTimer);
+        clearInterval(streamTimer);
+        if (rafId) cancelAnimationFrame(rafId);
+    };
 }
 
 // =========================================================================
