@@ -1405,41 +1405,9 @@ function activateFullDayRainyMode() {
   //   (skeleton swap → per-tile regen can't map old tiles → needs a full gen).
   return { structureChanged: skeletonSwitched };
 }
-// ★★★ Build resource overrides for the stacker ★★★
-function buildRainyDayResourceOverrides() {
-  const g = window.loadGlobalSettings?.() || {};
-  const fields = g.app1?.fields || [];
-  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
-  const overrides = {};
-  
-  // Fields
-  fields.forEach(f => {
-    if (!f?.name) return;
-    if (f.rainyDayCapacity > 0) {
-      if (!overrides[f.name]) overrides[f.name] = {};
-      overrides[f.name].capacity = f.rainyDayCapacity;
-    }
-    if (f.rainyDayAvailableAllDay) {
-      if (!overrides[f.name]) overrides[f.name] = {};
-      overrides[f.name].ignoreTimeRules = true;
-    }
-  });
-  
-  // Special Activities
-  specials.forEach(s => {
-    if (!s?.name) return;
-    if (s.rainyDayCapacity > 0) {
-      if (!overrides[s.name]) overrides[s.name] = {};
-      overrides[s.name].capacity = s.rainyDayCapacity;
-    }
-    if (s.rainyDayAvailableAllDay) {
-      if (!overrides[s.name]) overrides[s.name] = {};
-      overrides[s.name].ignoreTimeRules = true;
-    }
-  });
-  
-  return overrides;
-}
+// NOTE: buildRainyDayResourceOverrides used to live here for the retired
+// mid-day stacker call; the stacker keeps its own copy (midday_rain_stacker.js)
+// for the rain-clears path.
 function activateMidDayRainyMode(customStartTime = null) {
   if (!window.AccessControl?.checkEditAccess?.('activate mid-day rainy mode')) return;
   
@@ -1474,43 +1442,45 @@ function activateMidDayRainyMode(customStartTime = null) {
   const regularSkeletonName = assignments[dayNames[dow]] || assignments["Default"];
   window.saveCurrentDailyData?.("_preRainySkeletonName", regularSkeletonName);
   
-  // ★★★ NEW: Use the stacking algorithm instead of just clearing ★★★
-  if (window.MidDayRainStacker) {
-    // Build resource overrides from settings
-    const resourceOverrides = buildRainyDayResourceOverrides();
-    
-    // Run the stacking algorithm
-    const result = window.MidDayRainStacker.handleMidDayRainStart(rainStartMin, resourceOverrides);
-    
-    if (result.success) {
-      console.log("[RainyDay] ✅ Stacker rebuilt schedule successfully");
-      console.log("[RainyDay] Summary:", result.summary);
-      
-      // Update module state AND persist via saveDailySkeleton
-      dailyOverrideSkeleton = result.rebuiltSkeleton;
-      window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-      saveDailySkeleton();
-    } else {
-      console.error("[RainyDay] ❌ Stacker failed:", result.error);
-      // Fall back to old behavior (clear and switch)
-      backupPreservedSchedule(rainStartMin);
-      const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
-      clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
-      if (isAutoSkeletonSwitchEnabled()) {
-        switchToRainySkeleton();
-      }
-    }
-  } else {
-    // Fallback: old behavior if stacker not loaded
-    console.warn("[RainyDay] MidDayRainStacker not available, using legacy mode");
-    backupPreservedSchedule(rainStartMin);
-    const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
-    clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
-    if (isAutoSkeletonSwitchEnabled()) {
-      switchToRainySkeleton();
-    }
-  }
-  
+  // ★★★ SPLIT & CLEAR (v3) — no stacker rebuild, no auto-generation ★★★
+  // The day is CUT at the rain-start time: everything already done stays
+  // exactly as it was (pinned, keeps rotation credit); everything from the
+  // cut onward is ERASED — from the schedule AND the rotation counts (both
+  // count paths derive from scheduleAssignments, so the erase + recount
+  // below uncounts them). A block in progress at the cut follows the
+  // RAIN_KEEP_FRACTION rule (≥75% done → kept + counted; less → erased +
+  // not counted). The user then builds the indoor rest-of-day themselves —
+  // manual tiles, per-tile regen, or Generate (PinnedPreservation protects
+  // the kept morning; rainy mode restricts new fills to indoor).
+  const sa = window.scheduleAssignments || {};
+
+  // Safety net: snapshot the pre-split schedule for manual recovery.
+  try {
+    window.saveCurrentDailyData?.("preMidDayRainSchedule", JSON.parse(JSON.stringify(sa)));
+  } catch (_eSnap) { /* non-fatal */ }
+
+  const split = _rainySplitScheduleAt(sa, window.divisionTimes || {}, _rainyScopedDivisions(), rainStartMin);
+  Object.keys(split.assignments).forEach(b => { sa[b] = split.assignments[b]; });
+  window.scheduleAssignments = sa;
+  window.saveCurrentDailyData?.("scheduleAssignments", sa);
+
+  const st = split.stats;
+  console.log(`[RainyDay] ✂️ Split at ${minutesToTime(rainStartMin)}: kept ${st.keptDone} done + ${st.keptInProgress} in-progress (≥75%), erased ${st.erasedInProgress} in-progress (<75%) + ${st.erasedFuture} future` +
+              (st.unknown ? `, ${st.unknown} untouched (no time info)` : ''));
+
+  // Persist the split schedule + recount rotation. Both rotation stores are
+  // DERIVED from scheduleAssignments (RotationCloud.save delete-then-upserts
+  // the date's rows; rebuildHistoricalCounts rescans local dailies), so the
+  // erased blocks lose their credit and the kept ones keep it — including
+  // the ≥75% in-progress block, with no special-case marker needed.
+  const _splitDateKey = window.currentScheduleDate;
+  try {
+    if (window.verifiedScheduleSave) window.verifiedScheduleSave(_splitDateKey);
+    else window.ScheduleDB?.saveSchedule?.(_splitDateKey, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} });
+  } catch (_eSave) { console.warn('[RainyDay] split save failed:', _eSave); }
+  try { window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true); } catch (_eRC) { /* non-fatal */ }
+  try { window.RotationCloud?.save?.(_splitDateKey, sa); } catch (_eRCl) { /* non-fatal */ }
+
   // Disable outdoor fields
   const existingDisabled = overrides.disabledFields || [];
   const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
@@ -1520,109 +1490,110 @@ function activateMidDayRainyMode(customStartTime = null) {
   // Set window.isRainyDay
   window.isRainyDay = true;
   window.rainyDayStartTime = rainStartMin;
-  
+
   window.saveCurrentDailyData?.("rainyDayMode", true);
   window.saveCurrentDailyData?.("rainyDayStartTime", rainStartMin);
   window.saveCurrentDailyData?.("isRainyDay", true);
-  
- 
-  
-  // ★★★ FIX: Clear stale league data (same as full-day mode) ★★★
-  window.leagueAssignments = {};
 
-  let skeletonSwitched = true; // Stacker handles this
-  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
+  // NOTE: leagueAssignments is intentionally NOT wiped (unlike full-day mode):
+  // pre-rain league games already played keep their matchup data; post-rain
+  // league ENTRIES were erased with everything else, and rainy generation
+  // skips league placement, so nothing stale can come back.
+
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, false, st.keptDone + st.keptInProgress);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
-  
-  // Trigger generation now — all rainy state is configured above
-  // (isRainyDay, disabled fields, cleared leagues). No setTimeout
-  // so the optimizer sees the correct state immediately.
-  if (window.MidDayRainStacker?.triggerMidDayGeneration) {
-    window.MidDayRainStacker.triggerMidDayGeneration();
-    renderGrid();
-  }
+  return { rainStartMin, stats: st };
 }
 
-// Analyze activities relative to rain start time
-function analyzeActivitiesForMidDayRain(rainStartMin) {
-  const times = window.unifiedTimes || [];
-  const schedules = window.scheduleAssignments || {};
-  
-  const analysis = {
-    completed: [],      // Slots that finished before rain (KEEP)
-    inProgress: [],     // Slots that were in progress when rain started (CUT SHORT)
-    future: [],         // Slots that hadn't started yet (CLEAR)
-    completedCount: 0,
-    inProgressCount: 0,
-    futureCount: 0,
-    rainStartTime: rainStartMin,
-    rainStartFormatted: minutesToTime(rainStartMin)
-  };
-  
-  for (let i = 0; i < times.length; i++) {
-    const slot = times[i];
-    if (!slot || !slot.start || !slot.end) continue;
-    
-    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-    const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
-    
-    const slotInfo = {
-      index: i,
-      startTime: minutesToTime(slotStart),
-      endTime: minutesToTime(slotEnd),
-      startMin: slotStart,
-      endMin: slotEnd
-    };
-    
-    if (slotEnd <= rainStartMin) {
-      // Slot ended before rain started → COMPLETED (keep)
-      analysis.completed.push(slotInfo);
-      analysis.completedCount++;
-    } else if (slotStart < rainStartMin && slotEnd > rainStartMin) {
-      // Slot was in progress when rain started → CUT SHORT (discard)
-      slotInfo.cutAt = minutesToTime(rainStartMin);
-      analysis.inProgress.push(slotInfo);
-      analysis.inProgressCount++;
-    } else if (slotStart >= rainStartMin) {
-      // Slot hadn't started yet → FUTURE (clear)
-      analysis.future.push(slotInfo);
-      analysis.futureCount++;
+// ─────────────────────────────────────────────────────────────────────────
+// MID-DAY RAIN SPLIT — the day is cut at the rain-start minute.
+// A block in progress at the cut is decided by how much of it already ran:
+// ≥ RAIN_KEEP_FRACTION done → treat as happened (keep + rotation credit);
+// less → treat as not-happened (erase + no credit).
+// ─────────────────────────────────────────────────────────────────────────
+const RAIN_KEEP_FRACTION = 0.75;
+
+// Pure — mirrored verbatim in tests/rainy_midday_split_sim.js; keep in sync.
+// Walks every bunk of the passed divisions, groups multi-slot blocks (spanned
+// specials) via _blockStart/_startMin — the same rule as the per-tile regen
+// multi-period guard — and decides each block AS ONE UNIT against tMin:
+//   • block ends at/before tMin   → keep (stamped _pinned/_fixed so a later
+//                                   Generate can't overwrite the morning)
+//   • block starts at/after tMin  → erase (slot → null)
+//   • straddling block            → done-fraction ≥ keepFraction ? keep : erase
+// Block spans come from divisionTimes slot times, falling back to the entry's
+// own _startMin/_endMin; blocks with no resolvable time are left untouched.
+// Returns { assignments, stats } — assignments holds ONLY the scanned bunks,
+// each a NEW array; stats counts BLOCKS (continuation slots aren't re-counted,
+// matching how rotation counting skips continuations).
+function _rainySplitScheduleAt(assignments, divisionTimes, divisions, tMin, keepFraction) {
+  const kf = (typeof keepFraction === 'number') ? keepFraction : RAIN_KEEP_FRACTION;
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
     }
-  }
-  
-  return analysis;
-}
+    return null;
+  };
+  const out = {};
+  const stats = { keptDone: 0, keptInProgress: 0, erasedInProgress: 0, erasedFuture: 0, unknown: 0 };
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk];
+      if (!Array.isArray(arr)) return;
 
-// Clear schedule assignments from rain start onwards
-function clearActivitiesFromRainStart(rainStartMin, analysis) {
-  const schedules = window.scheduleAssignments || {};
-  
-  // Get slot indices to clear (in-progress + future)
-  const slotsToClear = new Set();
-  analysis.inProgress.forEach(slot => slotsToClear.add(slot.index));
-  analysis.future.forEach(slot => slotsToClear.add(slot.index));
-  
-  if (slotsToClear.size === 0) {
-    console.log("[RainyDay] No slots to clear");
-    return;
-  }
-  
-  // Clear assignments for these slots across all bunks
-  let clearedCount = 0;
-  Object.keys(schedules).forEach(bunk => {
-    slotsToClear.forEach(slotIdx => {
-      if (schedules[bunk] && schedules[bunk][slotIdx]) {
-        schedules[bunk][slotIdx] = null;
-        clearedCount++;
+      // 1. Group slot indices into blocks (a spanned special = one block).
+      const groups = new Map();
+      for (let i = 0; i < arr.length; i++) {
+        const e = arr[i];
+        if (!e) continue;
+        const bs = (e._blockStart != null) ? e._blockStart
+                 : (e._startMin != null) ? e._startMin : null;
+        const key = (bs != null) ? ('b:' + bs) : ('i:' + i);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(i);
       }
+
+      // 2. Decide each block's fate from its real time span.
+      const res = arr.map(e => e ? JSON.parse(JSON.stringify(e)) : null);
+      groups.forEach(indices => {
+        let start = null, end = null;
+        indices.forEach(i => {
+          const s = slots[i] || {};
+          const e = arr[i] || {};
+          const ss = toMin((s.startMin != null) ? s.startMin : ((s.start != null) ? s.start : e._startMin));
+          const se = toMin((s.endMin != null) ? s.endMin : ((s.end != null) ? s.end : e._endMin));
+          if (ss != null && (start == null || ss < start)) start = ss;
+          if (se != null && (end == null || se > end)) end = se;
+        });
+        if (start == null || end == null || end <= start) {
+          stats.unknown += indices.length;
+          return; // no resolvable time — leave the entries untouched
+        }
+        let keep, inProgress = false;
+        if (end <= tMin) keep = true;
+        else if (start >= tMin) keep = false;
+        else { inProgress = true; keep = ((tMin - start) / (end - start)) >= kf; }
+        indices.forEach(i => {
+          const isHead = res[i] && !res[i].continuation;
+          if (keep) {
+            res[i] = Object.assign({}, res[i], { _pinned: true, _fixed: true, _midDayPreserved: true });
+            if (isHead) stats[inProgress ? 'keptInProgress' : 'keptDone']++;
+          } else {
+            if (isHead) stats[inProgress ? 'erasedInProgress' : 'erasedFuture']++;
+            res[i] = null;
+          }
+        });
+      });
+      out[bunk] = res;
     });
   });
-  
-  // Save the updated schedule
-  window.scheduleAssignments = schedules;
-  window.saveCurrentDailyData?.("scheduleAssignments", schedules);
-  
-  console.log(`[RainyDay] Cleared ${clearedCount} assignments from ${slotsToClear.size} slots`);
+  return { assignments: out, stats };
 }
 
 // Show mid-day rain start time picker modal
@@ -1647,9 +1618,9 @@ function showMidDayRainModal() {
       </div>
       <div class="da-modal-body">
         <p style="margin-bottom:16px;color:#64748b;">
-          This will preserve activities that <strong>completed before</strong> the rain start time, 
-          discard any activities that were <strong>in progress</strong> (cut short by rain), 
-          and clear all <strong>future</strong> activities for you to reschedule with indoor options.
+          The day is <strong>split</strong> at the rain start time: everything before it stays
+          exactly as it is, and everything after is <strong>cleared</strong> — from the schedule
+          and the rotation counts — so you can build the indoor rest of the day.
         </p>
         
         <div class="da-form-field" style="margin-bottom:16px;">
@@ -1666,9 +1637,10 @@ function showMidDayRainModal() {
         </div>
         
         <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:16px;">
-          <div style="font-weight:600;color:#92400e;margin-bottom:4px;">⚠️ Warning</div>
+          <div style="font-weight:600;color:#92400e;margin-bottom:4px;">⚠️ Activity in progress at the cut</div>
           <div style="font-size:13px;color:#a16207;">
-            Activities that were <strong>in progress</strong> when rain started will be marked as incomplete and won't count toward rotation.
+            If it's at least <strong>75% done</strong> it stays and counts toward rotation;
+            if less, it's cleared and does <strong>not</strong> count.
           </div>
         </div>
       </div>
@@ -1690,27 +1662,35 @@ function showMidDayRainModal() {
     
     const [hours, mins] = timeInput.value.split(':').map(Number);
     const rainStartMin = hours * 60 + mins;
-    
-    const analysis = analyzeActivitiesForMidDayRain(rainStartMin);
-    
+
+    // Dry-run of the REAL split (pure function) so the preview always matches
+    // what confirming will actually do — counts are per BLOCK, per bunk.
+    const st = _rainySplitScheduleAt(
+      window.scheduleAssignments || {},
+      window.divisionTimes || {},
+      _rainyScopedDivisions(),
+      rainStartMin
+    ).stats;
+
     previewContent.innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;">
         <div style="background:#d1fae5;padding:8px;border-radius:6px;">
-          <div style="font-size:20px;font-weight:700;color:#065f46;">${analysis.completedCount}</div>
+          <div style="font-size:20px;font-weight:700;color:#065f46;">${st.keptDone + st.keptInProgress}</div>
           <div style="font-size:11px;color:#047857;">✅ Keep</div>
         </div>
         <div style="background:#fef3c7;padding:8px;border-radius:6px;">
-          <div style="font-size:20px;font-weight:700;color:#92400e;">${analysis.inProgressCount}</div>
-          <div style="font-size:11px;color:#a16207;">⚠️ Cut Short</div>
+          <div style="font-size:20px;font-weight:700;color:#92400e;">${st.erasedInProgress}</div>
+          <div style="font-size:11px;color:#a16207;">⚠️ Cut (&lt;75%)</div>
         </div>
         <div style="background:#fee2e2;padding:8px;border-radius:6px;">
-          <div style="font-size:20px;font-weight:700;color:#991b1b;">${analysis.futureCount}</div>
+          <div style="font-size:20px;font-weight:700;color:#991b1b;">${st.erasedFuture}</div>
           <div style="font-size:11px;color:#dc2626;">🗑️ Clear</div>
         </div>
       </div>
-      ${analysis.inProgressCount > 0 ? `
+      ${(st.keptInProgress + st.erasedInProgress) > 0 ? `
         <div style="margin-top:10px;font-size:12px;color:#64748b;">
-          <strong>Cut short slots:</strong> ${analysis.inProgress.map(s => s.startTime + '-' + s.endTime).join(', ')}
+          In progress at the cut: <strong>${st.keptInProgress}</strong> ≥75% done (kept &amp; counted),
+          <strong>${st.erasedInProgress}</strong> under 75% (cleared, not counted)
         </div>
       ` : ''}
     `;
@@ -1750,38 +1730,6 @@ function showMidDayRainModal() {
   
   // Initial preview
   updatePreview();
-}
-
-function backupPreservedSchedule(startTimeMin) {
-  const times = window.unifiedTimes || [];
-  const schedules = window.scheduleAssignments || {};
-  const preserved = [];
-  
-  for (let i = 0; i < times.length; i++) {
-    const slot = times[i];
-    if (slot && slot.start) {
-      const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-      if (slotStart < startTimeMin) {
-        preserved.push(i);
-      }
-    }
-  }
-  
-  if (preserved.length === 0) return null;
-  
-  const backup = {};
-  Object.keys(schedules).forEach(bunk => {
-    backup[bunk] = {};
-    preserved.forEach(slotIdx => {
-      if (schedules[bunk]?.[slotIdx]) {
-        backup[bunk][slotIdx] = JSON.parse(JSON.stringify(schedules[bunk][slotIdx]));
-      }
-    });
-  });
-  
-  window.saveCurrentDailyData?.("preservedScheduleBackup", backup);
-  console.log(`[RainyDay] Backed up ${preserved.length} preserved slots`);
-  return backup;
 }
 
 function switchToRainySkeleton() {
@@ -1831,6 +1779,7 @@ function deactivateRainyDayMode() {
   window.saveCurrentDailyData?.("rainyDayMode", false);
   window.saveCurrentDailyData?.("rainyDayStartTime", null);
   window.saveCurrentDailyData?.("preservedScheduleBackup", null);
+  window.saveCurrentDailyData?.("preMidDayRainSchedule", null);
   window.saveCurrentDailyData?.("isRainyDay", false);
   
   let skeletonRestored = false;
