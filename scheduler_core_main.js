@@ -3892,28 +3892,53 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   7.6 empty-field free-fill) can place a regenerated bunk onto it CROSS-division
         //   → conflict → auto-demote to a blank slot. lockFieldForDivision blocks OTHER
         //   divisions while still letting a same-division bunk legitimately share.
+        //   ★ TIME-QUALIFIED KEYS (fill-quality fix): slot indices are per-division, so
+        //   plain-index locks blanket-blocked the regen division's SAME indices at
+        //   DIFFERENT wall-clock times — isFieldLocked's index fast-path has no time
+        //   check → the solver's whole domain collapsed and everything fell through to
+        //   the first-legal fallback filler (solver went 0 Free → 2 Free the moment
+        //   STEP 1.7 shipped). Store at "idx#startMin" instead: invisible to the index
+        //   fast-path (no false positives), still enforced by the time-aware safety net
+        //   (isFieldLockedByTime scans ALL keys and uses the explicit timeRange).
+        //   Pseudo-activities (Swim/Free/Lunch…) are skipped — they aren't bookable
+        //   facilities and locking the shared "Swim" name starved other divisions.
         if (window.__regenSlotScope && window.GlobalFieldLocks &&
             typeof window.GlobalFieldLocks.lockFieldForDivision === 'function') {
             const _divOf17 = {};
             Object.entries(divisions || {}).forEach(([dn, di]) =>
                 ((di && di.bunks) || []).forEach(b => { _divOf17[String(b)] = String(dn); }));
+            const _skip17 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1,
+                'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1,
+                'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1, 'main activity': 1 };
             let _locked17 = 0;
             for (const _b in window.scheduleAssignments) {
                 const _arr17 = window.scheduleAssignments[_b];
                 if (!Array.isArray(_arr17)) continue;
                 const _dn17 = _divOf17[String(_b)] || null;
+                const _dts17 = (window.divisionTimes && _dn17 && window.divisionTimes[_dn17]) || [];
                 for (let i = 0; i < _arr17.length; i++) {
                     const _e17 = _arr17[i];
                     if (!_e17 || _e17.continuation || _e17._isTransition) continue;
                     const _f17 = _e17.field;
                     if (!_f17) continue;
+                    if (_skip17[String(_f17).toLowerCase().trim()]) continue;
+                    // Resolve the placement's wall-clock window (entry first, grid fallback).
+                    let _sM17 = _e17._startMin, _eM17 = _e17._endMin;
+                    if (_sM17 == null && _dts17[i]) { _sM17 = _dts17[i].startMin; _eM17 = _dts17[i].endMin; }
                     try {
-                        window.GlobalFieldLocks.lockFieldForDivision(_f17, [i], _dn17, 'regen_preserve');
+                        if (_sM17 != null && _eM17 != null) {
+                            window.GlobalFieldLocks.lockFieldForDivision(
+                                _f17, [i + '#' + _sM17], _dn17, 'regen_preserve',
+                                { startMin: _sM17, endMin: _eM17 });
+                        } else {
+                            // Time unresolvable — fall back to the conservative index lock.
+                            window.GlobalFieldLocks.lockFieldForDivision(_f17, [i], _dn17, 'regen_preserve');
+                        }
                         _locked17++;
                     } catch (_e) { /* non-fatal */ }
                 }
             }
-            if (_locked17 > 0) console.log('[STEP 1.7] ★ Per-tile regen: division-locked ' + _locked17 + ' preserved field(s) against cross-division poaching');
+            if (_locked17 > 0) console.log('[STEP 1.7] ★ Per-tile regen: TIME-locked ' + _locked17 + ' preserved field(s) against cross-division poaching (index-collision-free)');
         }
 
         // ★ LG-6: restore league matchups for divisions NOT in this scoped gen.
@@ -5556,9 +5581,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         }
                     });
                     const _fields56 = [..._fSet56].filter(Boolean);
+                    // ★ Fill-quality: use a TIME-QUALIFIED key ("idx#startMin") when the
+                    //   window is known — invisible to isFieldLocked's time-blind index
+                    //   fast-path (slot indices are per-division, so a plain-index lock
+                    //   blanket-blocked the regen division's same index at a different
+                    //   time and starved the solver), while isFieldLockedByTime still
+                    //   enforces the real overlap via the explicit startMin/endMin.
+                    const _key56 = (_sM56 != null) ? (_si56 + '#' + _sM56) : _si56;
                     _fields56.forEach(_f56 => {
                         try {
-                            window.GlobalFieldLocks.lockField(_f56, [_si56], {
+                            window.GlobalFieldLocks.lockField(_f56, [_key56], {
                                 lockedBy: 'regen_preserved_league', division: _dv56,
                                 activity: 'Preserved league game', startMin: _sM56, endMin: _eM56
                             });
