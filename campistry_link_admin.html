@@ -628,6 +628,21 @@
         </div>
     </div>
 
+    <!-- Staff accounts — tips land here automatically -->
+    <div class="lk-card" style="margin-top:18px;">
+        <div class="lk-card-head">
+            <div>
+                <h2>Staff Accounts</h2>
+                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Every tip credits the staff member's account instantly. Give each person their access code so they can watch their balance.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="openAddStaffAccount()" style="flex-shrink:0;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add staff
+            </button>
+        </div>
+        <div id="staffAccountsList"><div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">Accounts appear automatically the first time someone is tipped — run migration 017 to enable.</div></div>
+    </div>
+
     <!-- Tip history -->
     <div class="lk-card" style="margin-top:18px;">
         <div class="lk-card-head">
@@ -2846,8 +2861,138 @@ function renderTipsAdmin() {
     _renderTipAmounts(cfg);
     _renderTipCategories(cfg);
     _renderTipHistory();
-    // Refresh from the cloud, then re-render with the latest tips
+    _renderStaffAccounts();
+    // Refresh from the cloud, then re-render with the latest tips + balances
     _loadCloudTips(_renderTipHistory);
+    _loadStaffAccounts(_renderStaffAccounts);
+}
+
+// ─── STAFF TIP ACCOUNTS (link_staff_accounts, migration 017) ─────────────────
+var _staffAccounts = [];
+
+function _loadStaffAccounts(cb) {
+    var db = _dbc();
+    if (!db) { if (cb) cb(); return; }
+    db.client
+        .from('link_staff_accounts')
+        .select('id, staff_name, role, access_code, balance, total_earned, total_paid_out, updated_at')
+        .eq('camp_id', db.campId)
+        .order('balance', { ascending: false })
+        .then(function(res) {
+            if (res.error) { console.warn('[Link Admin] link_staff_accounts load:', res.error.message); }
+            else { _staffAccounts = res.data || []; }
+            if (cb) cb();
+        });
+}
+
+function _renderStaffAccounts() {
+    var el = document.getElementById('staffAccountsList'); if (!el) return;
+
+    if (!_staffAccounts.length) {
+        // Fall back to a read-only view derived from the tip log (same-browser
+        // demo, or migration 017 not run yet) so the section stays useful
+        var byStaff = {};
+        _mergedTipLog().forEach(function(t) {
+            var k = (t.recipientName || '—').toLowerCase();
+            if (!byStaff[k]) byStaff[k] = { name: t.recipientName || '—', role: t.role || '', total: 0 };
+            byStaff[k].total += parseFloat(t.amount) || 0;
+        });
+        var derived = Object.values(byStaff).sort(function(a, b) { return b.total - a.total; });
+        if (!derived.length) {
+            el.innerHTML = '<div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">No staff accounts yet — one is created automatically the first time someone is tipped.</div>';
+            return;
+        }
+        el.innerHTML = '<div style="font-size:.76rem;color:var(--amber-600);background:var(--amber-50);border:1px solid var(--amber-200);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:10px;">Showing totals from the tip log — connect to the cloud (migration 017) for live balances, payouts, and staff access codes.</div>' +
+            derived.map(function(r) {
+                return '<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--slate-100);font-size:.84rem;">' +
+                    '<div style="flex:1;"><strong>' + esc(r.name) + '</strong>' + (r.role ? ' <span style="color:var(--text-muted);font-size:.76rem;">· ' + esc(r.role) + '</span>' : '') + '</div>' +
+                    '<div style="font-weight:700;color:var(--green-600);">$' + r.total.toFixed(2) + '</div>' +
+                '</div>';
+            }).join('');
+        return;
+    }
+
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">' +
+        '<thead><tr style="border-bottom:1.5px solid var(--slate-200);">' +
+            '<th style="text-align:left;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Staff Member</th>' +
+            '<th style="text-align:right;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Earned</th>' +
+            '<th style="text-align:right;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Paid Out</th>' +
+            '<th style="text-align:right;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Balance</th>' +
+            '<th style="text-align:left;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Access Code</th>' +
+            '<th style="padding:6px 10px;"></th>' +
+        '</tr></thead><tbody>' +
+        _staffAccounts.map(function(a) {
+            var bal = parseFloat(a.balance) || 0;
+            return '<tr style="border-bottom:1px solid var(--slate-100);">' +
+                '<td style="padding:8px 10px;"><strong>' + esc(a.staff_name) + '</strong>' + (a.role ? ' <span style="color:var(--text-muted);font-size:.74rem;">· ' + esc(a.role) + '</span>' : '') + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;">$' + (parseFloat(a.total_earned) || 0).toFixed(2) + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">$' + (parseFloat(a.total_paid_out) || 0).toFixed(2) + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;font-weight:700;color:' + (bal > 0 ? 'var(--green-600)' : 'var(--text-muted)') + ';">$' + bal.toFixed(2) + '</td>' +
+                '<td style="padding:8px 10px;white-space:nowrap;">' +
+                    '<code style="background:var(--slate-50);border:1px solid var(--slate-200);border-radius:6px;padding:2px 7px;font-size:.76rem;letter-spacing:.06em;">' + esc(a.access_code || '') + '</code> ' +
+                    '<button class="btn btn-ghost btn-sm" onclick="copyStaffLink(\'' + esc(a.access_code || '') + '\')" title="Copy their balance-page link" style="padding:2px 7px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>' +
+                '</td>' +
+                '<td style="padding:8px 10px;text-align:right;">' +
+                    '<button class="btn btn-secondary btn-sm" onclick="payoutStaff(\'' + esc(a.id) + '\')"' + (bal <= 0 ? ' disabled style="opacity:.45;cursor:default;"' : '') + '>Pay out</button>' +
+                '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table>';
+}
+
+function copyStaffLink(code) {
+    var url = window.location.href.replace(/[^/]*$/, '') + 'campistry_link_staff.html?code=' + encodeURIComponent(code);
+    var done = function() { toast('Balance-page link copied — send it to the staff member'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, function() { prompt('Copy this link:', url); });
+    } else {
+        prompt('Copy this link:', url);
+    }
+}
+
+function payoutStaff(accountId) {
+    var a = _staffAccounts.find(function(x) { return x.id === accountId; });
+    if (!a) return;
+    var bal = parseFloat(a.balance) || 0;
+    if (bal <= 0) { toast('Nothing to pay out'); return; }
+    var raw = prompt('Pay out to ' + a.staff_name + '.\nCurrent balance: $' + bal.toFixed(2) + '\n\nAmount to pay out:', bal.toFixed(2));
+    if (raw == null) return;
+    var amt = parseFloat(raw);
+    if (!amt || amt <= 0 || amt > bal) { toast('Enter an amount between $0.01 and $' + bal.toFixed(2)); return; }
+    var db = _dbc();
+    if (!db) { toast('Cloud not connected'); return; }
+    db.client.rpc('record_staff_payout', { p_account_id: accountId, p_amount: amt }).then(function(res) {
+        if (res.error || !res.data || !res.data.success) {
+            toast('Payout failed: ' + (res.error ? res.error.message : (res.data || {}).error || 'unknown'));
+            return;
+        }
+        a.balance = res.data.balance;
+        a.total_paid_out = (parseFloat(a.total_paid_out) || 0) + (parseFloat(res.data.paid) || 0);
+        _renderStaffAccounts();
+        toast('$' + (parseFloat(res.data.paid) || 0).toFixed(2) + ' paid out to ' + a.staff_name);
+    });
+}
+
+function openAddStaffAccount() {
+    var name = prompt('Staff member\'s name (as parents see it when tipping):');
+    if (!name || !name.trim()) return;
+    name = name.trim();
+    if (_staffAccounts.some(function(a) { return a.staff_name.toLowerCase() === name.toLowerCase(); })) {
+        toast(name + ' already has an account'); return;
+    }
+    var role = (prompt('Role (optional — e.g. Counselor, Lifeguard):') || '').trim();
+    var db = _dbc();
+    if (!db) { toast('Cloud not connected — accounts need migration 017'); return; }
+    db.client
+        .from('link_staff_accounts')
+        .insert({ camp_id: db.campId, staff_name: name, role: role })
+        .select()
+        .single()
+        .then(function(res) {
+            if (res.error) { toast('Could not create account: ' + res.error.message); return; }
+            _staffAccounts.push(res.data);
+            _renderStaffAccounts();
+            toast(name + '\'s account created — code ' + res.data.access_code);
+        });
 }
 
 function _renderTipAmounts(cfg) {

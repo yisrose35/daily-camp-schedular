@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Tips — Campistry Link</title>
+<link rel="icon" type="image/png" href="Campistry_logo.png">
+<style>
+    :root {
+        --green: #2A7A35; --green-tint: #EAF5EC;
+        --slate-900: #0F172A; --slate-600: #475569; --slate-400: #94A3B8;
+        --slate-200: #E2E8F0; --slate-100: #F1F5F9; --slate-50: #F8FAFC;
+        --red: #EF4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0; min-height: 100vh; background: var(--slate-50);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: flex; align-items: flex-start; justify-content: center; padding: 32px 16px;
+        color: var(--slate-900);
+    }
+    .wrap { width: 100%; max-width: 420px; }
+    .logo { display: block; height: 42px; margin: 0 auto 10px; }
+    h1 { font-size: 1.15rem; text-align: center; margin: 0 0 4px; }
+    .sub { font-size: .82rem; color: var(--slate-600); text-align: center; margin: 0 0 22px; }
+    .card { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; padding: 22px; margin-bottom: 14px; }
+    .code-input {
+        width: 100%; padding: 13px; border: 1.5px solid var(--slate-200); border-radius: 10px;
+        font-size: 1.25rem; font-weight: 700; letter-spacing: .18em; text-align: center;
+        text-transform: uppercase; outline: none;
+    }
+    .code-input:focus { border-color: var(--green); }
+    .btn {
+        width: 100%; margin-top: 12px; padding: 12px; border: none; border-radius: 10px;
+        background: var(--green); color: #fff; font-size: .95rem; font-weight: 700; cursor: pointer;
+    }
+    .btn-ghost { background: none; color: var(--slate-400); font-weight: 600; font-size: .78rem; padding: 8px; }
+    .msg { font-size: .8rem; color: var(--red); text-align: center; min-height: 18px; margin-top: 10px; }
+    .balance-label { font-size: .72rem; font-weight: 800; letter-spacing: .08em; color: var(--slate-400); text-transform: uppercase; }
+    .balance { font-size: 2.6rem; font-weight: 800; color: var(--green); margin: 4px 0 2px; }
+    .who { font-size: .95rem; font-weight: 700; }
+    .who span { font-weight: 500; color: var(--slate-600); }
+    .totals { display: flex; gap: 10px; margin-top: 16px; }
+    .tot { flex: 1; background: var(--slate-50); border-radius: 10px; padding: 10px 12px; }
+    .tot .v { font-size: 1.05rem; font-weight: 700; }
+    .tot .k { font-size: .68rem; color: var(--slate-400); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; margin-top: 2px; }
+    .tip-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--slate-100); font-size: .85rem; }
+    .tip-row:last-child { border-bottom: none; }
+    .tip-when { color: var(--slate-400); font-size: .75rem; }
+    .tip-amt { font-weight: 700; color: var(--green); }
+    .sec-title { font-size: .78rem; font-weight: 800; letter-spacing: .06em; color: var(--slate-400); text-transform: uppercase; margin: 0 0 8px; }
+    .note { font-size: .74rem; color: var(--slate-400); text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <img src="Link_clean.png" class="logo" alt="Campistry Link">
+    <h1>My Tips</h1>
+    <p class="sub">Tips from camp families go straight into your account</p>
+
+    <!-- Code entry -->
+    <div class="card" id="codeCard">
+        <div style="font-size:.82rem;color:var(--slate-600);margin-bottom:10px;">Enter the access code the camp office gave you:</div>
+        <input class="code-input" id="staffCode" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off"
+               oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')"
+               onkeydown="if(event.key==='Enter')loadAccount()">
+        <button class="btn" onclick="loadAccount()">View My Tips</button>
+        <div class="msg" id="codeMsg"></div>
+    </div>
+
+    <!-- Account view -->
+    <div id="accountView" style="display:none;">
+        <div class="card" style="text-align:center;">
+            <div class="who" id="staffWho"></div>
+            <div class="balance-label" style="margin-top:14px;">Current balance</div>
+            <div class="balance" id="staffBalance">$0.00</div>
+            <div style="font-size:.74rem;color:var(--slate-400);">paid out to you by the camp office</div>
+            <div class="totals">
+                <div class="tot"><div class="v" id="staffEarned">$0.00</div><div class="k">Total earned</div></div>
+                <div class="tot"><div class="v" id="staffPaid">$0.00</div><div class="k">Paid out</div></div>
+            </div>
+        </div>
+        <div class="card">
+            <p class="sec-title">Recent tips</p>
+            <div id="staffTips"></div>
+        </div>
+        <p class="note">Balances update the moment a family sends a tip.<br>Questions about payout? Ask the camp office.</p>
+        <button class="btn btn-ghost" onclick="switchCode()">Use a different code</button>
+    </div>
+</div>
+
+<script src="supabase-js@2.js"></script>
+<script src="config.js"></script>
+<script>
+(function() {
+    'use strict';
+    var CODE_KEY = 'campistry_link_staff_code';
+    var db = null;
+    var cfg = window.__CAMPISTRY_SUPABASE__;
+    if (cfg && typeof supabase !== 'undefined' && supabase.createClient) {
+        db = supabase.createClient(cfg.url, cfg.anonKey);
+    }
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function money(v) { return '$' + (parseFloat(v) || 0).toFixed(2); }
+    function setMsg(m) { document.getElementById('codeMsg').textContent = m || ''; }
+
+    window.loadAccount = function(codeArg) {
+        var code = (codeArg || document.getElementById('staffCode').value || '').trim().toUpperCase();
+        if (!code) { setMsg('Enter your access code.'); return; }
+        if (!db) { setMsg('Connection not configured — contact the camp office.'); return; }
+        setMsg('Checking…');
+        db.rpc('get_staff_tip_account', { p_code: code }).then(function(res) {
+            if (res.error) {
+                var m = res.error.message || '';
+                setMsg(m.indexOf('does not exist') >= 0
+                    ? 'Tips accounts are not set up yet — the camp admin needs to run migration 017.'
+                    : 'Error: ' + m);
+                return;
+            }
+            if (!res.data || !res.data.success) {
+                setMsg((res.data || {}).error === 'invalid_code'
+                    ? 'That code doesn’t match an account. Double-check it with the camp office.'
+                    : 'Could not load your account.');
+                return;
+            }
+            setMsg('');
+            try { localStorage.setItem(CODE_KEY, code); } catch(e) {}
+            render(res.data);
+        });
+    };
+
+    function render(d) {
+        document.getElementById('codeCard').style.display = 'none';
+        document.getElementById('accountView').style.display = '';
+        document.getElementById('staffWho').innerHTML = esc(d.staff_name) + (d.role ? ' <span>· ' + esc(d.role) + '</span>' : '');
+        document.getElementById('staffBalance').textContent = money(d.balance);
+        document.getElementById('staffEarned').textContent = money(d.total_earned);
+        document.getElementById('staffPaid').textContent = money(d.total_paid_out);
+        var tips = d.recent_tips || [];
+        var el = document.getElementById('staffTips');
+        if (!tips.length) {
+            el.innerHTML = '<div style="font-size:.82rem;color:var(--slate-400);padding:6px 0;">No tips yet — they’ll show up here.</div>';
+            return;
+        }
+        el.innerHTML = tips.map(function(t) {
+            var when = t.created_at ? new Date(t.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+            var fromWho = '';
+            if (t.camper_name) {
+                var parts = String(t.camper_name).split(' ');
+                fromWho = parts[0] + (parts[1] ? ' ' + parts[1][0] + '.' : '') + '’s family';
+            } else {
+                fromWho = 'A camp family';
+            }
+            return '<div class="tip-row"><div>' + esc(fromWho) + '<div class="tip-when">' + esc(when) + '</div></div>' +
+                '<div class="tip-amt">+' + money(t.amount) + '</div></div>';
+        }).join('');
+    }
+
+    window.switchCode = function() {
+        try { localStorage.removeItem(CODE_KEY); } catch(e) {}
+        document.getElementById('accountView').style.display = 'none';
+        document.getElementById('codeCard').style.display = '';
+        document.getElementById('staffCode').value = '';
+        document.getElementById('staffCode').focus();
+    };
+
+    // Auto-load: ?code=XXXX-XXXX in the URL, or a remembered code
+    var urlCode = new URLSearchParams(window.location.search).get('code');
+    var saved = null;
+    try { saved = localStorage.getItem(CODE_KEY); } catch(e) {}
+    if (urlCode) { document.getElementById('staffCode').value = urlCode.toUpperCase(); loadAccount(urlCode); }
+    else if (saved) { document.getElementById('staffCode').value = saved; loadAccount(saved); }
+})();
+</script>
+</body>
+</html>
