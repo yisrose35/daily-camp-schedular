@@ -1186,6 +1186,7 @@ function renderSentForms() {
                 '<div style="display:flex;gap:6px;flex-shrink:0;">' +
                     '<button class="btn btn-secondary btn-sm" onclick="openResponsesSheet(\'' + esc(f.formId || '').replace(/'/g, '') + '\',\'' + esc(f.formName).replace(/'/g, '&#39;') + '\')">Responses</button>' +
                     '<button class="btn btn-ghost btn-sm" onclick="viewFormResponses(\'' + esc(f.formName).replace(/'/g, '&#39;') + '\')" title="Browse by division / grade / bunk">Folders</button>' +
+                    '<button class="btn btn-ghost btn-sm" onclick="deleteSentForm(\'' + esc(f.id) + '\')" title="Remove this form from parent portals" style="color:var(--red-500);">✕</button>' +
                 '</div>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
@@ -1201,6 +1202,25 @@ function viewFormResponses(formName) {
     _recvPath = [formName];
     var s = document.getElementById('recvSearch'); if (s) s.value = '';
     renderReceivedTree();
+}
+
+function deleteSentForm(sfId) {
+    var sentForms = _loadSentForms();
+    var sf = sentForms.find(function(x) { return x.id === sfId; });
+    if (!sf) return;
+    if (!confirm('Remove "' + sf.formName + '"?\n\nParents will no longer see it in their portal. Responses already received are kept.')) return;
+    var remaining = sentForms.filter(function(x) { return x.id !== sfId; });
+    _saveSentForms(remaining);
+    // Unpublish the form itself unless another send still references it
+    var stillUsed = remaining.some(function(x) { return x.formId === sf.formId; });
+    if (sf.formId && !stillUsed) {
+        var lf = _loadLinkForms();
+        lf.digital = lf.digital.filter(function(f) { return f.id !== sf.formId; });
+        lf.printReturn = lf.printReturn.filter(function(f) { return f.id !== sf.formId; });
+        _saveLinkForms(lf);
+    }
+    renderSentForms();
+    toast('"' + sf.formName + '" removed from parent portals');
 }
 
 // ─── TOAST ───────────────────────────────────────────────────────────────────
