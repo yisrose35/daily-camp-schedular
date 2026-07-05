@@ -1287,9 +1287,9 @@ function bindRainyDayEvents() {
   }
      
   if (toggle) {
-    toggle.onchange = function(e) {
+    toggle.onchange = async function(e) {
       e.stopPropagation();
-      
+
       // Debounce to prevent double-triggering
       if (_rainyToggleDebounce) {
         console.log("[RainyDay] Toggle debounced - ignoring duplicate");
@@ -1297,17 +1297,20 @@ function bindRainyDayEvents() {
       }
       _rainyToggleDebounce = true;
       setTimeout(() => { _rainyToggleDebounce = false; }, 500);
-      
+
       console.log("[RainyDay] Toggle changed, checked =", this.checked);
-      
-      if (this.checked) {
-        activateFullDayRainyMode();
-      } else {
-        deactivateRainyDayMode();
-      }
+
+      const activated = this.checked;
+      // result is undefined when activation was refused (access control)
+      const result = activated ? activateFullDayRainyMode() : deactivateRainyDayMode();
       renderRainyDayPanel();
       renderResourceOverridesUI();
       renderGrid();
+
+      // ★ Finish the job on an already-generated schedule: offer to re-roll
+      //   ONLY the weather-invalidated tiles (or a full gen after a skeleton
+      //   structure change). See _rainyOfferScheduleFix.
+      if (result) await _rainyOfferScheduleFix(activated, !!result.structureChanged);
     };
   }
      
@@ -1397,6 +1400,10 @@ function activateFullDayRainyMode() {
   }
   
   showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
+
+  // ★ Rainy tile-regen: tell the caller whether the day's slot STRUCTURE changed
+  //   (skeleton swap → per-tile regen can't map old tiles → needs a full gen).
+  return { structureChanged: skeletonSwitched };
 }
 // ★★★ Build resource overrides for the stacker ★★★
 function buildRainyDayResourceOverrides() {
@@ -1826,9 +1833,11 @@ function deactivateRainyDayMode() {
   window.saveCurrentDailyData?.("preservedScheduleBackup", null);
   window.saveCurrentDailyData?.("isRainyDay", false);
   
+  let skeletonRestored = false;
   if (isAutoSkeletonSwitchEnabled()) {
     const restored = restorePreRainySkeleton();
-    
+    skeletonRestored = !!restored;
+
     // ★ Rebuild divisionTimes from restored skeleton (mirrors activate logic)
     if (restored) {
       const restoredDaily = window.loadCurrentDailyData?.() || {};
@@ -1845,7 +1854,12 @@ function deactivateRainyDayMode() {
   window.leagueAssignments = {};
   
   showRainyDayNotification(false);
-  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);}
+  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);
+
+  // ★ Rainy tile-regen: mirror activate — a restored skeleton means the slot
+  //   structure changed back, so per-tile regen can't map (needs a full gen).
+  return { structureChanged: skeletonRestored };
+}
 
 function restorePreRainySkeleton() {
   const dailyData = window.loadCurrentDailyData?.() || {};
@@ -1895,8 +1909,155 @@ function restorePreRainySkeleton() {
   console.log(`[RainyDay] ✅ Restored skeleton from ${source} (${skeletonToRestore.length} blocks)`);
   return true;
 }
-  
- 
+
+// ─────────────────────────────────────────────────────────────────────────
+// RAINY TILE-REGEN — finish the full-day rainy flow with per-tile regeneration.
+//
+// Activating full-day rain reconfigures state (outdoor fields disabled, rainy
+// specials enabled) but never touched an ALREADY-GENERATED schedule: every
+// outdoor tile sat there until the user regenerated the WHOLE day, discarding
+// the indoor tiles that were perfectly valid. These helpers reuse the shared
+// per-tile regen core (_daPartialRegenerate → __regenSlotScope) to re-roll ONLY
+// the tiles the weather invalidated:
+//   • rain:  tiles on outdoor fields (rainyDayAvailable !== true) + specials
+//            the solver drops in rain (rainyDayAvailable/availableOnRainyDay
+//            === false) — mirrors the scheduler_core_main masterSpecials filter.
+//   • sun:   tiles holding rainy-only specials (rainyDayOnly/rainyDayExclusive)
+//            — the ones the solver would never place on a regular day.
+// When the rainy skeleton swap changed the day's SLOT STRUCTURE, old tiles
+// can't be time-mapped, so we offer a full generation instead. Mid-day rain is
+// untouched — the stacker already owns that path.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Which activity/field names are invalid under the new weather. Rain rules
+// mirror scheduler_core_main.js (getRainyDayFieldFilter + the masterSpecials
+// filter); sun rules mirror its !isRainyMode branch.
+function _rainyBuildInvalidSets(mode) {
+  const g = window.loadGlobalSettings?.() || {};
+  const fields = g.app1?.fields || [];
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
+  const norm = n => String(n || '').toLowerCase().trim();
+  const fieldSet = new Set();
+  const specialSet = new Set();
+  if (mode === 'rain') {
+    fields.forEach(f => { if (f && f.name && f.rainyDayAvailable !== true) fieldSet.add(norm(f.name)); });
+    specials.forEach(s => {
+      if (s && s.name && (s.rainyDayAvailable === false || s.availableOnRainyDay === false)) specialSet.add(norm(s.name));
+    });
+  } else {
+    specials.forEach(s => {
+      if (s && s.name && (s.rainyDayOnly === true || s.rainyDayExclusive === true)) specialSet.add(norm(s.name));
+    });
+  }
+  return { fields: fieldSet, specials: specialSet };
+}
+
+// Pure scanner — mirrored verbatim in tests/rainy_tile_regen_sim.js; keep in sync.
+// Walks every bunk's generated entries and returns [{bunk, startMin, endMin}]
+// selections (the shared regen core's input) for each tile whose field or
+// activity is in the invalid sets. Continuations/transitions are skipped — the
+// regen core's multi-period guard expands a block head to its whole span.
+function _rainyScanInvalidTiles(assignments, divisionTimes, divisions, invalid) {
+  const norm = n => String(n || '').toLowerCase().trim();
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  };
+  const selections = [];
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk] || [];
+      for (let i = 0; i < arr.length && i < slots.length; i++) {
+        const e = arr[i];
+        if (!e || e.continuation || e._isTransition) continue;
+        const act = norm(e._activity || e.activityName || e.sport);
+        const fld = norm(e.field);
+        if (!act && !fld) continue;
+        if (act === 'free' || act === 'free play') continue;
+        if (!((fld && invalid.fields.has(fld)) || (act && invalid.specials.has(act)))) continue;
+        const s = slots[i] || {};
+        const startMin = toMin((s.startMin != null) ? s.startMin : s.start);
+        const endMin = toMin((s.endMin != null) ? s.endMin : s.end);
+        if (startMin == null) continue;
+        selections.push({ bunk, startMin, endMin });
+      }
+    });
+  });
+  return selections;
+}
+
+// Divisions this account may generate for — mirrors runOptimizer's MS-1 role
+// clamp so a scheduler's rainy toggle never re-rolls another scheduler's tiles.
+function _rainyScopedDivisions() {
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  try {
+    const gd = window.AccessControl?.getGeneratableDivisions?.();
+    if (Array.isArray(gd) && gd.length > 0 && gd.length < Object.keys(divisions).length) {
+      const allow = new Set(gd.map(String));
+      const scoped = {};
+      Object.entries(divisions).forEach(([dn, di]) => { if (allow.has(String(dn))) scoped[dn] = di; });
+      return scoped;
+    }
+  } catch (_e) { /* non-fatal — fall through unclamped */ }
+  return divisions;
+}
+
+// Called by the full-day toggle AFTER activate/deactivate + re-render. Offers
+// the smallest fix for an already-generated schedule: per-tile regen of the
+// weather-invalidated tiles, or a full gen when the slot structure changed.
+async function _rainyOfferScheduleFix(activated, structureChanged) {
+  try {
+    // Per-tile regen is a Manual-builder feature (matches _daPartialRegenerate);
+    // in Auto mode the activation notification already points at Generate.
+    if (window._daBuilderMode === 'auto') return;
+
+    const sa = window.scheduleAssignments || {};
+    const hasSchedule = Object.keys(sa).some(b =>
+      Array.isArray(sa[b]) && sa[b].some(e => e && (e._activity || e.field)));
+    if (!hasSchedule) return; // nothing generated yet — the next gen handles it
+
+    if (structureChanged) {
+      const ok = await daShowConfirm(
+        (activated
+          ? '🌧️ The day was switched to the rainy skeleton, so the schedule structure changed.'
+          : '☀️ The regular skeleton was restored, so the schedule structure changed.') +
+        '<br><br>Generate the schedule for the new structure now?',
+        { confirmText: 'Generate', cancelText: 'Not yet' });
+      if (ok && typeof runOptimizer === 'function') await runOptimizer();
+      return;
+    }
+
+    const invalid = _rainyBuildInvalidSets(activated ? 'rain' : 'sun');
+    if (invalid.fields.size === 0 && invalid.specials.size === 0) return;
+    const selections = _rainyScanInvalidTiles(sa, window.divisionTimes || {}, _rainyScopedDivisions(), invalid);
+    if (selections.length === 0) {
+      console.log('[RainyDay] Schedule already valid for the new weather — no tiles to re-roll');
+      return;
+    }
+    const n = selections.length;
+    const msg = activated
+      ? ('🌧️ ' + n + (n === 1 ? ' scheduled tile uses' : ' scheduled tiles use') +
+         ' outdoor fields or activities that can\'t run in the rain.<br><br>' +
+         'Re-roll just ' + (n === 1 ? 'that tile' : 'those tiles') +
+         ' indoors? Everything already indoor stays exactly as it is.')
+      : ('☀️ ' + n + (n === 1 ? ' tile holds' : ' tiles hold') +
+         ' rainy-day-only activities.<br><br>Re-roll just ' +
+         (n === 1 ? 'that tile' : 'those tiles') +
+         ' for a regular day? Everything else stays exactly as it is.');
+    await _daPartialRegenerate(selections, { confirmMessage: msg });
+  } catch (e) {
+    console.warn('[RainyDay] tile re-roll offer failed:', e);
+  }
+}
+
 function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false, skeletonSwitched = false, preservedCount = 0) {
   const existing = document.getElementById('da-rainy-notification');
   if (existing) existing.remove();
@@ -7483,13 +7644,15 @@ async function _boRegenerateSelectedCells() {
 //   • Bunk-Level Overrides grid (per-bunk cells)   → _boRegenerateSelectedCells
 //   • Main schedule grid (whole division period)   → _daRegenerateSelectedTiles
 // `selections` = [{ bunk, startMin, endMin }]. Returns true if a regen actually ran.
+// `opts.confirmMessage` replaces the default confirm text (still exactly one
+// dialog) — used by the rainy-day flow to explain WHY tiles are being re-rolled.
 //
 // Re-rolls ONLY the selected (bunk, slot) tiles, preserving every other already-
 // generated cell. Builds window.__regenSlotScope (consumed by scheduler_core_main
 // STEP 1) covering EVERY bunk of the affected divisions, so sibling bunks (no
 // selected tiles) are fully preserved and pinned — immune to STEP 0's wipe.
 // ─────────────────────────────────────────────────────────────────────────
-async function _daPartialRegenerate(selections) {
+async function _daPartialRegenerate(selections, opts = {}) {
   if (window._daBuilderMode === 'auto') {
     await daShowAlert('Partial tile regeneration is available in Manual builder mode only.');
     return false;
@@ -7586,9 +7749,10 @@ async function _daPartialRegenerate(selections) {
 
   // 3. Confirm.
   const affectedBunkCount = Object.values(regenByBunk).filter(s => s.size > 0).length;
-  let msg = 'Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
+  let msg = opts.confirmMessage ||
+            ('Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
             ' across ' + affectedBunkCount + (affectedBunkCount === 1 ? ' bunk' : ' bunks') +
-            '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.';
+            '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.');
   if (unmapped > 0) msg += '<br><br><span style="color:#b45309;">(' + unmapped + ' selected tile(s) could not be mapped and will be skipped.)</span>';
   const ok = await daShowConfirm(msg, { confirmText: 'Regenerate', cancelText: 'Cancel' });
   if (!ok) return false;
