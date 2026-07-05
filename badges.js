@@ -12,14 +12,15 @@
 //
 // Presentation: metallic medallions — conic-gradient metal ring (bronze/
 // silver/gold/platinum, rose-gold founder, violet secret) around a dark coin
-// face with a periodic shine sweep and tier glow. Earned medals also render
-// in the dashboard HERO next to the camp name (#dashHeroBadges) — the strip
-// is content-sized so it never squeezes the camp name (v3.1: the v3 strip
-// grabbed flex space and wrapped long names), 30px medals capped at the 6
-// most recent, plus a count chip that scrolls to the full collection at the
-// bottom of the page. Badge IDs are unchanged — earned cloud data carries
-// over. No SQL migrations anywhere: state lives in the existing
-// camp_state_kv table; founder status reads the existing camps.plan_status.
+// face with a periodic shine sweep and tier glow. The dashboard HERO
+// (#dashHeroBadges, next to the camp name) shows the TOP earned medal of
+// each progression track (a 500-camper camp shows 500, not 50/100/250);
+// heroFreeSpace() measures the hero's real free space and the medals wrap
+// onto extra lines within it, so the strip never squeezes the camp name.
+// The chip scrolls to the full collection at the bottom, which shows ALL
+// badges. Badge IDs are unchanged — earned cloud data carries over. No SQL
+// migrations anywhere: state lives in the existing camp_state_kv table;
+// founder status reads the existing camps.plan_status.
 //
 // Storage: camp_state_kv key 'campBadges' → { earned: { badgeId: isoDate } }
 // (direct Supabase upsert with read-merge-union so badges are never lost to a
@@ -70,7 +71,6 @@ const BADGE_DEFS = [
 ];
 
 const CATEGORY_ORDER = ["Milestones", "Years with Campistry", "Enrollment", "Special", "Secret"];
-const HERO_MAX_MEDALS = 6;   // hero strip shows the N most recent; chip carries the full count
 
 // =========================================================================
 // IDENTITY + PERSISTENCE
@@ -358,45 +358,44 @@ function renderIfPresent() {
     if (strip) renderHeroStrip(strip);
 }
 
-// How many medals fit in the hero: measured from real geometry — hero width
-// minus the clock/weather block, hero padding, and a protected zone for the
-// camp-name text — so zoom and display scaling can't miscount (the old
-// viewport-width media queries hid medals on scaled displays even when the
-// hero had visible room). Returns -1 when not even the chip fits.
-function heroMedalBudget(strip) {
+// Free horizontal space for the hero strip: measured from real geometry —
+// hero width minus the clock/weather block, hero padding, and a protected
+// zone for the camp-name text — so zoom and display scaling can't miscount.
+// Returns the free px (the strip wraps its medals within it), or -1 when
+// not even the count chip fits.
+function heroFreeSpace(strip) {
     try {
         const hero = strip.parentElement;
         const right = hero && hero.querySelector ? hero.querySelector(".dash-hero-right") : null;
-        if (!hero || !right || !hero.clientWidth) return HERO_MAX_MEDALS;
+        if (!hero || !right || !hero.clientWidth) return 9999;
         const TITLE_MIN = 260;   // room reserved for the welcome text
         const CHIP_W = 80;       // count chip + gap
-        const SLOT_W = 38;       // 30px medal + 8px gap
         const PADDING = 48;      // hero padding + strip margins
         const free = hero.clientWidth - right.getBoundingClientRect().width - PADDING - TITLE_MIN;
-        if (free < CHIP_W) return -1;
-        return Math.max(0, Math.min(HERO_MAX_MEDALS, Math.floor((free - CHIP_W) / SLOT_W)));
-    } catch (_) { return HERO_MAX_MEDALS; }
+        return free < CHIP_W ? -1 : free;
+    } catch (_) { return 9999; }
 }
 
 function renderHeroStrip(strip) {
     injectStyles();
-    const budget = heroMedalBudget(strip);
-    if (budget < 0) { strip.style.display = "none"; return; }
+    const freePx = heroFreeSpace(strip);
+    if (freePx < 0) { strip.style.display = "none"; return; }
+    strip.style.maxWidth = freePx + "px";
 
     const earned = (_state && _state.earned) || {};
-    let earnedDefs = BADGE_DEFS.filter(d => earned[d.id]);
-    const totalEarned = earnedDefs.length;
+    const totalEarned = BADGE_DEFS.filter(d => earned[d.id]).length;
 
-    // Show only the most recently earned medals that fit (definition order
-    // preserved); the chip carries the full count.
-    if (earnedDefs.length > budget) {
-        const byRecent = [...earnedDefs].sort((a, b) => String(earned[b.id]).localeCompare(String(earned[a.id])));
-        const keep = new Set(byRecent.slice(0, budget).map(d => d.id));
-        earnedDefs = earnedDefs.filter(d => keep.has(d.id));
-    }
+    // Show only the TOP earned badge of each progression track (a 500-camper
+    // camp shows the 500 medal, not 50/100/250 too) — the full collection at
+    // the bottom of the page has everything. Defs within each category are
+    // ordered ascending, so the last earned one is the highest tier.
+    const heroDefs = CATEGORY_ORDER.map(cat => {
+        const got = BADGE_DEFS.filter(d => d.cat === cat && earned[d.id]);
+        return got.length ? got[got.length - 1] : null;
+    }).filter(Boolean);
 
     strip.innerHTML = "";
-    earnedDefs.forEach(def => {
+    heroDefs.forEach(def => {
         const medal = buildMedal(def);
         medal.setAttribute("title", def.name + " — " + (def.desc || ""));
         strip.appendChild(medal);
@@ -513,15 +512,15 @@ function injectStyles() {
     100% { left: 140%; }
 }
 
-/* Hero strip — sits between the camp name and the clock/weather widgets.
-   Content-sized and non-shrinking: heroMedalBudget() measures the hero's
-   real free space and renders only as many medals as fit, so the strip
-   never squeezes the camp name regardless of zoom or display scaling.
-   Phones (<760px) hide the strip entirely. */
+/* Hero strip — sits between the camp name and the clock/weather widgets,
+   showing the TOP earned medal per track. heroFreeSpace() measures the
+   hero's real free space and sets max-width; medals wrap onto extra lines
+   within it, so the strip never squeezes the camp name regardless of zoom
+   or display scaling. Phones (<760px) hide the strip entirely. */
 .dash-hero-badges {
     position: relative; z-index: 1;
-    display: flex; flex-wrap: nowrap; align-items: center;
-    gap: 8px; flex: 0 0 auto; margin: 0 16px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 8px; row-gap: 6px; flex: 0 0 auto; margin: 0 16px;
 }
 .dash-hero-badges .cbadge-medal { width: 30px; height: 30px; padding: 2px; }
 .dash-hero-badges .cbadge-medal-text { font-size: .54rem; }
