@@ -434,49 +434,68 @@
     window.__showOverridePlayerWarning = function () { renderOP(); };
 
     // =====================================================================
-    // ★ LEAGUE BYE / SKIPPED-PERIOD WARNING  (orange — "not enough fields")
+    // ★ LEAGUE BYE / SKIPPED-PERIOD WARNING  (amber — "not enough fields")
     // ---------------------------------------------------------------------
     // When a league period needs more simultaneous games than there are open
     // fields, a matchup is dropped to a BYE — and when NO field is open at
     // all, the entire league period is skipped and the bunks get regular
     // activities (or Free) instead. Both used to land silently (console
-    // only). scheduler_core_leagues.js now dispatches
+    // only). scheduler_core_leagues.js dispatches
     // 'campistry-league-bye-warnings' after every league run with the reason
-    // per event; this renders it auto-expanded. An empty dispatch (clean
-    // gen) clears the panel. Anchored top-LEFT so it never overlaps the
-    // Free (top-center) or access (top-right) panels.
+    // per event; an empty dispatch (clean gen) clears it.
+    //
+    // A bye is informational, not an error — so this is DELIBERATELY quiet:
+    // it surfaces as a small collapsed CHIP (bottom-left, out of the way),
+    // and only OPENS into the detail card when the user clicks it. Mirrors
+    // the coverage heads-up chip, not the red Free banner.
     // =====================================================================
     var LB_WRAP_ID = 'campistry-league-bye-warn';
     var LB_STYLE_ID = 'campistry-league-bye-warn-style';
     var _lb = [];
-    var _lbOpen = true;
+    var _lbOpen = false;   // false = chip (collapsed) · true = detail card
 
     function injectLBStyle() {
         if (document.getElementById(LB_STYLE_ID)) return;
         var css = '' +
-        '#' + LB_WRAP_ID + '{position:fixed;top:12px;left:12px;z-index:99999;' +
-            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;width:460px;max-width:92vw;}' +
+        '#' + LB_WRAP_ID + '{position:fixed;left:16px;bottom:16px;z-index:99998;' +
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}' +
         '#' + LB_WRAP_ID + ' *{box-sizing:border-box;}' +
-        '#' + LB_WRAP_ID + ' .lb-panel{background:#fff;border:2px solid #ea580c;border-radius:12px;' +
-            'box-shadow:0 12px 34px rgba(234,88,12,.26);overflow:hidden;}' +
+        // collapsed chip — soft amber pill, matches the coverage heads-up chip
+        '#' + LB_WRAP_ID + ' .lb-chip{display:inline-flex;align-items:center;gap:8px;cursor:pointer;' +
+            'background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:9999px;' +
+            'padding:8px 14px;font-size:13px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.10);' +
+            'user-select:none;transition:background .12s;}' +
+        '#' + LB_WRAP_ID + ' .lb-chip:hover{background:#fef3c7;}' +
+        '#' + LB_WRAP_ID + ' .lb-chip .lb-caret{opacity:.6;font-size:11px;}' +
+        // expanded detail card — soft, no alarm border
+        '#' + LB_WRAP_ID + ' .lb-panel{background:#fff;border:1px solid #e5e7eb;border-radius:12px;' +
+            'box-shadow:0 10px 30px rgba(0,0,0,.16);overflow:hidden;width:440px;max-width:90vw;}' +
         '#' + LB_WRAP_ID + ' .lb-head{display:flex;align-items:center;gap:8px;padding:10px 12px;' +
-            'background:#ffedd5;border-bottom:1px solid #fed7aa;color:#9a3412;cursor:pointer;}' +
-        '#' + LB_WRAP_ID + ' .lb-head .lb-title{font-size:13px;font-weight:800;flex:1;}' +
+            'background:#fffbeb;border-bottom:1px solid #fde68a;color:#92400e;cursor:pointer;}' +
+        '#' + LB_WRAP_ID + ' .lb-head .lb-title{font-size:13px;font-weight:700;flex:1;}' +
         '#' + LB_WRAP_ID + ' .lb-head button{border:none;background:transparent;cursor:pointer;' +
-            'color:#9a3412;font-size:18px;line-height:1;padding:0 6px;border-radius:6px;}' +
-        '#' + LB_WRAP_ID + ' .lb-head button:hover{background:#fed7aa;}' +
-        '#' + LB_WRAP_ID + ' .lb-body{max-height:300px;overflow:auto;padding:6px 0;}' +
-        '#' + LB_WRAP_ID + ' .lb-row{padding:6px 12px;border-bottom:1px solid #f3f4f6;font-size:12.5px;color:#374151;}' +
+            'color:#92400e;font-size:18px;line-height:1;padding:0 6px;border-radius:6px;}' +
+        '#' + LB_WRAP_ID + ' .lb-head button:hover{background:#fde68a;}' +
+        '#' + LB_WRAP_ID + ' .lb-body{max-height:300px;overflow:auto;padding:4px 0 2px;}' +
+        '#' + LB_WRAP_ID + ' .lb-row{padding:7px 12px;border-bottom:1px solid #f3f4f6;font-size:12.5px;color:#374151;}' +
         '#' + LB_WRAP_ID + ' .lb-row:last-child{border-bottom:none;}' +
         '#' + LB_WRAP_ID + ' .lb-where{font-weight:700;color:#111827;}' +
-        '#' + LB_WRAP_ID + ' .lb-what{color:#c2410c;font-weight:700;font-size:12px;margin-top:1px;}' +
-        '#' + LB_WRAP_ID + ' .lb-why{color:#6b7280;font-size:11.5px;margin-top:1px;}' +
-        '#' + LB_WRAP_ID + ' .lb-foot{padding:7px 12px;background:#fff7ed;border-top:1px solid #fed7aa;' +
-            'font-size:11px;color:#9a3412;}';
+        '#' + LB_WRAP_ID + ' .lb-what{color:#b45309;font-weight:600;font-size:12px;margin-top:1px;}' +
+        '#' + LB_WRAP_ID + ' .lb-why{color:#6b7280;font-size:11.5px;margin-top:1px;line-height:1.4;}' +
+        '#' + LB_WRAP_ID + ' .lb-foot{padding:8px 12px;border-top:1px solid #f3f4f6;font-size:11px;color:#9ca3af;}';
         var st = document.createElement('style');
         st.id = LB_STYLE_ID;
         st.textContent = css;
         (document.head || document.documentElement).appendChild(st);
+    }
+
+    function lbChipLabel() {
+        var nBye = 0, nSkip = 0;
+        _lb.forEach(function (w) { if (w.kind === 'skipped') nSkip++; else nBye++; });
+        var parts = [];
+        if (nBye) parts.push(nBye + ' bye' + (nBye === 1 ? '' : 's'));
+        if (nSkip) parts.push(nSkip + ' skipped');
+        return 'League ' + parts.join(' + ');
     }
 
     function renderLB() {
@@ -485,45 +504,51 @@
         if (!document.body) { document.addEventListener('DOMContentLoaded', renderLB, { once: true }); return; }
         injectLBStyle();
         if (!wrap) { wrap = document.createElement('div'); wrap.id = LB_WRAP_ID; document.body.appendChild(wrap); }
-        var nBye = 0, nSkip = 0;
-        _lb.forEach(function (w) { if (w.kind === 'skipped') nSkip++; else nBye++; });
-        var parts = [];
-        if (nBye) parts.push(nBye + ' bye' + (nBye === 1 ? '' : 's'));
-        if (nSkip) parts.push(nSkip + ' skipped period' + (nSkip === 1 ? '' : 's'));
-        var title = '🏳️ Leagues: ' + parts.join(' + ') + ' — not enough fields';
-        var head =
-            '<div class="lb-head" title="' + (_lbOpen ? 'Collapse' : 'Expand') + '">' +
-                '<span>🏳️</span><span class="lb-title">' + esc(title) + '</span>' +
-                '<button class="lb-min" title="' + (_lbOpen ? 'Collapse' : 'Expand') + '">' + (_lbOpen ? '–' : '+') + '</button>' +
-                '<button class="lb-close" title="Dismiss">×</button>' +
-            '</div>';
-        var bodyHtml = '';
-        if (_lbOpen) {
-            var rows = '';
-            _lb.forEach(function (w) {
-                var t = Number(w.time);
-                var timeStr = isNaN(t) ? (w.time != null ? String(w.time) : '') : fmtTime(t);
-                var where = (w.league || '?') + (w.game != null ? '  ·  Game ' + w.game : '') + (timeStr ? '  ·  ' + timeStr : '');
-                var what = (w.kind === 'skipped')
-                    ? 'League period skipped — no games ran'
-                    : ((w.team1 || '?') + ' vs ' + (w.team2 || '?') + ' — bye');
-                rows += '<div class="lb-row"><div class="lb-where">' + esc(where) + '</div>' +
-                        '<div class="lb-what">' + esc(what) + '</div>' +
-                        '<div class="lb-why">' + esc(w.reason || 'not enough fields') + '</div></div>';
+
+        if (!_lbOpen) {
+            // Collapsed: a quiet chip. Click to open the detail card.
+            wrap.innerHTML = '<div class="lb-chip" role="button" tabindex="0" ' +
+                'title="Some league games got a bye — click for details">' +
+                '<span>🏳️</span><span>' + esc(lbChipLabel()) + '</span><span class="lb-caret">▲</span></div>';
+            var chip = wrap.querySelector('.lb-chip');
+            chip.addEventListener('click', function () { _lbOpen = true; renderLB(); });
+            chip.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); _lbOpen = true; renderLB(); }
             });
-            bodyHtml = '<div class="lb-body">' + rows + '</div>' +
-                '<div class="lb-foot">A bye means a matchup had no open field at its time. Free a field at that time (reservations, other leagues, pinned activities) or add fields for the league\'s sports, then re-generate.</div>';
+            return;
         }
-        wrap.innerHTML = '<div class="lb-panel">' + head + bodyHtml + '</div>';
-        wrap.querySelector('.lb-min').addEventListener('click', function (ev) { ev.stopPropagation(); _lbOpen = !_lbOpen; renderLB(); });
-        wrap.querySelector('.lb-close').addEventListener('click', function (ev) { ev.stopPropagation(); _lb = []; renderLB(); });
-        wrap.querySelector('.lb-head').addEventListener('click', function () { _lbOpen = !_lbOpen; renderLB(); });
+
+        var rows = '';
+        _lb.forEach(function (w) {
+            var t = Number(w.time);
+            var timeStr = isNaN(t) ? (w.time != null ? String(w.time) : '') : fmtTime(t);
+            var where = (w.league || '?') + (w.game != null ? '  ·  Game ' + w.game : '') + (timeStr ? '  ·  ' + timeStr : '');
+            var what = (w.kind === 'skipped')
+                ? 'League period skipped — no games ran'
+                : ((w.team1 || '?') + ' vs ' + (w.team2 || '?') + ' — bye');
+            rows += '<div class="lb-row"><div class="lb-where">' + esc(where) + '</div>' +
+                    '<div class="lb-what">' + esc(what) + '</div>' +
+                    '<div class="lb-why">' + esc(w.reason || 'not enough fields') + '</div></div>';
+        });
+        wrap.innerHTML =
+            '<div class="lb-panel">' +
+                '<div class="lb-head">' +
+                    '<span>🏳️</span>' +
+                    '<span class="lb-title">' + esc(lbChipLabel()) + ' — not enough fields</span>' +
+                    '<button class="lb-min" title="Hide" aria-label="Hide">–</button>' +
+                    '<button class="lb-close" title="Dismiss" aria-label="Dismiss">×</button>' +
+                '</div>' +
+                '<div class="lb-body">' + rows + '</div>' +
+                '<div class="lb-foot">A bye means a matchup had no open field at its time — free a field then (reservations, other leagues, pins) or add fields for the sport, and re-generate.</div>' +
+            '</div>';
+        wrap.querySelector('.lb-min').addEventListener('click', function (ev) { ev.stopPropagation(); _lbOpen = false; renderLB(); });
+        wrap.querySelector('.lb-close').addEventListener('click', function (ev) { ev.stopPropagation(); _lb = []; _lbOpen = false; renderLB(); });
     }
 
     function onLeagueByes(e) {
         var d = (e && e.detail) || {};
         _lb = Array.isArray(d.items) ? d.items.slice() : [];
-        _lbOpen = true;   // always surface expanded — never silent
+        _lbOpen = false;   // surface as a quiet chip first; user clicks to expand
         renderLB();
     }
 
