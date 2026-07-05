@@ -62,6 +62,7 @@ const BADGE_DEFS = [
     { id: "campers_100",    medal: "100", tier: "silver",   name: "100 Campers", cat: "Enrollment", desc: "100+ campers enrolled", check: s => s.campers >= 100 },
     { id: "campers_250",    medal: "250", tier: "gold",     name: "250 Campers", cat: "Enrollment", desc: "250+ campers enrolled", check: s => s.campers >= 250 },
     { id: "campers_500",    medal: "500", tier: "platinum", name: "500 Campers", cat: "Enrollment", desc: "500+ campers enrolled", check: s => s.campers >= 500 },
+    { id: "campers_1000",   medal: "1K",  tier: "diamond",  name: "1,000 Campers", cat: "Enrollment", desc: "1,000+ campers enrolled", check: s => s.campers >= 1000 },
     // Special — founding camps (camps.plan_status === 'founding_member')
     { id: "founding_member",medal: "✦",  tier: "rose",     name: "Founding Member", cat: "Special", desc: "One of Campistry's founding camps", check: s => s.foundingMember === true },
     // Secret — event-awarded only (no check)
@@ -472,6 +473,8 @@ function injectStyles() {
 .cbadge-tier-accent   .cbadge-medal-text { color: #c3b0fd; }
 .cbadge-tier-rose     { background: conic-gradient(from 210deg, #8f4a3e, #f2b09b, #7a3a30, #ffd3c0, #8f4a3e); box-shadow: 0 2px 14px rgba(235,145,115,.55); }
 .cbadge-tier-rose     .cbadge-medal-text { color: #f4b8a4; }
+.cbadge-tier-diamond  { background: conic-gradient(from 210deg, #4d99ad, #e8fbff, #3a7a8c, #ffffff, #4d99ad); box-shadow: 0 2px 18px rgba(130,225,250,.65), 0 0 0 1.5px rgba(220,248,255,.55); }
+.cbadge-tier-diamond  .cbadge-medal-text { color: #c9f2fc; }
 .cbadge-medal::after {
     content: ""; position: absolute; top: -60%; left: -80%;
     width: 55%; height: 220%; transform: rotate(25deg);
