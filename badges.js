@@ -72,6 +72,18 @@ const BADGE_DEFS = [
 
 const CATEGORY_ORDER = ["Milestones", "Years with Campistry", "Enrollment", "Special", "Secret"];
 
+// Campistry's founding camps — recognized regardless of camps.plan_status
+// (which also grants founding status when set to 'founding_member').
+// Founding camps earn the rose-gold badge AND the "Founding Member"
+// wordmark under the camp name on the dashboard.
+const FOUNDING_CAMPS = [
+    "f4d7979e-83d0-463c-8e2d-ae9ad8a7421f",
+    "740109c2-ab01-4a43-9e20-c7f77e20a376",
+    "8512cffe-2f8d-47d4-afd2-a483d7ad0591",
+    "a2d3525a-25a1-41dd-b694-adc37301a12a",
+    "9f682352-fa18-439f-8a97-c70089fa4795",
+];
+
 // =========================================================================
 // IDENTITY + PERSISTENCE
 // =========================================================================
@@ -214,6 +226,7 @@ async function collectStats(campId) {
             stats.foundingMember = String(row.plan_status) === "founding_member";
         }
     } catch (_) {}
+    if (FOUNDING_CAMPS.indexOf(String(campId)) !== -1) stats.foundingMember = true;
 
     return stats;
 }
@@ -356,6 +369,27 @@ function renderIfPresent() {
     if (grid) renderCollection(grid);
     const strip = document.getElementById("dashHeroBadges");
     if (strip) renderHeroStrip(strip);
+    renderFoundingMark();
+}
+
+// "✦ FOUNDING MEMBER ✦" wordmark under the camp name in the dashboard hero —
+// rose-gold letterspaced small caps with a slow shimmer, flanked by thin
+// fading rules. Rendered once for camps holding the founding_member badge.
+function renderFoundingMark() {
+    if (!isEarned("founding_member")) return;
+    if (document.getElementById("campFoundingMark")) return;
+    const title = document.querySelector(".dash-hero-left .welcome-title");
+    if (!title || !title.insertAdjacentElement) return;
+    injectStyles();
+    const mark = document.createElement("div");
+    mark.id = "campFoundingMark";
+    mark.className = "cbadge-founding-mark";
+    mark.setAttribute("title", "One of Campistry's founding camps");
+    const text = document.createElement("span");
+    text.className = "cbadge-fm-text";
+    text.textContent = "✦ Founding Member ✦";
+    mark.appendChild(text);
+    title.insertAdjacentElement("afterend", mark);
 }
 
 // Free horizontal space for the hero strip: measured from real geometry —
@@ -556,6 +590,28 @@ function injectStyles() {
     0% { opacity: 0; transform: translateX(48px); }
     100% { opacity: 1; transform: translateX(0); }
 }
+
+/* Founding Member wordmark — under the camp name in the hero */
+.cbadge-founding-mark {
+    display: inline-flex; align-items: center; gap: 12px;
+    margin-top: 10px;
+}
+.cbadge-founding-mark::before,
+.cbadge-founding-mark::after { content: ""; height: 1px; width: 36px; }
+.cbadge-founding-mark::before { background: linear-gradient(90deg, transparent, rgba(244,196,170,.85)); }
+.cbadge-founding-mark::after  { background: linear-gradient(90deg, rgba(244,196,170,.85), transparent); }
+.cbadge-fm-text {
+    font-size: .66rem; font-weight: 700;
+    letter-spacing: .3em; text-transform: uppercase; white-space: nowrap;
+    background: linear-gradient(90deg, #e9b18e 0%, #ffe9d8 45%, #e9b18e 90%);
+    background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: cbadgeFmShimmer 5.5s linear infinite;
+}
+@keyframes cbadgeFmShimmer { to { background-position: 200% center; } }
+@media (prefers-reduced-motion: reduce) { .cbadge-fm-text { animation: none; } }
+@media (max-width: 760px) { .cbadge-founding-mark::before, .cbadge-founding-mark::after { width: 20px; } }
 
 .cbadge-cat {
     margin: 16px 0 8px; font-size: .68rem; font-weight: 700;
