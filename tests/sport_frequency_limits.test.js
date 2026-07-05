@@ -82,4 +82,24 @@ describe('per-sport frequency limits', () => {
         assert.ok(props['soccer'], 'lowercase key present');
         assert.equal(props['soccer'].frequencyDays, 4);
     });
+
+    it('a PER-GRADE-ONLY cap (no base max) still builds an entry carrying maxUsagePerGrade', () => {
+        const win = boot({ Soccer: { maxUsagePerGrade: { D: 1 } } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        assert.ok(props['Soccer'], 'per-grade-only limit still creates an entry');
+        assert.equal(props['Soccer'].maxUsage, 0, 'no base max');
+        assert.deepEqual(props['Soccer'].maxUsagePerGrade, { D: 1 });
+    });
+
+    it('ENFORCEMENT: a per-grade override caps that grade and leaves others uncapped', () => {
+        const win = boot({ Soccer: { maxUsagePerGrade: { D: 1 } } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        win.RotationEngine.getActivityCount = () => 1; // every bunk has done Soccer once
+        win.RotationEngine.clearHistoryCache();
+        // grade D: override = 1, count 1 → at cap → blocked
+        assert.equal(win.RotationEngine.calculateLimitScore('a', 'Soccer', props, 'D'), Infinity, 'grade D capped by override');
+        // grade E: no override, no base max → not capped
+        win.RotationEngine.clearHistoryCache();
+        assert.notEqual(win.RotationEngine.calculateLimitScore('a', 'Soccer', props, 'E'), Infinity, 'grade E uncapped');
+    });
 });

@@ -2098,14 +2098,31 @@ function setSportLimitGlobal(sport, patch) {
     window.saveGlobalSettings?.("app1", app1);
     window.forceSyncToCloud?.();
 }
+function getSportMaxPerGrade(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    const pg = (m.maxUsagePerGrade && typeof m.maxUsagePerGrade === 'object') ? m.maxUsagePerGrade : {};
+    return pg;
+}
+function _sportPerGradeCount(sport) {
+    const pg = getSportMaxPerGrade(sport);
+    return Object.keys(pg).filter(k => (parseInt(pg[k]) || 0) > 0).length;
+}
+function sportHasAnyLimit(sport) {
+    const l = getSportLimit(sport);
+    return l.maxUsage > 0 || l.frequencyDays > 0 || _sportPerGradeCount(sport) > 0;
+}
 function summaryFieldLimits(f) {
     const sports = (f.activities || []).filter(Boolean);
     if (!sports.length) return "No sports selected";
-    const set = sports.map(s => ({ s, ...getSportLimit(s) })).filter(x => x.maxUsage > 0 || x.frequencyDays > 0);
+    const set = sports.filter(sportHasAnyLimit);
     if (!set.length) return "No limits (normal rotation)";
-    const parts = set.slice(0, 2).map(x => x.maxUsage > 0
-        ? `${x.s} max ${x.maxUsage} ${x.maxUsagePeriod}`
-        : `${x.s} ${x.frequencyDays}d gap`);
+    const parts = set.slice(0, 2).map(s => {
+        const l = getSportLimit(s);
+        const pgN = _sportPerGradeCount(s);
+        if (l.maxUsage > 0) return `${s} max ${l.maxUsage} ${l.maxUsagePeriod}` + (pgN ? ` (+${pgN} grade)` : '');
+        if (l.frequencyDays > 0) return `${s} ${l.frequencyDays}d gap`;
+        return `${s} per-grade max`;
+    });
     const extra = set.length - parts.length;
     return parts.join(', ') + (extra > 0 ? ` +${extra}` : '');
 }
@@ -2180,6 +2197,64 @@ function renderFieldLimits(f) {
         maxIn.onchange = commit; perSel.onchange = commit; gapIn.onchange = commit;
 
         box.appendChild(row);
+
+        // ── Per-grade max override (mirrors the specials "Different max per grade").
+        //    Writes sportMetaData[sport].maxUsagePerGrade[grade]; calculateLimitScore
+        //    already prefers a >0 per-grade value over the sport's base max.
+        const pgWrap = document.createElement("div");
+        pgWrap.style.cssText = "flex:1 1 100%; margin:0 0 12px 4px;";
+        const pgMap = { ...getSportMaxPerGrade(sport) };
+        const hasPg = Object.keys(pgMap).some(k => (parseInt(pgMap[k]) || 0) > 0);
+
+        const pgTog = document.createElement("label");
+        pgTog.style.cssText = "display:inline-flex; align-items:center; gap:8px; cursor:pointer;";
+        const pgCb = document.createElement("input"); pgCb.type = "checkbox"; pgCb.checked = hasPg;
+        const pgLbl = document.createElement("span"); pgLbl.style.cssText = lblStyle; pgLbl.textContent = "Different max per grade";
+        pgTog.appendChild(pgCb); pgTog.appendChild(pgLbl);
+        pgWrap.appendChild(pgTog);
+
+        const pgGrid = document.createElement("div");
+        pgGrid.style.cssText = "flex-direction:column; gap:5px; margin-top:6px;";
+        pgGrid.style.display = hasPg ? "flex" : "none";
+
+        const persistPg = () => {
+            Object.keys(pgMap).forEach(k => { if (!((parseInt(pgMap[k]) || 0) > 0)) delete pgMap[k]; });
+            setSportLimitGlobal(sport, { maxUsagePerGrade: { ...pgMap } });
+            updateSummary();
+        };
+
+        const grades = (typeof _getOrderedGrades === 'function') ? (_getOrderedGrades() || []) : [];
+        grades.forEach(div => {
+            const gr = document.createElement("div");
+            gr.style.cssText = "display:flex; align-items:center; gap:8px;";
+            const gLbl = document.createElement("span");
+            gLbl.style.cssText = "font-size:0.82rem; color:#374151; flex:1;";
+            gLbl.textContent = div;
+            const gIn = document.createElement("input");
+            gIn.type = "number"; gIn.min = "1";
+            gIn.placeholder = getSportLimit(sport).maxUsage > 0 ? String(getSportLimit(sport).maxUsage) : "∞";
+            if ((parseInt(pgMap[div]) || 0) > 0) gIn.value = pgMap[div];
+            gIn.style.cssText = "width:56px; padding:4px 6px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+            gIn.title = "Max " + sport + " per period for " + div + " (overrides the sport's max)";
+            gIn.onchange = () => {
+                const v = parseInt(gIn.value, 10);
+                if (Number.isFinite(v) && v > 0) pgMap[div] = v; else { delete pgMap[div]; gIn.value = ""; }
+                persistPg();
+            };
+            gr.appendChild(gLbl); gr.appendChild(gIn);
+            pgGrid.appendChild(gr);
+        });
+        pgWrap.appendChild(pgGrid);
+
+        pgCb.onchange = () => {
+            pgGrid.style.display = pgCb.checked ? "flex" : "none";
+            if (!pgCb.checked) {
+                Object.keys(pgMap).forEach(k => delete pgMap[k]);
+                pgGrid.querySelectorAll("input").forEach(i => { i.value = ""; });
+                persistPg();
+            }
+        };
+        box.appendChild(pgWrap);
     });
 
     return box;

@@ -416,10 +416,13 @@
             }));
             _seenSports.forEach(sp => {
                 const m = _sportMeta[sp] || {};
+                const _pgObj = (m.maxUsagePerGrade && typeof m.maxUsagePerGrade === 'object') ? m.maxUsagePerGrade : null;
+                const _hasPerGrade = _pgObj && Object.keys(_pgObj).some(k => (parseInt(_pgObj[k]) || 0) > 0);
                 const hasLimit = (parseInt(m.maxUsage) || 0) > 0
                     || (parseInt(m.frequencyDays) || 0) > 0
                     || (parseInt(m.exactFrequency) || 0) > 0
-                    || (parseInt(m.minFrequency) || 0) > 0;
+                    || (parseInt(m.minFrequency) || 0) > 0
+                    || _hasPerGrade;                                      // per-grade-only cap still counts
                 if (!hasLimit) return;                                    // no limit → leave sport as-is
                 if (props[sp] && props[sp].type !== 'sport') return;      // never clobber a special/field of the same name
                 const sportEntry = {
