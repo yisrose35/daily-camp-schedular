@@ -217,6 +217,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             Photos
         </button>
+        <button class="lk-nav-item" data-page="lists" onclick="nav('lists')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+            Lists
+        </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Financial</div>
         <button class="lk-nav-item" data-page="tips" onclick="nav('tips')">
@@ -651,6 +655,63 @@
     </div>
 </div>
 
+<!-- LISTS (packing lists / checklists for parents) -->
+<div class="lk-page" id="page-lists">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+        </div>
+        <div>
+            <h1>Lists</h1>
+            <p>Packing lists and checklists parents can check off in the portal</p>
+        </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+        <button class="btn btn-primary btn-sm" onclick="openListEditor()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New List
+        </button>
+    </div>
+    <div id="adminListsWrap"></div>
+</div>
+
+<!-- List editor modal -->
+<div id="listEditorBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeListEditor()"></div>
+<div id="listEditorModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.18);z-index:951;width:480px;max-width:calc(100vw - 32px);max-height:88vh;overflow-y:auto;padding:28px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+        <h2 id="listEditorTitle" style="font-size:1rem;font-weight:700;margin:0;">New List</h2>
+        <button onclick="closeListEditor()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem;">✕</button>
+    </div>
+    <div class="lk-field">
+        <label>List name</label>
+        <input type="text" class="lk-input" id="listEdName" placeholder='e.g. "Overnight Trip Packing List"'>
+    </div>
+    <div class="lk-field" style="margin-top:12px;">
+        <label>Description <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+        <input type="text" class="lk-input" id="listEdDesc" placeholder="e.g. Everything campers need for the Wednesday overnight">
+    </div>
+    <div class="lk-field" style="margin-top:12px;">
+        <label>Who is it for?</label>
+        <div style="display:flex;gap:8px;">
+            <select class="lk-select" id="listEdScope" onchange="onListScopeChange()" style="flex:1;">
+                <option value="all">Everyone</option>
+                <option value="division">A division</option>
+                <option value="grade">A grade</option>
+                <option value="bunk">A bunk</option>
+            </select>
+            <select class="lk-select" id="listEdScopeVal" style="flex:1;display:none;"></select>
+        </div>
+    </div>
+    <div class="lk-field" style="margin-top:12px;">
+        <label>Items <span style="font-weight:400;color:var(--text-muted);">— one per line</span></label>
+        <textarea class="lk-textarea" id="listEdItems" rows="9" placeholder="Sleeping bag&#10;Flashlight&#10;2 pairs of socks&#10;Water bottle&#10;Bug spray"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">
+        <button class="btn btn-ghost btn-sm" onclick="closeListEditor()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="saveListEditor()">Save List</button>
+    </div>
+</div>
+
 </div><!-- /.lk-main -->
 <div id="toastBox"></div>
 
@@ -783,6 +844,7 @@
 <script src="campistry_cloud_bootstrap.js"></script>
 <script src="campistry_link_data.js"></script>
 <script src="campistry_link_photos.js"></script>
+<script src="campistry_link_export.js"></script>
 <script>
 'use strict';
 
@@ -813,6 +875,7 @@ function nav(p) {
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
     if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
     if (p === 'tips') renderTipsAdmin();
+    if (p === 'lists') renderAdminLists();
 }
 
 function switchMsgTab(tab, btn) {
@@ -825,7 +888,15 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
-    if (tab === 'forms')  { _loadFormSubmissions(); switchFormsTab(_currentFormsTab || 'sent'); }
+    if (tab === 'forms')  {
+        _loadFormSubmissions();
+        switchFormsTab(_currentFormsTab || 'sent');
+        // Pull the latest parent responses from the cloud, then re-render
+        _loadCloudSubmissions(function() {
+            _loadFormSubmissions();
+            switchFormsTab(_currentFormsTab || 'sent');
+        });
+    }
 }
 
 // ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
@@ -1095,7 +1166,10 @@ function renderSentForms() {
         return;
     }
     el.innerHTML = sentForms.map(function(f) {
-        var received = docSubmissions.filter(function(d) { return (d.name || '') === f.formName; }).length;
+        var received = docSubmissions.filter(function(d) {
+            if (f.formId && d.formId) return d.formId === f.formId;
+            return (d.name || '') === f.formName;
+        }).length;
         var pct = f.recipients ? Math.min(100, Math.round(received / f.recipients * 100)) : 0;
         var scopeLabel = f.scope === 'all' ? 'Everyone' : (f.scopeValue || f.scope);
         var modeBadge = f.mode === 'digital'
@@ -1109,7 +1183,10 @@ function renderSentForms() {
                     '</div>' +
                     '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">To: ' + esc(scopeLabel) + ' &nbsp;·&nbsp; ' + esc(_fmtMsgTime(f.date)) + '</div>' +
                 '</div>' +
-                '<button class="btn btn-secondary btn-sm" onclick="viewFormResponses(\'' + esc(f.formName).replace(/'/g, '&#39;') + '\')">View Responses</button>' +
+                '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+                    '<button class="btn btn-secondary btn-sm" onclick="openResponsesSheet(\'' + esc(f.formId || '').replace(/'/g, '') + '\',\'' + esc(f.formName).replace(/'/g, '&#39;') + '\')">Responses</button>' +
+                    '<button class="btn btn-ghost btn-sm" onclick="viewFormResponses(\'' + esc(f.formName).replace(/'/g, '&#39;') + '\')" title="Browse by division / grade / bunk">Folders</button>' +
+                '</div>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
                 '<div class="progress" style="flex:1;height:7px;"><div class="progress-fill" style="width:' + pct + '%;"></div></div>' +
@@ -1753,12 +1830,27 @@ function renderReceivedTree() {
 
     var inScope = docSubmissions.filter(_recvMatchesPath);
 
+    // Export toolbar — visible once you're inside a form's folder
+    var toolbar = '';
+    if (_recvPath.length >= 1) {
+        var tbName = _recvPath[0];
+        var tbId = (inScope.find(function(d) { return d.formId; }) || {}).formId || '';
+        var tbSafeId = esc(tbId).replace(/'/g, ''), tbSafeName = esc(tbName).replace(/'/g, '&#39;');
+        toolbar = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+            '<span style="font-size:.76rem;color:var(--text-muted);">' + inScope.length + ' submission' + (inScope.length !== 1 ? 's' : '') + ' here</span>' +
+            '<div style="flex:1;"></div>' +
+            '<button class="btn btn-secondary btn-sm" onclick="openResponsesSheet(\'' + tbSafeId + '\',\'' + tbSafeName + '\')">Open as sheet</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="exportResponsesCSV(\'' + tbSafeId + '\',\'' + tbSafeName + '\')">CSV</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="exportResponsesXLSX(\'' + tbSafeId + '\',\'' + tbSafeName + '\')">Excel</button>' +
+        '</div>';
+    }
+
     // Search — flat results within the current scope
     if (q) {
         var hits = inScope.filter(function(d) {
             return ((d.camper || '') + ' ' + (d.name || '') + ' ' + (d.grade || '') + ' ' + (d.division || '') + ' ' + (d.bunk || '')).toLowerCase().indexOf(q) >= 0;
         });
-        listEl.innerHTML = '<div class="lk-card">' + (hits.length
+        listEl.innerHTML = toolbar + '<div class="lk-card">' + (hits.length
             ? hits.map(function(d) { return docRow(d); }).join('')
             : '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">No submissions match &ldquo;' + esc(q) + '&rdquo;</div>') + '</div>';
         return;
@@ -1773,7 +1865,7 @@ function renderReceivedTree() {
 
     // Leaf level — individual camper submissions in this bunk
     if (level >= 4) {
-        listEl.innerHTML = '<div class="lk-card">' + (inScope.length
+        listEl.innerHTML = toolbar + '<div class="lk-card">' + (inScope.length
             ? inScope.map(function(d) { return docRow(d); }).join('')
             : '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">Nothing here yet</div>') + '</div>';
         return;
@@ -1787,10 +1879,10 @@ function renderReceivedTree() {
     });
     _recvKeys = Object.keys(groups).sort();
     if (!_recvKeys.length) {
-        listEl.innerHTML = '<div class="lk-card"><div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">Nothing here yet</div></div>';
+        listEl.innerHTML = toolbar + '<div class="lk-card"><div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">Nothing here yet</div></div>';
         return;
     }
-    listEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;">' +
+    listEl.innerHTML = toolbar + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;">' +
         _recvKeys.map(function(k, idx) {
             var n = groups[k].length;
             return '<div class="lk-card" style="cursor:pointer;padding:14px;margin:0;" onclick="recvDrillIdx(' + idx + ')">' +
@@ -1813,7 +1905,7 @@ function docRow(d) {
     var where = [d.division, d.grade, d.bunk].filter(Boolean).join(' · ');
     var viewBtn = isDigital
         ? '<button class="btn btn-secondary btn-sm" onclick="viewFormSubmission(\'' + esc(d.id) + '\')">View</button>'
-        : '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading ' + esc(d.filename || 'file') + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>';
+        : '<button class="btn btn-secondary btn-sm" onclick="downloadUploadSubmission(\'' + esc(d.id) + '\')" title="Download ' + esc(d.filename || 'file') + '"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button>';
     return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
         '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:' + extBg + ';display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;color:' + extColor + ';flex-shrink:0;">' + ext + '</div>' +
         '<div style="flex:1;min-width:0;">' +
@@ -1822,6 +1914,250 @@ function docRow(d) {
         '</div>' +
         '<div style="display:flex;gap:5px;flex-shrink:0;">' + viewBtn + '</div>' +
     '</div>';
+}
+
+// ─── SUBMISSION DOWNLOAD + RESPONSES SHEET ────────────────────────────────────
+function _saveDataUrl(dataUrl, filename) {
+    var a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename || 'submission';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+}
+
+function downloadUploadSubmission(subId) {
+    var d = docSubmissions.find(function(x) { return x.id === subId; });
+    if (!d) return;
+    if (d.fileDataUrl) { _saveDataUrl(d.fileDataUrl, d.filename); return; }
+    if (!d._cloud) { toast('No file stored for this submission'); return; }
+    // Cloud row — file bytes are fetched lazily (they're excluded from the list query)
+    var db = _dbc();
+    if (!db) { toast('Cloud not connected'); return; }
+    toast('Fetching ' + (d.filename || 'file') + '…');
+    db.client
+        .from('link_form_responses')
+        .select('file_data, file_name')
+        .eq('id', subId)
+        .single()
+        .then(function(res) {
+            if (res.error || !res.data || !res.data.file_data) { toast('File not available'); return; }
+            d.fileDataUrl = res.data.file_data; // cache for repeat downloads
+            _saveDataUrl(res.data.file_data, res.data.file_name || d.filename);
+        });
+}
+
+/**
+ * Google-Forms-style responses sheet for one form: a table of every
+ * submission (one question per column) with CSV / Excel download.
+ */
+function _responsesTable(formId, formName) {
+    var subs = docSubmissions.filter(function(d) {
+        if (formId && d.formId) return d.formId === formId;
+        return d.name === formName; // legacy rows without a formId
+    });
+    // Column order: form definition first (if we still have it), then any extra keys seen
+    var qCols = [];
+    var lf = _loadLinkForms();
+    var def = lf.digital.find(function(f) { return f.id === formId; });
+    if (def) {
+        (def.fields || []).forEach(function(f) {
+            if (f.type === 'heading' || f.type === 'paragraph') return;
+            if (f.label && qCols.indexOf(f.label) < 0) qCols.push(f.label);
+        });
+    }
+    subs.forEach(function(d) {
+        Object.keys(d.values || {}).forEach(function(k) { if (qCols.indexOf(k) < 0) qCols.push(k); });
+    });
+    var headers = ['Submitted', 'Camper', 'Parent', 'Division', 'Grade', 'Bunk'].concat(qCols);
+    var rows = subs.map(function(d) {
+        return [d.date || '', d.camper || '', d.parentName || '', d.division || '', d.grade || '', d.bunk || '']
+            .concat(qCols.map(function(k) { return (d.values || {})[k] != null ? String(d.values[k]) : ''; }));
+    });
+    return { headers: headers, rows: rows, count: subs.length };
+}
+
+function _exportSafeName(s) { return String(s || 'form').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'form'; }
+
+function exportResponsesCSV(formId, formName) {
+    var t = _responsesTable(formId, formName);
+    if (!t.count) { toast('No responses yet'); return; }
+    window.LinkExport.downloadCSV(_exportSafeName(formName) + '_responses.csv', t.headers, t.rows);
+    toast(t.count + ' response' + (t.count !== 1 ? 's' : '') + ' exported — open in Excel or Google Sheets');
+}
+
+function exportResponsesXLSX(formId, formName) {
+    var t = _responsesTable(formId, formName);
+    if (!t.count) { toast('No responses yet'); return; }
+    window.LinkExport.downloadXLSX(_exportSafeName(formName) + '_responses.xlsx', 'Responses', t.headers, t.rows);
+    toast(t.count + ' response' + (t.count !== 1 ? 's' : '') + ' exported to Excel');
+}
+
+function openResponsesSheet(formId, formName) {
+    var t = _responsesTable(formId, formName);
+    var dlSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+    var fid = (formId || '').replace(/'/g, ''), fname = String(formName || '').replace(/'/g, '');
+    var tableHtml;
+    if (!t.count) {
+        tableHtml = '<div style="padding:36px 20px;text-align:center;color:var(--text-muted);font-size:.85rem;">No responses yet — they appear here the moment a parent submits.</div>';
+    } else {
+        tableHtml = '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;font-size:.78rem;">' +
+            '<thead><tr>' + t.headers.map(function(h) {
+                return '<th style="text-align:left;padding:8px 10px;background:var(--slate-50);border-bottom:2px solid var(--border-light);font-weight:700;color:var(--slate-700);white-space:nowrap;position:sticky;top:0;">' + esc(h) + '</th>';
+            }).join('') + '</tr></thead><tbody>' +
+            t.rows.map(function(r) {
+                return '<tr>' + r.map(function(c) {
+                    return '<td style="padding:7px 10px;border-bottom:1px solid var(--slate-100);color:var(--slate-800);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(c) + '">' + esc(c) + '</td>';
+                }).join('') + '</tr>';
+            }).join('') + '</tbody></table></div>';
+    }
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
+    el.innerHTML = '<div style="background:#fff;border-radius:var(--radius-lg);max-width:960px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.2);">' +
+        '<div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border-light);flex-wrap:wrap;">' +
+            '<div style="flex:1;min-width:200px;">' +
+                '<div style="font-size:.95rem;font-weight:700;">' + esc(formName) + ' — Responses</div>' +
+                '<div style="font-size:.73rem;color:var(--text-muted);">' + t.count + ' response' + (t.count !== 1 ? 's' : '') + ', one row per camper</div>' +
+            '</div>' +
+            '<button class="btn btn-secondary btn-sm" onclick="exportResponsesCSV(\'' + esc(fid) + '\',\'' + esc(fname) + '\')">' + dlSvg + ' CSV — Google Sheets</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="exportResponsesXLSX(\'' + esc(fid) + '\',\'' + esc(fname) + '\')">' + dlSvg + ' Excel (.xlsx)</button>' +
+            '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">✕</button>' +
+        '</div>' +
+        '<div style="overflow-y:auto;padding:0 4px;">' + tableHtml + '</div>' +
+    '</div>';
+    el.addEventListener('click', function(e) { if (e.target === el) el.remove(); });
+    document.body.appendChild(el);
+}
+
+// ─── LISTS — packing lists / checklists for the parent portal ────────────────
+// Stored in camp_state_kv under 'link_lists'; parents read them through the
+// get_link_camp_lists RPC (migration 014) and check items off per child.
+var _editingListId = null;
+
+function _loadLinkListsStore() {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    return Array.isArray(s.link_lists) ? s.link_lists : [];
+}
+function _saveLinkListsStore(arr) {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    s.link_lists = arr;
+    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(s));
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
+        window.saveGlobalSettings('link_lists', arr);
+    }
+}
+
+function renderAdminLists() {
+    var el = document.getElementById('adminListsWrap'); if (!el) return;
+    var lists = _loadLinkListsStore();
+    if (!lists.length) {
+        el.innerHTML = '<div class="lk-card"><div class="lk-empty" style="padding:36px 20px;">' +
+            '<div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div>' +
+            '<h3>No lists yet</h3><p>Create a packing list or checklist — parents check items off per child in the portal.</p></div></div>';
+        return;
+    }
+    el.innerHTML = lists.map(function(l) {
+        var n = (l.items || []).length;
+        var scopeLabel = (!l.scope || l.scope === 'all') ? 'Everyone' : (l.scopeValue || l.scope);
+        var preview = (l.items || []).slice(0, 4).map(function(it) {
+            return '<span style="font-size:.73rem;color:var(--slate-600);background:var(--slate-50);border:1px solid var(--slate-100);border-radius:6px;padding:2px 8px;">' + esc(typeof it === 'string' ? it : it.text) + '</span>';
+        }).join(' ') + (n > 4 ? ' <span style="font-size:.73rem;color:var(--text-muted);">+' + (n - 4) + ' more</span>' : '');
+        return '<div class="lk-card" style="padding:14px 16px;margin-bottom:10px;">' +
+            '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+                '<div style="flex:1;min-width:180px;">' +
+                    '<div style="font-size:.9rem;font-weight:700;color:var(--slate-900);">' + esc(l.name) + '</div>' +
+                    '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">For: ' + esc(scopeLabel) + ' &nbsp;·&nbsp; ' + n + ' item' + (n !== 1 ? 's' : '') + (l.description ? ' &nbsp;·&nbsp; ' + esc(l.description) : '') + '</div>' +
+                '</div>' +
+                '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+                    '<button class="btn btn-secondary btn-sm" onclick="openListEditor(\'' + esc(l.id) + '\')">Edit</button>' +
+                    '<button class="btn btn-ghost btn-sm" onclick="deleteAdminList(\'' + esc(l.id) + '\')" style="color:var(--red-500);">Delete</button>' +
+                '</div>' +
+            '</div>' +
+            (preview ? '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:10px;">' + preview + '</div>' : '') +
+        '</div>';
+    }).join('');
+}
+
+function onListScopeChange() {
+    var scope = (document.getElementById('listEdScope') || {}).value || 'all';
+    var valEl = document.getElementById('listEdScopeVal');
+    if (!valEl) return;
+    if (scope === 'all') { valEl.style.display = 'none'; return; }
+    valEl.style.display = '';
+    var cl = CL(); var struct = cl ? cl.data.getStructure() : {};
+    var opts = ['<option value="">— Select —</option>'];
+    if (scope === 'division') {
+        Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+    } else if (scope === 'grade') {
+        var grades = {};
+        Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+        Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+    } else if (scope === 'bunk') {
+        var bunks = {};
+        Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
+        Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+    }
+    valEl.innerHTML = opts.join('');
+}
+
+function openListEditor(listId) {
+    _editingListId = listId || null;
+    var l = listId ? _loadLinkListsStore().find(function(x) { return x.id === listId; }) : null;
+    document.getElementById('listEditorTitle').textContent = l ? 'Edit List' : 'New List';
+    document.getElementById('listEdName').value = l ? (l.name || '') : '';
+    document.getElementById('listEdDesc').value = l ? (l.description || '') : '';
+    document.getElementById('listEdScope').value = (l && l.scope) || 'all';
+    onListScopeChange();
+    if (l && l.scope && l.scope !== 'all') document.getElementById('listEdScopeVal').value = l.scopeValue || '';
+    document.getElementById('listEdItems').value = l ? (l.items || []).map(function(it) { return typeof it === 'string' ? it : it.text; }).join('\n') : '';
+    document.getElementById('listEditorBackdrop').style.display = '';
+    document.getElementById('listEditorModal').style.display = '';
+    setTimeout(function() { document.getElementById('listEdName').focus(); }, 100);
+}
+function closeListEditor() {
+    document.getElementById('listEditorBackdrop').style.display = 'none';
+    document.getElementById('listEditorModal').style.display = 'none';
+}
+
+function saveListEditor() {
+    var name = document.getElementById('listEdName').value.trim();
+    if (!name) { toast('Give the list a name'); return; }
+    var items = document.getElementById('listEdItems').value.split('\n')
+        .map(function(s) { return s.trim(); }).filter(Boolean)
+        .map(function(s) { return { text: s }; });
+    if (!items.length) { toast('Add at least one item'); return; }
+    var scope = document.getElementById('listEdScope').value || 'all';
+    var scopeValue = scope === 'all' ? '' : (document.getElementById('listEdScopeVal').value || '');
+    if (scope !== 'all' && !scopeValue) { toast('Pick which ' + scope + ' this list is for'); return; }
+
+    var lists = _loadLinkListsStore();
+    if (_editingListId) {
+        var idx = lists.findIndex(function(x) { return x.id === _editingListId; });
+        if (idx >= 0) {
+            lists[idx] = Object.assign({}, lists[idx], { name: name, description: document.getElementById('listEdDesc').value.trim(), scope: scope, scopeValue: scopeValue, items: items, updated: Date.now() });
+        }
+    } else {
+        lists.unshift({
+            id: 'll_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            name: name, description: document.getElementById('listEdDesc').value.trim(),
+            scope: scope, scopeValue: scopeValue, items: items,
+            created: Date.now(), updated: Date.now()
+        });
+    }
+    _saveLinkListsStore(lists);
+    closeListEditor();
+    renderAdminLists();
+    toast('"' + name + '" saved — parents see it in their Lists tab');
+}
+
+function deleteAdminList(listId) {
+    var lists = _loadLinkListsStore();
+    var l = lists.find(function(x) { return x.id === listId; });
+    if (!l) return;
+    if (!confirm('Delete "' + l.name + '"? Parents will no longer see it.')) return;
+    _saveLinkListsStore(lists.filter(function(x) { return x.id !== listId; }));
+    renderAdminLists();
+    toast('List deleted');
 }
 
 // ─── BUILD A FORM — online form builder ──────────────────────────────────────
@@ -2023,23 +2359,74 @@ function useBuiltForm() {
 }
 
 // ─── FORM SUBMISSION VIEWER ──────────────────────────────────────────────────
+// Submissions come from two places and are merged:
+//   • link_form_responses in Supabase (parents on any device — authoritative)
+//   • localStorage FORM_SUB_KEY (same-browser demo / legacy fallback)
+var _cloudSubRows = [];
+
+function _dbc() {
+    var d = window.CampistryDB;
+    if (!d) return null;
+    var client = d.getClient ? d.getClient() : null;
+    var campId = d.getCampId ? d.getCampId() : null;
+    return (client && campId) ? { client: client, campId: campId } : null;
+}
+
+function _loadCloudSubmissions(cb) {
+    var db = _dbc();
+    if (!db) { if (cb) cb(); return; }
+    db.client
+        .from('link_form_responses')
+        .select('id, form_id, form_name, mode, camper_name, camper_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, created_at')
+        .eq('camp_id', db.campId)
+        .order('created_at', { ascending: false })
+        .limit(2000)
+        .then(function(res) {
+            if (res.error) { console.warn('[Link Admin] link_form_responses load:', res.error.message); }
+            else { _cloudSubRows = res.data || []; }
+            if (cb) cb();
+        });
+}
+
+function _fmtSubDate(iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? String(iso || '') : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function _loadFormSubmissions() {
-    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
-    docSubmissions = raw.map(function(s) {
+    var seen = {}; // formId|camper of cloud rows — cloud wins over local mirror
+    docSubmissions = _cloudSubRows.map(function(r) {
+        seen[(r.form_id || '') + '|' + (r.camper_name || '')] = 1;
         return {
-            id: s.id, name: s.formName, docType: s.docType,
+            id: r.id, name: r.form_name, formId: r.form_id, docType: r.mode,
+            camper: r.camper_name, grade: r.grade || '', division: r.division || '', bunk: r.bunk || '',
+            parentName: r.parent_name || '', parentEmail: r.parent_email || '',
+            date: _fmtSubDate(r.created_at), submittedAt: r.created_at,
+            filename: r.mode === 'digital' ? null : (r.file_name || 'upload'),
+            values: r.answers || {}, signatureDataUrl: r.signature_data || null,
+            mode: r.mode || 'upload', _cloud: true
+        };
+    });
+    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
+    raw.forEach(function(s) {
+        if (seen[(s.formId || '') + '|' + (s.camper || '')]) return;
+        docSubmissions.push({
+            id: s.id, name: s.formName, formId: s.formId || '', docType: s.docType,
             camper: s.camper, grade: s.grade, division: s.division, bunk: s.bunk,
+            parentName: s.parentName || '', parentEmail: '',
             date: s.date, submittedAt: s.submittedAt,
             filename: s.mode === 'digital' ? null : (s.filename || 'upload'),
             values: s.values || {}, signatureDataUrl: s.signatureDataUrl || null,
+            fileDataUrl: s.fileDataUrl || null,
             mode: s.mode || 'upload'
-        };
+        });
     });
+    docSubmissions.sort(function(a, b) { return new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0); });
 }
 
 function viewFormSubmission(subId) {
-    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
-    var s = raw.find(function(x){ return x.id === subId; }); if (!s) return;
+    var s = docSubmissions.find(function(x){ return x.id === subId; }); if (!s) return;
+    s = Object.assign({}, s, { formName: s.name }); // render shape below
     var vals = s.values || {};
     var rows = Object.entries(vals).map(function(kv){
         return '<div style="padding:8px 0;border-bottom:1px solid var(--slate-100);display:flex;gap:10px;">' +
@@ -2336,6 +2723,16 @@ function boot() {
     renderDash();
     renderAdminMsgs('all');
     _loadFormSubmissions();
+
+    // Pull parent form responses from the cloud once the DB client is ready
+    function _initCloudSubs() {
+        _loadCloudSubmissions(function() {
+            _loadFormSubmissions();
+            if (currentMsgTab === 'forms') { renderReceivedTree(); renderSentForms(); }
+        });
+    }
+    if (_dbc()) _initCloudSubs();
+    else window.addEventListener('campistry-db-ready', _initCloudSubs, { once: true });
 
     window.addEventListener('campistry-cloud-hydrated', function() {
         console.log('[Link Admin] Cloud hydrated — refreshing');
