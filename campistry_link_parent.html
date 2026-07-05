@@ -747,6 +747,9 @@ function nav(p){
     if(p==='tips')renderTipsPage();
     if(p==='lists')renderCampLists();
     if(p==='mail')renderCamperMail();
+    if(p==='pickup'&&window._loadMyParentRequests)window._loadMyParentRequests();
+    if(p==='canteen'&&window._loadMyCanteen)window._loadMyCanteen();
+    if(p==='health'){if(window._loadMyNurseLog)window._loadMyNurseLog();if(window._loadMyHealthDocs)window._loadMyHealthDocs();}
     window.scrollTo(0,0);
 }
 function _syncBnavMsgBadge(unread){var b=document.getElementById('bnavMsgBadge');if(b){b.textContent=unread>99?'99+':unread;b.style.display=unread?'flex':'none';}}
@@ -782,6 +785,7 @@ function addFunds(){
         a.balance=Math.round(((a.balance||0)+amt)*100)/100;
         s.transactions.unshift({time:now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),camper:c.name,items:'Funds added by parent',amount:amt,type:'credit',date:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')});
     });
+    if (window._submitCanteenOpCloud) window._submitCanteenOpCloud({ camper:c.name, op:'add_funds', amount:amt });
     _loadSnacksData(children);
     switchCanteen(c.id);
     toast('$'+amt.toFixed(2)+' added to '+c.name.split(' ')[0]+"'s canteen account");
@@ -796,6 +800,7 @@ function saveSpendingControls(){
         var a=s.accounts[c.name]||(s.accounts[c.name]={balance:0,dailyLimit:10,spentToday:0});
         a.dailyLimit=lim;a.creditLimit=credit;a.balanceFloor=floor;
     });
+    if (window._submitCanteenOpCloud) window._submitCanteenOpCloud({ camper:c.name, op:'set_controls', controls:{ dailyLimit:lim, creditLimit:credit, balanceFloor:floor } });
     _loadSnacksData(children);
     toast('Spending controls saved for '+c.name.split(' ')[0]);
 }
@@ -982,13 +987,55 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
     input.value='';
 }
 
+var _healthChildId = null;
 function switchHealth(id,btn){
     if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
     var c=children.find(function(k){return k.id===id});if(!c)return;
+    _healthChildId=id;
     var idx=children.indexOf(c);
     var camperNum='#'+String(idx+1).padStart(4,'0');
     var hcb=document.getElementById('healthCamperBadge');if(hcb)hcb.textContent=c.name+' · '+camperNum;
     var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=c.name+' · '+camperNum;
+    _renderNurseLog();
+    _renderMyHealthDocs();
+}
+
+// Nurse Visit Log — real visits from Campistry Health (get_my_nurse_log RPC)
+function _renderNurseLog(){
+    var el=document.getElementById('nurseLog');if(!el)return;
+    var c=children.find(function(k){return k.id===_healthChildId})||children[0];
+    var visits=(window._myNurseLog||[]).filter(function(v){return c&&v.camper_name===c.name;});
+    if(!visits.length){
+        el.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No nurse visits on record</h3></div>';
+        return;
+    }
+    el.innerHTML=visits.map(function(v){
+        var disp=String(v.disposition||'').toLowerCase();
+        var dot=/home|sent/.test(disp)?'sent-home':/monitor|watch|follow|attention/.test(disp)?'attention':'routine';
+        var meta=[v.nurse?('Nurse '+_pEsc(v.nurse)):'',_pEsc(v.date||''),_pEsc(v.time||'')].filter(Boolean).join(' · ');
+        return '<div class="lk-health-visit"><div class="lk-health-visit-dot '+dot+'"></div><div class="lk-health-visit-body">'+
+            '<div class="lk-health-visit-title">'+_pEsc(v.complaint||'Nurse visit')+(v.disposition?' <span class="badge badge-neutral" style="font-size:.62rem;margin-left:6px;">'+_pEsc(v.disposition)+'</span>':'')+'</div>'+
+            (v.treatment?'<div class="lk-health-visit-note">'+_pEsc(v.treatment)+'</div>':'')+
+            (meta?'<div class="lk-health-visit-meta"><span>'+meta+'</span></div>':'')+
+            '</div></div>';
+    }).join('');
+}
+
+// Health documents — cloud list with review status from the nurse
+function _renderMyHealthDocs(){
+    var list=document.getElementById('healthDocList');if(!list)return;
+    var docs=window._myHealthDocs;
+    if(docs===undefined||docs===null)return;   // cloud not loaded — leave whatever is shown
+    var docSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+    if(!docs.length){list.innerHTML='';return;}
+    var badgeFor={pending:'<span class="badge badge-warn">Pending review</span>',approved:'<span class="badge badge-ok">Approved</span>',flagged:'<span class="badge badge-err">Needs attention</span>'};
+    list.innerHTML=docs.map(function(d){
+        var when=d.created_at?new Date(d.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+        return '<div class="lk-health-doc"><div class="lk-health-doc-icon">'+docSvg+'</div>'+
+            '<div class="lk-health-doc-info"><div class="lk-health-doc-name">'+_pEsc(d.file_name)+'</div>'+
+            '<div class="lk-health-doc-meta">'+_pEsc(d.camper_name)+(when?' · '+when:'')+(d.review_note?' · “'+_pEsc(d.review_note)+'”':'')+'</div></div>'+
+            (badgeFor[d.status]||badgeFor.pending)+'</div>';
+    }).join('');
 }
 
 function handleRefPhoto(id,input){
@@ -1007,14 +1054,23 @@ var HEALTH_SUBMIT_KEY = 'campistry_health_submissions_v1';
 function handleHealthDocUpload(input){
     if(!input.files||!input.files[0])return;
     var f=input.files[0];
+    if(f.size>10*1024*1024){toast('File too large — max 10 MB');input.value='';return;}
     var list=document.getElementById('healthDocList');
     var docSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
     var activeBadge=document.getElementById('healthCamperBadge');
     var badgeText=activeBadge?activeBadge.textContent:'';
     var camperName=badgeText.split(' · ')[0].trim()||'Unknown';
-    list.insertAdjacentHTML('afterbegin','<div class="lk-health-doc"><div class="lk-health-doc-icon">'+docSvg+'</div><div class="lk-health-doc-info"><div class="lk-health-doc-name">'+f.name+'</div><div class="lk-health-doc-meta">Just uploaded · '+badgeText+'</div></div><button class="btn btn-secondary btn-sm">View</button></div>');
+    list.insertAdjacentHTML('afterbegin','<div class="lk-health-doc"><div class="lk-health-doc-icon">'+docSvg+'</div><div class="lk-health-doc-info"><div class="lk-health-doc-name">'+_pEsc(f.name)+'</div><div class="lk-health-doc-meta">Uploading · '+_pEsc(badgeText)+'</div></div><span class="badge badge-warn">Sending…</span></div>');
     input.value='';
-    // Write to shared store (read by Campistry Health)
+    // Read the file and relay it to Campistry Health (link_health_docs)
+    var reader=new FileReader();
+    reader.onload=function(){
+        if(window._submitHealthDocCloud){
+            window._submitHealthDocCloud({camper:camperName,fileName:f.name,fileData:reader.result});
+        }
+    };
+    reader.readAsDataURL(f);
+    // Legacy same-device hand-off (kept for offline/demo use)
     try {
         var hstore=JSON.parse(localStorage.getItem(HEALTH_SUBMIT_KEY)||'[]');
         hstore.unshift({
@@ -1025,7 +1081,7 @@ function handleHealthDocUpload(input){
         });
         localStorage.setItem(HEALTH_SUBMIT_KEY,JSON.stringify(hstore));
     } catch(e){}
-    toast('Document uploaded!');
+    toast('Document sent to the camp nurse!');
 }
 
 function showChild(id){
@@ -1332,17 +1388,30 @@ var _PICKUP_ICONS = {early:'<svg width="14" height="14" viewBox="0 0 24 24" fill
 
 // Rebuild today's request history from the shared store, so it survives reload
 function hydratePickupRequests(){
+    var startOfDay=new Date(); startOfDay.setHours(0,0,0,0);
+    var out=[];
+    // Cloud requests (authoritative — status updated by Campistry Live staff)
+    (window._cloudParentReqs||[]).forEach(function(r){
+        var d=new Date(r.created_at);
+        if(isNaN(d)||d.getTime()<startOfDay.getTime())return;
+        out.push({id:r.id,type:r.type,label:r.label||r.type,icon:_PICKUP_ICONS[r.type]||_PICKUP_ICONS.late,
+            time:d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(),
+            status:r.status||'Pending',_sortTs:d.getTime()});
+    });
+    // Legacy same-device submissions that never reached the cloud
     var store=[];
     try{ store=JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]'); }catch(e){}
-    var startOfDay=new Date(); startOfDay.setHours(0,0,0,0);
-    pickupRequests=store.filter(function(r){
+    store.filter(function(r){
         if(!r.submittedAt||r.submittedAt<startOfDay.getTime())return false;
+        if(r._cloudId)return false; // its cloud twin is already listed above
         return !parent.name||r.parentName===parent.name;
-    }).map(function(r){
+    }).forEach(function(r){
         var d=new Date(r.submittedAt);
-        return {id:r.id,type:r.type,label:r.label||r.type,icon:_PICKUP_ICONS[r.type]||_PICKUP_ICONS.late,
-            time:d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(),status:r.status||'Pending'};
+        out.push({id:r.id,type:r.type,label:r.label||r.type,icon:_PICKUP_ICONS[r.type]||_PICKUP_ICONS.late,
+            time:d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(),status:r.status||'Pending',_sortTs:r.submittedAt});
     });
+    out.sort(function(a,b){return (b._sortTs||0)-(a._sortTs||0);});
+    pickupRequests=out;
     renderPickupHistory();
 }
 
@@ -1405,8 +1474,16 @@ function _loadMessages(){
 
 // ── Snacks canteen data reader ────────────────────────────────────────────────
 function _loadSnacksData(childrenList){
-    var gs={};try{gs=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');}catch(e){}
-    var snacks=gs.campistrySnacks||{}, accts=snacks.accounts||{}, txs=snacks.transactions||[];
+    // Cloud data (get_my_canteen — the camp's real Snacks store) wins;
+    // localStorage only serves the same-browser demo case.
+    var accts, txs, pendingOps=[];
+    var cc=window._cloudCanteen;
+    if(cc&&cc.accounts){
+        accts=cc.accounts; txs=cc.transactions||[]; pendingOps=cc.pending_ops||[];
+    } else {
+        var gs={};try{gs=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');}catch(e){}
+        var snacks=gs.campistrySnacks||{}; accts=snacks.accounts||{}; txs=snacks.transactions||[];
+    }
     childrenList.forEach(function(c){
         var a=accts[c.name]||{};
         c._hasSnacksAccount=(a.balance!=null);
@@ -1414,11 +1491,23 @@ function _loadSnacksData(childrenList){
         if(a.dailyLimit  !=null)c.dailyLimit=a.dailyLimit;
         if(a.creditLimit !=null)c.creditLimit=a.creditLimit;
         if(a.balanceFloor!=null)c.balanceFloor=a.balanceFloor;
-        var childTx=txs.filter(function(t){return t.camper===c.name;});
-        canteenTxByChild[c.id]=childTx.map(function(t){
-            var credit=t.type==='credit';
+        // My control changes the POS hasn't applied yet — reflect them now
+        pendingOps.forEach(function(op){
+            if(op.camper_name!==c.name||op.op!=='set_controls'||!op.controls)return;
+            if(op.controls.dailyLimit  !=null)c.dailyLimit=op.controls.dailyLimit;
+            if(op.controls.creditLimit !=null)c.creditLimit=op.controls.creditLimit;
+            if(op.controls.balanceFloor!=null)c.balanceFloor=op.controls.balanceFloor;
+        });
+        var childTx=txs.filter(function(t){return t.camper===c.name;}).map(function(t){
+            var credit=t.type==='credit'||t.type==='tip';
             return{name:t.items||'Purchase',date:(t.time||'')+(t.date?' · '+t.date:''),amt:credit?Math.abs(t.amount||0):-Math.abs(t.amount||0)};
         });
+        // My add-funds the canteen hasn't applied yet — show as processing
+        pendingOps.forEach(function(op){
+            if(op.camper_name!==c.name||op.op!=='add_funds')return;
+            childTx.unshift({name:'Funds added by parent — processing',date:'Pending',amt:Math.abs(parseFloat(op.amount)||0)});
+        });
+        canteenTxByChild[c.id]=childTx;
     });
 }
 function selPickup(type, btn) {
@@ -1474,6 +1563,11 @@ function submitPickup(type) {
         }, fields));
         localStorage.setItem(PARENT_REQ_KEY, JSON.stringify(store));
     } catch(e){}
+
+    // Relay to the cloud so Campistry Live sees it on any device
+    if (window._submitParentRequestCloud) {
+        window._submitParentRequestCloud({ type:type, label:labels[type], camper:child.name||'', fields:fields, localId:reqId });
+    }
 
     pickupRequests.unshift({id:reqId,type:type,label:labels[type],icon:icons[type],time:timeStr,status:'Pending'});
     renderPickupHistory();
@@ -1692,13 +1786,119 @@ window.addEventListener('storage', function(e) {
     }
     function _loadTipsConfigCloud(campId) {
         db.rpc('get_link_tips_config', { p_camp_id: campId }).then(function(res) {
-            if (res.error || !res.data || !res.data.success || !res.data.config) return;
+            if (res.error || !res.data || !res.data.success) return;
+            if (res.data.staff) window._cloudTipsStaff = res.data.staff;
+            if (!res.data.config) {
+                // No config yet — the staff roster alone can still power Tips
+                var pg0 = document.getElementById('page-tips');
+                if (pg0 && pg0.classList.contains('active') && typeof renderTipsPage === 'function') renderTipsPage();
+                return;
+            }
             window._cloudTipsConfig = res.data.config;
             // Re-render if the parent is looking at the Tips page right now
             var pg = document.getElementById('page-tips');
             if (pg && pg.classList.contains('active') && typeof renderTipsPage === 'function') renderTipsPage();
         });
     }
+
+    // ── Pickup & Arrival bridge (migration 018 → Campistry Live) ─────────────
+    window._cloudParentReqs = [];
+    window._submitParentRequestCloud = function(p) {
+        db.rpc('submit_parent_request', {
+            p_type:        p.type || '',
+            p_label:       p.label || '',
+            p_camper_name: p.camper || '',
+            p_fields:      p.fields || {}
+        }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Request cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+                if (res.data && res.data.error === 'daily_limit_reached' && typeof toast === 'function') toast('Daily request limit reached — call the camp office.');
+                return;
+            }
+            // Mark the local twin so it isn't double-listed alongside the cloud row
+            if (p.localId) {
+                try {
+                    var st = JSON.parse(localStorage.getItem('campistry_parent_requests_v1')||'[]');
+                    var lr = st.find(function(x){ return x.id === p.localId; });
+                    if (lr) { lr._cloudId = res.data.id; localStorage.setItem('campistry_parent_requests_v1', JSON.stringify(st)); }
+                } catch(e) {}
+            }
+            window._loadMyParentRequests();
+        });
+    };
+    window._loadMyParentRequests = function() {
+        db.rpc('get_my_parent_requests').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            window._cloudParentReqs = res.data.requests || [];
+            if (typeof hydratePickupRequests === 'function') hydratePickupRequests();
+        });
+    };
+
+    // ── Canteen bridge (migration 018 → Campistry Snacks) ────────────────────
+    window._cloudCanteen = null;
+    window._submitCanteenOpCloud = function(p) {
+        db.rpc('submit_canteen_op', {
+            p_camper_name: p.camper || '',
+            p_op:          p.op || '',
+            p_amount:      p.amount != null ? p.amount : null,
+            p_controls:    p.controls || null
+        }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Canteen op cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+                return;
+            }
+            window._loadMyCanteen();
+        });
+    };
+    window._loadMyCanteen = function() {
+        db.rpc('get_my_canteen').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            window._cloudCanteen = res.data;
+            if (typeof _loadSnacksData === 'function' && children.length) {
+                _loadSnacksData(children);
+                var pg = document.getElementById('page-canteen');
+                if (pg && pg.classList.contains('active')) {
+                    var ac = (typeof _activeCanteenChild === 'function') ? _activeCanteenChild() : null;
+                    if (ac && typeof switchCanteen === 'function') switchCanteen(ac.id);
+                }
+                var bal = children.reduce(function(sm,c){ return sm + (c.canteenBalance || 0); }, 0);
+                var cs = document.getElementById('homeCanteenSub');
+                if (cs) cs.textContent = '$' + bal.toFixed(2);
+            }
+        });
+    };
+
+    // ── Health bridge (migration 018 → Campistry Health) ─────────────────────
+    window._myHealthDocs = null;
+    window._myNurseLog = [];
+    window._submitHealthDocCloud = function(p) {
+        db.rpc('submit_health_doc', {
+            p_camper_name: p.camper || '',
+            p_file_name:   p.fileName || '',
+            p_file_data:   p.fileData || null
+        }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Health doc cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+                if (typeof toast === 'function') toast('Upload could not reach the camp — it will show locally only.');
+                return;
+            }
+            window._loadMyHealthDocs();
+        });
+    };
+    window._loadMyHealthDocs = function() {
+        db.rpc('get_my_health_docs').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            window._myHealthDocs = res.data.docs || [];
+            if (typeof _renderMyHealthDocs === 'function') _renderMyHealthDocs();
+        });
+    };
+    window._loadMyNurseLog = function() {
+        db.rpc('get_my_nurse_log').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            window._myNurseLog = res.data.visits || [];
+            if (typeof _renderNurseLog === 'function') _renderNurseLog();
+        });
+    };
 
     console.log('[Parent] Auth init. Token in URL:', urlToken ? urlToken.slice(0,8)+'…' : 'none');
 
@@ -1773,6 +1973,10 @@ window.addEventListener('storage', function(e) {
         }
         _loadMyMail();
         _loadMyTips();
+        window._loadMyParentRequests();
+        window._loadMyCanteen();
+        window._loadMyHealthDocs();
+        window._loadMyNurseLog();
     }
 
     var _lastLinkForms = null; // cache so post-submit re-renders don't lose the RPC data
@@ -2447,22 +2651,50 @@ function _renderTipRecipients(child, cfg) {
         recipients.push({ name: child.counselor, role: 'Counselor', fromRoster: true });
     }
 
+    // Camp staff roster from the Me page (via get_link_tips_config)
+    var staffRoster = window._cloudTipsStaff || [];
+    function rosterMatches(label) {
+        var l = String(label||'').toLowerCase();
+        return staffRoster.filter(function(st) {
+            var r = String(st.role||'').toLowerCase();
+            return r && (r === l || r.indexOf(l) !== -1 || l.indexOf(r) !== -1);
+        });
+    }
+
     // Configured categories
+    var usedNames = {};
+    if (child.counselor) usedNames[child.counselor] = true;
     cfg.categories.forEach(function(cat) {
         if (cat.staff && cat.staff.length) {
             cat.staff.forEach(function(s) {
-                // Avoid duplicating the counselor already added from roster
-                if (!(cat.label === 'Counselor' && s === child.counselor)) {
-                    recipients.push({ name: s, role: cat.label });
-                }
+                if (usedNames[s]) return;
+                usedNames[s] = true;
+                recipients.push({ name: s, role: cat.label });
             });
         } else {
-            // No specific names — show "Your [role]" if not Counselor (already shown)
-            if (cat.label.toLowerCase() !== 'counselor' || !child.counselor) {
+            // No typed names — pull real staff with a matching role from the
+            // Me page roster ("Leave blank to show all staff from camp roster")
+            var matches = rosterMatches(cat.label);
+            if (matches.length) {
+                matches.forEach(function(st) {
+                    if (usedNames[st.name]) return;
+                    usedNames[st.name] = true;
+                    recipients.push({ name: st.name, role: cat.label });
+                });
+            } else if (cat.label.toLowerCase() !== 'counselor' || !child.counselor) {
                 recipients.push({ name: 'Your ' + cat.label, role: cat.label, generic: true });
             }
         }
     });
+
+    // No categories configured at all — offer the whole staff roster
+    if (!cfg.categories.length && staffRoster.length) {
+        staffRoster.forEach(function(st) {
+            if (usedNames[st.name]) return;
+            usedNames[st.name] = true;
+            recipients.push({ name: st.name, role: st.role || 'Staff' });
+        });
+    }
 
     if (!recipients.length) {
         el.innerHTML = '<div class="lk-empty" style="padding:28px 0;"><div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><h3>No staff configured</h3><p>Your camp hasn\'t set up tip recipients yet.</p></div>';

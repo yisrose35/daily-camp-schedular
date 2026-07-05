@@ -16,7 +16,7 @@
     'use strict';
 
     var STORAGE_KEY = 'campGlobalSettings_v1';
-    var FETCH_KEYS  = ['campStructure', 'app1', 'campistryMe', 'bunkMetaData', 'fields'];
+    var FETCH_KEYS  = ['campStructure', 'app1', 'campistryMe', 'bunkMetaData', 'fields', 'campistrySnacks', 'campistryHealth'];
 
     // Guard: only one successful cloud hydration per page load
     var _hydrated = false;

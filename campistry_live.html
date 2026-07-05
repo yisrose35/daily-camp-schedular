@@ -309,16 +309,23 @@
             document.querySelectorAll('.cs-bnav-item').forEach(function(x){x.classList.remove('active')});
             var bn=document.querySelector('.cs-bnav-item[data-page="'+p+'"]');if(bn)bn.classList.add('active');
             close();
-            if(p==='parent-requests'&&window.ParentRequests) ParentRequests.render();
+            if(p==='parent-requests'&&window.ParentRequests) ParentRequests.refresh();
         });
     });
 })();
 </script>
 <script>
-// ── Parent Requests bridge — reads from campistry_parent_requests_v1 ──────────
+// ── Parent Requests bridge ─────────────────────────────────────────────────────
+// Cloud-first: parents submit through Campistry Link (submit_parent_request RPC
+// → link_parent_requests). Live pulls today's rows via staff RLS, confirms or
+// declines them (the status flows straight back to the parent's portal), and
+// still merges any legacy same-device localStorage submissions.
 var ParentRequests = (function(){
     var PKEY = 'campistry_parent_requests_v1';
     var LIVE_KEY = 'campistry_live_v1';
+    var _merged = [];        // what render() showed — confirm(i)/decline(i) index into this
+    var _cloudReqs = [];
+    var _fetching = false;
 
     function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
     function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
@@ -344,14 +351,49 @@ var ParentRequests = (function(){
         return (d.getMonth()+1)+'/'+d.getDate();
     }
 
+    // Pull today's cloud requests (staff RLS scopes to this camp)
+    function fetchCloud(cb){
+        var db=window.CampistryDB;
+        if(!db||!db.client||!(db.getCampId&&db.getCampId())){if(cb)cb();return;}
+        if(_fetching){if(cb)cb();return;}
+        _fetching=true;
+        var start=new Date();start.setHours(0,0,0,0);
+        db.client.from('link_parent_requests')
+            .select('id, type, label, camper_name, bunk, parent_name, fields, status, created_at')
+            .gte('created_at', start.toISOString())
+            .order('created_at', {ascending:false})
+            .limit(200)
+            .then(function(res){
+                _fetching=false;
+                if(!res.error&&res.data){
+                    _cloudReqs=res.data.map(function(r){
+                        return Object.assign({
+                            id:r.id, type:r.type, label:r.label||r.type,
+                            childName:r.camper_name, childBunk:r.bunk||'',
+                            parentName:r.parent_name||'',
+                            submittedAt:Date.parse(r.created_at),
+                            status:r.status||'Pending', _cloud:true
+                        }, r.fields||{});
+                    });
+                }
+                if(cb)cb();
+            });
+    }
+
+    // Cloud rows + legacy same-device submissions that never reached the cloud
+    function mergedReqs(){
+        var local=getReqs().filter(function(r){return !r._cloudId;});
+        return _cloudReqs.concat(local).sort(function(a,b){return (b.submittedAt||0)-(a.submittedAt||0);});
+    }
+
     function updateBadge(){
-        var count=getReqs().filter(function(r){return r.status==='Pending';}).length;
+        var count=mergedReqs().filter(function(r){return r.status==='Pending';}).length;
         var badge=document.getElementById('sbParentReqCount');
         if(badge){badge.textContent=String(count);badge.style.display=count?'':'none';}
     }
 
     function render(){
-        var reqs=getReqs();
+        var reqs=_merged=mergedReqs();
         var body=document.getElementById('parentRequestsBody');if(!body)return;
         updateBadge();
         if(!reqs.length){body.innerHTML='<div class="empty-state">No parent requests yet — they\'ll appear here when parents submit from Campistry Link</div>';return;}
@@ -393,11 +435,25 @@ var ParentRequests = (function(){
         body.innerHTML=html;
     }
 
+    function setCloudStatus(r,status){
+        var db=window.CampistryDB;
+        if(!db||!db.client)return;
+        db.client.from('link_parent_requests')
+            .update({status:status, reviewed_at:new Date().toISOString()})
+            .eq('id', r.id)
+            .then(function(res){if(res.error)console.warn('[ParentRequests] Cloud status update failed:',res.error.message);});
+    }
+
     function confirm(i){
-        var reqs=getReqs(),r=reqs[i];
+        var r=_merged[i];
         if(!r||r.status!=='Pending')return;
         r.status='Confirmed';
-        saveReqs(reqs);
+        if(r._cloud){ setCloudStatus(r,'Confirmed'); }
+        else {
+            var reqs=getReqs();
+            var lr=reqs.find(function(x){return x.id===r.id;});
+            if(lr){lr.status='Confirmed';saveReqs(reqs);}
+        }
         // Inject into Live's own data store
         var today=getTodayData();
         var now=new Date(),timeStr=now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
@@ -418,18 +474,27 @@ var ParentRequests = (function(){
     }
 
     function decline(i){
-        var reqs=getReqs(),r=reqs[i];
+        var r=_merged[i];
         if(!r||r.status!=='Pending')return;
         r.status='Declined';
-        saveReqs(reqs);
+        if(r._cloud){ setCloudStatus(r,'Declined'); }
+        else {
+            var reqs=getReqs();
+            var lr=reqs.find(function(x){return x.id===r.id;});
+            if(lr){lr.status='Declined';saveReqs(reqs);}
+        }
         render();
         liveToast((r.label||'Request')+' declined');
     }
 
-    function refresh(){render();}
+    function refresh(){fetchCloud(render);}
 
-    // Update badge on load
+    // Load + keep fresh: hydration event, tab focus, 60s poll
     updateBadge();
+    window.addEventListener('campistry-cloud-hydrated', function(){fetchCloud(render);});
+    document.addEventListener('visibilitychange', function(){if(!document.hidden)fetchCloud(render);});
+    setInterval(function(){fetchCloud(render);}, 60000);
+    setTimeout(function(){fetchCloud(render);}, 4000);
 
     return {render:render,confirm:confirm,decline:decline,refresh:refresh,updateBadge:updateBadge};
 })();

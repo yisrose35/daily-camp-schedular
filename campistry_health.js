@@ -44,9 +44,26 @@
             g[HEALTH_KEY] = h;
             g.updated_at = new Date().toISOString();
             localStorage.setItem(STORAGE_KEY, JSON.stringify(g));
-            if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler)
+            if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
                 window.saveGlobalSettings(HEALTH_KEY, h);
+            } else {
+                cloudSaveHealth(h);
+            }
         } catch(e) { console.error('[Health] save failed', e); }
+    }
+
+    // Mirror the health store to camp_state_kv so it reaches other devices
+    // and the parent portal's Nurse Visit Log (get_my_nurse_log RPC).
+    function cloudSaveHealth(h) {
+        try {
+            var db = window.CampistryDB;
+            if (!db || !db.client) return;
+            var campId = db.getCampId && db.getCampId();
+            if (!campId) return;
+            db.client.from('camp_state_kv')
+                .upsert({ camp_id: campId, key: HEALTH_KEY, value: h, updated_at: new Date().toISOString() }, { onConflict: 'camp_id,key' })
+                .then(function (res) { if (res.error) console.warn('[Health] Cloud save failed:', res.error.message); });
+        } catch (e) { console.warn('[Health] Cloud save error:', e); }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
@@ -230,9 +247,35 @@
     }
 
     // ── Parent-submitted health documents ─────────────────────────────────
+    // Cloud-first: parents upload via the Link portal (submit_health_doc RPC →
+    // link_health_docs). Falls back to the legacy same-device localStorage
+    // hand-off when the cloud is unreachable.
     var HSUBMIT_KEY = 'campistry_health_submissions_v1';
+    var _cloudDocs = null;   // null = cloud not loaded yet → legacy fallback
     function getSubmissions(){ try{return JSON.parse(localStorage.getItem(HSUBMIT_KEY)||'[]');}catch(e){return[];} }
     function saveSubmissions(arr){ try{localStorage.setItem(HSUBMIT_KEY,JSON.stringify(arr));}catch(e){} }
+
+    function fetchParentDocs() {
+        var db = window.CampistryDB;
+        if (!db || !db.client) return;
+        if (!(db.getCampId && db.getCampId())) return;
+        db.client.from('link_health_docs')
+            .select('id, camper_name, parent_name, file_name, status, review_note, created_at')
+            .order('created_at', { ascending: false })
+            .limit(200)
+            .then(function (res) {
+                if (res.error) { console.warn('[Health] Parent docs fetch failed:', res.error.message); return; }
+                _cloudDocs = (res.data || []).map(function (d) {
+                    return { id: d.id, camperName: d.camper_name, parentName: d.parent_name,
+                             fileName: d.file_name, submittedAt: Date.parse(d.created_at),
+                             status: d.status, _cloud: true };
+                });
+                renderParentDocs();
+            });
+    }
+    window.addEventListener('campistry-cloud-hydrated', fetchParentDocs);
+    document.addEventListener('visibilitychange', function(){ if (!document.hidden) fetchParentDocs(); });
+    setTimeout(fetchParentDocs, 4000);
 
     function fmtDocTime(ts){
         if(!ts)return'';
@@ -245,7 +288,7 @@
 
     function renderParentDocs(){
         var section=document.getElementById('parentDocsSection'); if(!section)return;
-        var docs=getSubmissions();
+        var docs=(_cloudDocs!==null)?_cloudDocs:getSubmissions();
         var pending=docs.filter(function(d){return d.status==='pending';}).length;
         // Update form count badge to include parent docs
         var badge=document.getElementById('sbFormCount');
@@ -257,10 +300,12 @@
             '</div><table class="data-table"><thead><tr><th>Camper</th><th>File</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>';
         docs.forEach(function(doc){
             var statusBdg=doc.status==='approved'?bdg('Approved','green'):doc.status==='flagged'?bdg('Flagged','red'):bdg('Pending','amber');
+            var viewBtn=doc._cloud?'<button class="btn btn-sm btn-ghost" onclick="CampistryHealth.viewParentDoc(\''+je(doc.id)+'\')">View</button>':'';
             var actions=doc.status==='pending'?
+                viewBtn+(viewBtn?'&nbsp;':'')+
                 '<button class="btn btn-sm btn-primary" onclick="CampistryHealth.approveParentDoc(\''+je(doc.id)+'\')">Approve</button>&nbsp;'+
                 '<button class="btn btn-sm btn-danger" onclick="CampistryHealth.flagParentDoc(\''+je(doc.id)+'\')">Flag</button>':
-                '<button class="btn btn-sm btn-ghost">View</button>';
+                (viewBtn||'<button class="btn btn-sm btn-ghost" disabled>View</button>');
             h+='<tr>'+
                 '<td style="font-weight:700;">'+esc(doc.camperName||'—')+'</td>'+
                 '<td><span style="font-size:.75rem;">'+esc(doc.fileName||'—')+'</span></td>'+
@@ -273,7 +318,28 @@
         section.innerHTML=h;
     }
 
+    function _reviewParentDoc(id, status, toastType){
+        // Cloud doc → update the row (parents see the result via get_my_health_docs)
+        if (_cloudDocs !== null) {
+            var cd = _cloudDocs.find(function(d){return d.id===id;});
+            if (cd) {
+                cd.status = status; renderParentDocs();
+                var db = window.CampistryDB;
+                if (db && db.client) {
+                    db.client.from('link_health_docs')
+                        .update({ status: status, reviewed_at: new Date().toISOString() })
+                        .eq('id', id)
+                        .then(function(res){ if (res.error) { console.warn('[Health] Review update failed:', res.error.message); toast('Cloud update failed — will retry on refresh','err'); } });
+                }
+                toast(cd.camperName+' — document '+status, toastType);
+                return true;
+            }
+        }
+        return false;
+    }
+
     function approveParentDoc(id){
+        if (_reviewParentDoc(id, 'approved', 'ok')) return;
         var docs=getSubmissions();
         var doc=docs.find(function(d){return d.id===id;});
         if(!doc)return;
@@ -283,12 +349,33 @@
     }
 
     function flagParentDoc(id){
+        if (_reviewParentDoc(id, 'flagged', 'err')) return;
         var docs=getSubmissions();
         var doc=docs.find(function(d){return d.id===id;});
         if(!doc)return;
         doc.status='flagged'; doc.reviewedAt=Date.now();
         saveSubmissions(docs); renderParentDocs();
         toast(doc.camperName+' — document flagged','err');
+    }
+
+    // Open the uploaded file (fetched on demand — the list query skips file bodies)
+    function viewParentDoc(id){
+        var db = window.CampistryDB;
+        if (!db || !db.client) return;
+        db.client.from('link_health_docs').select('file_name, file_data').eq('id', id).single()
+            .then(function(res){
+                if (res.error || !res.data || !res.data.file_data) { toast('No file attached to this document','err'); return; }
+                try {
+                    var parts = res.data.file_data.split(',');
+                    var mime = (parts[0].match(/data:(.*?);/)||[])[1] || 'application/octet-stream';
+                    var bin = atob(parts[1]);
+                    var bytes = new Uint8Array(bin.length);
+                    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                    var url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    window.open(url, '_blank');
+                    setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
+                } catch (e) { toast('Could not open file','err'); }
+            });
     }
 
     function renderIntake() {
@@ -428,6 +515,7 @@
         renderAllergies:renderAllergies, renderNighttime:renderNighttime,
         renderCamperDirectory:renderCamperDirectory, renderIntake:renderIntake,
         renderParentDocs:renderParentDocs, approveParentDoc:approveParentDoc, flagParentDoc:flagParentDoc,
+        viewParentDoc:viewParentDoc, fetchParentDocs:fetchParentDocs,
         logDispensing:logDispensing, saveSickVisit:saveSickVisit, saveDispensing:saveDispensing,
         viewCamper:viewCamper, getRoster:getRoster, getStructure:getStructure,
         getHealth:getHealth, saveHealth:saveHealth,
