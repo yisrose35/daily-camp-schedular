@@ -201,6 +201,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             Messages
         </button>
+        <button class="lk-nav-item" data-page="mail" onclick="nav('mail')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            Camper Mail <span class="nav-count" id="navMailCount" style="display:none;"></span>
+        </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Families</div>
         <button class="lk-nav-item" data-page="directory" onclick="nav('directory')">
@@ -655,6 +659,36 @@
     </div>
 </div>
 
+<!-- CAMPER MAIL (letters from parents → print queue) -->
+<div class="lk-page" id="page-mail">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        </div>
+        <div>
+            <h1>Camper Mail</h1>
+            <p>Letters parents send their campers — print them and hand them out</p>
+        </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+        <div class="lk-tabs" style="margin:0;">
+            <button class="lk-tab active" data-mailtab="new" onclick="switchMailTab('new',this)">To Print</button>
+            <button class="lk-tab" data-mailtab="printed" onclick="switchMailTab('printed',this)">Printed</button>
+            <button class="lk-tab" data-mailtab="all" onclick="switchMailTab('all',this)">All</button>
+        </div>
+        <select class="lk-select" id="mailDivFilter" onchange="renderAdminMail()" style="max-width:170px;font-size:.8rem;padding:5px 10px;height:auto;">
+            <option value="">All divisions</option>
+        </select>
+        <div style="flex:1;"></div>
+        <button class="btn btn-secondary btn-sm" onclick="printSelectedMail()">Print selected</button>
+        <button class="btn btn-primary btn-sm" onclick="printAllNewMail()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+            Print all new
+        </button>
+    </div>
+    <div id="adminMailList"></div>
+</div>
+
 <!-- LISTS (packing lists / checklists for parents) -->
 <div class="lk-page" id="page-lists">
     <div class="lk-page-hero">
@@ -876,6 +910,7 @@ function nav(p) {
     if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
     if (p === 'tips') renderTipsAdmin();
     if (p === 'lists') renderAdminLists();
+    if (p === 'mail') { renderAdminMail(); _loadCloudMail(renderAdminMail); }
 }
 
 function switchMsgTab(tab, btn) {
@@ -2049,6 +2084,224 @@ function openResponsesSheet(formId, formName) {
     document.body.appendChild(el);
 }
 
+// ─── CAMPER MAIL — parent letters → print queue ───────────────────────────────
+// Cloud rows come from link_camper_mail (migration 015); a localStorage mirror
+// ('campistry_link_camper_mail_v1') covers the same-browser demo case.
+var MAIL_LOCAL_KEY = 'campistry_link_camper_mail_v1';
+var _cloudMailRows = [];
+var _mailRows = [];
+var _mailTab = 'new';
+var _mailSelected = {};
+
+function _loadCloudMail(cb) {
+    var db = _dbc();
+    if (!db) { if (cb) cb(); return; }
+    db.client
+        .from('link_camper_mail')
+        .select('id, camper_name, division, grade, bunk, parent_name, parent_email, subject, body, status, created_at, printed_at')
+        .eq('camp_id', db.campId)
+        .order('created_at', { ascending: false })
+        .limit(2000)
+        .then(function(res) {
+            if (res.error) { console.warn('[Link Admin] link_camper_mail load:', res.error.message); }
+            else { _cloudMailRows = res.data || []; }
+            if (cb) cb();
+        });
+}
+
+function _mergeMailRows() {
+    var seen = {};
+    _mailRows = _cloudMailRows.map(function(r) {
+        seen[r.id] = 1;
+        return {
+            id: r.id, camper: r.camper_name, division: r.division || '', grade: r.grade || '', bunk: r.bunk || '',
+            parentName: r.parent_name || '', subject: r.subject || '', body: r.body || '',
+            status: r.status || 'new', date: r.created_at, _cloud: true
+        };
+    });
+    var local = [];
+    try { local = JSON.parse(localStorage.getItem(MAIL_LOCAL_KEY) || '[]'); } catch(e) {}
+    local.forEach(function(m) {
+        if (seen[m.id]) return;
+        _mailRows.push({
+            id: m.id, camper: m.camper, division: m.division || '', grade: m.grade || '', bunk: m.bunk || '',
+            parentName: m.parentName || '', subject: m.subject || '', body: m.body || '',
+            status: m.status || 'new', date: m.date
+        });
+    });
+    _mailRows.sort(function(a, b) { return new Date(b.date || 0) - new Date(a.date || 0); });
+    // Sidebar badge — letters waiting to print
+    var pending = _mailRows.filter(function(m) { return m.status !== 'printed'; }).length;
+    var badge = document.getElementById('navMailCount');
+    if (badge) { badge.textContent = pending; badge.style.display = pending ? '' : 'none'; }
+}
+
+function switchMailTab(tab, btn) {
+    _mailTab = tab;
+    document.querySelectorAll('[data-mailtab]').forEach(function(t) { t.classList.toggle('active', t.dataset.mailtab === tab); });
+    renderAdminMail();
+}
+
+function renderAdminMail() {
+    _mergeMailRows();
+    var el = document.getElementById('adminMailList'); if (!el) return;
+
+    // Division filter options (rebuild, keep selection)
+    var divSel = document.getElementById('mailDivFilter');
+    if (divSel) {
+        var cur = divSel.value;
+        var divs = {};
+        _mailRows.forEach(function(m) { if (m.division) divs[m.division] = 1; });
+        divSel.innerHTML = '<option value="">All divisions</option>' + Object.keys(divs).sort().map(function(d) {
+            return '<option value="' + esc(d) + '">' + esc(d) + '</option>';
+        }).join('');
+        divSel.value = cur;
+    }
+
+    var rows = _mailRows.filter(function(m) {
+        if (_mailTab === 'new' && m.status === 'printed') return false;
+        if (_mailTab === 'printed' && m.status !== 'printed') return false;
+        var dv = divSel ? divSel.value : '';
+        if (dv && m.division !== dv) return false;
+        return true;
+    });
+
+    if (!rows.length) {
+        el.innerHTML = '<div class="lk-card"><div class="lk-empty" style="padding:36px 20px;">' +
+            '<div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>' +
+            '<h3>' + (_mailTab === 'new' ? 'Nothing waiting to print' : 'No letters here') + '</h3>' +
+            '<p>Letters parents write in the portal land here for printing.</p></div></div>';
+        return;
+    }
+
+    el.innerHTML = '<div class="lk-card" style="padding:6px 16px;">' + rows.map(function(m) {
+        var d = m.date ? new Date(m.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+        var where = [m.division, m.bunk].filter(Boolean).join(' · ');
+        var badge = m.status === 'printed'
+            ? '<span class="badge badge-ok" style="font-size:.62rem;">Printed</span>'
+            : '<span class="badge badge-warn" style="font-size:.62rem;">New</span>';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
+            '<input type="checkbox" ' + (_mailSelected[m.id] ? 'checked' : '') + ' onchange="_mailSelected[\'' + esc(m.id) + '\']=this.checked" style="width:16px;height:16px;flex-shrink:0;">' +
+            '<div style="flex:1;min-width:0;">' +
+                '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                    '<span style="font-size:.87rem;font-weight:700;color:var(--slate-900);">' + esc(m.camper) + '</span>' +
+                    (where ? '<span style="font-size:.72rem;color:var(--text-muted);">' + esc(where) + '</span>' : '') + badge +
+                '</div>' +
+                '<div style="font-size:.75rem;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+                    (m.subject ? '<strong>' + esc(m.subject) + '</strong> — ' : '') + esc(String(m.body).slice(0, 100)) +
+                '</div>' +
+            '</div>' +
+            '<span style="font-size:.72rem;color:var(--text-muted);white-space:nowrap;">From ' + esc(m.parentName || 'parent') + ' · ' + d + '</span>' +
+            '<div style="display:flex;gap:5px;flex-shrink:0;">' +
+                '<button class="btn btn-secondary btn-sm" onclick="viewCamperMail(\'' + esc(m.id) + '\')">Read</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="printCamperMail([\'' + esc(m.id) + '\'])" title="Print this letter"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg></button>' +
+            '</div>' +
+        '</div>';
+    }).join('') + '</div>';
+}
+
+function viewCamperMail(id) {
+    var m = _mailRows.find(function(x) { return x.id === id; }); if (!m) return;
+    var d = m.date ? new Date(m.date).toLocaleString() : '';
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
+    el.innerHTML = '<div style="background:#fff;border-radius:var(--radius-lg);max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:#fff;">' +
+            '<span style="font-size:.92rem;font-weight:700;">Letter for ' + esc(m.camper) + '</span>' +
+            '<div style="display:flex;gap:6px;">' +
+                '<button class="btn btn-secondary btn-sm" onclick="printCamperMail([\'' + esc(m.id) + '\']);this.closest(\'[style*=fixed]\').remove()">Print</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">✕</button>' +
+            '</div>' +
+        '</div>' +
+        '<div style="padding:18px 20px;">' +
+            '<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px;">From ' + esc(m.parentName || 'parent') + ' · ' + esc(d) + ([m.division, m.bunk].filter(Boolean).length ? ' · ' + esc([m.division, m.bunk].filter(Boolean).join(' · ')) : '') + '</div>' +
+            (m.subject ? '<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">' + esc(m.subject) + '</div>' : '') +
+            '<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">' + esc(m.body) + '</div>' +
+        '</div>' +
+    '</div>';
+    el.addEventListener('click', function(e) { if (e.target === el) el.remove(); });
+    document.body.appendChild(el);
+}
+
+function printSelectedMail() {
+    var ids = Object.keys(_mailSelected).filter(function(id) { return _mailSelected[id]; });
+    if (!ids.length) { toast('Tick the letters you want to print'); return; }
+    printCamperMail(ids);
+}
+
+function printAllNewMail() {
+    _mergeMailRows();
+    var ids = _mailRows.filter(function(m) { return m.status !== 'printed'; }).map(function(m) { return m.id; });
+    if (!ids.length) { toast('Nothing waiting to print'); return; }
+    printCamperMail(ids);
+}
+
+/** Open a print window with one letter per page, then mark them printed. */
+function printCamperMail(ids) {
+    var letters = _mailRows.filter(function(m) { return ids.indexOf(m.id) >= 0; });
+    if (!letters.length) return;
+    var campName = (CL() && CL().data.getCampName()) || 'Camp';
+    var pages = letters.map(function(m) {
+        var d = m.date ? new Date(m.date).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : '';
+        return '<div class="letter">' +
+            '<div class="lt-head">' +
+                '<div class="lt-camp">' + esc(campName) + ' — Camper Mail</div>' +
+                '<div class="lt-date">' + esc(d) + '</div>' +
+            '</div>' +
+            '<div class="lt-to">To: <strong>' + esc(m.camper) + '</strong>' + (m.bunk ? ' &nbsp;·&nbsp; ' + esc(m.bunk) : '') + (m.division ? ' &nbsp;·&nbsp; ' + esc(m.division) : '') + '</div>' +
+            (m.subject ? '<div class="lt-subject">' + esc(m.subject) + '</div>' : '') +
+            '<div class="lt-body">' + esc(m.body) + '</div>' +
+            '<div class="lt-from">— From ' + esc(m.parentName || 'your family') + ', with love ❤</div>' +
+        '</div>';
+    }).join('');
+    var w = window.open('', '_blank');
+    if (!w) { toast('Allow pop-ups to print letters'); return; }
+    w.document.write('<!DOCTYPE html><html><head><title>Camper Mail — ' + letters.length + ' letter' + (letters.length !== 1 ? 's' : '') + '</title><style>' +
+        'body{font-family:Georgia,\'Times New Roman\',serif;color:#1a1a1a;margin:0;}' +
+        '.letter{padding:56px 64px;page-break-after:always;min-height:90vh;box-sizing:border-box;}' +
+        '.letter:last-child{page-break-after:auto;}' +
+        '.lt-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #ccc;padding-bottom:10px;margin-bottom:22px;}' +
+        '.lt-camp{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#666;}' +
+        '.lt-date{font-size:13px;color:#666;}' +
+        '.lt-to{font-size:15px;margin-bottom:18px;color:#333;}' +
+        '.lt-subject{font-size:22px;font-weight:bold;margin-bottom:16px;}' +
+        '.lt-body{font-size:16px;line-height:1.9;white-space:pre-wrap;}' +
+        '.lt-from{margin-top:34px;font-size:15px;font-style:italic;color:#444;}' +
+        '@media print{.letter{min-height:auto;}}' +
+    '</style></head><body>' + pages + '</body></html>');
+    w.document.close();
+    w.focus();
+    setTimeout(function() { w.print(); }, 250);
+    _markMailPrinted(ids);
+}
+
+function _markMailPrinted(ids) {
+    var nowIso = new Date().toISOString();
+    // Cloud rows — optimistic in-memory update; persist when the client is up
+    var db = _dbc();
+    var cloudIds = ids.filter(function(id) { return _mailRows.some(function(m) { return m.id === id && m._cloud; }); });
+    _cloudMailRows.forEach(function(r) { if (cloudIds.indexOf(r.id) >= 0) { r.status = 'printed'; r.printed_at = nowIso; } });
+    if (db && cloudIds.length) {
+        db.client
+            .from('link_camper_mail')
+            .update({ status: 'printed', printed_at: nowIso })
+            .in('id', cloudIds)
+            .then(function(res) {
+                if (res.error) console.warn('[Link Admin] mark printed:', res.error.message);
+            });
+    }
+    // Local mirror rows
+    try {
+        var local = JSON.parse(localStorage.getItem(MAIL_LOCAL_KEY) || '[]');
+        var touched = false;
+        local.forEach(function(m) { if (ids.indexOf(m.id) >= 0 && m.status !== 'printed') { m.status = 'printed'; touched = true; } });
+        if (touched) localStorage.setItem(MAIL_LOCAL_KEY, JSON.stringify(local));
+    } catch(e) {}
+    _mailSelected = {};
+    renderAdminMail();
+    toast(ids.length + ' letter' + (ids.length !== 1 ? 's' : '') + ' sent to the printer');
+}
+
 // ─── LISTS — packing lists / checklists for the parent portal ────────────────
 // Stored in camp_state_kv under 'link_lists'; parents read them through the
 // get_link_camp_lists RPC (migration 014) and check items off per child.
@@ -2593,6 +2846,8 @@ function renderTipsAdmin() {
     _renderTipAmounts(cfg);
     _renderTipCategories(cfg);
     _renderTipHistory();
+    // Refresh from the cloud, then re-render with the latest tips
+    _loadCloudTips(_renderTipHistory);
 }
 
 function _renderTipAmounts(cfg) {
@@ -2719,14 +2974,90 @@ function removeTipStaff(ci, si) {
     _renderTipCategories(cfg);
 }
 
+// Cloud tips (link_tips table, migration 016) merged with the local ledger
+var _cloudTipRows = [];
+
+function _loadCloudTips(cb) {
+    var db = _dbc();
+    if (!db) { if (cb) cb(); return; }
+    db.client
+        .from('link_tips')
+        .select('id, camper_name, parent_name, recipient_name, recipient_role, amount, status, created_at')
+        .eq('camp_id', db.campId)
+        .order('created_at', { ascending: false })
+        .limit(3000)
+        .then(function(res) {
+            if (res.error) { console.warn('[Link Admin] link_tips load:', res.error.message); }
+            else { _cloudTipRows = res.data || []; }
+            if (cb) cb();
+        });
+}
+
+function _mergedTipLog() {
+    var log = _cloudTipRows.map(function(t) {
+        return { id: t.id, from: t.parent_name || '', childName: t.camper_name || '', recipientName: t.recipient_name, role: t.recipient_role || '', amount: parseFloat(t.amount) || 0, date: t.created_at, _cloud: true };
+    });
+    var seen = {}; log.forEach(function(t) { seen[t.id] = 1; });
+    _loadTipsLog().forEach(function(t) { if (!seen[t.id]) log.push(t); });
+    log.sort(function(a, b) { return new Date(b.date || 0) - new Date(a.date || 0); });
+    return log;
+}
+
+function exportTipsCSV() { _exportTips('csv'); }
+function exportTipsXLSX() { _exportTips('xlsx'); }
+function _exportTips(kind) {
+    var log = _mergedTipLog();
+    if (!log.length) { toast('No tips to export'); return; }
+    var headers = ['Date', 'Staff Member', 'Role', 'Amount', 'From Parent', 'Camper'];
+    var rows = log.map(function(t) {
+        return [t.date ? new Date(t.date).toLocaleDateString('en-US') : '', t.recipientName || '', t.role || '', parseFloat(t.amount) || 0, t.from || '', t.childName || ''];
+    });
+    if (kind === 'csv') window.LinkExport.downloadCSV('tips_report.csv', headers, rows);
+    else window.LinkExport.downloadXLSX('tips_report.xlsx', 'Tips', headers, rows);
+    toast(log.length + ' tip' + (log.length !== 1 ? 's' : '') + ' exported');
+}
+
 function _renderTipHistory() {
     var el = document.getElementById('tipsHistoryList'); if (!el) return;
-    var log = _loadTipsLog();
+    var log = _mergedTipLog();
     if (!log.length) {
         el.innerHTML = '<div class="lk-empty" style="padding:24px 0;"><div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/></svg></div><h3>No tips yet</h3><p>Parent tips will appear here.</p></div>';
         return;
     }
-    el.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">' +
+
+    // Payout summary — totals per staff member
+    var byStaff = {};
+    log.forEach(function(t) {
+        var k = (t.recipientName || '—') + '|' + (t.role || '');
+        if (!byStaff[k]) byStaff[k] = { name: t.recipientName || '—', role: t.role || '', count: 0, total: 0 };
+        byStaff[k].count++;
+        byStaff[k].total += parseFloat(t.amount) || 0;
+    });
+    var summary = Object.values(byStaff).sort(function(a, b) { return b.total - a.total; });
+    var grand = summary.reduce(function(s, r) { return s + r.total; }, 0);
+
+    var dlSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+    var html =
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+            '<span style="font-size:.8rem;color:var(--text-muted);">' + log.length + ' tips &nbsp;·&nbsp; <strong style="color:var(--green-600);">$' + grand.toFixed(2) + '</strong> total</span>' +
+            '<div style="flex:1;"></div>' +
+            '<button class="btn btn-secondary btn-sm" onclick="exportTipsCSV()">' + dlSvg + ' CSV</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="exportTipsXLSX()">' + dlSvg + ' Excel (.xlsx)</button>' +
+        '</div>' +
+        '<div style="font-size:.72rem;font-weight:800;letter-spacing:.06em;color:var(--text-muted);margin:4px 0 6px;">PAYOUT SUMMARY</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:18px;">' +
+        '<thead><tr style="border-bottom:1.5px solid var(--slate-200);"><th style="text-align:left;padding:6px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Staff Member</th><th style="text-align:left;padding:6px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Role</th><th style="text-align:right;padding:6px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Tips</th><th style="text-align:right;padding:6px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Total</th></tr></thead><tbody>' +
+        summary.map(function(r) {
+            return '<tr style="border-bottom:1px solid var(--slate-100);">' +
+                '<td style="padding:7px 10px;font-weight:600;">' + esc(r.name) + '</td>' +
+                '<td style="padding:7px 10px;color:var(--text-muted);">' + esc(r.role) + '</td>' +
+                '<td style="padding:7px 10px;text-align:right;">' + r.count + '</td>' +
+                '<td style="padding:7px 10px;text-align:right;color:var(--green-600);font-weight:700;">$' + r.total.toFixed(2) + '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table>' +
+        '<div style="font-size:.72rem;font-weight:800;letter-spacing:.06em;color:var(--text-muted);margin:4px 0 6px;">RECENT TIPS</div>';
+
+    el.innerHTML = html + '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">' +
         '<thead><tr style="border-bottom:1.5px solid var(--slate-200);"><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">From</th><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">For</th><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Role</th><th style="text-align:left;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Child</th><th style="text-align:right;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Amount</th><th style="text-align:right;padding:7px 10px;font-size:.74rem;color:var(--text-muted);font-weight:600;">Date</th></tr></thead>' +
         '<tbody>' + log.slice(0, 100).map(function(t) {
             var d = t.date ? new Date(t.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
@@ -2747,11 +3078,19 @@ function boot() {
     renderAdminMsgs('all');
     _loadFormSubmissions();
 
-    // Pull parent form responses from the cloud once the DB client is ready
+    // Pull parent form responses, camper mail, and tips from the cloud once
+    // the DB client is ready
     function _initCloudSubs() {
         _loadCloudSubmissions(function() {
             _loadFormSubmissions();
             if (currentMsgTab === 'forms') { renderReceivedTree(); renderSentForms(); }
+        });
+        _loadCloudMail(function() {
+            _mergeMailRows(); // updates the sidebar badge
+            if (document.getElementById('page-mail').classList.contains('active')) renderAdminMail();
+        });
+        _loadCloudTips(function() {
+            if (document.getElementById('page-tips').classList.contains('active')) _renderTipHistory();
         });
     }
     if (_dbc()) _initCloudSubs();
@@ -2795,6 +3134,11 @@ function boot() {
         if (e.key === FORM_SUB_KEY) {
             _loadFormSubmissions();
             if (currentMsgTab === 'forms') { renderReceivedTree(); renderSentForms(); }
+        }
+        // Parent wrote a letter (same-browser demo) — refresh the mail queue
+        if (e.key === MAIL_LOCAL_KEY) {
+            _mergeMailRows();
+            if (document.getElementById('page-mail').classList.contains('active')) renderAdminMail();
         }
     });
 }

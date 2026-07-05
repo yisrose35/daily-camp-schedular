@@ -118,6 +118,7 @@
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Communication</div>
         <button class="lk-nav-item" data-page="messages" onclick="nav('messages')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Messages <span class="nav-count" id="navMsgCount" style="display:none;"></span></button>
+        <button class="lk-nav-item" data-page="mail" onclick="nav('mail')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> Camper Mail</button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Camp Life</div>
         <button class="lk-nav-item" data-page="schedule" onclick="nav('schedule')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Schedule</button>
@@ -231,6 +232,15 @@
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Tips</div>
                 <div class="lk-home-tile-sub">Show your appreciation</div>
+            </div>
+        </button>
+        <button class="lk-home-tile" onclick="nav('mail')">
+            <div class="lk-home-tile-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            </div>
+            <div class="lk-home-tile-body">
+                <div class="lk-home-tile-label">Camper Mail</div>
+                <div class="lk-home-tile-sub" id="homeMailSub">Write to your camper</div>
             </div>
         </button>
     </div>
@@ -392,6 +402,38 @@
 </div>
     <div class="lk-tabs" id="listChildTabs" style="margin-bottom:16px;"></div>
     <div id="campListsWrap"><div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div><h3>No lists yet</h3><p>When camp shares a packing list or checklist, it will appear here.</p></div></div>
+</div>
+
+<!-- CAMPER MAIL -->
+<div class="lk-page" id="page-mail">
+    <div class="lk-page-hero">
+    <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
+    <div><h1>Camper Mail</h1><p>Write a letter to your camper — the camp office prints it and hands it out</p></div>
+</div>
+
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Write a Letter</h2></div>
+        <div class="lk-tabs" id="mailChildTabs" style="margin-bottom:14px;"></div>
+        <div class="lk-field"><label>Subject <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+            <input type="text" class="lk-input" id="mailSubject" maxlength="120" placeholder='e.g. "We miss you!"'>
+        </div>
+        <div class="lk-field" style="margin-top:12px;"><label>Your letter</label>
+            <textarea class="lk-textarea" id="mailBody" rows="8" maxlength="10000" placeholder="Dear ..." oninput="_mailCount()"></textarea>
+            <div style="display:flex;justify-content:space-between;margin-top:5px;">
+                <span style="font-size:.73rem;color:var(--text-muted);">Delivered on paper — emojis print too 🙂</span>
+                <span style="font-size:.73rem;color:var(--text-muted);" id="mailCharCount"></span>
+            </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px;" onclick="sendCamperMail()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Send to Camp
+        </button>
+    </div>
+
+    <div class="lk-card" style="margin-top:16px;">
+        <div class="lk-card-head"><h2>My Letters</h2></div>
+        <div id="myMailList"><div class="lk-empty" style="padding:20px 0;"><h3>No letters yet</h3><p>Letters you send appear here with their delivery status.</p></div></div>
+    </div>
 </div>
 
 <!-- PHOTOS -->
@@ -690,6 +732,7 @@ function nav(p){
     if(p==='children')document.getElementById('childDetail').style.display='none';
     if(p==='tips')renderTipsPage();
     if(p==='lists')renderCampLists();
+    if(p==='mail')renderCamperMail();
     window.scrollTo(0,0);
 }
 function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
@@ -1169,6 +1212,101 @@ function _updateListsHomeTile(){
     sub.textContent=total?(done>=total?'All checked off':done+' of '+total+' checked'):'Packing & checklists';
 }
 
+// CAMPER MAIL — letters from parents, printed by the camp office
+var MAIL_LOCAL_KEY = 'campistry_link_camper_mail_v1';
+window._myCamperMail = window._myCamperMail || []; // cloud copy, set by auth layer
+var _mailChildName = null;
+
+function _mailEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function _mailCount(){
+    var ta=document.getElementById('mailBody');
+    var el=document.getElementById('mailCharCount');
+    if(ta&&el)el.textContent=ta.value.length?ta.value.length+' / 10000':'';
+}
+
+function _mailLocal(){ try{ return JSON.parse(localStorage.getItem(MAIL_LOCAL_KEY)||'[]'); }catch(e){ return []; } }
+
+function renderCamperMail(){
+    // Child tabs
+    var ct=document.getElementById('mailChildTabs');
+    if(ct){
+        ct.innerHTML='';
+        if(children.length>1){
+            if(!_mailChildName||!children.some(function(c){return c.name===_mailChildName;}))_mailChildName=children[0].name;
+            children.forEach(function(c){
+                ct.innerHTML+='<button class="lk-tab '+(c.name===_mailChildName?'active':'')+'" onclick="_mailChildName=\''+c.name.replace(/'/g,"\\'")+'\';renderCamperMail()">'+_mailEsc(c.name.split(' ')[0])+'</button>';
+            });
+        } else {
+            _mailChildName=children.length?children[0].name:null;
+            if(children.length===1)ct.innerHTML='<span style="font-size:.8rem;color:var(--text-muted);">To: <strong>'+_mailEsc(children[0].name)+'</strong></span>';
+        }
+    }
+    _renderMyMail();
+}
+
+function _renderMyMail(){
+    var el=document.getElementById('myMailList'); if(!el)return;
+    // Cloud letters (any device) merged with local mirror (this device), cloud wins by id
+    var cloud=window._myCamperMail||[];
+    var seen={}; cloud.forEach(function(m){seen[m.id]=1;});
+    var all=cloud.map(function(m){
+        return {id:m.id,camper:m.camper_name,subject:m.subject,body:m.body,status:m.status,date:m.created_at};
+    });
+    _mailLocal().forEach(function(m){ if(!seen[m.id])all.push(m); });
+    all.sort(function(a,b){return new Date(b.date||0)-new Date(a.date||0);});
+    if(!all.length){
+        el.innerHTML='<div class="lk-empty" style="padding:20px 0;"><h3>No letters yet</h3><p>Letters you send appear here with their delivery status.</p></div>';
+        return;
+    }
+    el.innerHTML=all.slice(0,50).map(function(m){
+        var d=m.date?new Date(m.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
+        var printed=m.status==='printed';
+        var badge=printed
+            ? '<span class="badge badge-ok" style="font-size:.64rem;">Printed &amp; delivered</span>'
+            : '<span class="badge badge-warn" style="font-size:.64rem;">Waiting to print</span>';
+        return '<div style="padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                '<span style="font-size:.85rem;font-weight:700;color:var(--slate-900);">'+_mailEsc(m.subject||'(no subject)')+'</span>'+badge+
+                '<div style="flex:1;"></div><span style="font-size:.72rem;color:var(--text-muted);">'+d+'</span>' +
+            '</div>' +
+            '<div style="font-size:.76rem;color:var(--text-muted);margin-top:3px;">To '+_mailEsc(m.camper||'')+' &nbsp;·&nbsp; '+_mailEsc(String(m.body||'').slice(0,90))+(String(m.body||'').length>90?'…':'')+'</div>' +
+        '</div>';
+    }).join('');
+    var sub=document.getElementById('homeMailSub');
+    if(sub){var pending=all.filter(function(m){return m.status!=='printed';}).length;
+        sub.textContent=pending?pending+' waiting to print':'Write to your camper';}
+}
+
+function sendCamperMail(){
+    var child=children.find(function(c){return c.name===_mailChildName;})||children[0];
+    if(!child){toast('No camper linked yet');return;}
+    var subject=(document.getElementById('mailSubject')||{}).value||'';
+    var body=((document.getElementById('mailBody')||{}).value||'').trim();
+    if(!body){toast('Write your letter first');return;}
+    var now=new Date();
+    var letter={
+        id:'mail_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5),
+        camper:child.name, division:child.division||'', grade:child.grade||'', bunk:child.bunk||'',
+        parentName:parent.name||'', subject:subject.trim(), body:body,
+        status:'new', date:now.toISOString()
+    };
+    // Local mirror — makes same-browser admin demo work and survives network failure
+    try{
+        var local=_mailLocal(); local.unshift(letter);
+        localStorage.setItem(MAIL_LOCAL_KEY, JSON.stringify(local));
+    }catch(e){}
+    // Cloud — this is how the camp office actually receives it
+    if(window._submitCamperMailCloud){
+        window._submitCamperMailCloud(letter);
+    }
+    document.getElementById('mailSubject').value='';
+    document.getElementById('mailBody').value='';
+    _mailCount();
+    _renderMyMail();
+    toast('Letter sent! The camp office will print it for '+child.name.split(' ')[0]+'.');
+}
+
 // PICKUP & ARRIVAL
 var PARENT_REQ_KEY = 'campistry_parent_requests_v1';
 var LINK_STORE_KEY = 'campistry_link_v1';
@@ -1254,6 +1392,7 @@ function _loadSnacksData(childrenList){
     var snacks=gs.campistrySnacks||{}, accts=snacks.accounts||{}, txs=snacks.transactions||[];
     childrenList.forEach(function(c){
         var a=accts[c.name]||{};
+        c._hasSnacksAccount=(a.balance!=null);
         if(a.balance     !=null)c.canteenBalance=a.balance;
         if(a.dailyLimit  !=null)c.dailyLimit=a.dailyLimit;
         if(a.creditLimit !=null)c.creditLimit=a.creditLimit;
@@ -1484,6 +1623,65 @@ window.addEventListener('storage', function(e) {
         return _cloudSubs.some(function(s) { return s.form_id === formId && s.camper_name === camperName; });
     };
 
+    // ── Camper Mail bridge (migration 015) ────────────────────────────────────
+    window._submitCamperMailCloud = function(letter) {
+        db.rpc('submit_camper_mail', {
+            p_camper_name: letter.camper || '',
+            p_subject:     letter.subject || '',
+            p_body:        letter.body || '',
+            p_division:    letter.division || null,
+            p_grade:       letter.grade || null,
+            p_bunk:        letter.bunk || null
+        }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Camper mail cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+                if (res.data && res.data.error === 'daily_limit_reached') {
+                    if (typeof toast === 'function') toast('Daily letter limit reached — try again tomorrow.');
+                }
+            } else {
+                _loadMyMail(); // refresh statuses with the cloud row
+            }
+        });
+    };
+    function _loadMyMail() {
+        db.rpc('get_my_camper_mail').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            window._myCamperMail = res.data.mail || [];
+            if (typeof _renderMyMail === 'function') _renderMyMail();
+        });
+    }
+
+    // ── Tips bridge (migration 016) ───────────────────────────────────────────
+    window._submitTipCloud = function(tip) {
+        db.rpc('submit_link_tip', {
+            p_recipient_name: tip.recipientName || '',
+            p_recipient_role: tip.role || '',
+            p_amount:         tip.amount || 0,
+            p_camper_name:    tip.childName || null
+        }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Tip cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+            } else {
+                _loadMyTips();
+            }
+        });
+    };
+    function _loadMyTips() {
+        db.rpc('get_my_tips').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            window._cloudMyTips = res.data.tips || [];
+        });
+    }
+    function _loadTipsConfigCloud(campId) {
+        db.rpc('get_link_tips_config', { p_camp_id: campId }).then(function(res) {
+            if (res.error || !res.data || !res.data.success || !res.data.config) return;
+            window._cloudTipsConfig = res.data.config;
+            // Re-render if the parent is looking at the Tips page right now
+            var pg = document.getElementById('page-tips');
+            if (pg && pg.classList.contains('active') && typeof renderTipsPage === 'function') renderTipsPage();
+        });
+    }
+
     console.log('[Parent] Auth init. Token in URL:', urlToken ? urlToken.slice(0,8)+'…' : 'none');
 
     // ── Overlay helpers ───────────────────────────────────────────────────────
@@ -1549,11 +1747,14 @@ window.addEventListener('storage', function(e) {
         init();
         hydratePickupRequests();
         _hideOverlay('parentAuthOverlay');
-        // Load camp-configured forms + lists after portal is visible
+        // Load camp-configured forms, lists, tips config, mail + tip history
         if (parent.campId) {
             _loadLinkForms(parent.campId);
             _loadLinkLists(parent.campId);
+            _loadTipsConfigCloud(parent.campId);
         }
+        _loadMyMail();
+        _loadMyTips();
     }
 
     var _lastLinkForms = null; // cache so post-submit re-renders don't lose the RPC data
@@ -2161,6 +2362,9 @@ var _tipTarget = null; // { name, role }
 var _tipChildId = null;
 
 function _loadTipsConfigP() {
+    // Cloud config (get_link_tips_config) is authoritative — the local key
+    // only exists when the admin shares this browser
+    if (window._cloudTipsConfig) return window._cloudTipsConfig;
     var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e){}
     return gs.link_tips_config || { amounts: [5, 10, 20, 50], categories: [] };
 }
@@ -2313,30 +2517,37 @@ function confirmTip() {
     var child = _activeTipChild();
     if (!child) { toast('Select a child first'); return; }
 
-    // Check balance
-    var bal = child.canteenBalance || 0;
-    var floor = child.balanceFloor || 0;
-    var credit = child.creditLimit || 0;
-    var spendable = bal - floor + credit;
-    if (amt > spendable) { toast('Insufficient balance ($' + spendable.toFixed(2) + ' available)'); return; }
+    // Balance check only applies when this device actually has the child's
+    // canteen account data (same browser as the Snacks admin/POS). On a
+    // normal parent device the tip is recorded in the cloud and the camp
+    // settles it against the family's account.
+    if (child._hasSnacksAccount) {
+        var bal = child.canteenBalance || 0;
+        var floor = child.balanceFloor || 0;
+        var credit = child.creditLimit || 0;
+        var spendable = bal - floor + credit;
+        if (amt > spendable) { toast('Insufficient balance ($' + spendable.toFixed(2) + ' available)'); return; }
+    }
 
     var recipName = _tipTarget.name;
     var recipRole = _tipTarget.role;
     var now = new Date();
 
-    // Deduct from canteen balance
-    _mutateSnacks(function(s) {
-        var a = s.accounts[child.name] || (s.accounts[child.name] = {balance:0, dailyLimit:10, spentToday:0});
-        a.balance = Math.round(((a.balance || 0) - amt) * 100) / 100;
-        s.transactions.unshift({
-            time: now.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}),
-            camper: child.name,
-            items: 'Tip — ' + recipName + ' (' + recipRole + ')',
-            amount: amt,
-            type: 'tip',
-            date: now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0')
+    // Deduct from canteen balance when the account is on this device
+    if (child._hasSnacksAccount) {
+        _mutateSnacks(function(s) {
+            var a = s.accounts[child.name] || (s.accounts[child.name] = {balance:0, dailyLimit:10, spentToday:0});
+            a.balance = Math.round(((a.balance || 0) - amt) * 100) / 100;
+            s.transactions.unshift({
+                time: now.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}),
+                camper: child.name,
+                items: 'Tip — ' + recipName + ' (' + recipRole + ')',
+                amount: amt,
+                type: 'tip',
+                date: now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0')
+            });
         });
-    });
+    }
 
     // Log in tips ledger
     var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); } catch(e){}
@@ -2354,6 +2565,11 @@ function confirmTip() {
     localStorage.setItem('campGlobalSettings_v1', JSON.stringify(gs));
     try { localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(gs)); } catch(e){}
 
+    // Record in the cloud — this is how the camp actually receives the tip
+    if (window._submitTipCloud) {
+        window._submitTipCloud({ recipientName: recipName, role: recipRole, amount: amt, childName: child.name });
+    }
+
     _loadSnacksData(children);
     closeTipSheet();
     _renderTipHistory(child);
@@ -2362,7 +2578,14 @@ function confirmTip() {
 
 function _renderTipHistory(child) {
     var el = document.getElementById('tipHistoryList'); if (!el) return;
-    var log = _loadTipsLogP();
+    // Merge local ledger with cloud rows (any device), cloud-deduped by id
+    var log = _loadTipsLogP().slice();
+    var localIds = {}; log.forEach(function(t){ localIds[t.id] = 1; });
+    (window._cloudMyTips || []).forEach(function(t) {
+        if (localIds[t.id]) return;
+        log.push({ id: t.id, childName: t.camper_name, recipientName: t.recipient_name, role: t.recipient_role, amount: parseFloat(t.amount) || 0, date: t.created_at });
+    });
+    log.sort(function(a,b){ return new Date(b.date||0) - new Date(a.date||0); });
     var mine = child ? log.filter(function(t){ return t.childName === child.name; }) : log;
     if (!mine.length) {
         el.innerHTML = '<div class="lk-empty" style="padding:20px 0;"><h3>No tips sent yet</h3><p>Tips you send will appear here.</p></div>';
