@@ -397,77 +397,43 @@
     <!-- ========================================= -->
     <!-- PRICING SECTION -->
     <!-- ========================================= -->
-    <section id="pricing" class="pricing reveal">
+    <section id="pricing" class="pricing bundle-section reveal">
         <div class="section-header">
             <span class="section-eyebrow">Pricing</span>
-            <h2 class="section-title">Simple, transparent pricing</h2>
-            <p class="section-sub">Founding member pricing available through June 1, 2026</p>
+            <h2 class="section-title">Build your bundle</h2>
+            <p class="section-sub">Pick the products your camp needs and watch your price update instantly — one flat rate per product, per summer.</p>
         </div>
         
-        <div class="pricing-grid pricing-grid-two">
-            <!-- Early Access -->
-            <div class="pricing-card featured">
-                <div class="pricing-popular">Founding Member</div>
-                <div class="pricing-header">
-                    <h3>Founding Member</h3>
-                    <p>Claim your spot today</p>
+        <div class="bundle-layout">
+            <!-- Product picker (cards injected by JS from the PRODUCTS config) -->
+            <div class="bundle-products" id="bundleProducts">
+                <noscript>
+                    <p style="color:var(--slate-500);">Enable JavaScript to build a custom bundle, or
+                    <a href="mailto:campistryoffice@gmail.com" style="color:var(--camp-green);font-weight:600;">contact us</a> for a quote.</p>
+                </noscript>
+            </div>
+
+            <!-- Live summary -->
+            <aside class="bundle-summary" id="bundleSummary" aria-live="polite">
+                <h3 class="bundle-summary-title">Your bundle</h3>
+                <div class="bundle-summary-items" id="bundleSummaryItems">
+                    <p class="bundle-empty">Nothing selected yet — toggle a product to start building.</p>
                 </div>
-                <div class="pricing-price">
-                    <span class="price-currency">$</span>
-                    <span class="price-value">100</span>
-                    <span class="price-period">today</span>
-                </div>
-                <div class="pricing-plus">
-                    <span>+</span>
-                    <div class="pricing-price-secondary">
-                        <span class="price-currency">$</span>
-                        <span class="price-value-small">1,000</span>
-                        <span class="price-period">when camp starts</span>
+                <div class="bundle-summary-totals" id="bundleSummaryTotals" hidden>
+                    <div class="bundle-line"><span>Subtotal</span><span id="bundleSubtotal">$0</span></div>
+                    <div class="bundle-line bundle-line-discount" id="bundleDiscountLine" hidden>
+                        <span id="bundleDiscountLabel">Bundle discount</span><span id="bundleDiscount">-$0</span>
                     </div>
+                    <div class="bundle-line bundle-line-total"><span>Total <small>/ summer</small></span><span id="bundleTotal">$0</span></div>
                 </div>
-                <ul class="pricing-features">
-                    <li><strong>Immediate access</strong> to Campistry Flow</li>
-                    <li>Get comfortable before summer rush</li>
-                    <li><strong>Direct access to the developer</strong></li>
-                    <li>Shape the product to fit your camp</li>
-                    <li>Priority feature requests</li>
-                    <li>Founding member pricing locked in</li>
-                    <li>Cloud backup &amp; sync included</li>
-                </ul>
-                <button class="pricing-cta primary" onclick="openAuthModal('signup')">
-                    Claim Your Spot
-                </button>
-                <p class="pricing-note">
-                    <strong>Available through June 1, 2026</strong>
-                </p>
-            </div>
-            <!-- Standard -->
-            <div class="pricing-card">
-                <div class="pricing-header">
-                    <h3>Standard</h3>
-                    <p>Full summer access</p>
-                </div>
-                <div class="pricing-price">
-                    <span class="price-currency">$</span>
-                    <span class="price-value">1,500</span>
-                    <span class="price-period">/summer</span>
-                </div>
-                <ul class="pricing-features">
-                    <li>Full access to Campistry Flow</li>
-                    <li>All scheduling features</li>
-                    <li>League management</li>
-                    <li>Rainy day mode</li>
-                    <li>Cloud backup &amp; sync</li>
-                    <li>Email support</li>
-                </ul>
-                <button class="pricing-cta" onclick="openAuthModal('signup')">
-                    Get Started
-                </button>
-                <p class="pricing-note">Available after June 1, 2026</p>
-            </div>
+                <button class="pricing-cta primary bundle-cta" onclick="openAuthModal('signup')">Get started</button>
+                <button class="bundle-reset" type="button" id="bundleReset" hidden>Clear selection</button>
+                <p class="pricing-note"><strong>Founding member pricing — locked in through June 1, 2026</strong></p>
+            </aside>
         </div>
+
         <div class="pricing-contact">
-            <p>Running multiple camps? <a href="mailto:campistryoffice@gmail.com">Contact us</a> for enterprise pricing.</p>
+            <p>Running multiple camps or want a custom quote? <a href="mailto:campistryoffice@gmail.com">Contact us</a>.</p>
             <p class="contact-response">We respond within 5 hours</p>
         </div>
     </section>
@@ -666,5 +632,152 @@ if (window.location.protocol === 'file:') {
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
 <script defer src="/_vercel/insights/script.js"></script>
+<!-- ========================================= -->
+<!-- BUILD YOUR BUNDLE — pricing calculator -->
+<!-- ========================================= -->
+<script>
+/*
+  To change a price or launch a product, edit the PRODUCTS list below:
+    price      = flat cost per summer (USD)
+    available  = true  -> selectable now
+                 false -> shown greyed out as "Coming Soon"
+  DISCOUNT_TIERS gives a multi-product discount (highest matching tier wins).
+  Set DISCOUNT_TIERS = [] to disable bundle discounts entirely.
+*/
+(function () {
+  var PRODUCTS = [
+    { key: 'flow',   name: 'Flow',   tagline: 'Smart Daily Scheduling',    price: 1500, available: true,  logo: 'Flow_clean.png',   color: '#147D91' },
+    { key: 'me',     name: 'Me',     tagline: 'Personal Portals',          price: 0,    available: true,  logo: 'Me_clean.png',     color: '#F59E0B' }, /* price 0 -> shows "Included" */
+    { key: 'go',     name: 'Go',     tagline: 'Transportation Management',  price: 750,  available: false, logo: 'Go_clean.png',     color: '#10B981' },
+    { key: 'health', name: 'Health', tagline: 'Medical Records & Wellness', price: 600,  available: false, logo: 'Health_clean.png', color: '#5F1B8C' },
+    { key: 'live',   name: 'Live',   tagline: 'Daily Attendance Tracking',  price: 400,  available: false, logo: 'Live_clean.png',   color: '#2151B5' },
+    { key: 'snacks', name: 'Snacks', tagline: 'Canteen Management',         price: 500,  available: false, logo: 'Snacks_clean.png', color: '#6A320F' },
+    { key: 'link',   name: 'Link',   tagline: 'Communication Portal',       price: 400,  available: false, logo: 'Link_clean.png',   color: '#2A7A35' }
+  ];
+
+  // N products selected -> percent off. Highest tier whose "min" is met wins.
+  // Empty for now (no bundle discount). To enable, e.g.:
+  //   var DISCOUNT_TIERS = [ { min: 4, pct: 20 }, { min: 3, pct: 15 }, { min: 2, pct: 10 } ];
+  var DISCOUNT_TIERS = [];
+
+  function money(n) {
+    return '$' + Math.round(n).toLocaleString('en-US');
+  }
+
+  function bestTier(count) {
+    var best = null;
+    for (var i = 0; i < DISCOUNT_TIERS.length; i++) {
+      if (count >= DISCOUNT_TIERS[i].min) {
+        if (!best || DISCOUNT_TIERS[i].pct > best.pct) best = DISCOUNT_TIERS[i];
+      }
+    }
+    return best;
+  }
+
+  function init() {
+    var wrap = document.getElementById('bundleProducts');
+    if (!wrap) return;
+
+    var selected = Object.create(null);
+
+    // Build the product cards.
+    PRODUCTS.forEach(function (p) {
+      var label = document.createElement('label');
+      label.className = 'bundle-card' + (p.available ? '' : ' is-disabled');
+      label.style.setProperty('--accent', p.color);
+
+      var priceHtml;
+      if (!p.available) {
+        priceHtml = '<span class="bundle-card-price bundle-card-soon">Coming soon</span>';
+      } else if (p.price === 0) {
+        priceHtml = '<span class="bundle-card-price bundle-card-incl">Included</span>';
+      } else {
+        priceHtml = '<span class="bundle-card-price">' + money(p.price) + '<small>/summer</small></span>';
+      }
+
+      label.innerHTML =
+        '<input type="checkbox" class="bundle-card-input" data-key="' + p.key + '"' + (p.available ? '' : ' disabled') + '>' +
+        '<span class="bundle-card-check" aria-hidden="true"></span>' +
+        '<img class="bundle-card-logo" src="' + p.logo + '" alt="" loading="lazy">' +
+        '<span class="bundle-card-body">' +
+          '<span class="bundle-card-name">Campistry <b>' + p.name + '</b></span>' +
+          '<span class="bundle-card-tag">' + p.tagline + '</span>' +
+        '</span>' +
+        priceHtml;
+
+      wrap.appendChild(label);
+    });
+
+    var itemsBox   = document.getElementById('bundleSummaryItems');
+    var totalsBox  = document.getElementById('bundleSummaryTotals');
+    var subtotalEl = document.getElementById('bundleSubtotal');
+    var discLine   = document.getElementById('bundleDiscountLine');
+    var discLabel  = document.getElementById('bundleDiscountLabel');
+    var discEl     = document.getElementById('bundleDiscount');
+    var totalEl    = document.getElementById('bundleTotal');
+    var resetBtn   = document.getElementById('bundleReset');
+
+    function render() {
+      var chosen = PRODUCTS.filter(function (p) { return selected[p.key]; });
+
+      if (!chosen.length) {
+        itemsBox.innerHTML = '<p class="bundle-empty">Nothing selected yet — toggle a product to start building.</p>';
+        totalsBox.hidden = true;
+        resetBtn.hidden = true;
+        return;
+      }
+
+      itemsBox.innerHTML = chosen.map(function (p) {
+        var priceLabel = p.price === 0 ? 'Included' : money(p.price);
+        return '<div class="bundle-item"><span class="bundle-item-dot" style="background:' + p.color + '"></span>' +
+               '<span class="bundle-item-name">Campistry ' + p.name + '</span>' +
+               '<span class="bundle-item-price">' + priceLabel + '</span></div>';
+      }).join('');
+
+      var subtotal = chosen.reduce(function (s, p) { return s + p.price; }, 0);
+      var tier = bestTier(chosen.length);
+      var discount = tier ? subtotal * tier.pct / 100 : 0;
+
+      subtotalEl.textContent = money(subtotal);
+      if (tier) {
+        discLabel.textContent = 'Bundle discount (' + tier.pct + '% off ' + chosen.length + ' products)';
+        discEl.textContent = '-' + money(discount);
+        discLine.hidden = false;
+      } else {
+        discLine.hidden = true;
+      }
+      totalEl.textContent = money(subtotal - discount);
+
+      totalsBox.hidden = false;
+      resetBtn.hidden = false;
+    }
+
+    wrap.addEventListener('change', function (e) {
+      var input = e.target.closest('.bundle-card-input');
+      if (!input) return;
+      var key = input.getAttribute('data-key');
+      if (input.checked) selected[key] = true; else delete selected[key];
+      var card = input.closest('.bundle-card');
+      if (card) card.classList.toggle('is-selected', input.checked);
+      render();
+    });
+
+    resetBtn.addEventListener('click', function () {
+      selected = Object.create(null);
+      wrap.querySelectorAll('.bundle-card-input').forEach(function (i) { i.checked = false; });
+      wrap.querySelectorAll('.bundle-card').forEach(function (c) { c.classList.remove('is-selected'); });
+      render();
+    });
+
+    render();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
 </body>
 </html>
