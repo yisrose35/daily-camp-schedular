@@ -50,7 +50,7 @@ const Leagues = global.window.SchedulerCoreLeagues;
 assert.ok(Leagues && typeof Leagues.processRegularLeagues === 'function', 'module loaded');
 
 // --- Scenario builder ---------------------------------------------------------
-function makeContext(fields) {
+function makeContext(fields, teams) {
     return {
         schedulableSlotBlocks: [{
             type: 'league', event: 'League Time', divName: 'Juniors',
@@ -59,7 +59,7 @@ function makeContext(fields) {
         masterLeagues: {
             'Test League': {
                 name: 'Test League', enabled: true, divisions: ['Juniors'],
-                teams: ['T1', 'T2', 'T3', 'T4'], sports: ['Basketball'],
+                teams: teams || ['T1', 'T2', 'T3', 'T4'], sports: ['Basketball'],
                 schedulingPriority: 'sport_variety',
             },
         },
@@ -74,11 +74,11 @@ function makeContext(fields) {
     };
 }
 
-function run(fields) {
+function run(fields, teams) {
     cloud.leagueHistory = undefined;           // fresh history each run
     global.localStorage._m = {};
     dispatched.length = 0;
-    Leagues.processRegularLeagues(makeContext(fields));
+    Leagues.processRegularLeagues(makeContext(fields, teams));
     return {
         report: global.window.__leagueByeReport || [],
         events: dispatched.filter(e => e.type === 'campistry-league-bye-warnings'),
@@ -145,6 +145,36 @@ const courts = (n) => Array.from({ length: n }, (_, i) =>
     assert.strictEqual(r.events.length, 0, 'TEST4: no event under killswitch');
     global.window.__leagueByeNotify = undefined;
     console.log('✅ TEST 4 — killswitch works');
+}
+
+// =============================================================================
+// TEST 5 — structural odd-team bye: 3 teams, PLENTY of fields → 1 game places,
+//          1 team rotates to a bye. Must still be reported (not a field issue).
+// =============================================================================
+{
+    const r = run(courts(3), ['T1', 'T2', 'T3']);
+    assert.strictEqual(r.report.length, 1, 'TEST5: exactly one bye recorded, got ' + JSON.stringify(r.report));
+    const b = r.report[0];
+    assert.strictEqual(b.kind, 'bye', 'TEST5: kind is bye');
+    assert.ok(b.team1 && !b.team2, 'TEST5: single-team (unpaired) bye');
+    assert.ok(/odd number of teams/i.test(b.reason), 'TEST5: reason explains the rotation: ' + b.reason);
+    assert.ok(/not a field shortage/i.test(b.reason), 'TEST5: reason distinguishes it from a field problem: ' + b.reason);
+    assert.strictEqual(r.events.length, 1, 'TEST5: event dispatched');
+    console.log('✅ TEST 5 — structural odd-team bye reported with its own reason');
+}
+
+// =============================================================================
+// TEST 6 — no double-count: 4 teams (2 matchups) but only 1 field → 1 game
+//          places, 1 matchup byes (field shortage). The unpaired-bye scan must
+//          NOT also fire for those two teams (they were paired).
+// =============================================================================
+{
+    const r = run(courts(1), ['T1', 'T2', 'T3', 'T4']);
+    assert.strictEqual(r.report.length, 1, 'TEST6: exactly one bye (no double count), got ' + JSON.stringify(r.report));
+    assert.strictEqual(r.report[0].kind, 'bye', 'TEST6: it is the field-shortage bye');
+    assert.ok(r.report[0].team1 && r.report[0].team2, 'TEST6: it is the pairwise (field) bye, not a stray unpaired one');
+    assert.ok(/Not enough fields/i.test(r.report[0].reason), 'TEST6: field-shortage reason kept');
+    console.log('✅ TEST 6 — paired-but-fieldless bye not double-counted by the unpaired scan');
 }
 
 console.log('\n🎉 league_bye_notify_sim: ALL TESTS PASSED');

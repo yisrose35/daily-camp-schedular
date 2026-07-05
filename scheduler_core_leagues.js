@@ -1230,6 +1230,38 @@
         _recordByeEvent({ league: leagueName, kind: 'bye', team1: t1, team2: t2, reason: reason });
     }
 
+    // Structural bye: an active team that never entered a matchup this period
+    // (e.g. an odd number of teams means one rotates to a bye each round). It
+    // shows as "Team — Bye" on the grid just like a field-shortage bye, so it
+    // must be reported too — with its OWN reason (not a field problem). Teams
+    // whose matchup WAS chosen but lost its field are already reported pairwise
+    // by _recordForcedBye (they're in `matchups`), so this only covers the
+    // never-paired ones — the two sets are disjoint, no double count.
+    function _recordUnpairedByes(leagueName, activeTeams, matchups) {
+        try {
+            const teams = activeTeams || [];
+            const paired = new Set();
+            (matchups || []).forEach(function (m) {
+                const a = Array.isArray(m) ? m[0] : m;
+                const b = Array.isArray(m) ? m[1] : null;
+                if (a) paired.add(a);
+                if (b) paired.add(b);
+            });
+            const odd = teams.length % 2 === 1;
+            teams.forEach(function (t) {
+                if (!t || paired.has(t)) return;
+                _recordByeEvent({
+                    league: leagueName, kind: 'bye', team1: t, team2: null,
+                    reason: odd
+                        ? ('This league has an odd number of teams playing this period (' + teams.length
+                            + '), so one team rotates to a bye each round — this is not a field shortage. '
+                            + 'Add or remove a team for full pairings.')
+                        : 'This team was not paired into a game this period, so it is on a bye.'
+                });
+            });
+        } catch (_) {}
+    }
+
     function _publishByeReport() {
         try {
             window.__leagueByeReport = _byeReport.slice();
@@ -3039,7 +3071,16 @@
                     console.log(`      • ${t1} vs ${t2}`);
                 });
 
-                if (matchups.length === 0) continue;
+                if (matchups.length === 0) {
+                    // ≥2 active teams but no pairings came back — every active team
+                    // is effectively on a bye this period. Rare, but report it so
+                    // no bye is silent.
+                    _recordByeEvent({
+                        league: league.name, kind: 'skipped', time: timeKey, game: gameNumber,
+                        reason: 'No matchups could be formed for this league period, so no games ran and the teams were given regular activities instead.'
+                    });
+                    continue;
+                }
 
                 // (★ FN-57: the field/sport pool is now built BEFORE matchup
                 // selection — see above — because sport_variety pairing needs
@@ -3194,6 +3235,14 @@
                         reason: 'None of this league\'s ' + matchups.length + ' matchup(s) could get a field at this time (see the bye entries), so the league period was skipped — the affected bunks were given regular activities instead.'
                     });
                     continue;
+                }
+
+                // ★ STRUCTURAL BYES: report every active team that never got into
+                //   a matchup this period (odd-team rotation, etc.) so EVERY bye
+                //   shown on the grid is accounted for. Regular rounds only —
+                //   playoff byes are bracket structure, not what this warns about.
+                if (!playoffMatchupSports && !playoffIsTBD) {
+                    _recordUnpairedByes(league.name, activeTeams, matchups);
                 }
 
                 // ★ INDOOR: increment per-team count for matchups that landed indoor
