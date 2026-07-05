@@ -1,0 +1,18 @@
+{
+    "name": "Campistry Link",
+    "short_name": "Link",
+    "description": "Your camp, in your pocket — messages, canteen, forms, photos and more.",
+    "id": "./campistry_link_parent.html",
+    "start_url": "./campistry_link_parent.html",
+    "scope": "./",
+    "display": "standalone",
+    "orientation": "portrait",
+    "theme_color": "#2A7A35",
+    "background_color": "#F8FAFC",
+    "icons": [
+        { "src": "link_icon_192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+        { "src": "link_icon_512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+        { "src": "link_icon_192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+        { "src": "link_icon_512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    ]
+}

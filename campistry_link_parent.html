@@ -3,8 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <title>Campistry Link | Parent Portal</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no, maximum-scale=1">
+    <!-- PWA — installable app -->
+    <link rel="manifest" href="link_manifest.webmanifest">
+    <meta name="theme-color" content="#FFFFFF">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Link">
+    <link rel="apple-touch-icon" href="link_icon_180.png">
+    <link rel="icon" type="image/png" href="link_icon_192.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
@@ -79,10 +87,17 @@
     <script>
     (function() {
         var ov = document.getElementById('link-splash');
+        // Full splash animation only on a cold start — instant on reloads
+        // (pull-to-refresh, back-forward) so the app feels snappy.
+        var seen = false;
+        try { seen = !!sessionStorage.getItem('lk_splash_seen'); sessionStorage.setItem('lk_splash_seen', '1'); } catch (e) {}
+        if (seen) {
+            ov.querySelectorAll('.link-splash-half').forEach(function (el) { el.style.animation = 'none'; });
+        }
         setTimeout(function() {
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
-        }, 2200);
+        }, seen ? 250 : 2200);
     })();
     </script>
 </div>
@@ -137,14 +152,13 @@
     </div>
 </nav>
 
-<!-- BOTTOM NAV (Mobile) -->
+<!-- BOTTOM NAV (Mobile) — 5-tab app bar; everything else lives in "More" -->
 <div class="lk-bnav"><div class="lk-bnav-inner">
-    <button class="lk-bnav-item active" data-page="home" onclick="nav('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Home</button>
-    <button class="lk-bnav-item" data-page="payments" onclick="nav('payments')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Pay</button>
+    <button class="lk-bnav-item active" data-page="home" onclick="nav('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Home</button>
+    <button class="lk-bnav-item" data-page="messages" onclick="nav('messages')"><span class="lk-bnav-badge" id="bnavMsgBadge" style="display:none;"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Messages</button>
     <button class="lk-bnav-item" data-page="canteen" onclick="nav('canteen')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>Canteen</button>
-    <button class="lk-bnav-item" data-page="tips" onclick="nav('tips')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>Tips</button>
-    <button class="lk-bnav-item" data-page="pickup" onclick="nav('pickup')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>Pickup</button>
     <button class="lk-bnav-item" data-page="photos" onclick="nav('photos')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>Photos</button>
+    <button class="lk-bnav-item" data-more onclick="LinkApp.openMoreSheet()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More</button>
 </div></div>
 
 <!-- MAIN -->
@@ -255,7 +269,7 @@
 </div>
     <div id="childrenList"></div>
     <div id="childDetail" style="display:none;margin-top:16px;">
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('childDetail').style.display='none'" style="margin-bottom:12px;">&larr; Back</button>
+        <button class="btn btn-ghost btn-sm" onclick="(window.lkCloseChildDetail||function(){document.getElementById('childDetail').style.display='none'})()" style="margin-bottom:12px;">&larr; Back</button>
         <div id="childDetailContent"></div>
     </div>
 </div>
@@ -735,6 +749,7 @@ function nav(p){
     if(p==='mail')renderCamperMail();
     window.scrollTo(0,0);
 }
+function _syncBnavMsgBadge(unread){var b=document.getElementById('bnavMsgBadge');if(b){b.textContent=unread>99?'99+':unread;b.style.display=unread?'flex':'none';}}
 function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
 var _selAmt=25;
 function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});b.classList.add('sel');}
@@ -798,6 +813,7 @@ function init(){
 
     var unread=messages.filter(function(m){return!m.read}).length;
     var nm=document.getElementById('navMsgCount');if(nm){nm.textContent=unread;nm.style.display=unread?'':'none';}
+    _syncBnavMsgBadge(unread);
     var bal=children.length?(children.reduce(function(s,c){return s+(c.canteenBalance||0)},0)).toFixed(2):null;
 
     // Home tile subtitles
@@ -1046,6 +1062,7 @@ function openMsg(id){
     }
     var unread=messages.filter(function(x){return!x.read}).length;
     var nm2=document.getElementById('navMsgCount');if(nm2){nm2.textContent=unread;nm2.style.display=unread?'':'none';}
+    _syncBnavMsgBadge(unread);
     document.getElementById('msgListView').style.display='none';document.getElementById('msgDetailView').style.display='block';
     var typeBadge=m.type==='announcement'?'<span class="badge badge-warn">Announcement</span>':'<span class="badge badge-info">Direct</span>';
     var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" id="msgReplyBody" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="sendMsgReply(\''+String(m.id).replace(/'/g,'')+'\',\''+String(m.subject||'').replace(/[\'"<>]/g,'')+'\')">Send Reply</button></div></div>':'';
@@ -1537,6 +1554,7 @@ window.addEventListener('storage', function(e) {
         var unread = messages.filter(function(m){ return !m.read; }).length;
         var nm = document.getElementById('navMsgCount');
         if (nm){ nm.textContent = unread; nm.style.display = unread ? '' : 'none'; }
+        _syncBnavMsgBadge(unread);
         var mb = document.getElementById('homeMsgBadge');
         if (mb){ mb.textContent = unread; mb.style.display = unread ? 'flex' : 'none'; }
         var ms = document.getElementById('homeMsgSub');
@@ -1685,7 +1703,7 @@ window.addEventListener('storage', function(e) {
     console.log('[Parent] Auth init. Token in URL:', urlToken ? urlToken.slice(0,8)+'…' : 'none');
 
     // ── Overlay helpers ───────────────────────────────────────────────────────
-    var OVERLAY_CSS = 'position:fixed;inset:0;z-index:9998;background:#fff;display:flex;align-items:center;justify-content:center;padding:20px;';
+    var OVERLAY_CSS = 'position:fixed;inset:0;z-index:9998;background:#fff;display:flex;align-items:center;justify-content:center;padding:calc(20px + env(safe-area-inset-top,0px)) 20px calc(20px + env(safe-area-inset-bottom,0px));';
     var SPIN_CSS = '@keyframes _pa_spin{to{transform:rotate(360deg)}}';
     (function(){var s=document.createElement('style');s.textContent=SPIN_CSS;document.head.appendChild(s);})();
 
@@ -1703,7 +1721,7 @@ window.addEventListener('storage', function(e) {
         _showOverlay('parentAuthOverlay',
             '<div style="text-align:center;">' +
             '<img src="Link_clean.png" style="height:44px;display:block;margin:0 auto 20px;">' +
-            '<div style="width:28px;height:28px;border:3px solid #E2E8F0;border-top-color:#3B82F6;border-radius:50%;animation:_pa_spin .7s linear infinite;margin:0 auto 14px;"></div>' +
+            '<div style="width:28px;height:28px;border:3px solid #E2E8F0;border-top-color:#2A7A35;border-radius:50%;animation:_pa_spin .7s linear infinite;margin:0 auto 14px;"></div>' +
             '<p style="font-size:.82rem;color:#64748B;margin:0;">'+(msg||'Loading…')+'</p>' +
             '</div>');
     }
@@ -1893,13 +1911,13 @@ window.addEventListener('storage', function(e) {
             '<div style="width:100%;max-width:380px;">' +
             '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Parent Portal</h2><p style="font-size:.83rem;color:#64748B;margin:0;">Sign in to access your camp portal</p></div>' +
             err +
-            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
-            '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')parentSignIn()"></div>' +
-            '<button onclick="parentSignIn()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Sign In</button>' +
+            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid #CBD5E1;border-radius:12px;font-size:16px;outline:none;-webkit-appearance:none;" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
+            '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid #CBD5E1;border-radius:12px;font-size:16px;outline:none;-webkit-appearance:none;" onkeydown="if(event.key===\'Enter\')parentSignIn()"></div>' +
+            '<button onclick="parentSignIn()" style="width:100%;padding:14px;background:#2A7A35;color:#fff;border:none;border-radius:14px;font-size:1rem;font-weight:700;cursor:pointer;margin-bottom:12px;box-shadow:0 4px 14px rgba(42,122,53,.25);">Sign In</button>' +
             '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
             '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:16px;">' +
             '<p style="font-size:.78rem;color:#94A3B8;margin:0 0 8px;">First time here? Use your camp invite link, or after signing in you can enter your access code.</p>' +
-            (urlToken ? '<button onclick="parentShowSignup()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:8px 20px;font-size:.82rem;color:#3B82F6;font-weight:600;cursor:pointer;">Create account with invite</button>' : '') +
+            (urlToken ? '<button onclick="parentShowSignup()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:8px 20px;font-size:.82rem;color:#2A7A35;font-weight:600;cursor:pointer;">Create account with invite</button>' : '') +
             '</div>' +
             '</div>');
         setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
@@ -1913,12 +1931,12 @@ window.addEventListener('storage', function(e) {
         _showOverlay('parentAuthOverlay',
             '<div style="width:100%;max-width:380px;">' +
             '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 6px;">Create Your Account</h2>'+welcome+'</div>' +
-            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;'+(ev?'background:#F8FAFC;color:#64748B;':'')+'"></div>' +
-            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="At least 6 characters" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;"></div>' +
-            '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Confirm Password</label><input id="paPass2" type="password" placeholder="Re-enter password" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')parentSignUp()"></div>' +
-            '<button onclick="parentSignUp()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Create Account</button>' +
+            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid #CBD5E1;border-radius:12px;font-size:16px;outline:none;-webkit-appearance:none;'+(ev?'background:#F8FAFC;color:#64748B;':'')+'"></div>' +
+            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="At least 6 characters" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid #CBD5E1;border-radius:12px;font-size:16px;outline:none;-webkit-appearance:none;"></div>' +
+            '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Confirm Password</label><input id="paPass2" type="password" placeholder="Re-enter password" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1.5px solid #CBD5E1;border-radius:12px;font-size:16px;outline:none;-webkit-appearance:none;" onkeydown="if(event.key===\'Enter\')parentSignUp()"></div>' +
+            '<button onclick="parentSignUp()" style="width:100%;padding:14px;background:#2A7A35;color:#fff;border:none;border-radius:14px;font-size:1rem;font-weight:700;cursor:pointer;margin-bottom:12px;box-shadow:0 4px 14px rgba(42,122,53,.25);">Create Account</button>' +
             '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:10px;"></div>' +
-            '<div style="text-align:center;"><button onclick="parentShowSignin(\''+_esc(ev)+'\')" style="background:none;border:none;color:#3B82F6;font-size:.8rem;font-weight:600;cursor:pointer;">Already have an account? Sign in</button></div>' +
+            '<div style="text-align:center;"><button onclick="parentShowSignin(\''+_esc(ev)+'\')" style="background:none;border:none;color:#2A7A35;font-size:.8rem;font-weight:600;cursor:pointer;">Already have an account? Sign in</button></div>' +
             '</div>');
         setTimeout(function(){var p=document.getElementById(ev?'paPass':'paEmail');if(p)p.focus();},100);
         window._parentInviteData = inviteData || null;
@@ -1932,9 +1950,9 @@ window.addEventListener('storage', function(e) {
             err +
             '<div style="margin-bottom:18px;">' +
             '<label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Access Code</label>' +
-            '<input id="paCode" type="text" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #CBD5E1;border-radius:8px;font-size:1.2rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;text-align:center;outline:none;" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,\'\')" onkeydown="if(event.key===\'Enter\')parentLinkAccount()">' +
+            '<input id="paCode" type="text" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" style="width:100%;box-sizing:border-box;padding:14px;border:1.5px solid #CBD5E1;border-radius:12px;font-size:1.25rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;text-align:center;outline:none;" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,\'\')" onkeydown="if(event.key===\'Enter\')parentLinkAccount()">' +
             '</div>' +
-            '<button onclick="parentLinkAccount()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Link My Portal</button>' +
+            '<button onclick="parentLinkAccount()" style="width:100%;padding:14px;background:#2A7A35;color:#fff;border:none;border-radius:14px;font-size:1rem;font-weight:700;cursor:pointer;margin-bottom:12px;box-shadow:0 4px 14px rgba(42,122,53,.25);">Link My Portal</button>' +
             '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
             '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:14px;">' +
             '<button onclick="parentSignOut()" style="background:none;border:none;color:#94A3B8;font-size:.78rem;cursor:pointer;">Sign out and use a different account</button>' +
@@ -2216,7 +2234,7 @@ function openFillOnline(formIdx, camperName, camperId){
 
     body += '<div style="padding-top:16px;border-top:1px solid #E2E8F0;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">';
     body += '<button onclick="closeFillOnline()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 18px;font-size:.85rem;font-weight:600;color:#64748B;cursor:pointer;">Cancel</button>';
-    body += '<button onclick="submitFillOnline()" style="background:#3B82F6;color:#fff;border:none;border-radius:8px;padding:9px 22px;font-size:.85rem;font-weight:600;cursor:pointer;">Submit</button>';
+    body += '<button onclick="submitFillOnline()" style="background:#2A7A35;color:#fff;border:none;border-radius:8px;padding:9px 22px;font-size:.85rem;font-weight:600;cursor:pointer;">Submit</button>';
     body += '</div>';
 
     document.getElementById('foBody').innerHTML = body;
@@ -2601,5 +2619,7 @@ function _renderTipHistory(child) {
     }).join('');
 }
 </script>
+<!-- App shell: PWA install, back-gesture navigation, More sheet, pull-to-refresh -->
+<script src="campistry_link_app.js"></script>
 </body>
 </html>
