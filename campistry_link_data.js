@@ -603,7 +603,12 @@
 
     msg.send = function(opts) {
         var m = {
-            id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+            // Must be a real UUID, not the 'msg_...' style id used elsewhere —
+            // this gets inserted straight into link_messages.id (uuid column)
+            // by _insertMessageRow. A non-UUID string here made every single
+            // cloud insert silently fail with a Postgres type error, while the
+            // local echo (and the "message sent!" toast) succeeded regardless.
+            id: (typeof crypto!=='undefined'&&crypto.randomUUID) ? crypto.randomUUID() : 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
             direction: 'out',
             from: opts.from || 'Camp Admin',
             to: opts.to || '',
