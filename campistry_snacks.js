@@ -438,4 +438,15 @@ window.CampistrySnacks = {
 };
 
 document.addEventListener('DOMContentLoaded', init);
+
+// The roster (app1.camperRoster) and this page's own campistrySnacks data
+// both hydrate from the cloud asynchronously, shortly AFTER DOMContentLoaded
+// fires. init() above runs before that hydration lands, so on a fresh page
+// load it was reading an empty/stale roster — 0 campers shown, permanently
+// (nothing ever re-ran init() afterward). Re-run once hydration completes.
+window.addEventListener('campistry-cloud-hydrated', function () {
+    console.log('[Snacks Manager] Cloud hydrated — reloading roster + snacks data');
+    snacks = loadSnacksData();
+    init();
+});
 })();

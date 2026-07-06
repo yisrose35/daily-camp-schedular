@@ -367,6 +367,15 @@ document.addEventListener('DOMContentLoaded', init);
 window.CampistrySnacksPOS = {
     reinit: function() { snacks = loadSnacksData(); init(); }
 };
+// The roster and campistrySnacks data both hydrate from the cloud
+// asynchronously, shortly AFTER DOMContentLoaded fires — init() above runs
+// before that lands, so on a fresh page load the camper list was empty and
+// nothing ever re-ran init() afterward. Re-run once hydration completes.
+window.addEventListener('campistry-cloud-hydrated', function() {
+    console.log('[Snacks POS] Cloud hydrated — reloading roster + snacks data');
+    snacks = loadSnacksData();
+    init();
+});
 window.addEventListener('storage', function(e) {
     if (e.key === STORE_KEY || e.key === 'CAMPISTRY_LOCAL_CACHE') {
         snacks = loadSnacksData();
