@@ -1102,11 +1102,11 @@ function renderRainyDayPanel() {
   if (isMidDay) {
     midDayInfo = `
       <div class="da-rainy-midday-info">
-        <span class="da-rainy-midday-badge">⏰ Rain started at ${minutesToTime(midDayStartTime)}</span>
-        <span class="da-rainy-preserved-badge">✅ ${preservedSlots} kept</span>
+        <span class="da-rainy-midday-badge">Rain started at ${minutesToTime(midDayStartTime)}</span>
+        <span class="da-rainy-preserved-badge">${preservedSlots} kept</span>
         ${midDayAnalysis ? `
-          <span class="da-rainy-cutshort-badge">⚠️ ${midDayAnalysis.inProgressCount || 0} cut short</span>
-          <span class="da-rainy-cleared-badge">🗑️ ${midDayAnalysis.futureCount || 0} cleared</span>
+          <span class="da-rainy-cutshort-badge">${midDayAnalysis.inProgressCount || 0} cut short</span>
+          <span class="da-rainy-cleared-badge">${midDayAnalysis.futureCount || 0} cleared</span>
         ` : ''}
       </div>
     `;
@@ -1158,22 +1158,18 @@ function renderRainyDayPanel() {
             ${isActive ? `
               <!-- RAINY DAY STATS -->
               <div class="da-rainy-stat available">
-                <span>🏠</span>
                 <strong>${stats.indoorFields}</strong>
                 <span>Indoor Fields</span>
               </div>
               <div class="da-rainy-stat available">
-                <span>🎨</span>
                 <strong>${stats.indoorSpecials}</strong>
                 <span>Indoor Specials</span>
               </div>
               <div class="da-rainy-stat highlight">
-                <span>🌧️</span>
                 <strong>${stats.rainySpecials}</strong>
                 <span>Rainy-Only Activities</span>
               </div>
              <div class="da-rainy-stat disabled">
-                <span>🚫</span>
                 <strong>${stats.outdoorFields}</strong>
                 <span>Outdoor (Disabled)</span>
               </div>
@@ -1181,7 +1177,7 @@ function renderRainyDayPanel() {
               </div>
               <div style="margin-top:12px; padding:0 12px 12px;">
                 <button id="da-rain-clears-btn" class="da-btn da-btn-warning da-btn-sm" style="width:100%;">
-                  ☀️ Rain Cleared — Switch Back to Regular
+                  Rain Cleared — Switch Back to Regular
                 </button>
               </div>
               <div class="da-rainy-stats" style="display:none;">
@@ -1189,29 +1185,31 @@ function renderRainyDayPanel() {
             ` : `
               <!-- REGULAR DAY STATS -->
               <div class="da-rainy-stat">
-                <span>🏠</span>
                 <strong>${stats.indoorFields}</strong>
                 <span>Indoor Fields</span>
               </div>
               <div class="da-rainy-stat">
-                <span>🌳</span>
                 <strong>${stats.outdoorFields}</strong>
                 <span>Outdoor Fields</span>
               </div>
               <div class="da-rainy-stat">
-                <span>🎨</span>
                 <strong>${stats.indoorSpecials + stats.rainySpecials}</strong>
                 <span>Special Activities</span>
               </div>
-              <div class="da-rainy-stat" style="margin-left:auto;">
-                <button id="da-rainy-midday-btn" class="da-btn da-btn-warning da-btn-sm">⏰ Mid-Day Mode</button>
-              </div>
             `}
           </div>
+
+          ${!isActive ? `
+          <!-- Mid-Day Mode trigger — prominent, so it's easy to find when rain starts mid-day -->
+          <div class="da-rainy-midday-cta">
+            <button id="da-rainy-midday-btn" class="da-btn da-btn-warning da-rainy-midday-cta-btn">Mid-Day Mode</button>
+            <p class="da-rainy-midday-cta-hint">Rain started partway through the day? Keep this morning's schedule and switch only the afternoon indoors.</p>
+          </div>
+          ` : ''}
           
           <!-- Settings Toggle -->
           <div class="da-rainy-settings-toggle">
-            <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">⚙️ Settings</button>
+            <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">Settings</button>
           </div>
             
           <!-- Settings Panel -->
@@ -1282,7 +1280,7 @@ function bindRainyDayEvents() {
       e.stopPropagation();
       const isOpen = settingsPanel.style.display !== 'none';
       settingsPanel.style.display = isOpen ? 'none' : 'block';
-      settingsBtn.textContent = isOpen ? '⚙️ Settings' : '⚙️ Close';
+      settingsBtn.textContent = isOpen ? 'Settings' : 'Close';
     };
   }
      
@@ -8780,6 +8778,10 @@ function getStyles() {
     
     .da-rainy-midday-info { display:flex; gap:8px; padding:0 18px 12px; position:relative; z-index:1; flex-wrap:wrap; }
     .da-rainy-midday-badge { padding:4px 10px; background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
+    .da-rainy-midday-cta { padding:0 18px 16px; position:relative; z-index:1; }
+    .da-rainy-midday-cta-btn { width:100%; justify-content:center; padding:12px 16px; font-size:14px; border-radius:10px; box-shadow:0 2px 8px rgba(217,119,6,0.35); }
+    .da-rainy-midday-cta-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(217,119,6,0.45); }
+    .da-rainy-midday-cta-hint { margin:8px 2px 0; font-size:12px; line-height:1.4; color:#78350f; text-align:center; }
     .da-rainy-preserved-badge { padding:4px 10px; background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#4ade80; }
     .da-rainy-cutshort-badge { padding:4px 10px; background:rgba(251,191,36,0.2); border:1px solid rgba(251,191,36,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
     .da-rainy-cleared-badge { padding:4px 10px; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#f87171; }
