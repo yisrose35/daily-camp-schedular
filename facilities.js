@@ -919,8 +919,15 @@ function renderSportsConfig(container, fac) {
     container.appendChild(section("Activities", summaryActivities(fieldData),
         () => renderActivities(fieldData, allSports)));
 
-    container.appendChild(section("Durations", summaryFieldDurations(fieldData),
-        () => renderFieldDurations(fieldData)));
+    // Per-sport durations only matter to the auto-scheduler (it keeps a sport to
+    //   a fixed length / best-fits it into a layer block). In manual mode a bunk's
+    //   slot length comes from the skeleton tile, so this config has no effect —
+    //   hide it to avoid a misleading setting.
+    const _durIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+    if (_durIsAutoMode) {
+        container.appendChild(section("Durations", summaryFieldDurations(fieldData),
+            () => renderFieldDurations(fieldData)));
+    }
 
     container.appendChild(section("Usage Limits", summaryFieldLimits(fieldData),
         () => renderFieldLimits(fieldData)));
@@ -1167,8 +1174,15 @@ function renderSpecialConfig(container, fac) {
         saBody.appendChild(section("Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
-        saBody.appendChild(section("Duration", summarySpecialDuration(saData),
-            () => renderSpecialDuration(saData)));
+        // Duration (activity length / best-fit) is an auto-scheduler concept — in
+        //   manual mode the special's length comes from the skeleton block, so this
+        //   config does nothing. Hide it in manual mode. (Prep Duration below is a
+        //   separate feature that IS honored in manual, so it stays.)
+        const _saDurIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        if (_saDurIsAutoMode) {
+            saBody.appendChild(section("Duration", summarySpecialDuration(saData),
+                () => renderSpecialDuration(saData)));
+        }
 
         saBody.appendChild(section("Time Availability", summarySpecialTime(saData),
             () => renderSpecialTimeRules(saData)));
