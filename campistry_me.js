@@ -116,6 +116,28 @@ function loadData(){
         Object.values(roster).forEach(function(c){if(c.camperId&&c.camperId>maxId)maxId=c.camperId});
         if(maxId>=nextCamperId)nextCamperId=maxId+1;
         Object.entries(roster).forEach(function([n,c]){if(!c.camperId){c.camperId=nextCamperId;nextCamperId++}});
+        // ★ Bunk Builder/Edit reconciliation: bunkAsgn (legacy Bunk Builder
+        // drag-drop state) and roster[name].bunk (the field Edit, CSV import,
+        // and Campistry Link all actually read) used to be two independent
+        // stores that silently drifted apart — placing a camper in Bunk
+        // Builder never updated roster.bunk, and editing roster.bunk via the
+        // camper Edit modal never updated bunkAsgn, so each screen showed a
+        // different placement. roster.bunk is now the single source of truth
+        // (see renderBB/bbDrop/autoAssign) — backfill it here, once, for any
+        // camper the old bunkAsgn already placed but whose roster record
+        // never got the matching bunk field. Idempotent: once backfilled,
+        // roster[name].bunk is truthy, so re-running this on later loads is a
+        // no-op for that camper.
+        Object.keys(bunkAsgn).forEach(function(bunkName){
+            (bunkAsgn[bunkName]||[]).forEach(function(camperName){
+                var c=roster[camperName];
+                if(c&&!c.bunk){
+                    c.bunk=bunkName;
+                    var loc=_bunkDivGrade(bunkName);
+                    if(loc){c.division=loc.div;c.grade=loc.gr}
+                }
+            });
+        });
     }catch(e){console.warn('[Me]',e)}
 }
 function save(){
@@ -821,6 +843,17 @@ function saveCamper(){
         }
     }
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
+    // Keep any already-issued parent portal invite in sync. The invite stores
+    // a snapshot of camper_data at creation time (see _syncParentInviteSnapshot)
+    // — without this, bunk/division/allergy/etc. edits made here would never
+    // reach a parent who already has portal access until someone manually
+    // clicked "Get Invite Link" again.
+    Object.keys(enrollments).forEach(function(id){
+        var en=enrollments[id];
+        if(en&&en.camperName===full&&(en.status==='accepted'||en.status==='enrolled')){
+            _syncParentInviteSnapshot(id,true);
+        }
+    });
 }
 // ★ #4 cascade helpers. Camper records are keyed by NAME in `roster`, and several
 // other stores reference campers by that same name string: families[].camperIds,
@@ -850,6 +883,19 @@ function deleteCamper(n){
 }
 function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
+// Reverse lookup: which division/grade does this bunk name belong to? Used
+// to keep roster[name].division/grade consistent whenever a bunk is assigned
+// directly (Bunk Builder drag-drop, auto-assign, bunk-rename migration).
+function _bunkDivGrade(bunkName){
+    if(!bunkName)return null;
+    for(var div in structure){
+        var grades=(structure[div]&&structure[div].grades)||{};
+        for(var gr in grades){
+            if((grades[gr].bunks||[]).indexOf(bunkName)!==-1)return{div:div,gr:gr};
+        }
+    }
+    return null;
+}
 
 // Sync camper address to Campistry Go's address store
 function syncAddressToGo(camperName,camperData){
@@ -1357,8 +1403,24 @@ function saveDiv(){
     });
     var _renamedOrigBunks=Object.keys(bunkRenameMap);
     _renamedOrigBunks.forEach(function(oldB){ _propagateBunkRename(oldB, bunkRenameMap[oldB]); });
+    // Keep roster[name].bunk in sync with the rename too — mirrors the
+    // grade-rename handling above (Object.values(roster)...c.grade===oldG).
+    // Without this, a renamed bunk left every camper placed in it pointing at
+    // a bunk name that no longer exists in Camp Structure, silently vanishing
+    // them from Bunk Builder (no longer "unassigned", but no longer matching
+    // any real bunk either) and showing the stale name in Campistry Link.
+    if(Object.keys(bunkRenameMap).length){
+        Object.values(roster).forEach(function(c){ if(c&&bunkRenameMap[c.bunk])c.bunk=bunkRenameMap[c.bunk]; });
+    }
     var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1 && _renamedOrigBunks.indexOf(b)===-1;});
-    if(removed.length>0)_purgeOrphanedBunks(removed);
+    if(removed.length>0){
+        _purgeOrphanedBunks(removed);
+        // A camper whose bunk was deleted outright (not renamed) goes back to
+        // Unassigned rather than being permanently stranded on a bunk name
+        // that no longer exists anywhere in the structure.
+        Object.values(roster).forEach(function(c){ if(c&&removed.indexOf(c.bunk)!==-1)c.bunk=''; });
+    }
+    if(Object.keys(bunkRenameMap).length||removed.length>0){save();render(curPage);}
     // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
     //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
     var removedGrades=oldGrades.filter(function(g){return !(g in grades)&&!(g in gradeRenameMap)});
@@ -1872,8 +1934,13 @@ function _propagateBunkRename(oldB,newB){
 function renderBB(){
     var c=document.getElementById('page-bunkbuilder');
     var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,div:div,gr:gr,color:d.color||'#94A3B8'})})})});
-    var cArr=Object.keys(roster),aSet={};Object.values(bunkAsgn).forEach(function(ids){ids.forEach(function(id){aSet[id]=true})});
-    var un=cArr.filter(function(n){return!aSet[n]}),placed=cArr.length-un.length;
+    // Placement is read straight from roster[name].bunk — the same field the
+    // camper Edit modal, CSV import, and Campistry Link all read/write — so
+    // this screen can never drift out of sync with them (see loadData()'s
+    // one-time bunkAsgn→roster.bunk migration for camps that placed campers
+    // here before this fix).
+    var cArr=Object.keys(roster);
+    var un=cArr.filter(function(n){return!roster[n].bunk}),placed=cArr.length-un.length;
     var h='<div class="sec-hd"><div><h2 class="sec-title">Bunk Builder</h2><p class="sec-desc">'+placed+'/'+cArr.length+' placed</p></div><div class="sec-actions"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.autoAssign()">⚡ Auto-Assign</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.clearBunks()">Clear</button></div></div>';
     if(!allB.length){h+='<div class="me-empty"><h3>No bunks</h3><p>Create divisions and bunks in Camp Structure first.</p></div>'}
     else{
@@ -1885,7 +1952,7 @@ function renderBB(){
         var lastD='';
         allB.forEach(function(bk){
             if(bk.div!==lastD){if(lastD)h+='</div>';lastD=bk.div;h+='<div class="bb-div"><span class="bb-dot" style="background:'+bk.color+'"></span>'+esc(bk.div)+'</div><div class="bb-gl">'+esc(bk.gr)+'</div><div class="bb-grid">'}
-            var ids=bunkAsgn[bk.name]||[];
+            var ids=cArr.filter(function(n){return roster[n].bunk===bk.name});
             var mCt=bunkManualCounts[bk.name];
             var dispCount=(mCt!=null)?mCt:ids.length;
             h+='<div class="bb-bunk" ondragover="event.preventDefault();this.classList.add(\'dragover\')" ondragleave="this.classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\''+je(bk.name)+'\',event);this.classList.remove(\'dragover\')">';
@@ -1901,9 +1968,37 @@ function renderBB(){
     c.innerHTML=h;
 }
 function bbC(n){var d=roster[n]||{};return'<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')"><div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(n)+'</div></div>'+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>'}
-function bbDrop(t,e){e.preventDefault();var n=e.dataTransfer.getData('text/plain');if(!n)return;Object.keys(bunkAsgn).forEach(function(b){bunkAsgn[b]=bunkAsgn[b].filter(function(x){return x!==n})});if(t!=='__pool__'){if(!bunkAsgn[t])bunkAsgn[t]=[];bunkAsgn[t].push(n)}save();renderBB()}
-function autoAssign(){var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});var next={};allB.forEach(function(b){next[b.name]=[]});var campers=Object.entries(roster);campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});campers.forEach(function([n,d]){var el=allB.filter(function(b){return b.gr===d.grade});if(!el.length)el=allB.filter(function(b){return b.div===d.division});if(!el.length)el=allB;if(!el.length)return;el.sort(function(a,b){return next[a.name].length-next[b.name].length});next[el[0].name].push(n)});bunkAsgn=next;save();renderBB();toast('Auto-assigned')}
-function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
+function bbDrop(t,e){
+    e.preventDefault();
+    var n=e.dataTransfer.getData('text/plain');if(!n)return;
+    var c=roster[n];if(!c)return;
+    if(t==='__pool__'){
+        c.bunk='';
+    }else{
+        c.bunk=t;
+        var loc=_bunkDivGrade(t);
+        if(loc){c.division=loc.div;c.grade=loc.gr}
+    }
+    save();renderBB();
+}
+function autoAssign(){
+    var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});
+    var counts={};allB.forEach(function(b){counts[b.name]=0});
+    var campers=Object.entries(roster);
+    campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});
+    campers.forEach(function([n,d]){
+        var el=allB.filter(function(b){return b.gr===d.grade});
+        if(!el.length)el=allB.filter(function(b){return b.div===d.division});
+        if(!el.length)el=allB;
+        if(!el.length)return;
+        el.sort(function(a,b){return counts[a.name]-counts[b.name]});
+        var chosen=el[0];
+        d.bunk=chosen.name;d.division=chosen.div;d.grade=chosen.gr;
+        counts[chosen.name]++;
+    });
+    save();renderBB();toast('Auto-assigned')
+}
+function clearBunks(){if(!confirm('Clear all?'))return;Object.values(roster).forEach(function(c){c.bunk=''});save();renderBB();toast('Cleared')}
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
 function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
 function openBunkCountModal(bunkName){
@@ -2589,6 +2684,24 @@ function _parentPortalUrl(token){
 }
 
 function generateParentInvite(enrollId){
+    _syncParentInviteSnapshot(enrollId,false);
+}
+
+// The parent portal reads camper_data as a frozen snapshot captured at
+// invite-creation time (see campistry_link_parent.html — claim_parent_invite
+// / get_parent_data_by_user just return whatever camper_data upsert_parent_invite
+// last wrote). Nothing previously re-pushed that snapshot when the admin
+// later edited the camper (bunk, division, allergies, etc.) via the roster
+// Edit modal, so a parent who already had portal access would silently keep
+// seeing stale data forever. saveCamper() now calls this with silent=true
+// after every edit to refresh it in the background.
+//
+//   silent=false — the explicit "Get Invite Link" action. Creates the
+//     invite if none exists yet, and always shows the share modal.
+//   silent=true  — background resync only. NEVER creates a brand-new
+//     invite/access-code the admin never asked for — it only refreshes an
+//     invite that's already active, and never shows any UI.
+function _syncParentInviteSnapshot(enrollId,silent){
     var e=enrollments[enrollId]; if(!e)return;
     var parentEmail=e.parentEmail||e.parent1Email||'';
     var r0=roster[e.camperName]||{};
@@ -2598,59 +2711,75 @@ function generateParentInvite(enrollId){
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
     if(!db||!campId){
+        if(silent)return;
         console.warn('[Me] Invite: Supabase not ready, showing link only');
         _showInviteModal(enrollId,_parentPortalUrl(_genToken()),null);
         return;
     }
 
-    // Build snapshot for ALL accepted/enrolled campers belonging to this parent email.
-    // This ensures siblings are always grouped together and the invite is always fresh.
-    var familyEnrollments=Object.values(enrollments).filter(function(en){
-        var em=en.parentEmail||en.parent1Email||'';
-        return em===parentEmail&&(en.status==='accepted'||en.status==='enrolled');
-    });
-    var camperNames=familyEnrollments.map(function(en){return en.camperName;});
-    var camperData={};
-    familyEnrollments.forEach(function(en){
-        var r=roster[en.camperName]||{};
-        camperData[en.camperName]={
-            name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
-            division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
-            session:en.session||'',
-            allergies:en.allergies||r.allergies||'',medications:en.medications||r.medications||'',dietary:en.dietary||r.dietary||'',
-            doctor:en.doctor||r.doctor||'',doctorPhone:en.doctorPhone||r.doctorPhone||'',
-            insurance:en.insurance||r.insurance||'',policyNum:en.policyNum||r.policyNum||'',
-            emergencyName:en.emergencyName||r.emergencyName||'',emergencyPhone:en.emergencyPhone||r.emergencyPhone||'',emergencyRel:en.emergencyRel||r.emergencyRel||'',
-            parent2Name:en.parent2Name||r.parent2Name||r.parent1Name||'',parent2Phone:en.parent2Phone||r.parent2Phone||r.parent1Phone||''
-        };
-    });
+    function doUpsert(){
+        // Build snapshot for ALL accepted/enrolled campers belonging to this parent email.
+        // This ensures siblings are always grouped together and the invite is always fresh.
+        var familyEnrollments=Object.values(enrollments).filter(function(en){
+            var em=en.parentEmail||en.parent1Email||'';
+            return em===parentEmail&&(en.status==='accepted'||en.status==='enrolled');
+        });
+        var camperNames=familyEnrollments.map(function(en){return en.camperName;});
+        var camperData={};
+        familyEnrollments.forEach(function(en){
+            var r=roster[en.camperName]||{};
+            camperData[en.camperName]={
+                name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
+                division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
+                session:en.session||'',
+                allergies:en.allergies||r.allergies||'',medications:en.medications||r.medications||'',dietary:en.dietary||r.dietary||'',
+                doctor:en.doctor||r.doctor||'',doctorPhone:en.doctorPhone||r.doctorPhone||'',
+                insurance:en.insurance||r.insurance||'',policyNum:en.policyNum||r.policyNum||'',
+                emergencyName:en.emergencyName||r.emergencyName||'',emergencyPhone:en.emergencyPhone||r.emergencyPhone||'',emergencyRel:en.emergencyRel||r.emergencyRel||'',
+                parent2Name:en.parent2Name||r.parent2Name||r.parent1Name||'',parent2Phone:en.parent2Phone||r.parent2Phone||r.parent1Phone||''
+            };
+        });
 
-    var token=_genToken();
-    var expires=new Date();
-    expires.setFullYear(expires.getFullYear()+1);
+        var token=_genToken();
+        var expires=new Date();
+        expires.setFullYear(expires.getFullYear()+1);
 
-    db.rpc('upsert_parent_invite',{
-        p_camp_id:     campId,
-        p_token:       token,
-        p_parent_name: parentName,
-        p_parent_email:parentEmail,
-        p_camper_names:camperNames,
-        p_camper_data: camperData,
-        p_expires_at:  expires.toISOString()
-    }).then(function(res){
-        if(res.error){
-            console.error('[Me] upsert_parent_invite error:',res.error.message,res.error);
-            toast('Could not save invite: '+res.error.message+'. Run migration 011 in Supabase.');
-            return;
-        }
-        var d=res.data;
-        if(!d||!d.success){
-            console.error('[Me] upsert_parent_invite returned failure:',d);
-            toast('Could not save invite.');
-            return;
-        }
-        _showInviteModal(enrollId,_parentPortalUrl(d.token),parentEmail,d.access_code||null);
-    });
+        return db.rpc('upsert_parent_invite',{
+            p_camp_id:     campId,
+            p_token:       token,
+            p_parent_name: parentName,
+            p_parent_email:parentEmail,
+            p_camper_names:camperNames,
+            p_camper_data: camperData,
+            p_expires_at:  expires.toISOString()
+        }).then(function(res){
+            if(res.error){
+                console.error('[Me] upsert_parent_invite error:',res.error.message,res.error);
+                if(!silent)toast('Could not save invite: '+res.error.message+'. Run migration 011 in Supabase.');
+                return;
+            }
+            var d=res.data;
+            if(!d||!d.success){
+                console.error('[Me] upsert_parent_invite returned failure:',d);
+                if(!silent)toast('Could not save invite.');
+                return;
+            }
+            if(!silent)_showInviteModal(enrollId,_parentPortalUrl(d.token),parentEmail,d.access_code||null);
+        });
+    }
+
+    if(!silent){
+        doUpsert();
+        return;
+    }
+
+    // Silent path: only refresh an invite that ALREADY exists for this
+    // parent — never silently create one.
+    db.from('link_parent_invites').select('id').eq('camp_id',campId).eq('parent_email',parentEmail).eq('status','active').limit(1)
+        .then(function(res){
+            if(res.error||!res.data||!res.data.length)return;
+            doUpsert();
+        });
 }
 
 function _showInviteModal(enrollId,url,parentEmail,accessCode){
