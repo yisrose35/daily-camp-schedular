@@ -148,6 +148,8 @@ body {
 
 /* Avatar account menu — Material 3 Menu component */
 .lk-avatar-menu-wrap { position: relative; }
+.lk-hero-avatar-wrap { position: absolute; top: 20px; right: 20px; z-index: 2; }
+.lk-hero-avatar { background: rgba(255,255,255,0.22); color: #fff; }
 .lk-avatar-menu {
     position: absolute; top: calc(100% + 8px); right: 0;
     min-width: 200px;
@@ -259,7 +261,10 @@ body {
     background: rgba(255,255,255,0.16);
     border-radius: var(--radius-full);
     padding: 5px 14px 5px 5px;
+    border: none; cursor: pointer; font-family: var(--font-body);
+    transition: background 0.15s ease;
 }
+.lk-hero-kid-chip:hover, .lk-hero-kid-chip:active { background: rgba(255,255,255,0.26); }
 .lk-hero-kid-avatar {
     width: 26px; height: 26px; border-radius: 50%;
     background: var(--acc-1, var(--link-gold));

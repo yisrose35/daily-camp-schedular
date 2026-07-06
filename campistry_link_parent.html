@@ -87,31 +87,8 @@
     </script>
 </div>
 
-<!-- HEADER -->
-<header class="lk-header">
-    <div class="lk-header-left">
-        <span class="lk-camp-name" id="headerCampName" style="padding-left:0;border-left:none;"></span>
-    </div>
-    <div class="lk-header-right">
-        <div class="lk-avatar-menu-wrap">
-            <div class="lk-avatar" id="parentAvatar" onclick="toggleAvatarMenu(event)"></div>
-            <div class="lk-avatar-menu" id="avatarMenu" style="display:none;">
-                <button class="lk-avatar-menu-item" onclick="closeAvatarMenu();nav('settings')">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    Settings
-                </button>
-                <div class="lk-avatar-menu-divider"></div>
-                <button class="lk-avatar-menu-item" onclick="parentSignOut && parentSignOut()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-                    Sign Out
-                </button>
-            </div>
-        </div>
-    </div>
-</header>
-
 <!-- SIDEBAR -->
-<nav class="lk-sidebar">
+<nav class="lk-sidebar" style="top:0;">
     <div class="lk-sidebar-nav">
         <div class="lk-nav-label">Overview</div>
         <button class="lk-nav-item active" data-page="home" onclick="nav('home')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> Home</button>
@@ -152,11 +129,25 @@
 </div></div>
 
 <!-- MAIN -->
-<div class="lk-main">
+<div class="lk-main" style="min-height:100vh;">
 
 <!-- HOME -->
 <div class="lk-page active" id="page-home">
     <div class="lk-hero">
+        <div class="lk-avatar-menu-wrap lk-hero-avatar-wrap">
+            <div class="lk-avatar lk-hero-avatar" id="parentAvatar" onclick="toggleAvatarMenu(event)"></div>
+            <div class="lk-avatar-menu" id="avatarMenu" style="display:none;">
+                <button class="lk-avatar-menu-item" onclick="closeAvatarMenu();nav('settings')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    Settings
+                </button>
+                <div class="lk-avatar-menu-divider"></div>
+                <button class="lk-avatar-menu-item" onclick="parentSignOut && parentSignOut()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    Sign Out
+                </button>
+            </div>
+        </div>
         <div class="lk-hero-left">
             <p class="lk-hero-greeting" id="greeting">Good morning</p>
             <h1 class="lk-hero-title">Welcome back, <span id="heroParentName"></span></h1>
@@ -837,7 +828,7 @@ function init(){
     var hkr=document.getElementById('heroKidsRow');
     if(hkr){
         hkr.innerHTML=children.map(function(c,i){
-            return '<div class="lk-hero-kid-chip" data-accent="'+childAccent(i)+'"><div class="lk-hero-kid-avatar">'+(c.initials||'')+'</div><div class="lk-hero-kid-name">'+(c.name?c.name.split(' ')[0]:'')+(c.bunk?' · '+c.bunk:'')+'</div></div>';
+            return '<button type="button" class="lk-hero-kid-chip" data-accent="'+childAccent(i)+'" onclick="nav(\'children\');showChild(\''+c.id+'\')"><div class="lk-hero-kid-avatar">'+(c.initials||'')+'</div><div class="lk-hero-kid-name">'+(c.name?c.name.split(' ')[0]:'')+(c.bunk?' · '+c.bunk:'')+'</div></button>';
         }).join('');
     }
 
