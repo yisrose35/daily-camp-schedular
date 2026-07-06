@@ -95,6 +95,9 @@
         .msg-from { font-size:.74rem; color:var(--text-muted); margin-top:2px; }
         .msg-preview { font-size:.78rem; color:var(--slate-500); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .msg-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; white-space:nowrap; padding-top:2px; }
+        .msg-row-actions { flex-shrink:0; }
+        .icon-btn { border:none; background:transparent; cursor:pointer; font-size:.85rem; padding:3px 5px; border-radius:5px; color:var(--text-muted); line-height:1; }
+        .icon-btn:hover { background:var(--slate-100); color:var(--slate-900); }
 
         /* Empty state */
         .lk-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:36px 20px; color:var(--text-muted); text-align:center; }
@@ -302,6 +305,8 @@
             <div class="lk-tabs" style="margin-bottom:10px;">
                 <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
                 <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
+                <button class="lk-tab" onclick="filterAdminMsgs('important',this)">Important</button>
+                <button class="lk-tab" onclick="filterAdminMsgs('archived',this)">Archived</button>
             </div>
             <!-- Filter bar -->
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
@@ -984,13 +989,21 @@ function renderSentList() {
         var toLabel = m.to || (m.recipients ? m.recipients.length + ' recipients' : 'All');
         var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
         var preview = (m.body || '').slice(0, 100);
+        var isMsg = m.direction === 'out'; // broadcasts live in link_broadcasts, not link_messages — no archive/important/delete there
+        var actions = isMsg ?
+            '<div class="msg-row-actions" onclick="event.stopPropagation()" style="display:flex;gap:2px;">' +
+                '<button class="icon-btn" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\');renderSentList()">' + (m.important ? '★' : '☆') + '</button>' +
+                '<button class="icon-btn" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\');renderSentList()">' + (m.archived ? '📤' : '🗄') + '</button>' +
+                '<button class="icon-btn" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\');renderSentList()">🗑</button>' +
+            '</div>' : '';
         return '<div class="sent-item" onclick="openSentDetail(\'' + esc(m.id) + '\')">' +
             '<div class="sent-item-body">' +
-                '<div class="sent-item-subj">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="sent-item-subj">' + (m.important ? '⭐ ' : '') + esc(m.subject || '(No subject)') + '</div>' +
                 '<div class="sent-item-to">To: ' + esc(toLabel + camper) + '</div>' +
                 '<div class="sent-item-preview">' + esc(preview) + '</div>' +
             '</div>' +
             '<span class="sent-item-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
+            actions +
         '</div>';
     }).join('');
 }
@@ -1747,8 +1760,13 @@ function renderAdminMsgs(filter) {
     var cl = CL();
     var list = cl ? cl.msg.getInbox() : [];
 
-    // Read/unread
-    if (filter === 'unread') list = list.filter(function(m) { return !m.read; });
+    // Archived messages are hidden from every other view, same as a normal
+    // inbox — they only show up under the dedicated Archived tab.
+    if (filter === 'archived') list = list.filter(function(m) { return m.archived; });
+    else list = list.filter(function(m) { return !m.archived; });
+
+    if (filter === 'unread')    list = list.filter(function(m) { return !m.read; });
+    if (filter === 'important') list = list.filter(function(m) { return m.important; });
 
     // Text search
     var q       = ((document.getElementById('inboxSearch')  || {}).value || '').trim().toLowerCase();
@@ -1797,13 +1815,41 @@ function renderAdminMsgs(filter) {
         c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + esc(m.id) + '\')">' +
             '<div class="msg-dot"></div>' +
             '<div class="msg-body">' +
-                '<div class="msg-subj">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="msg-subj">' + (m.important ? '⭐ ' : '') + esc(m.subject || '(No subject)') + '</div>' +
                 '<div class="msg-preview">' + esc(preview) + '</div>' +
                 '<div class="msg-from">' + esc(from + camper) + '</div>' +
             '</div>' +
             '<span class="msg-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
+            '<div class="msg-row-actions" onclick="event.stopPropagation()" style="display:flex;gap:2px;">' +
+                '<button class="icon-btn" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\')">' + (m.important ? '★' : '☆') + '</button>' +
+                '<button class="icon-btn" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\')">' + (m.archived ? '📤' : '🗄') + '</button>' +
+                '<button class="icon-btn" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\')">🗑</button>' +
+            '</div>' +
         '</div>';
     });
+}
+
+function toggleMsgImportant(id) {
+    var cl = CL(); if (!cl) return;
+    var m = cl.msg.getInbox().concat(cl.msg.getSent()).find(function(x) { return x.id === id; });
+    if (!m) return;
+    cl.msg.setImportant(id, !m.important);
+    renderAdminMsgs(_inboxReadFilter);
+}
+
+function toggleMsgArchived(id) {
+    var cl = CL(); if (!cl) return;
+    var m = cl.msg.getInbox().concat(cl.msg.getSent()).find(function(x) { return x.id === id; });
+    if (!m) return;
+    cl.msg.setArchived(id, !m.archived);
+    renderAdminMsgs(_inboxReadFilter);
+}
+
+function deleteAdminMsg(id) {
+    var cl = CL(); if (!cl) return;
+    if (!confirm('Delete this message? This cannot be undone.')) return;
+    cl.msg.deleteMessage(id);
+    renderAdminMsgs(_inboxReadFilter);
 }
 function openAdminMsg(id) {
     var cl = CL();
@@ -1817,7 +1863,14 @@ function openAdminMsg(id) {
     document.getElementById('adminMsgDetailView').style.display = 'block';
     document.getElementById('adminMsgDetail').innerHTML =
         '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
-            '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">' +
+                '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div style="display:flex;gap:2px;flex-shrink:0;">' +
+                    '<button class="icon-btn" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\');openAdminMsg(\'' + esc(m.id) + '\')">' + (m.important ? '★' : '☆') + '</button>' +
+                    '<button class="icon-btn" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\');closeAdminMsgDetail()">' + (m.archived ? '📤' : '🗄') + '</button>' +
+                    '<button class="icon-btn" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\');closeAdminMsgDetail()">🗑</button>' +
+                '</div>' +
+            '</div>' +
             '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
                 '<span>From: <strong>' + esc(from) + '</strong></span>' +
                 '<span>' + esc(_fmtMsgTime(m.date)) + '</span>' +

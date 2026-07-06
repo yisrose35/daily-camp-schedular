@@ -205,6 +205,40 @@
     }
 
     /**
+     * Admin-side hard delete (admin owns the camp's data outright — this is a
+     * real DELETE, not a hide). Scoped by the link_messages_delete RLS policy
+     * (owner/admin only) so a scheduler session can't call this successfully
+     * even if it tried.
+     */
+    function _deleteMessageRow(id) {
+        var db = _db(); if (!db) return Promise.resolve({ error: 'no_db' });
+        return db.client
+            .from('link_messages')
+            .delete()
+            .eq('id', id)
+            .eq('camp_id', db.campId)
+            .then(function(res) {
+                if (res.error) console.warn('[Link] link_messages delete error:', res.error.message);
+                return res;
+            });
+    }
+
+    /** Admin-only archived/important flags — plain column updates. */
+    function _updateMessageFlag(id, field, value) {
+        var db = _db(); if (!db) return Promise.resolve({ error: 'no_db' });
+        var patch = {}; patch[field] = !!value;
+        return db.client
+            .from('link_messages')
+            .update(patch)
+            .eq('id', id)
+            .eq('camp_id', db.campId)
+            .then(function(res) {
+                if (res.error) console.warn('[Link] link_messages ' + field + ' update error:', res.error.message);
+                return res;
+            });
+    }
+
+    /**
      * Load message history from link_messages (cloud) — both directions, so
      * the admin inbox picks up parent replies made via submit_message_reply,
      * not just messages sent from this same browser.
@@ -214,16 +248,25 @@
         limit = limit || 200;
         db.client
             .from('link_messages')
-            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, created_at')
+            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, archived, important, created_at')
             .eq('camp_id', db.campId)
             .order('created_at', { ascending: false })
             .limit(limit)
             .then(function(res) {
                 if (res.error) { console.warn('[Link] loadCloudMessages error:', res.error.message); return; }
                 var rows = res.data || [];
-                var existingIds = new Set(_store.messages.map(function(m) { return m.id; }));
+                var byId = {};
+                _store.messages.forEach(function(m) { byId[m.id] = m; });
                 rows.forEach(function(row) {
-                    if (existingIds.has(row.id)) return;
+                    var existing = byId[row.id];
+                    if (existing) {
+                        // Row already known locally (e.g. just sent from this browser) —
+                        // still refresh archived/important/read so multi-device edits show up.
+                        existing.archived = !!row.archived;
+                        existing.important = !!row.important;
+                        existing.read = row.read;
+                        return;
+                    }
                     _store.messages.push({
                         id: row.id, direction: row.direction,
                         from: row.direction === 'in' ? (row.parent_name || 'Parent') : 'Camp Admin',
@@ -232,6 +275,7 @@
                         subject: row.subject, body: row.body,
                         channels: row.channels || ['app'],
                         date: row.created_at, read: row.read, replied: false,
+                        archived: !!row.archived, important: !!row.important,
                         threadId: row.thread_id,
                         metadata: { parentEmail: row.parent_email, camperName: row.camper_name }
                     });
@@ -650,6 +694,25 @@
     msg.markRead = function(msgId) {
         var m = _store.messages.find(function(x) { return x.id === msgId; });
         if (m) { m.read = true; saveStore(); }
+    };
+
+    /** Admin delete — real hard delete, removes the row for both parties. */
+    msg.deleteMessage = function(msgId) {
+        _store.messages = _store.messages.filter(function(m) { return m.id !== msgId; });
+        saveStore();
+        _deleteMessageRow(msgId);
+    };
+
+    msg.setArchived = function(msgId, archived) {
+        var m = _store.messages.find(function(x) { return x.id === msgId; });
+        if (m) { m.archived = !!archived; saveStore(); }
+        _updateMessageFlag(msgId, 'archived', archived);
+    };
+
+    msg.setImportant = function(msgId, important) {
+        var m = _store.messages.find(function(x) { return x.id === msgId; });
+        if (m) { m.important = !!important; saveStore(); }
+        _updateMessageFlag(msgId, 'important', important);
     };
 
     msg.reply = function(threadId, body, channels) {

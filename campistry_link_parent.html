@@ -1148,7 +1148,20 @@ function openMsg(id){
     document.getElementById('msgListView').style.display='none';document.getElementById('msgDetailView').style.display='block';
     var typeBadge=m.type==='announcement'?'<span class="badge badge-warn">Announcement</span>':'<span class="badge badge-info">Direct</span>';
     var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" id="msgReplyBody" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="sendMsgReply(\''+String(m.id).replace(/'/g,'')+'\',\''+String(m.subject||'').replace(/[\'"<>]/g,'')+'\')">Send Reply</button></div></div>':'';
-    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+replyHtml;
+    // Announcements are shared camp broadcasts, not a per-parent link_messages
+    // row — there's nothing to delete for just this parent, so no button.
+    var deleteHtml=m.type!=='announcement'?'<div style="margin-top:14px;text-align:right;"><button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="deleteMyMsg(\''+String(m.id).replace(/'/g,'')+'\')">Delete</button></div>':'';
+    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+deleteHtml+replyHtml;
+}
+function deleteMyMsg(id){
+    if(!confirm('Delete this message from your inbox?'))return;
+    var store=_readLinkStore();
+    store.messages=(store.messages||[]).filter(function(x){return x.id!==id});
+    _writeLinkStore(store);
+    messages=messages.filter(function(x){return String(x.id)!==String(id)});
+    if(typeof window._deleteMyMessageCloud==='function')window._deleteMyMessageCloud(id);
+    toast('Message deleted');
+    closeMsgDetail();
 }
 function closeMsgDetail(){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
 function sendMsgReply(threadId, subject){
@@ -1873,6 +1886,14 @@ window.addEventListener('storage', function(e) {
         db.rpc('get_camp_broadcasts', { p_camp_id: campId }).then(function(res) {
             window._cloudBroadcasts = (!res.error && res.data && res.data.success) ? (res.data.broadcasts || []) : [];
             if (cb) cb();
+        });
+    };
+    window._deleteMyMessageCloud = function(messageId, done) {
+        db.rpc('delete_my_message', { p_message_id: messageId }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] delete_my_message failed:', res.error ? res.error.message : (res.data||{}).error);
+            }
+            if (done) done(res);
         });
     };
 
