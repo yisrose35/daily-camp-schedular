@@ -319,7 +319,7 @@
     <div><h1>Messages</h1><p>Communication with camp</p></div>
 </div>
     <div id="msgListView" style="padding-bottom:76px;">
-        <div class="lk-tabs" style="margin-bottom:12px;"><button class="lk-tab active" onclick="fMsg('all',this)">All</button><button class="lk-tab" onclick="fMsg('unread',this)">Unread</button><button class="lk-tab" onclick="fMsg('announcements',this)">Announcements</button></div>
+        <div class="lk-tabs" style="margin-bottom:12px;"><button class="lk-tab active" onclick="fMsg('all',this)">All</button><button class="lk-tab" onclick="fMsg('unread',this)">Unread</button><button class="lk-tab" onclick="fMsg('announcements',this)">Announcements</button><button class="lk-tab" onclick="fMsg('archived',this)">Archived</button></div>
         <!-- Material Extended FAB — the compose action lives here, Gmail-style,
              rather than a small button in the header -->
         <button class="lk-fab" onclick="toggleCompose(true)">
@@ -629,6 +629,11 @@
             <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Canteen Activity</div><div style="font-size:.72rem;color:var(--text-muted);">Purchases and low balance</div></div><input type="checkbox" data-pref="notifyCanteen" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
             <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Photos</div><div style="font-size:.72rem;color:var(--text-muted);">New photo uploads</div></div><input type="checkbox" checked data-pref="notifyPhotos" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
             <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Health Updates</div><div style="font-size:.72rem;color:var(--text-muted);">Nurse visit notes and health alerts</div></div><input type="checkbox" checked data-pref="notifyHealth" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+        </div>
+    </div>
+    <div class="lk-card"><div class="lk-card-head"><h2>Messages</h2></div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Confirm before deleting</div><div style="font-size:.72rem;color:var(--text-muted);">Ask for confirmation before a message is deleted</div></div><input type="checkbox" id="prtConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
         </div>
     </div>
 </div>
@@ -1108,15 +1113,25 @@ function _bunkStaffRowsHtml(c){
 }
 
 // MESSAGES
-function renderMsgs(){ _loadMessages(); fMsg('all'); }
+var _curMsgFilter='all';
+function renderMsgs(){ _loadMessages(); fMsg(_curMsgFilter); }
 function fMsg(f,btn){
+    _curMsgFilter=f;
     if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
-    var list=messages;
-    if(f==='unread')list=messages.filter(function(m){return!m.read});
-    if(f==='announcements')list=messages.filter(function(m){return m.type==='announcement'});
+    var archivedView=(f==='archived');
+    var list=archivedView?messages.filter(function(m){return m._archived}):messages.filter(function(m){return!m._archived});
+    if(f==='unread')list=list.filter(function(m){return!m.read});
+    if(f==='announcements')list=list.filter(function(m){return m.type==='announcement'});
     var c=document.getElementById('msgList');c.innerHTML='';
-    if(!list.length){c.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages</h3></div>';return;}
-    list.forEach(function(m){c.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')">'+_msgAvatarHtml(m)+'<div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';});
+    if(!list.length){c.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>'+(archivedView?'No archived messages':'No messages')+'</h3></div>';return;}
+    list.forEach(function(m){
+        var inner='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')">'+_msgAvatarHtml(m)+'<div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';
+        // Announcements are shared camp broadcasts (no per-parent row) — plain
+        // row, no swipe/archive/delete actions.
+        if(m.type==='announcement'){ c.innerHTML+=inner; }
+        else{ c.innerHTML+='<div class="msg-swipe">'+inner+_msgActionsHtml(m.id,!!m._archived)+'</div>'; }
+    });
+    initMsgSwipe(c);
 }
 
 /** Avatar circle for a message row — colored + labeled by sender type
@@ -1149,20 +1164,45 @@ function openMsg(id){
     var typeBadge=m.type==='announcement'?'<span class="badge badge-warn">Announcement</span>':'<span class="badge badge-info">Direct</span>';
     var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" id="msgReplyBody" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="sendMsgReply(\''+String(m.id).replace(/'/g,'')+'\',\''+String(m.subject||'').replace(/[\'"<>]/g,'')+'\')">Send Reply</button></div></div>':'';
     // Announcements are shared camp broadcasts, not a per-parent link_messages
-    // row — there's nothing to delete for just this parent, so no button.
-    var deleteHtml=m.type!=='announcement'?'<div style="margin-top:14px;text-align:right;"><button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="deleteMyMsg(\''+String(m.id).replace(/'/g,'')+'\')">Delete</button></div>':'';
-    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+deleteHtml+replyHtml;
+    // row — there's nothing to archive/delete for just this parent, so no actions.
+    var headActions=m.type!=='announcement'?_msgDetailActionsHtml(String(m.id).replace(/'/g,''),!!m._archived):'';
+    var titleRow='<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:6px;"><div style="font-size:1.15rem;font-weight:700;flex:1;min-width:0;">'+m.subject+'</div>'+headActions+'</div>';
+    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">'+titleRow+'<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+replyHtml;
 }
-function deleteMyMsg(id){
-    if(!confirm('Delete this message from your inbox?'))return;
+function _afterMsgAction(){
+    document.getElementById('msgListView').style.display='';
+    document.getElementById('msgDetailView').style.display='none';
+    _loadMessages(); fMsg(_curMsgFilter);
+}
+function msgArchive(id){
     var store=_readLinkStore();
-    store.messages=(store.messages||[]).filter(function(x){return x.id!==id});
-    _writeLinkStore(store);
-    messages=messages.filter(function(x){return String(x.id)!==String(id)});
-    if(typeof window._deleteMyMessageCloud==='function')window._deleteMyMessageCloud(id);
-    toast('Message deleted');
-    closeMsgDetail();
+    var sm=(store.messages||[]).find(function(x){return String(x.id)===String(id)});
+    if(sm){sm.archived=true;_writeLinkStore(store);}
+    if(typeof window._setMyMessageArchivedCloud==='function')window._setMyMessageArchivedCloud(id,true);
+    toast('Message archived');
+    _afterMsgAction();
 }
+function msgUnarchive(id){
+    var store=_readLinkStore();
+    var sm=(store.messages||[]).find(function(x){return String(x.id)===String(id)});
+    if(sm){sm.archived=false;_writeLinkStore(store);}
+    if(typeof window._setMyMessageArchivedCloud==='function')window._setMyMessageArchivedCloud(id,false);
+    toast('Moved to inbox');
+    _afterMsgAction();
+}
+function msgDelete(id){
+    lkConfirmDelete('Delete message?','This message will be removed from your inbox. This can’t be undone.',function(){
+        var store=_readLinkStore();
+        store.messages=(store.messages||[]).filter(function(x){return x.id!==id});
+        _writeLinkStore(store);
+        messages=messages.filter(function(x){return String(x.id)!==String(id)});
+        if(typeof window._deleteMyMessageCloud==='function')window._deleteMyMessageCloud(id);
+        toast('Message deleted');
+        _afterMsgAction();
+    });
+}
+// Back-compat alias (older inline handlers).
+function deleteMyMsg(id){ msgDelete(id); }
 function closeMsgDetail(){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
 function sendMsgReply(threadId, subject){
     var ta=document.getElementById('msgReplyBody');
@@ -1454,6 +1494,95 @@ function hydratePickupRequests(){
     renderPickupHistory();
 }
 
+// ─── SHARED: message row actions, swipe gesture, in-app confirm ──────────────
+var LK_ICON_ARCHIVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="22" height="5" rx="1"/><path d="M21 8v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M10 12h4"/></svg>';
+var LK_ICON_UNARCHIVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="22" height="5" rx="1"/><path d="M21 8v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M12 18v-6M9 15l3-3 3 3"/></svg>';
+var LK_ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/><path d="M10 11v6M14 11v6"/></svg>';
+
+function _msgActionsHtml(id, isArchived){
+    id=String(id);
+    var arch=isArchived
+        ?'<button class="msg-action-btn archive" type="button" onclick="event.stopPropagation();msgUnarchive(\''+id+'\')">'+LK_ICON_UNARCHIVE+'Unarchive</button>'
+        :'<button class="msg-action-btn archive" type="button" onclick="event.stopPropagation();msgArchive(\''+id+'\')">'+LK_ICON_ARCHIVE+'Archive</button>';
+    return '<div class="msg-actions">'+arch+'<button class="msg-action-btn delete" type="button" onclick="event.stopPropagation();msgDelete(\''+id+'\')">'+LK_ICON_TRASH+'Delete</button></div>';
+}
+function _msgDetailActionsHtml(id, isArchived){
+    id=String(id);
+    var arch=isArchived
+        ?'<button class="msg-detail-btn archive" type="button" onclick="msgUnarchive(\''+id+'\')">'+LK_ICON_UNARCHIVE+'Unarchive</button>'
+        :'<button class="msg-detail-btn archive" type="button" onclick="msgArchive(\''+id+'\')">'+LK_ICON_ARCHIVE+'Archive</button>';
+    return '<div class="msg-detail-actions">'+arch+'<button class="msg-detail-btn delete" type="button" onclick="msgDelete(\''+id+'\')">'+LK_ICON_TRASH+'Delete</button></div>';
+}
+function initMsgSwipe(container){
+    if(!container) return;
+    container.querySelectorAll('.msg-swipe').forEach(function(row){
+        if(row._swipeInit) return; row._swipeInit=true;
+        var item=row.querySelector('.msg-item'); if(!item) return;
+        if(!row.querySelector('.msg-actions')) return; // announcement rows have no actions
+        var revealW=parseInt(getComputedStyle(row).getPropertyValue('--msg-actions-w'),10)||140;
+        var sx=0,sy=0,dx=0,dragging=false,horizontal=false;
+        row.addEventListener('touchstart',function(e){
+            var t=e.touches[0]; sx=t.clientX; sy=t.clientY; dx=0; dragging=true; horizontal=false;
+            container.querySelectorAll('.msg-swipe.revealed').forEach(function(r){ if(r!==row) r.classList.remove('revealed'); });
+        },{passive:true});
+        row.addEventListener('touchmove',function(e){
+            if(!dragging) return;
+            var t=e.touches[0]; dx=t.clientX-sx; var dy=t.clientY-sy;
+            if(!horizontal){
+                if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>8){ horizontal=true; row.classList.add('dragging'); }
+                else if(Math.abs(dy)>10){ dragging=false; return; }
+            }
+            if(horizontal){
+                e.preventDefault();
+                var base=row.classList.contains('revealed')?-revealW:0;
+                var tx=Math.max(-revealW,Math.min(0,base+dx));
+                item.style.transform='translateX('+tx+'px)';
+            }
+        },{passive:false});
+        function endDrag(){
+            if(!dragging) return; dragging=false;
+            row.classList.remove('dragging'); item.style.transform='';
+            if(horizontal){ if(dx<-50) row.classList.add('revealed'); else if(dx>50) row.classList.remove('revealed'); }
+        }
+        row.addEventListener('touchend',endDrag);
+        row.addEventListener('touchcancel',endDrag);
+        item.addEventListener('click',function(e){
+            if(row.classList.contains('revealed')){ e.stopImmediatePropagation(); e.preventDefault(); row.classList.remove('revealed'); }
+        },true);
+    });
+}
+
+// In-app confirm dialog + opt-out (shared key across parent & admin portals).
+var LK_CONFIRM_DELETE_KEY='campistry_link_confirm_delete_v1';
+var _lkConfirmCb=null;
+function lkConfirmEnabled(){ try{ return localStorage.getItem(LK_CONFIRM_DELETE_KEY)!=='0'; }catch(e){ return true; } }
+function lkSetConfirmDelete(on){ try{ localStorage.setItem(LK_CONFIRM_DELETE_KEY, on?'1':'0'); }catch(e){} }
+function lkConfirmDelete(title,message,onYes){
+    if(!lkConfirmEnabled()){ onYes(); return; }
+    _lkConfirmCb=onYes;
+    var t=document.getElementById('lkConfirmTitle'); if(t)t.textContent=title||'Delete?';
+    var m=document.getElementById('lkConfirmMsg'); if(m)m.textContent=message||'';
+    var o=document.getElementById('lkConfirmOptout'); if(o)o.checked=false;
+    var ov=document.getElementById('lkConfirmOverlay'); if(ov)ov.classList.add('open');
+}
+function lkConfirmClose(){ var ov=document.getElementById('lkConfirmOverlay'); if(ov)ov.classList.remove('open'); _lkConfirmCb=null; }
+(function _wireConfirm(){
+    function wire(){
+        var yes=document.getElementById('lkConfirmYes');
+        var ov=document.getElementById('lkConfirmOverlay');
+        var tog=document.getElementById('prtConfirmDeleteToggle');
+        if(tog)tog.checked=lkConfirmEnabled();
+        if(yes)yes.addEventListener('click',function(){
+            var o=document.getElementById('lkConfirmOptout');
+            if(o&&o.checked){ lkSetConfirmDelete(false); if(tog)tog.checked=false; }
+            var cb=_lkConfirmCb; lkConfirmClose(); if(cb)cb();
+        });
+        if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkConfirmClose(); });
+        document.addEventListener('keydown',function(e){ if(e.key==='Escape') lkConfirmClose(); });
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
+})();
+
 // ── Shared message store helpers ──────────────────────────────────────────────
 function _readLinkStore(){try{return JSON.parse(localStorage.getItem(LINK_STORE_KEY)||'{}');}catch(e){return {};}}
 function _writeLinkStore(s){try{localStorage.setItem(LINK_STORE_KEY,JSON.stringify(s));}catch(e){}}
@@ -1469,9 +1598,15 @@ function _syncMessagesFromCloud(){
         window._loadMyMessagesCloud(function(){
             var store=_readLinkStore();
             if(!store.messages)store.messages=[];
-            var existingIds={};store.messages.forEach(function(m){existingIds[m.id]=true;});
+            var byId={};store.messages.forEach(function(m){byId[m.id]=m;});
             (window._cloudMessages||[]).forEach(function(cm){
-                if(existingIds[cm.id])return;
+                var existing=byId[cm.id];
+                if(existing){
+                    // Refresh the parent archive flag so archives made on another
+                    // device show up here too.
+                    existing.archived=!!cm.archived;
+                    return;
+                }
                 store.messages.push({
                     id:cm.id, direction:cm.direction,
                     from: cm.direction==='in' ? (parent.name||'Parent') : 'Camp Office',
@@ -1480,7 +1615,7 @@ function _syncMessagesFromCloud(){
                     subject:cm.subject||'', body:cm.body||'',
                     channels:['app'], date:cm.created_at,
                     read: cm.direction==='in' ? true : !!cm.read,
-                    replied:false, threadId:cm.thread_id,
+                    replied:false, threadId:cm.thread_id, archived:!!cm.archived,
                     metadata:{parentEmail:parent.email}
                 });
             });
@@ -1533,7 +1668,7 @@ function _loadMessages(){
             preview:(m.body||'').slice(0,80),
             body:'<p>'+(m.body||'').replace(/\n/g,'</p><p>')+'</p>',
             date:_formatMsgDate(m.date),_rawDate:m.date,
-            read:m.read||byMe,_storeId:m.id
+            read:m.read||byMe,_storeId:m.id,_archived:!!m.archived
         });
     });
     broadcasts.forEach(function(b){
@@ -1892,6 +2027,14 @@ window.addEventListener('storage', function(e) {
         db.rpc('delete_my_message', { p_message_id: messageId }).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] delete_my_message failed:', res.error ? res.error.message : (res.data||{}).error);
+            }
+            if (done) done(res);
+        });
+    };
+    window._setMyMessageArchivedCloud = function(messageId, archived, done) {
+        db.rpc('set_my_message_archived', { p_message_id: messageId, p_archived: !!archived }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] set_my_message_archived failed:', res.error ? res.error.message : (res.data||{}).error);
             }
             if (done) done(res);
         });
@@ -2401,6 +2544,22 @@ window.addEventListener('storage', function(e) {
         <button onclick="closeFillOnline()" style="background:none;border:1px solid #E2E8F0;border-radius:7px;padding:5px 10px;font-size:.76rem;font-weight:600;color:#64748B;cursor:pointer;flex-shrink:0;margin-left:12px;margin-top:2px;">✕</button>
     </div>
     <div class="fo-body" id="foBody"></div>
+</div>
+
+<!-- In-app delete confirmation (replaces the browser confirm popup) -->
+<div class="lk-confirm-overlay" id="lkConfirmOverlay">
+    <div class="lk-confirm-card">
+        <div class="lk-confirm-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/><path d="M10 11v6M14 11v6"/></svg>
+        </div>
+        <h3 id="lkConfirmTitle">Delete message?</h3>
+        <p id="lkConfirmMsg">This can’t be undone.</p>
+        <label class="lk-confirm-optout"><input type="checkbox" id="lkConfirmOptout"> Don’t ask me again</label>
+        <div class="lk-confirm-foot">
+            <button class="btn btn-ghost" type="button" onclick="lkConfirmClose()">Cancel</button>
+            <button class="btn btn-danger" type="button" id="lkConfirmYes">Delete</button>
+        </div>
+    </div>
 </div>
 
 <script>

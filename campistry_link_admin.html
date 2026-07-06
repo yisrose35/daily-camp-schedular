@@ -302,11 +302,14 @@
     <div id="msgTabInbox">
         <div id="adminMsgListView">
             <!-- Read / Unread tabs -->
-            <div class="lk-tabs" style="margin-bottom:10px;">
+            <div class="lk-tabs" style="margin-bottom:10px;align-items:center;">
                 <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
                 <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
                 <button class="lk-tab" onclick="filterAdminMsgs('important',this)">Important</button>
                 <button class="lk-tab" onclick="filterAdminMsgs('archived',this)">Archived</button>
+                <label style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--text-muted);cursor:pointer;white-space:nowrap;padding-bottom:6px;" title="When on, deleting a message asks you to confirm first.">
+                    <input type="checkbox" id="admConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)" style="accent-color:var(--link-color);width:15px;height:15px;"> Confirm deletes
+                </label>
             </div>
             <!-- Filter bar -->
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
@@ -887,6 +890,22 @@
     </div>
 </div>
 
+<!-- In-app delete confirmation (replaces the browser confirm popup) -->
+<div class="lk-confirm-overlay" id="lkConfirmOverlay">
+    <div class="lk-confirm-card">
+        <div class="lk-confirm-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/><path d="M10 11v6M14 11v6"/></svg>
+        </div>
+        <h3 id="lkConfirmTitle">Delete message?</h3>
+        <p id="lkConfirmMsg">This can’t be undone.</p>
+        <label class="lk-confirm-optout"><input type="checkbox" id="lkConfirmOptout"> Don’t ask me again</label>
+        <div class="lk-confirm-foot">
+            <button class="btn btn-ghost" type="button" onclick="lkConfirmClose()">Cancel</button>
+            <button class="btn btn-danger" type="button" id="lkConfirmYes">Delete</button>
+        </div>
+    </div>
+</div>
+
 <!-- Scripts -->
 <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
@@ -911,6 +930,92 @@ var esc = function(s) {
 var CL = function() { return window.CampistryLink || null; };
 var CP = function() { return window.CampistryPhotos || null; };
 var channels = ['app'];
+
+// ─── SHARED: message icons, swipe gesture, in-app confirm dialog ─────────────
+var LK_ICON_ARCHIVE   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="22" height="5" rx="1"/><path d="M21 8v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M10 12h4"/></svg>';
+var LK_ICON_UNARCHIVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="22" height="5" rx="1"/><path d="M21 8v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M12 18v-6M9 15l3-3 3 3"/></svg>';
+var LK_ICON_TRASH     = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/><path d="M10 11v6M14 11v6"/></svg>';
+var LK_ICON_STAR        = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+var LK_ICON_STAR_FILLED = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+// Small filled star drawn inline before an important subject line.
+var LK_ICON_STAR_FILLED_INLINE = '<svg viewBox="0 0 24 24" width="13" height="13" fill="#F59E0B" stroke="#F59E0B" stroke-width="1.5" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+
+// Touch swipe-to-reveal for message rows (desktop uses CSS hover instead).
+function initMsgSwipe(container) {
+    if (!container) return;
+    container.querySelectorAll('.msg-swipe').forEach(function(row) {
+        if (row._swipeInit) return; row._swipeInit = true;
+        var item = row.querySelector('.msg-item');
+        if (!item) return;
+        var revealW = parseInt(getComputedStyle(row).getPropertyValue('--msg-actions-w'), 10) || 140;
+        var sx = 0, sy = 0, dx = 0, dragging = false, horizontal = false;
+        row.addEventListener('touchstart', function(e) {
+            var t = e.touches[0]; sx = t.clientX; sy = t.clientY; dx = 0; dragging = true; horizontal = false;
+            container.querySelectorAll('.msg-swipe.revealed').forEach(function(r) { if (r !== row) r.classList.remove('revealed'); });
+        }, { passive: true });
+        row.addEventListener('touchmove', function(e) {
+            if (!dragging) return;
+            var t = e.touches[0]; dx = t.clientX - sx; var dy = t.clientY - sy;
+            if (!horizontal) {
+                if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) { horizontal = true; row.classList.add('dragging'); }
+                else if (Math.abs(dy) > 10) { dragging = false; return; }
+            }
+            if (horizontal) {
+                e.preventDefault();
+                var base = row.classList.contains('revealed') ? -revealW : 0;
+                var tx = Math.max(-revealW, Math.min(0, base + dx));
+                item.style.transform = 'translateX(' + tx + 'px)';
+            }
+        }, { passive: false });
+        function endDrag() {
+            if (!dragging) return; dragging = false;
+            row.classList.remove('dragging'); item.style.transform = '';
+            if (horizontal) {
+                if (dx < -50) row.classList.add('revealed');
+                else if (dx > 50) row.classList.remove('revealed');
+            }
+        }
+        row.addEventListener('touchend', endDrag);
+        row.addEventListener('touchcancel', endDrag);
+        item.addEventListener('click', function(e) {
+            if (row.classList.contains('revealed')) { e.stopImmediatePropagation(); e.preventDefault(); row.classList.remove('revealed'); }
+        }, true);
+    });
+}
+
+// In-app confirm dialog + opt-out (shared key across parent & admin portals).
+var LK_CONFIRM_DELETE_KEY = 'campistry_link_confirm_delete_v1';
+var _lkConfirmCb = null;
+function lkConfirmEnabled() { try { return localStorage.getItem(LK_CONFIRM_DELETE_KEY) !== '0'; } catch (e) { return true; } }
+function lkSetConfirmDelete(on) { try { localStorage.setItem(LK_CONFIRM_DELETE_KEY, on ? '1' : '0'); } catch (e) {} }
+function lkConfirmDelete(title, message, onYes) {
+    if (!lkConfirmEnabled()) { onYes(); return; }
+    _lkConfirmCb = onYes;
+    var t = document.getElementById('lkConfirmTitle'); if (t) t.textContent = title || 'Delete?';
+    var m = document.getElementById('lkConfirmMsg'); if (m) m.textContent = message || '';
+    var o = document.getElementById('lkConfirmOptout'); if (o) o.checked = false;
+    var ov = document.getElementById('lkConfirmOverlay'); if (ov) ov.classList.add('open');
+}
+function lkConfirmClose() {
+    var ov = document.getElementById('lkConfirmOverlay'); if (ov) ov.classList.remove('open');
+    _lkConfirmCb = null;
+}
+(function _wireConfirm() {
+    function wire() {
+        var yes = document.getElementById('lkConfirmYes');
+        var ov = document.getElementById('lkConfirmOverlay');
+        var tog = document.getElementById('admConfirmDeleteToggle');
+        if (tog) tog.checked = lkConfirmEnabled();
+        if (yes) yes.addEventListener('click', function() {
+            var o = document.getElementById('lkConfirmOptout');
+            if (o && o.checked) { lkSetConfirmDelete(false); if (tog) tog.checked = false; }
+            var cb = _lkConfirmCb; lkConfirmClose(); if (cb) cb();
+        });
+        if (ov) ov.addEventListener('click', function(e) { if (e.target === ov) lkConfirmClose(); });
+        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') lkConfirmClose(); });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire); else wire();
+})();
 
 // ─── NAV ─────────────────────────────────────────────────────────────────────
 var currentMsgTab = 'inbox';
@@ -991,14 +1096,14 @@ function renderSentList() {
         var preview = (m.body || '').slice(0, 100);
         var isMsg = m.direction === 'out'; // broadcasts live in link_broadcasts, not link_messages — no archive/important/delete there
         var actions = isMsg ?
-            '<div class="msg-row-actions" onclick="event.stopPropagation()" style="display:flex;gap:2px;">' +
-                '<button class="icon-btn" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\');renderSentList()">' + (m.important ? '★' : '☆') + '</button>' +
-                '<button class="icon-btn" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\');renderSentList()">' + (m.archived ? '📤' : '🗄') + '</button>' +
-                '<button class="icon-btn" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\');renderSentList()">🗑</button>' +
+            '<div class="msg-row-actions" onclick="event.stopPropagation()" style="display:flex;gap:2px;align-items:center;">' +
+                '<button class="icon-btn lk-ico' + (m.important ? ' on' : '') + '" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\');renderSentList()">' + (m.important ? LK_ICON_STAR_FILLED : LK_ICON_STAR) + '</button>' +
+                '<button class="icon-btn lk-ico" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\');renderSentList()">' + (m.archived ? LK_ICON_UNARCHIVE : LK_ICON_ARCHIVE) + '</button>' +
+                '<button class="icon-btn lk-ico" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\', renderSentList)">' + LK_ICON_TRASH + '</button>' +
             '</div>' : '';
         return '<div class="sent-item" onclick="openSentDetail(\'' + esc(m.id) + '\')">' +
             '<div class="sent-item-body">' +
-                '<div class="sent-item-subj">' + (m.important ? '⭐ ' : '') + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="sent-item-subj">' + (m.important ? LK_ICON_STAR_FILLED_INLINE : '') + esc(m.subject || '(No subject)') + '</div>' +
                 '<div class="sent-item-to">To: ' + esc(toLabel + camper) + '</div>' +
                 '<div class="sent-item-preview">' + esc(preview) + '</div>' +
             '</div>' +
@@ -1812,21 +1917,30 @@ function renderAdminMsgs(filter) {
         var from   = m.from || 'Parent';
         var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
         var preview = (m.body || '').slice(0, 80);
-        c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + esc(m.id) + '\')">' +
-            '<div class="msg-dot"></div>' +
-            '<div class="msg-body">' +
-                '<div class="msg-subj">' + (m.important ? '⭐ ' : '') + esc(m.subject || '(No subject)') + '</div>' +
-                '<div class="msg-preview">' + esc(preview) + '</div>' +
-                '<div class="msg-from">' + esc(from + camper) + '</div>' +
+        var id = esc(m.id);
+        c.innerHTML += '<div class="msg-swipe" style="--msg-actions-w:210px;">' +
+            '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + id + '\')">' +
+                '<div class="msg-dot"></div>' +
+                '<div class="msg-body">' +
+                    '<div class="msg-subj">' + (m.important ? LK_ICON_STAR_FILLED_INLINE : '') + esc(m.subject || '(No subject)') + '</div>' +
+                    '<div class="msg-preview">' + esc(preview) + '</div>' +
+                    '<div class="msg-from">' + esc(from + camper) + '</div>' +
+                '</div>' +
+                '<span class="msg-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
             '</div>' +
-            '<span class="msg-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
-            '<div class="msg-row-actions" onclick="event.stopPropagation()" style="display:flex;gap:2px;">' +
-                '<button class="icon-btn" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\')">' + (m.important ? '★' : '☆') + '</button>' +
-                '<button class="icon-btn" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\')">' + (m.archived ? '📤' : '🗄') + '</button>' +
-                '<button class="icon-btn" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\')">🗑</button>' +
-            '</div>' +
+            _msgAdminActionsHtml(id, !!m.archived, !!m.important) +
         '</div>';
     });
+    initMsgSwipe(c);
+}
+
+// Swipe/hover-revealed action buttons for an admin inbox row.
+function _msgAdminActionsHtml(id, isArchived, isImportant) {
+    return '<div class="msg-actions">' +
+        '<button class="msg-action-btn important" type="button" onclick="event.stopPropagation();toggleMsgImportant(\'' + id + '\')">' + (isImportant ? LK_ICON_STAR_FILLED : LK_ICON_STAR) + (isImportant ? 'Starred' : 'Star') + '</button>' +
+        '<button class="msg-action-btn archive" type="button" onclick="event.stopPropagation();toggleMsgArchived(\'' + id + '\')">' + (isArchived ? LK_ICON_UNARCHIVE : LK_ICON_ARCHIVE) + (isArchived ? 'Unarchive' : 'Archive') + '</button>' +
+        '<button class="msg-action-btn delete" type="button" onclick="event.stopPropagation();deleteAdminMsg(\'' + id + '\')">' + LK_ICON_TRASH + 'Delete</button>' +
+    '</div>';
 }
 
 function toggleMsgImportant(id) {
@@ -1835,6 +1949,7 @@ function toggleMsgImportant(id) {
     if (!m) return;
     cl.msg.setImportant(id, !m.important);
     renderAdminMsgs(_inboxReadFilter);
+    if (document.getElementById('adminMsgDetailView').style.display === 'block') openAdminMsg(id);
 }
 
 function toggleMsgArchived(id) {
@@ -1842,14 +1957,20 @@ function toggleMsgArchived(id) {
     var m = cl.msg.getInbox().concat(cl.msg.getSent()).find(function(x) { return x.id === id; });
     if (!m) return;
     cl.msg.setArchived(id, !m.archived);
-    renderAdminMsgs(_inboxReadFilter);
+    toast(m.archived ? 'Moved to inbox' : 'Message archived');
+    if (document.getElementById('adminMsgDetailView').style.display === 'block') closeAdminMsgDetail();
+    else renderAdminMsgs(_inboxReadFilter);
 }
 
-function deleteAdminMsg(id) {
+function deleteAdminMsg(id, onDone) {
     var cl = CL(); if (!cl) return;
-    if (!confirm('Delete this message? This cannot be undone.')) return;
-    cl.msg.deleteMessage(id);
-    renderAdminMsgs(_inboxReadFilter);
+    lkConfirmDelete('Delete message?', 'This deletes the message from the camp record. This can’t be undone.', function() {
+        cl.msg.deleteMessage(id);
+        toast('Message deleted');
+        if (typeof onDone === 'function') onDone();
+        else if (document.getElementById('adminMsgDetailView').style.display === 'block') closeAdminMsgDetail();
+        else renderAdminMsgs(_inboxReadFilter);
+    });
 }
 function openAdminMsg(id) {
     var cl = CL();
@@ -1863,12 +1984,12 @@ function openAdminMsg(id) {
     document.getElementById('adminMsgDetailView').style.display = 'block';
     document.getElementById('adminMsgDetail').innerHTML =
         '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
-            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">' +
-                '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
-                '<div style="display:flex;gap:2px;flex-shrink:0;">' +
-                    '<button class="icon-btn" title="' + (m.important ? 'Unmark important' : 'Mark important') + '" onclick="toggleMsgImportant(\'' + esc(m.id) + '\');openAdminMsg(\'' + esc(m.id) + '\')">' + (m.important ? '★' : '☆') + '</button>' +
-                    '<button class="icon-btn" title="' + (m.archived ? 'Unarchive' : 'Archive') + '" onclick="toggleMsgArchived(\'' + esc(m.id) + '\');closeAdminMsgDetail()">' + (m.archived ? '📤' : '🗄') + '</button>' +
-                    '<button class="icon-btn" title="Delete" onclick="deleteAdminMsg(\'' + esc(m.id) + '\');closeAdminMsgDetail()">🗑</button>' +
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+                '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;flex:1;min-width:0;">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="msg-detail-actions">' +
+                    '<button class="msg-detail-btn important' + (m.important ? ' on' : '') + '" type="button" onclick="toggleMsgImportant(\'' + esc(m.id) + '\')">' + (m.important ? LK_ICON_STAR_FILLED : LK_ICON_STAR) + (m.important ? 'Starred' : 'Star') + '</button>' +
+                    '<button class="msg-detail-btn archive" type="button" onclick="toggleMsgArchived(\'' + esc(m.id) + '\')">' + (m.archived ? LK_ICON_UNARCHIVE : LK_ICON_ARCHIVE) + (m.archived ? 'Unarchive' : 'Archive') + '</button>' +
+                    '<button class="msg-detail-btn delete" type="button" onclick="deleteAdminMsg(\'' + esc(m.id) + '\')">' + LK_ICON_TRASH + 'Delete</button>' +
                 '</div>' +
             '</div>' +
             '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
@@ -1884,7 +2005,7 @@ function openAdminMsg(id) {
                 '<button class="btn btn-primary btn-sm" onclick="sendAdminReply(\'' + esc(m.id) + '\',\'' + esc(from) + '\')">Send Reply</button>' +
             '</div>' +
         '</div>';
-    renderAdminMsgs('all');
+    renderAdminMsgs(_inboxReadFilter);
 }
 function sendAdminReply(threadId, toName) {
     var body = (document.getElementById('adminReplyBody') || {}).value || '';
