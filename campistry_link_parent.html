@@ -1062,10 +1062,18 @@ function showChild(id){
     document.getElementById('childDetail').style.display='block';
     document.getElementById('childDetailContent').innerHTML=
         '<div class="lk-card" data-accent="'+childAccent(id)+'"><div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><div class="lk-avatar-accent" style="width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;">'+c.initials+'</div><div><div style="font-size:1.15rem;font-weight:700;">'+c.name+'</div><div style="font-size:.82rem;color:var(--text-muted);">Age '+c.age+' · '+c.session+'</div></div></div></div>'+
-        '<div class="lk-card"><div class="lk-card-head"><h2>Camp Details</h2></div><div class="info-row"><span class="label">Division</span><span class="value">'+c.division+'</span></div><div class="info-row"><span class="label">Grade</span><span class="value">'+c.grade+'</span></div><div class="info-row"><span class="label">Bunk</span><span class="value">'+c.bunk+'</span></div><div class="info-row"><span class="label">Counselor</span><span class="value">'+c.counselor+'</span></div></div>'+
+        '<div class="lk-card"><div class="lk-card-head"><h2>Camp Details</h2></div><div class="info-row"><span class="label">Division</span><span class="value">'+c.division+'</span></div><div class="info-row"><span class="label">Grade</span><span class="value">'+c.grade+'</span></div><div class="info-row"><span class="label">Bunk</span><span class="value">'+c.bunk+'</span></div></div>'+
+        '<div class="lk-card"><div class="lk-card-head"><h2>Bunk Staff</h2></div>'+_bunkStaffRowsHtml(c)+'</div>'+
         '<div class="lk-card"><div class="lk-card-head"><h2>Medical</h2></div><div class="info-row"><span class="label">Allergies</span><span class="value" style="color:'+(c.allergies!=='None'?'var(--red-500)':'')+';">'+c.allergies+'</span></div><div class="info-row"><span class="label">Medications</span><span class="value">'+c.medications+'</span></div><div class="info-row"><span class="label">Dietary</span><span class="value">'+c.dietary+'</span></div></div>'+
         '<div class="lk-card"><div class="lk-card-head"><h2>Canteen</h2></div><div class="info-row"><span class="label">Balance</span><span class="value" style="color:var(--green-600);font-size:1.05rem;">$'+c.canteenBalance.toFixed(2)+'</span></div><div class="info-row"><span class="label">Daily Limit</span><span class="value">$'+c.dailyLimit+'.00</span></div></div>';
     window.scrollTo(0,document.getElementById('childDetail').offsetTop-70);
+}
+function _bunkStaffRowsHtml(c){
+    var list=(c.staff&&c.staff.length)?c.staff:(c.counselor?[{name:c.counselor,role:'Counselor'}]:[]);
+    if(!list.length)return '<div class="info-row"><span class="label">Staff</span><span class="value" style="color:var(--slate-400)">Not yet assigned</span></div>';
+    return list.map(function(s){
+        return '<div class="info-row"><span class="label">'+_pEsc(s.role||'Staff')+'</span><span class="value">'+_pEsc(s.name)+'</span></div>';
+    }).join('');
 }
 
 // MESSAGES
@@ -1786,7 +1794,7 @@ window.addEventListener('storage', function(e) {
             return {
                 id:'child_'+idx, name:name, initials:initials, age:age,
                 division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
-                session:c.session||'', counselor:c.counselor||'',
+                session:c.session||'', counselor:c.counselor||'', staff:c.staff||[],
                 allergies:c.allergies||'None', medications:c.medications||'None',
                 dietary:c.dietary||'', doctor:c.doctor||'', doctorPhone:c.doctorPhone||'',
                 insurance:c.insurance||'', policyNum:c.policyNum||'',

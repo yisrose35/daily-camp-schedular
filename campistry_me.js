@@ -6,7 +6,7 @@ console.log('📋 Campistry Me loading...');
 var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899','#84CC16','#6366F1','#14B8A6'];
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
-var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={};
+var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={};
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
@@ -102,6 +102,7 @@ function loadData(){
         var me=s.campistryMe||{};
         families=me.families||{}; payments=me.payments||[];
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
+        bunkStaff=me.bunkStaff||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         formConfig=me.formConfig||null;
         // Ensure promoCodes live inside enrollSettings
@@ -171,6 +172,7 @@ function save(){
             broadcasts:broadcasts,
             bunkAssignments:bunkAsgn,
             bunkManualCounts:bunkManualCounts,
+            bunkStaff:bunkStaff,
             nextCamperId:nextCamperId,
             enrollments:enrollments,
             sessions:sessions,
@@ -848,12 +850,7 @@ function saveCamper(){
     // — without this, bunk/division/allergy/etc. edits made here would never
     // reach a parent who already has portal access until someone manually
     // clicked "Get Invite Link" again.
-    Object.keys(enrollments).forEach(function(id){
-        var en=enrollments[id];
-        if(en&&en.camperName===full&&(en.status==='accepted'||en.status==='enrolled')){
-            _syncParentInviteSnapshot(id,true);
-        }
-    });
+    _syncInvitesForCamper(full);
 }
 // ★ #4 cascade helpers. Camper records are keyed by NAME in `roster`, and several
 // other stores reference campers by that same name string: families[].camperIds,
@@ -1955,8 +1952,13 @@ function renderBB(){
             var ids=cArr.filter(function(n){return roster[n].bunk===bk.name});
             var mCt=bunkManualCounts[bk.name];
             var dispCount=(mCt!=null)?mCt:ids.length;
+            var staff=bunkStaff[bk.name]||[];
             h+='<div class="bb-bunk" ondragover="event.preventDefault();this.classList.add(\'dragover\')" ondragleave="this.classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\''+je(bk.name)+'\',event);this.classList.remove(\'dragover\')">';
             h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct"'+(mCt!=null?' style="color:var(--me)" title="Manual count"':' title="Roster count"')+'>'+dispCount+'</span></div>';
+            h+='<div class="bb-staff" style="padding:2px 0 8px;cursor:pointer" onclick="CampistryMe.openBunkStaffModal(\''+je(bk.name)+'\')" title="Manage staff for this bunk">';
+            if(staff.length)h+=staff.map(function(s){return '<span style="display:inline-block;background:var(--s100);border-radius:var(--r);padding:2px 8px;margin:0 4px 4px 0;font-size:.68rem;font-weight:600;color:var(--s600)">'+esc(s.name)+' · '+esc(s.role||'Staff')+'</span>'}).join('');
+            else h+='<span style="font-size:.72rem;color:var(--me);font-weight:600;cursor:pointer">+ Add staff</span>';
+            h+='</div>';
             h+='<div class="bb-campers">';
             if(!ids.length)h+='<div class="bb-empty">Drop campers here</div>';
             else ids.forEach(function(n){h+=bbC(n)});
@@ -2001,6 +2003,55 @@ function autoAssign(){
 function clearBunks(){if(!confirm('Clear all?'))return;Object.values(roster).forEach(function(c){c.bunk=''});save();renderBB();toast('Cleared')}
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
 function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
+
+// ═══ BUNK STAFF — who's taking care of this bunk (Counselor, Junior
+// Counselor, Waiter, etc.) ═══════════════════════════════════════════
+// Staff are assigned per BUNK (not per camper) — everyone currently placed
+// in that bunk shares the same staff list. Kept as its own bunk-name-keyed
+// store (bunkStaff), same pattern as bunkManualCounts, rather than folding
+// into `structure` (which treats bunks as plain name strings everywhere).
+function openBunkStaffModal(bunkName){
+    _renderBunkStaffModalBody(bunkName);
+}
+function _renderBunkStaffModalBody(bunkName){
+    var staff=bunkStaff[bunkName]||[];
+    var listHtml=staff.length
+        ?staff.map(function(s,i){
+            return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)">'
+                +'<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.85rem">'+esc(s.name)+'</div><div style="font-size:.72rem;color:var(--s400)">'+esc(s.role||'Staff')+'</div></div>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.removeBunkStaff(\''+je(bunkName)+'\','+i+')">Remove</button>'
+                +'</div>';
+        }).join('')
+        :'<p style="font-size:.8rem;color:var(--s400);margin:0 0 4px">No staff assigned yet.</p>';
+    var body=listHtml
+        +'<div style="display:flex;gap:8px;margin-top:14px;align-items:flex-start">'
+        +'<input type="text" id="bsName" placeholder="Name" class="fi" style="flex:1.3" onkeydown="if(event.key===\'Enter\'){event.preventDefault();CampistryMe.addBunkStaff(\''+je(bunkName)+'\')}">'
+        +'<input type="text" id="bsRole" placeholder="Role" class="fi" list="bsRoleOpts" style="flex:1" onkeydown="if(event.key===\'Enter\'){event.preventDefault();CampistryMe.addBunkStaff(\''+je(bunkName)+'\')}">'
+        +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addBunkStaff(\''+je(bunkName)+'\')">Add</button>'
+        +'</div>'
+        +'<datalist id="bsRoleOpts"><option value="Counselor"><option value="Co-Counselor"><option value="Junior Counselor"><option value="Head Counselor"><option value="Waiter"><option value="Learning Specialist"></datalist>';
+    showModal('Staff — '+bunkName,body);
+}
+function addBunkStaff(bunkName){
+    var nameEl=document.getElementById('bsName'),roleEl=document.getElementById('bsRole');
+    var name=((nameEl&&nameEl.value)||'').trim(), role=((roleEl&&roleEl.value)||'').trim();
+    if(!name){toast('Enter a name','error');return}
+    if(!bunkStaff[bunkName])bunkStaff[bunkName]=[];
+    bunkStaff[bunkName].push({name:name,role:role||'Staff'});
+    save();
+    _syncInvitesForBunk(bunkName);
+    renderBB();
+    _renderBunkStaffModalBody(bunkName);
+    toast('Added '+name);
+}
+function removeBunkStaff(bunkName,idx){
+    if(!bunkStaff[bunkName]||!bunkStaff[bunkName][idx])return;
+    bunkStaff[bunkName].splice(idx,1);
+    save();
+    _syncInvitesForBunk(bunkName);
+    renderBB();
+    _renderBunkStaffModalBody(bunkName);
+}
 function openBunkCountModal(bunkName){
     var rosterCt=Object.values(roster).filter(function(c){return c.bunk===bunkName}).length;
     var manualCt=bunkManualCounts[bunkName];
@@ -2687,6 +2738,24 @@ function generateParentInvite(enrollId){
     _syncParentInviteSnapshot(enrollId,false);
 }
 
+// Shared by saveCamper() (after any roster edit) and bunk-staff add/remove —
+// find the accepted/enrolled enrollment(s) for a given camper name and
+// silently refresh their family's already-issued invite, if any.
+function _enrollIdsForCamper(camperName){
+    return Object.keys(enrollments).filter(function(id){
+        var en=enrollments[id];
+        return en&&en.camperName===camperName&&(en.status==='accepted'||en.status==='enrolled');
+    });
+}
+function _syncInvitesForCamper(camperName){
+    _enrollIdsForCamper(camperName).forEach(function(id){ _syncParentInviteSnapshot(id,true); });
+}
+function _syncInvitesForBunk(bunkName){
+    Object.keys(roster).forEach(function(n){
+        if(roster[n].bunk===bunkName)_syncInvitesForCamper(n);
+    });
+}
+
 // The parent portal reads camper_data as a frozen snapshot captured at
 // invite-creation time (see campistry_link_parent.html — claim_parent_invite
 // / get_parent_data_by_user just return whatever camper_data upsert_parent_invite
@@ -2736,7 +2805,8 @@ function _syncParentInviteSnapshot(enrollId,silent){
                 doctor:en.doctor||r.doctor||'',doctorPhone:en.doctorPhone||r.doctorPhone||'',
                 insurance:en.insurance||r.insurance||'',policyNum:en.policyNum||r.policyNum||'',
                 emergencyName:en.emergencyName||r.emergencyName||'',emergencyPhone:en.emergencyPhone||r.emergencyPhone||'',emergencyRel:en.emergencyRel||r.emergencyRel||'',
-                parent2Name:en.parent2Name||r.parent2Name||r.parent1Name||'',parent2Phone:en.parent2Phone||r.parent2Phone||r.parent1Phone||''
+                parent2Name:en.parent2Name||r.parent2Name||r.parent1Name||'',parent2Phone:en.parent2Phone||r.parent2Phone||r.parent1Phone||'',
+                staff:bunkStaff[r.bunk]||[]
             };
         });
 
@@ -5183,6 +5253,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
+    openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,
     saveAppNote:saveAppNote,printApplication:printApplication,
