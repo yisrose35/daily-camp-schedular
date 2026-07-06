@@ -5152,7 +5152,15 @@ function importRows(rows){
     });
 
     // ═══ PASS 2: Create campers ═══
+    // roster is keyed by full name (wiped to {} above), and nearly every
+    // other system built on top of it — bunk assignment, bunk staff,
+    // families, enrollments, Link invites/tips/mail — joins on that SAME
+    // name string, not the numeric camperId. Two rows sharing an identical
+    // name would otherwise silently collide: the second row overwrites the
+    // first in roster with zero warning. Track and report it instead.
+    var _importDupeNames=[];
     rows.forEach(function(r){
+        if(roster[r.name])_importDupeNames.push(r.name);
         added++;
         var existingId=nextCamperId;nextCamperId++;
 
@@ -5282,6 +5290,11 @@ function importRows(rows){
     if(newBunks>0)summary+=', '+newBunks+' bunk'+(newBunks>1?'s':'');
     if(newFamilies>0)summary+=', '+newFamilies+' famil'+(newFamilies>1?'ies':'y');
     summary+=' — previous data replaced';
+    if(_importDupeNames.length>0){
+        var uniqDupes=Array.from(new Set(_importDupeNames));
+        summary+=' — ⚠ '+uniqDupes.length+' duplicate name'+(uniqDupes.length>1?'s':'')+' in this file (only the last row for each was kept: '+uniqDupes.join(', ')+')';
+        console.warn('[Me] CSV import: duplicate camper name(s) collided in roster —',uniqDupes);
+    }
     toast(summary);
     console.log('[Me] CSV import (full overwrite):',summary);
 }
