@@ -1,0 +1,21 @@
+{
+  "appId": "com.campistry.link",
+  "appName": "Campistry Link",
+  "webDir": "www",
+  "backgroundColor": "#F3F1EE",
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "launchAutoHide": true,
+      "backgroundColor": "#F3F1EE",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "overlaysWebView": false,
+      "style": "LIGHT",
+      "backgroundColor": "#FDFCFB"
+    }
+  }
+}

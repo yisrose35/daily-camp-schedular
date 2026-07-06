@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Campistry Link</string>
+    <string name="title_activity_main">Campistry Link</string>
+    <string name="package_name">com.campistry.link</string>
+    <string name="custom_url_scheme">com.campistry.link</string>
+</resources>

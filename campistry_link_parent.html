@@ -3,8 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <title>Campistry Link | Parent Portal</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#FDFCFB">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="format-detection" content="telephone=no">
     <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="apple-touch-icon" href="Link_apple_touch_icon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
@@ -730,6 +736,10 @@ function childAccent(idOrIndex){
 }
 
 // NAV
+// Simple page-history stack — lets the Capacitor shell (campistry_link_capacitor.js)
+// map the Android hardware back button to "go to the previous page" instead of
+// exiting the app. No-op cost for plain web use.
+var _navHistory=['home'];
 function nav(p){
     document.querySelectorAll('.lk-page').forEach(function(e){e.classList.remove('active')});
     document.querySelectorAll('.lk-nav-item,.lk-bnav-item').forEach(function(e){e.classList.remove('active')});
@@ -740,8 +750,17 @@ function nav(p){
     if(p==='tips')renderTipsPage();
     if(p==='lists')renderCampLists();
     if(p==='mail')renderCamperMail();
+    if(_navHistory[_navHistory.length-1]!==p)_navHistory.push(p);
     window.scrollTo(0,0);
 }
+window.__navBack=function(){
+    if(_navHistory.length>1){
+        _navHistory.pop();
+        nav(_navHistory[_navHistory.length-1]);
+        return true;
+    }
+    return false;
+};
 function toggleAvatarMenu(e){
     if(e)e.stopPropagation();
     var m=document.getElementById('avatarMenu');
@@ -1591,6 +1610,7 @@ window.addEventListener('storage', function(e) {
 });
 </script>
 <script src="campistry_notes_quick.js"></script>
+<script src="campistry_link_capacitor.js"></script>
 <script src="supabase-js@2.js"></script>
 <script src="config.js"></script>
 <script>
@@ -2144,6 +2164,12 @@ window.addEventListener('storage', function(e) {
             _showCreateAccount('', res.data);
         });
     }
+
+    // Exposed so campistry_link_capacitor.js can hand off an invite token
+    // pulled from a native deep link (custom URL scheme / universal link),
+    // since inside a Capacitor shell the token doesn't arrive as a normal
+    // window.location.search query string.
+    window.__handleParentInviteToken = _validateThenShowSignup;
 
     // ── Entry point ───────────────────────────────────────────────────────────
     // Invite URL → always show auth screen (never auto-claim from existing session)

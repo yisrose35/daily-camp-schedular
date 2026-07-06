@@ -610,16 +610,18 @@ body {
 .lk-fab:hover { box-shadow: var(--shadow-lg); }
 .lk-fab svg { width: 24px; height: 24px; flex-shrink: 0; }
 @media (max-width: 768px) {
-    .lk-fab { right: 20px; bottom: 96px; }
+    .lk-fab { right: 20px; bottom: calc(96px + env(safe-area-inset-bottom)); }
 }
 
 /* BOTTOM NAV — Material 3 Navigation Bar: full-width surface, per-item
-   pill "indicator" that sits behind the icon only (not the label) */
+   pill "indicator" that sits behind the icon only (not the label).
+   padding-bottom accounts for the iPhone home-indicator safe area. */
 .lk-bnav {
     display: none; position: fixed; bottom: 0; left: 0; right: 0;
     z-index: 100;
     background: var(--md-surface-container);
     box-shadow: 0 -1px 3px rgba(0,0,0,0.06);
+    padding-bottom: env(safe-area-inset-bottom);
 }
 .lk-bnav-inner {
     display: flex; align-items: center; justify-content: space-around;
@@ -966,7 +968,7 @@ body {
 /* RESPONSIVE */
 @media (max-width: 768px) {
     .lk-sidebar { display: none; }
-    .lk-main { margin-left: 0; padding: 16px 14px 100px; }
+    .lk-main { margin-left: 0; padding: 16px 14px calc(100px + env(safe-area-inset-bottom)); }
     .lk-bnav { display: block; }
     .lk-stats { grid-template-columns: 1fr 1fr; gap: 10px; }
     .lk-page-header h1 { font-size: 1.2rem; }
