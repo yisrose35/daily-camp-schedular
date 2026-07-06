@@ -723,6 +723,18 @@ var payments = [];
 var canteenTxByChild = {};
 var schedule = [];
 
+// Per-camper identity color (Life360-style) — same accent follows a child
+// everywhere: hero chips, My Children, Canteen wallet card, message avatars.
+var CHILD_ACCENTS = ['emerald','gold','violet','azure','coral','teal','rose','indigo'];
+function childAccent(idOrIndex){
+    var idx = idOrIndex;
+    if (typeof idOrIndex === 'string') {
+        idx = children.findIndex(function(c){ return c.id === idOrIndex; });
+        if (idx < 0) idx = 0;
+    }
+    return CHILD_ACCENTS[idx % CHILD_ACCENTS.length];
+}
+
 // NAV
 function nav(p){
     document.querySelectorAll('.lk-page').forEach(function(e){e.classList.remove('active')});
@@ -810,17 +822,17 @@ function init(){
     // Hero kid chips — quick personal touch under the greeting
     var hkr=document.getElementById('heroKidsRow');
     if(hkr){
-        hkr.innerHTML=children.map(function(c){
-            return '<div class="lk-hero-kid-chip"><div class="lk-hero-kid-avatar">'+(c.initials||'')+'</div><div class="lk-hero-kid-name">'+(c.name?c.name.split(' ')[0]:'')+(c.bunk?' · '+c.bunk:'')+'</div></div>';
+        hkr.innerHTML=children.map(function(c,i){
+            return '<div class="lk-hero-kid-chip" data-accent="'+childAccent(i)+'"><div class="lk-hero-kid-avatar">'+(c.initials||'')+'</div><div class="lk-hero-kid-name">'+(c.name?c.name.split(' ')[0]:'')+(c.bunk?' · '+c.bunk:'')+'</div></div>';
         }).join('');
     }
 
     // Home messages
-    var hm=document.getElementById('homeMessages');if(hm){hm.innerHTML='';messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg(\''+m.id+'\')},50)"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});}
+    var hm=document.getElementById('homeMessages');if(hm){hm.innerHTML='';messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg(\''+m.id+'\')},50)">'+_msgAvatarHtml(m)+'<div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});}
 
     // Children list
     var cl=document.getElementById('childrenList');cl.innerHTML='';
-    if(children.length){children.forEach(function(c){cl.innerHTML+='<div class="lk-child-card" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
+    if(children.length){children.forEach(function(c,i){cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
     else{cl.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}
 
     // Payments
@@ -897,6 +909,7 @@ function switchCanteen(id,btn){
     var c=children.find(function(k){return k.id===id});
     if(!c)return;
     document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
+    var walletCard=document.querySelector('.canteen-bal');if(walletCard)walletCard.setAttribute('data-accent',childAccent(id));
     // Sync spending-control sliders with real Snacks values
     var lim=c.dailyLimit!=null?c.dailyLimit:5, credit=c.creditLimit||0, floor=c.balanceFloor||0;
     var lr=document.getElementById('limRange');   if(lr)lr.value=Math.round(lim);
@@ -1025,7 +1038,7 @@ function showChild(id){
     var c=children.find(function(k){return k.id===id});if(!c)return;
     document.getElementById('childDetail').style.display='block';
     document.getElementById('childDetailContent').innerHTML=
-        '<div class="lk-card"><div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,var(--link-tint),#DBEAFE);display:flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:700;color:var(--product-700);">'+c.initials+'</div><div><div style="font-size:1.15rem;font-weight:700;">'+c.name+'</div><div style="font-size:.82rem;color:var(--text-muted);">Age '+c.age+' · '+c.session+'</div></div></div></div>'+
+        '<div class="lk-card" data-accent="'+childAccent(id)+'"><div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><div class="lk-avatar-accent" style="width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;">'+c.initials+'</div><div><div style="font-size:1.15rem;font-weight:700;">'+c.name+'</div><div style="font-size:.82rem;color:var(--text-muted);">Age '+c.age+' · '+c.session+'</div></div></div></div>'+
         '<div class="lk-card"><div class="lk-card-head"><h2>Camp Details</h2></div><div class="info-row"><span class="label">Division</span><span class="value">'+c.division+'</span></div><div class="info-row"><span class="label">Grade</span><span class="value">'+c.grade+'</span></div><div class="info-row"><span class="label">Bunk</span><span class="value">'+c.bunk+'</span></div><div class="info-row"><span class="label">Counselor</span><span class="value">'+c.counselor+'</span></div></div>'+
         '<div class="lk-card"><div class="lk-card-head"><h2>Medical</h2></div><div class="info-row"><span class="label">Allergies</span><span class="value" style="color:'+(c.allergies!=='None'?'var(--red-500)':'')+';">'+c.allergies+'</span></div><div class="info-row"><span class="label">Medications</span><span class="value">'+c.medications+'</span></div><div class="info-row"><span class="label">Dietary</span><span class="value">'+c.dietary+'</span></div></div>'+
         '<div class="lk-card"><div class="lk-card-head"><h2>Canteen</h2></div><div class="info-row"><span class="label">Balance</span><span class="value" style="color:var(--green-600);font-size:1.05rem;">$'+c.canteenBalance.toFixed(2)+'</span></div><div class="info-row"><span class="label">Daily Limit</span><span class="value">$'+c.dailyLimit+'.00</span></div></div>';
@@ -1041,7 +1054,17 @@ function fMsg(f,btn){
     if(f==='announcements')list=messages.filter(function(m){return m.type==='announcement'});
     var c=document.getElementById('msgList');c.innerHTML='';
     if(!list.length){c.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages</h3></div>';return;}
-    list.forEach(function(m){c.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';});
+    list.forEach(function(m){c.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')">'+_msgAvatarHtml(m)+'<div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';});
+}
+
+/** Avatar circle for a message row — colored + labeled by sender type
+    (announcement / camp office / you), Brightwheel/Bloomz-style feed. */
+function _msgAvatarHtml(m){
+    var initials, accent;
+    if(m.type==='announcement'){ initials='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>'; accent='gold'; }
+    else if(m.type==='sent'){ initials=(parent.name||'?').split(' ').map(function(w){return w[0]||''}).join('').slice(0,2).toUpperCase(); accent='indigo'; }
+    else { initials='C'; accent='emerald'; }
+    return '<div class="msg-avatar lk-avatar-accent" data-accent="'+accent+'">'+initials+(m.read?'':'<span class="msg-unread-dot"></span>')+'</div>';
 }
 function openMsg(id){
     var m=messages.find(function(x){return String(x.id)===String(id)});if(!m)return;
