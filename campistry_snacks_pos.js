@@ -20,7 +20,13 @@ const SNACKS_LOCAL_KEY = 'campistry_snacks_data';
 // ==========================================================================
 
 function readGlobal() {
-    const keys = ['CAMPISTRY_UNIFIED_STATE', STORE_KEY, 'CAMPISTRY_LOCAL_CACHE'];
+    // STORE_KEY (campGlobalSettings_v1) is what campistry_cloud_bootstrap.js
+    // actually hydrates from Supabase into — it must be checked FIRST.
+    // CAMPISTRY_UNIFIED_STATE is only ever written by demo_mode.js (offline
+    // expo mode) or the standalone registration page; checking it first meant
+    // a stale/demo value left in this browser's localStorage would
+    // permanently shadow the real, freshly-hydrated roster.
+    const keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
     for (const key of keys) {
         try { const raw = localStorage.getItem(key); if (raw) return JSON.parse(raw) || {}; } catch (_) {}
     }

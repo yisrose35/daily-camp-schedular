@@ -26,7 +26,16 @@ const SNACKS_LOCAL_KEY = 'campistry_snacks_data'; // fallback
 // ==========================================================================
 
 function readGlobal() {
-    const keys = ['CAMPISTRY_UNIFIED_STATE', STORE_KEY, 'CAMPISTRY_LOCAL_CACHE'];
+    // STORE_KEY (campGlobalSettings_v1) is what campistry_cloud_bootstrap.js
+    // actually hydrates from Supabase into — it must be checked FIRST.
+    // CAMPISTRY_UNIFIED_STATE is only ever written by demo_mode.js (offline
+    // expo mode) or the standalone registration page; if either of those was
+    // ever visited in this browser, that key sits in localStorage
+    // indefinitely and — when checked first — permanently shadows the real,
+    // freshly-hydrated roster with stale/demo data. This was reported as
+    // "campers not showing in Snacks" even after cloud hydration confirmed
+    // finding real campers.
+    const keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
     for (const key of keys) {
         try { const raw = localStorage.getItem(key); if (raw) return JSON.parse(raw) || {}; } catch (_) {}
     }
