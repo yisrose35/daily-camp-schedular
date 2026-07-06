@@ -288,7 +288,11 @@
         <div style="display:flex;gap:6px;justify-content:center;margin:12px 0;">
             <button class="canteen-quick-btn" onclick="selAmt(10,this)">$10</button><button class="canteen-quick-btn sel" onclick="selAmt(25,this)">$25</button><button class="canteen-quick-btn" onclick="selAmt(50,this)">$50</button>
         </div>
-        <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="toast('Auto-reload enabled!')">Auto-Reload</button></div>
+        <div style="display:flex;gap:6px;justify-content:center;align-items:center;margin-bottom:12px;">
+            <span style="font-size:.82rem;font-weight:600;opacity:.85;">$</span>
+            <input type="number" id="canteenCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="selCustomAmt(this)" style="width:130px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:inherit;font-size:.85rem;text-align:center;">
+        </div>
+        <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="toast('Auto-reload enabled!')">Auto-Reload</button></div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Spending Controls</h2></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
@@ -773,7 +777,11 @@ document.addEventListener('click',function(e){
 });
 function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
 var _selAmt=25;
-function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});b.classList.add('sel');}
+function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});b.classList.add('sel');var ci=document.getElementById('canteenCustomAmt');if(ci)ci.value='';}
+function selCustomAmt(input){
+    var v=parseFloat(input.value);
+    if(!isNaN(v)&&v>0){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});}
+}
 
 function _activeCanteenChild(){
     var activeTab=document.querySelector('#canteenTabs .lk-tab.active');
@@ -797,15 +805,38 @@ function _mutateSnacks(fn){
 function addFunds(){
     var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
     var amt=_selAmt||25;
-    var now=new Date();
-    _mutateSnacks(function(s){
-        var a=s.accounts[c.name]||(s.accounts[c.name]={balance:0,dailyLimit:10,spentToday:0});
-        a.balance=Math.round(((a.balance||0)+amt)*100)/100;
-        s.transactions.unshift({time:now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),camper:c.name,items:'Funds added by parent',amount:amt,type:'credit',date:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')});
+    if(!(amt>0)){toast('Enter an amount first');return;}
+    var db=window._parentDB;
+    if(!db){toast('Connection not ready — try again in a moment.');return;}
+    var btn=document.getElementById('canteenAddBtn');
+    if(btn){btn.disabled=true;btn.textContent='Adding…';}
+    db.rpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt}).then(function(res){
+        if(btn){btn.disabled=false;btn.textContent='Add Funds';}
+        if(res.error){
+            console.error('[Parent] submit_canteen_deposit error:',res.error.message,res.error);
+            toast('Could not add funds — please try again.');
+            return;
+        }
+        var d=res.data;
+        if(!d||!d.success){
+            var msg=(d&&d.error==='camper_not_on_invite')?'That camper isn\'t on your account.':'Could not add funds.';
+            toast(msg);
+            return;
+        }
+        // Keep the same local echo the rest of the canteen UI already reads from
+        // (transaction history, other-device fallback) — the RPC call above is
+        // what actually persists this to Campistry Snacks in the cloud.
+        var now=new Date();
+        _mutateSnacks(function(s){
+            s.accounts[c.name]={balance:d.balance,dailyLimit:(s.accounts[c.name]&&s.accounts[c.name].dailyLimit)||10,spentToday:(s.accounts[c.name]&&s.accounts[c.name].spentToday)||0};
+            s.transactions.unshift({time:now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),camper:c.name,items:'Funds added by parent',amount:amt,type:'credit',date:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')});
+        });
+        _loadSnacksData(children);
+        c.canteenBalance=d.balance;
+        switchCanteen(c.id);
+        var ci=document.getElementById('canteenCustomAmt');if(ci)ci.value='';
+        toast('$'+amt.toFixed(2)+' added to '+c.name.split(' ')[0]+"'s canteen account");
     });
-    _loadSnacksData(children);
-    switchCanteen(c.id);
-    toast('$'+amt.toFixed(2)+' added to '+c.name.split(' ')[0]+"'s canteen account");
 }
 
 function saveSpendingControls(){
@@ -1777,6 +1808,41 @@ window.addEventListener('storage', function(e) {
     }
     function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
+    // Live canteen balances — get_canteen_accounts (migration 019) reads the
+    // SAME camp_state_kv blob the admin Snacks dashboard/POS terminal use, so
+    // this shows whatever an admin most recently set too, not just deposits
+    // made from this parent's own device.
+    function _syncCanteenFromCloud(childrenList, campId) {
+        if (!campId) return;
+        db.rpc('get_canteen_accounts', { p_camp_id: campId }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            var accounts = res.data.accounts || {};
+            var txs = res.data.transactions || [];
+            childrenList.forEach(function(c) {
+                var a = accounts[c.name];
+                if (a && a.balance != null) c.canteenBalance = a.balance;
+                if (a && a.dailyLimit != null) c.dailyLimit = a.dailyLimit;
+                if (a && a.creditLimit != null) c.creditLimit = a.creditLimit;
+                if (a && a.balanceFloor != null) c.balanceFloor = a.balanceFloor;
+                var childTx = txs.filter(function(t){ return t.camper === c.name; });
+                canteenTxByChild[c.id] = childTx.map(function(t) {
+                    var credit = t.type === 'credit';
+                    return { name: t.items || 'Purchase', date: (t.time||'') + (t.date?' · '+t.date:''), amt: credit ? Math.abs(t.amount||0) : -Math.abs(t.amount||0) };
+                });
+            });
+            // Refresh whatever's currently on screen with the live numbers.
+            if (typeof _activeCanteenChild === 'function') {
+                var active = _activeCanteenChild();
+                if (active) switchCanteen(active.id);
+            }
+            var canteenSub = document.getElementById('homeCanteenSub');
+            if (canteenSub) {
+                var bal = childrenList.length ? childrenList.reduce(function(s,c){return s+(c.canteenBalance||0);},0).toFixed(2) : null;
+                canteenSub.textContent = bal !== null ? '$'+bal : '—';
+            }
+        });
+    }
+
     // ── Apply real data ───────────────────────────────────────────────────────
     function _applyData(d) {
         console.log('[Parent] Applying data — parent:', d.parent_name, '| campers:', d.camper_names);
@@ -1805,7 +1871,8 @@ window.addEventListener('storage', function(e) {
         if (realChildren.length) {
             children = realChildren;
             var newTx = {}; realChildren.forEach(function(c){newTx[c.id]=[];}); canteenTxByChild = newTx;
-            _loadSnacksData(realChildren); // pull real balances + transactions from Campistry Snacks
+            _loadSnacksData(realChildren); // instant local echo while the live cloud fetch below is in flight
+            _syncCanteenFromCloud(realChildren, d.camp_id);
         }
         _loadMessages(); // pull messages/broadcasts/notifications from shared store
         init();
