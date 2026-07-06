@@ -496,11 +496,17 @@
                 
                 const slotIdx = block.slots[0];
                 if (!window.leagueAssignments[block.divName][slotIdx]) {
+                    // ★ Stamp the game's own time (mirrors schedule entries' _startMin/_endMin)
+                    //   so mid-day rain league split/restore never has to re-derive it from a
+                    //   drifting slot index against a possibly-stale window.divisionTimes.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[block.divName] && window.divisionTimes[block.divName][slotIdx]) || {};
                     window.leagueAssignments[block.divName][slotIdx] = {
                         matchups: pick._allMatchups || [],
                         gameLabel: pick._gameLabel || block.event || 'League Game',
                         sport: pick.sport || '',
-                        leagueName: pick._leagueName || ''
+                        leagueName: pick._leagueName || '',
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIdx}: ${(pick._allMatchups || []).length} matchups`);
                 }
@@ -784,11 +790,16 @@
             
             mainSlots.forEach(slotIndex => {
                 if (!window.leagueAssignments[block.divName][slotIndex]) {
+                    // ★ Stamp the game's own time (see the slot-0 store above) so the
+                    //   mid-day rain league split/restore is index-drift-proof.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[block.divName] && window.divisionTimes[block.divName][slotIndex]) || {};
                     window.leagueAssignments[block.divName][slotIndex] = {
                         matchups: pick._allMatchups || [],
                         gameLabel: pick._gameLabel || '',
                         sport: pick.sport || '',
-                        leagueName: pick._leagueName || ''
+                        leagueName: pick._leagueName || '',
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIndex}: ${(pick._allMatchups || []).length} matchups`);
                 }
@@ -5312,11 +5323,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 for (const slotIdx of slots) {
                     if (!window.leagueAssignments[divName][slotIdx]) {
+                        // ★ Stamp the game's own time (see fillBlock's league store) so the
+                        //   mid-day rain league split/restore is index-drift-proof.
+                        const _lgT = (window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx]) || {};
                         window.leagueAssignments[divName][slotIdx] = {
                             matchups: matchups || [],
                             gameLabel: gameLabel || '',
                             sport: sport || '',
-                            leagueName: leagueName || ''
+                            leagueName: leagueName || '',
+                            _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                            _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                         };
                         console.log(`[storeLeagueMatchups] ✅ Stored ${(matchups || []).length} matchups for ${divName} at slot ${slotIdx}`);
                     }
@@ -5458,12 +5474,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 
                 if (foundMatchups.length > 0) {
+                    // ★ Stamp the game's own time (see fillBlock's league store) so the
+                    //   mid-day rain league split/restore is index-drift-proof.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx]) || {};
                     window.leagueAssignments[divName][slotIdx] = {
                         matchups: foundMatchups,
                         gameLabel: foundGameLabel,
                         sport: foundSport,
                         leagueName: league.name,
-                        teams: leagueTeams
+                        teams: leagueTeams,
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`   ✅ League "${league.name}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
                 }
@@ -5683,9 +5704,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // overwrite those fills. Remove any block whose slot is already occupied.
         {
             const preFilt = schedulableSlotBlocks.length;
+            let _scopeDropped65 = 0;
             for (let _fi = schedulableSlotBlocks.length - 1; _fi >= 0; _fi--) {
                 const _fb = schedulableSlotBlocks[_fi];
                 if (!_fb.bunk || !_fb.slots?.length) continue;
+                // ★ Slot-scope gate: when a per-slot regen scope is active for this
+                //   bunk (per-tile regen OR the mid-day rain cut), the solver may fill
+                //   ONLY the scoped regen slots. An EMPTY out-of-scope slot (e.g. an
+                //   unscheduled slot before the rain cut) must stay empty — without
+                //   this gate it reads as "free" and gets backfilled, rewriting the
+                //   part of the day the scope promised to leave alone.
+                const _rsg = window.__regenSlotScope && window.__regenSlotScope[_fb.bunk];
+                if (_rsg && _rsg.regen && typeof _rsg.regen.has === 'function' && !_rsg.regen.has(_fb.slots[0])) {
+                    schedulableSlotBlocks.splice(_fi, 1);
+                    _scopeDropped65++;
+                    continue;
+                }
                 const _ex = window.scheduleAssignments[_fb.bunk]?.[_fb.slots[0]];
                 if (_ex && !_ex.continuation && !_ex._isTransition) {
                     const _act = (_ex._activity || _ex.field || '').toLowerCase().trim();
@@ -5695,7 +5729,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
             }
             const removed = preFilt - schedulableSlotBlocks.length;
-            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events`);
+            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events` +
+                (_scopeDropped65 > 0 ? ` (${_scopeDropped65} outside the active slot scope)` : ''));
         }
 
         // =========================================================================
@@ -5811,8 +5846,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                     if (_allowedBunks && !_allowedBunks.has(bunk)) return;
                     const arr = window.scheduleAssignments[bunk] || [];
+                    // ★ Slot-scope gate (mirrors STEP 6.5): with an active per-slot
+                    //   regen scope, this fallback may only touch the scoped regen
+                    //   slots — never backfill an out-of-scope empty (e.g. pre-rain-cut).
+                    const _rs75 = window.__regenSlotScope && window.__regenSlotScope[bunk];
                     for (let si = 0; si < arr.length; si++) {
                         const e = arr[si];
+                        if (_rs75 && _rs75.regen && typeof _rs75.regen.has === 'function' && !_rs75.regen.has(si)) continue;
                         if (_isLeagueSlot75(bunk, si)) { _lgSkipped75++; continue; }
                         if (!e) { _freeFills.push({ bunk, si }); continue; }
                         if (e.continuation || e._isTransition || e._fixed || e._pinned || e._h2h || e._bunkOverride) continue;
@@ -5841,7 +5881,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     for (const ff of _freeFills) {
                         try {
                             const _ffKind = _kindByCell75[String(ff.bunk) + '|' + ff.si];
-                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
+                            let ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
+                            // ★ Rainy fallback: rain shrinks the sport pool to the few
+                            //   indoor fields (often all pinned by league events), so a
+                            //   Sports tile can have ZERO legal sport candidates. Rather
+                            //   than leave the bunk Free, retry kind-unrestricted so an
+                            //   indoor special can take the slot — the realistic indoor
+                            //   alternative when the gyms are taken.
+                            if (!ok && _ffKind === 'sport' && window.isRainyDay === true) {
+                                ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, undefined);
+                            }
                             if (ok) _ffOk++; else _ffSkip++;
                         } catch (e) {
                             _ffSkip++;

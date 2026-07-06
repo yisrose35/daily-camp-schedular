@@ -2751,12 +2751,14 @@
         const validActivities = Utils.getValidActivityNames();
         const allDaily = window.loadAllDailyData?.() || {};
         const counts = {};
+        const countsByDate = {}; // per-date breakdown → lets a regen authoritatively replace one date
         let totalActivities = 0;
         let datesProcessed = 0;
 
         Object.entries(allDaily).forEach(([dateKey, dayData]) => {
             const sched = dayData?.scheduleAssignments || {};
             datesProcessed++;
+            const dayCounts = (countsByDate[dateKey] = {});
 
             Object.keys(sched).forEach(bunk => {
                 const bunkSchedule = sched[bunk] || [];
@@ -2775,6 +2777,8 @@
                         if (!validActivities.has(actName)) return;
                         counts[bunk] = counts[bunk] || {};
                         counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
+                        dayCounts[bunk] = dayCounts[bunk] || {};
+                        dayCounts[bunk][actName] = (dayCounts[bunk][actName] || 0) + 1;
                         totalActivities++;
                     }
                 });
@@ -2797,29 +2801,80 @@
             // counted-dates set. Decrements are the job of the explicit
             // erase / New-Half paths, not this passive rebuild.
             let _finalCounts = counts;
+            let _finalByDate = countsByDate; // full scan → per-date is authoritative
             const _countedDates = {};
             Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
             try {
                 const _gs = window.loadGlobalSettings?.() || {};
                 const _prevCounts = _gs.historicalCounts || {};
                 const _prevDates = _gs.historicalCountedDates || {};
+                const _prevByDate = _gs.historicalCountsByDate || {};
                 const _scanned = new Set(Object.keys(allDaily));
                 const _partial = Object.keys(_prevDates).some(dk => !_scanned.has(dk));
                 if (_partial && Object.keys(_prevCounts).length > 0) {
-                    console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan (cloud knew dates absent locally) — merging raise-only to avoid dropping rotation history');
-                    const _merged = JSON.parse(JSON.stringify(_prevCounts));
-                    Object.keys(counts).forEach(function (bunk) {
-                        _merged[bunk] = _merged[bunk] || {};
-                        Object.keys(counts[bunk]).forEach(function (act) {
-                            _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                    // A partial local scan (near-quota browser keeps most dates in the
+                    // cloud) can't lower the shared totals for the dates it can't see —
+                    // hence raise-only. BUT the date we just (re)generated IS local and
+                    // MUST be authoritative, or a mid-day rain erase (or any edit-down)
+                    // stays frozen high. Using the stored per-date breakdown, remove the
+                    // active date's OLD contribution from the floor and add its FRESH one;
+                    // absent dates keep their raise-only protection.
+                    const _activeDate = window._activeGenDate || window.currentScheduleDate || null;
+                    const _oldActive = (_activeDate && _prevByDate[_activeDate]) || null;
+                    if (_oldActive) {
+                        console.warn('📊 [SchedulerCoreUtils] PARTIAL scan — raise-only floor for absent dates, AUTHORITATIVE for active date ' + _activeDate);
+                        const _newActive = (_activeDate && countsByDate[_activeDate]) || {};
+                        // floor = prev cumulative minus the active date's OLD contribution
+                        const _floor = JSON.parse(JSON.stringify(_prevCounts));
+                        Object.keys(_oldActive).forEach(function (b) {
+                            Object.keys(_oldActive[b]).forEach(function (a) {
+                                if (_floor[b] && _floor[b][a] != null) _floor[b][a] = Math.max(0, _floor[b][a] - _oldActive[b][a]);
+                            });
                         });
-                    });
-                    _finalCounts = _merged;
+                        // fresh cumulative minus the active date (raise-only compares the rest)
+                        const _freshRest = JSON.parse(JSON.stringify(counts));
+                        Object.keys(_newActive).forEach(function (b) {
+                            Object.keys(_newActive[b]).forEach(function (a) {
+                                if (_freshRest[b] && _freshRest[b][a] != null) _freshRest[b][a] = Math.max(0, _freshRest[b][a] - _newActive[b][a]);
+                            });
+                        });
+                        const _merged = JSON.parse(JSON.stringify(_floor));
+                        Object.keys(_freshRest).forEach(function (b) {
+                            _merged[b] = _merged[b] || {};
+                            Object.keys(_freshRest[b]).forEach(function (a) {
+                                _merged[b][a] = Math.max(_merged[b][a] || 0, _freshRest[b][a]);
+                            });
+                        });
+                        // add the active date back, authoritatively
+                        Object.keys(_newActive).forEach(function (b) {
+                            _merged[b] = _merged[b] || {};
+                            Object.keys(_newActive[b]).forEach(function (a) {
+                                _merged[b][a] = (_merged[b][a] || 0) + _newActive[b][a];
+                            });
+                        });
+                        _finalCounts = _merged;
+                    } else {
+                        // No per-date baseline for the active date yet (first rebuild after
+                        // this ships) → keep the safe raise-only behavior and seed the
+                        // per-date store so the NEXT regen of this date is authoritative.
+                        console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan — merging raise-only (seeding per-date baseline)');
+                        const _merged = JSON.parse(JSON.stringify(_prevCounts));
+                        Object.keys(counts).forEach(function (bunk) {
+                            _merged[bunk] = _merged[bunk] || {};
+                            Object.keys(counts[bunk]).forEach(function (act) {
+                                _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                            });
+                        });
+                        _finalCounts = _merged;
+                    }
                     // keep previously-counted dates too
                     Object.keys(_prevDates).forEach(function (dk) { _countedDates[dk] = true; });
                 }
             } catch (_e) { /* fall back to authoritative overwrite */ }
             window.saveGlobalSettings('historicalCounts', _finalCounts);
+            // Per-date breakdown of the locally-scanned dates — the baseline that lets
+            // the NEXT regen of any of these dates be authoritative (bounded to local dates).
+            window.saveGlobalSettings('historicalCountsByDate', _finalByDate);
             // Rebuild historicalCountedDates to match so incrementHistoricalCounts
             // guards stay consistent after a full rebuild.
             window.saveGlobalSettings('historicalCountedDates', _countedDates);

@@ -1334,13 +1334,16 @@
                 await new Promise(r => setTimeout(r, delay));
                 
                 try {
+                    // maybeSingle: .single() throws a 406 network error into the
+                    // console when the row hasn't replicated yet — the retry loop
+                    // handles the miss either way, so ask politely.
                     const { data: verifyData, error: verifyError } = await client
                         .from(CONFIG.TABLE_NAME)
                         .select('updated_at, schedule_data')
                         .eq('camp_id', campId)
                         .eq('date_key', dateKey)
                         .eq('scheduler_id', userId)
-                        .single();
+                        .maybeSingle();
 
                     if (!verifyError && verifyData) {
                         const cloudBunks = Object.keys(verifyData.schedule_data?.scheduleAssignments || {}).length;

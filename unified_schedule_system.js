@@ -2759,29 +2759,64 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
         }
         if (leagues[divName]) {
+            // ★ Fuzzy ±2-slot lookup lets a league game that spans a few grid
+            //   columns share its matchups. But a DIFFERENT league period up to 2
+            //   slots away must NOT borrow them — that renders a phantom duplicate
+            //   game (e.g. a rain-dropped 5:10 State League tile inheriting the
+            //   1:25 game's matchups on already-closed outdoor fields). Only
+            //   inherit when the stored game's OWN time actually covers this slot.
+            //   Times come from the game's stamped _startMin/_endMin (falling back
+            //   to each slot's divisionTimes), so this holds for legacy data too.
+            const _dt = (window.divisionTimes && window.divisionTimes[divName]) || null;
+            const _qs = _dt && _dt[slotIdx];
+            const qStart = (_qs && _qs.startMin != null) ? _qs.startMin : null;
+            const qEnd = (_qs && _qs.endMin != null) ? _qs.endMin : null;
             const divSlotKeys = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
             for (const storedSlot of divSlotKeys) {
                 if (Math.abs(storedSlot - slotIdx) <= 2) {
                     const data = leagues[divName][storedSlot];
-                    if (data && (data.matchups?.length > 0 || data.gameLabel)) return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+                    if (!(data && (data.matchups?.length > 0 || data.gameLabel))) continue;
+                    const gStart = (data._startMin != null) ? data._startMin
+                                 : (_dt && _dt[storedSlot] && _dt[storedSlot].startMin != null ? _dt[storedSlot].startMin : null);
+                    const gEnd = (data._endMin != null) ? data._endMin
+                               : (_dt && _dt[storedSlot] && _dt[storedSlot].endMin != null ? _dt[storedSlot].endMin : null);
+                    // Times known on both sides and disjoint → different period, skip.
+                    if (qStart != null && qEnd != null && gStart != null && gEnd != null && !(gStart < qEnd && gEnd > qStart)) continue;
+                    return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
                 }
             }
         }
-        const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
-        let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
-        const applicableLeagues = masterLeaguesList.filter(l => l?.name && l?.divisions?.includes(divName));
-        if (applicableLeagues.length > 0) {
-            const league = applicableLeagues[0], teams = league.teams || [];
-            if (teams.length >= 2) {
-                const displayMatchups = [];
-                for (let i = 0; i < teams.length - 1; i += 2) { 
-                    if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` }); 
+        // Master-league DEFAULT matchups: only when this division has NO stored
+        // league games at all (never generated). If it HAS games but not for this
+        // slot, the slot legitimately has none (e.g. a rained-out post-cut period)
+        // — fabricating defaults here would just be another phantom.
+        const _hasStored = leagues[divName] && Object.keys(leagues[divName]).length > 0;
+        if (!_hasStored) {
+            const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
+            let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
+            const applicableLeagues = masterLeaguesList.filter(l => l?.name && l?.divisions?.includes(divName));
+            if (applicableLeagues.length > 0) {
+                const league = applicableLeagues[0], teams = league.teams || [];
+                if (teams.length >= 2) {
+                    const displayMatchups = [];
+                    for (let i = 0; i < teams.length - 1; i += 2) {
+                        if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` });
+                    }
+                    if (teams.length % 2 === 1) displayMatchups.push({ teamA: teams[teams.length - 1], teamB: 'BYE', display: `${teams[teams.length - 1]} (BYE)` });
+                    return { matchups: displayMatchups, gameLabel: `${league.name} Game`, sport: league.sports?.[0] || 'League', leagueName: league.name };
                 }
-                if (teams.length % 2 === 1) displayMatchups.push({ teamA: teams[teams.length - 1], teamB: 'BYE', display: `${teams[teams.length - 1]} (BYE)` });
-                return { matchups: displayMatchups, gameLabel: `${league.name} Game`, sport: league.sports?.[0] || 'League', leagueName: league.name };
             }
         }
         return { matchups: [], gameLabel: '', sport: '', leagueName: '' };
+    }
+
+    // A league tile only renders as a GAME when there's a real scheduled game for
+    // its slot. A rain-dropped (or never-scheduled-this-slot) league tile yields
+    // nothing here, so the grid renders the underlying activity instead of an
+    // empty/phantom league cell.
+    function hasScheduledLeagueGame(divName, slotIdx) {
+        const li = getLeagueMatchups(divName, slotIdx);
+        return !!(li && ((li.matchups && li.matchups.length > 0) || li.gameLabel));
     }
 
     // =========================================================================
@@ -3484,7 +3519,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                         _postChangeMin: slot._postChangeMin
                     };
                     var td;
-                    if (isLeagueBlockType(blockObj.event, blockObj.type)) {
+                    if (isLeagueBlockType(blockObj.event, blockObj.type) && hasScheduledLeagueGame(divName, slotIdx)) {
                         td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx, isEditable);
                     } else {
                         // When this slot is a full-division merge, this single cell
@@ -3757,9 +3792,15 @@ divBlocks.forEach((block, blockIdx) => {
     tr.appendChild(tdTime);
     
     if (isLeagueBlockType(block.event, block.type)) {
-        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable));
-        tbody.appendChild(tr);
-        return;
+        // Only render a league GAME cell when a real game exists for this slot.
+        // A rain-dropped league tile has none → fall through to the normal
+        // activity render instead of a phantom/empty league cell.
+        const _lgSlot = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
+        if (hasScheduledLeagueGame(divName, _lgSlot)) {
+            tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable));
+            tbody.appendChild(tr);
+            return;
+        }
     }
 
     if (block.type === 'elective' || block.type === 'swim_elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
