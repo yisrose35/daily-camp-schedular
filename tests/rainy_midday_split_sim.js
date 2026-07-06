@@ -177,8 +177,9 @@ function rainySplitLeagueMapAt(leagueAssignments, divisionTimes, bunkToDiv, tMin
       if (v == null) return;
       const si = parseInt(k, 10);
       const s = (!isNaN(si) && slots[si]) || {};
-      const ss = (s.startMin != null) ? s.startMin : null;
-      const se = (s.endMin != null) ? s.endMin : null;
+      // Fall back to the game's OWN stamped time when the slot index doesn't resolve.
+      const ss = (s.startMin != null) ? s.startMin : ((v && v._startMin != null) ? v._startMin : null);
+      const se = (s.endMin != null) ? s.endMin : ((v && v._endMin != null) ? v._endMin : null);
       let keep;
       if (se == null) keep = true;
       else if (se <= tMin) keep = true;
@@ -190,6 +191,32 @@ function rainySplitLeagueMapAt(leagueAssignments, divisionTimes, bunkToDiv, tMin
     out[key] = dst;
   });
   return { map: out, dropped };
+}
+
+// (mirrors daily_adjustments.js _rainyRestorePreCutLeagues — keep in sync)
+// Restores ONLY pre-cut games from the snapshot; a game that starts at/after the
+// cut is "owned by the gen" and skipped. Time resolves from the slot OR the
+// game's own stamped _startMin.
+function rainyRestorePreCutLeagues(snapshot, divisionTimes, bunkToDiv, tMin, live) {
+  const la = live || {};
+  let restored = 0;
+  Object.keys(snapshot || {}).forEach(key => {
+    const src = snapshot[key];
+    if (!src || typeof src !== 'object') return;
+    const divName = (divisionTimes || {})[key] ? key : ((bunkToDiv || {})[key] || null);
+    const slots = (divName && divisionTimes[divName]) || [];
+    Object.keys(src).forEach(k => {
+      const v = src[k];
+      if (v == null) return;
+      const si = parseInt(k, 10);
+      const s = (!isNaN(si) && slots[si]) || {};
+      const ss = (s.startMin != null) ? s.startMin : ((v && v._startMin != null) ? v._startMin : null);
+      if (ss != null && ss >= tMin) return; // post-cut → the gen owns it
+      if (!la[key]) la[key] = Array.isArray(src) ? [] : {};
+      if (la[key][k] == null) { la[key][k] = JSON.parse(JSON.stringify(v)); restored++; }
+    });
+  });
+  return { la, restored };
 }
 
 // rotation_cloud.js saveRotationCounts / scheduler_core_utils rebuildHistoricalCounts
@@ -502,6 +529,34 @@ test('league map split: played games kept, rained-out fixtures dropped, 75% rule
 
   // Input not mutated.
   assert.ok(la.Div1[1] && la.Div1[2], 'source map untouched');
+});
+
+test('index-drift: a post-cut league game whose slot no longer resolves is still dropped via its stamped time', () => {
+  // The real bug: 6th grade kept its 3:30pm league game after a 2:30pm rain cut.
+  // divisionTimes drifted (rebuilt with fewer slots) so slot index 2 doesn't
+  // resolve — without the stamped _startMin the game reads as "no time → keep".
+  const divisionTimes = { Div1: [ { startMin: 600, endMin: 660 } ] }; // only slot 0 resolves
+  const bunkToDiv = {};
+  const la = {
+    Div1: {
+      0: { matchups: [{ home: 'AM', away: 'game' }], _startMin: 600, _endMin: 660 },  // pre-cut
+      2: { matchups: [{ home: 'Fruit', away: 'League' }], _startMin: 930, _endMin: 1010 }, // 3:30pm, post-cut, index drifted
+    },
+  };
+
+  // SPLIT at 870 (2:30pm): the post-cut game must drop via its stamped time.
+  const r = rainySplitLeagueMapAt(la, divisionTimes, bunkToDiv, 870);
+  assert.ok(r.map.Div1[0], 'pre-cut morning game kept');
+  assert.strictEqual(r.map.Div1[2], undefined, 'post-cut 3:30pm game dropped (stamped time, drifted index)');
+  assert.strictEqual(r.dropped, 1);
+
+  // RESTORE: snapshot still carries the post-cut game (e.g. reloaded from cloud);
+  // it must NOT be restored, while the pre-cut morning game is.
+  const snap = JSON.parse(JSON.stringify(la));
+  const rr = rainyRestorePreCutLeagues(snap, divisionTimes, bunkToDiv, 870, {});
+  assert.ok(rr.la.Div1 && rr.la.Div1[0], 'pre-cut game restored');
+  assert.strictEqual(rr.la.Div1[2], undefined, 'post-cut game NOT restored (stamped time, drifted index)');
+  assert.strictEqual(rr.restored, 1);
 });
 
 test('bunks outside the passed divisions are never scanned or returned; input not mutated', () => {

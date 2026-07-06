@@ -1918,8 +1918,12 @@ function _rainySplitLeagueMapAt(leagueAssignments, divisionTimes, bunkToDiv, tMi
       if (v == null) return;
       const si = parseInt(k, 10);
       const s = (!isNaN(si) && slots[si]) || {};
-      const ss = (s.startMin != null) ? s.startMin : null;
-      const se = (s.endMin != null) ? s.endMin : null;
+      // Prefer the slot's time, but fall back to the game's OWN stamped time
+      // (_startMin/_endMin, written at storage) — the slot-index→divisionTimes
+      // lookup drifts across regens and can be stale at apply time, which let
+      // rained-out afternoon games slip through as "no time info → keep".
+      const ss = (s.startMin != null) ? s.startMin : ((v && v._startMin != null) ? v._startMin : null);
+      const se = (s.endMin != null) ? s.endMin : ((v && v._endMin != null) ? v._endMin : null);
       let keep;
       if (se == null) keep = true;                 // no time info — leave alone
       else if (se <= tMin) keep = true;            // game finished before the cut
@@ -1969,7 +1973,10 @@ function _rainyRestorePreCutLeagues(snapshot, tMin) {
       if (v == null) return;
       const si = parseInt(k, 10);
       const s = (!isNaN(si) && slots[si]) || {};
-      const ss = (s.startMin != null) ? s.startMin : null;
+      // Prefer the slot's time, fall back to the game's OWN stamped _startMin
+      // (see _rainySplitLeagueMapAt) so a post-cut game whose slot index no
+      // longer resolves isn't wrongly restored.
+      const ss = (s.startMin != null) ? s.startMin : ((v && v._startMin != null) ? v._startMin : null);
       if (ss != null && ss >= tMin) return; // post-cut → the gen owns it
       if (!la[key]) la[key] = Array.isArray(src) ? [] : {};
       if (la[key][k] == null) {

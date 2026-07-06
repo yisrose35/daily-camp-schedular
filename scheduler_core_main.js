@@ -496,11 +496,17 @@
                 
                 const slotIdx = block.slots[0];
                 if (!window.leagueAssignments[block.divName][slotIdx]) {
+                    // ★ Stamp the game's own time (mirrors schedule entries' _startMin/_endMin)
+                    //   so mid-day rain league split/restore never has to re-derive it from a
+                    //   drifting slot index against a possibly-stale window.divisionTimes.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[block.divName] && window.divisionTimes[block.divName][slotIdx]) || {};
                     window.leagueAssignments[block.divName][slotIdx] = {
                         matchups: pick._allMatchups || [],
                         gameLabel: pick._gameLabel || block.event || 'League Game',
                         sport: pick.sport || '',
-                        leagueName: pick._leagueName || ''
+                        leagueName: pick._leagueName || '',
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIdx}: ${(pick._allMatchups || []).length} matchups`);
                 }
@@ -784,11 +790,16 @@
             
             mainSlots.forEach(slotIndex => {
                 if (!window.leagueAssignments[block.divName][slotIndex]) {
+                    // ★ Stamp the game's own time (see the slot-0 store above) so the
+                    //   mid-day rain league split/restore is index-drift-proof.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[block.divName] && window.divisionTimes[block.divName][slotIndex]) || {};
                     window.leagueAssignments[block.divName][slotIndex] = {
                         matchups: pick._allMatchups || [],
                         gameLabel: pick._gameLabel || '',
                         sport: pick.sport || '',
-                        leagueName: pick._leagueName || ''
+                        leagueName: pick._leagueName || '',
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIndex}: ${(pick._allMatchups || []).length} matchups`);
                 }
@@ -5312,11 +5323,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 for (const slotIdx of slots) {
                     if (!window.leagueAssignments[divName][slotIdx]) {
+                        // ★ Stamp the game's own time (see fillBlock's league store) so the
+                        //   mid-day rain league split/restore is index-drift-proof.
+                        const _lgT = (window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx]) || {};
                         window.leagueAssignments[divName][slotIdx] = {
                             matchups: matchups || [],
                             gameLabel: gameLabel || '',
                             sport: sport || '',
-                            leagueName: leagueName || ''
+                            leagueName: leagueName || '',
+                            _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                            _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                         };
                         console.log(`[storeLeagueMatchups] ✅ Stored ${(matchups || []).length} matchups for ${divName} at slot ${slotIdx}`);
                     }
@@ -5458,12 +5474,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 
                 if (foundMatchups.length > 0) {
+                    // ★ Stamp the game's own time (see fillBlock's league store) so the
+                    //   mid-day rain league split/restore is index-drift-proof.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx]) || {};
                     window.leagueAssignments[divName][slotIdx] = {
                         matchups: foundMatchups,
                         gameLabel: foundGameLabel,
                         sport: foundSport,
                         leagueName: league.name,
-                        teams: leagueTeams
+                        teams: leagueTeams,
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`   ✅ League "${league.name}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
                 }
