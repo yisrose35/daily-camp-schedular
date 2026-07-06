@@ -16,7 +16,12 @@
     'use strict';
 
     var STORAGE_KEY = 'campGlobalSettings_v1';
-    var FETCH_KEYS  = ['campStructure', 'app1', 'campistryMe', 'bunkMetaData', 'fields'];
+    // campistrySnacks was missing here — Campistry Snacks/POS could WRITE
+    // deposits to camp_state_kv fine, but this bootstrap never fetched that
+    // key back down, so a deposit made from any other browser/session (the
+    // parent portal, a different admin device) would never appear here no
+    // matter how many times hydration ran or how init() was re-triggered.
+    var FETCH_KEYS  = ['campStructure', 'app1', 'campistryMe', 'bunkMetaData', 'fields', 'campistrySnacks'];
 
     // Guard: only one successful cloud hydration per page load
     var _hydrated = false;
