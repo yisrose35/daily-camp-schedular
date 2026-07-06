@@ -14,8 +14,8 @@
     --link-border: #BBF7D0;
     --link-gold: #D4930A;
     --link-gold-light: #F5C563;
-    --link-canvas: #FAF9F4;
-    --bg-primary: #FAF9F4;
+    --link-canvas: #F3F1EE;
+    --bg-primary: #F3F1EE;
     --bg-secondary: #FFFFFF;
     --bg-tertiary: #F1F5F9;
     --border-light: #E2E8F0;
@@ -41,35 +41,42 @@
     --acc-teal-1: #0F766E;   --acc-teal-2: #5EEAD4;     --acc-teal-bg: #E4FBF8;
     --acc-rose-1: #BE185D;   --acc-rose-2: #F472B6;     --acc-rose-bg: #FDEAF3;
     --acc-indigo-1: #4338CA; --acc-indigo-2: #818CF8;   --acc-indigo-bg: #ECEBFE;
-    --font-display: 'Fraunces', Georgia, serif;
-    --font-body: 'DM Sans', system-ui, -apple-system, sans-serif;
-    --radius-xs: 6px; --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 20px; --radius-2xl: 26px; --radius-full: 999px;
-    --shadow-sm: 0 1px 3px rgba(15,23,42,0.05);
-    --shadow-md: 0 6px 16px rgba(15,23,42,0.07);
-    --shadow-lg: 0 16px 32px rgba(15,23,42,0.1);
-    --shadow-xl: 0 24px 48px rgba(15,23,42,0.14);
+    /* Material Design 3 system font — Roboto everywhere, no serif accents.
+       Kept as two variables for back-compat with existing rules, but both
+       now point at the same typeface (M3 uses one type family, varied by
+       weight/size, not a display+body pairing). */
+    --font-display: 'Roboto', 'Roboto Flex', system-ui, -apple-system, sans-serif;
+    --font-body: 'Roboto', 'Roboto Flex', system-ui, -apple-system, sans-serif;
+    /* M3 shape scale (approx.): small=8, medium=12, large=16, extra-large=28 */
+    --radius-xs: 6px; --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 20px; --radius-2xl: 28px; --radius-full: 999px;
+    /* M3 elevation is mostly flat/tonal — shadows are neutral, soft, and
+       shallow rather than colorful "glow" shadows */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.06), 0 1px 3px 1px rgba(0,0,0,0.05);
+    --shadow-md: 0 1px 2px rgba(0,0,0,0.06), 0 2px 6px 2px rgba(0,0,0,0.06);
+    --shadow-lg: 0 1px 3px rgba(0,0,0,0.08), 0 4px 8px 3px rgba(0,0,0,0.07);
+    --shadow-xl: 0 2px 3px rgba(0,0,0,0.08), 0 6px 10px 4px rgba(0,0,0,0.08);
+    /* M3 tonal surfaces — a neutral surface with a faint primary tint at
+       rest, not a warm cream or a colored gradient wash */
+    --md-surface: #FDFCFB;
+    --md-surface-container: #F3F1EE;
+    --md-surface-container-high: #EDEBE8;
+    --md-primary-container: var(--link-tint);
+    --md-on-primary-container: var(--link-darker);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
     font-family: var(--font-body);
-    background: var(--link-canvas);
-    background-image:
-        radial-gradient(ellipse 900px 500px at 8% -8%, rgba(42,122,53,0.07), transparent 55%),
-        radial-gradient(ellipse 700px 500px at 100% 0%, rgba(212,147,10,0.05), transparent 50%);
-    background-attachment: fixed;
-    color: var(--text-primary); line-height: 1.6; min-height: 100vh; -webkit-font-smoothing: antialiased;
+    background: var(--md-surface-container);
+    color: var(--text-primary); line-height: 1.5; min-height: 100vh; -webkit-font-smoothing: antialiased;
 }
 
 /* HEADER */
 .lk-header {
-    background: rgba(255,255,255,0.85);
-    backdrop-filter: blur(20px) saturate(1.6);
-    -webkit-backdrop-filter: blur(20px) saturate(1.6);
-    border-bottom: 1px solid rgba(15,23,42,0.06);
-    box-shadow: 0 1px 0 rgba(15,23,42,0.02), 0 8px 24px -16px rgba(15,23,42,0.15);
+    background: var(--md-surface);
+    border-bottom: 1px solid rgba(15,23,42,0.08);
     padding: 0 24px;
-    height: 60px;
+    height: 64px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -80,18 +87,19 @@ body {
 .lk-header-left { display: flex; align-items: center; gap: 14px; }
 .lk-logo {
     font-family: var(--font-display);
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: var(--link-color);
+    font-size: 1.15rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--slate-800);
     text-decoration: none;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 .lk-logo-icon {
-    width: 32px; height: 32px;
-    background: linear-gradient(135deg, var(--link-color), #34D399);
-    border-radius: var(--radius-sm);
+    width: 34px; height: 34px;
+    background: var(--link-color);
+    border-radius: var(--radius-md);
     display: flex; align-items: center; justify-content: center;
     color: #fff;
     flex-shrink: 0;
@@ -109,93 +117,80 @@ body {
     font-size: 0.8rem; color: var(--slate-400); font-weight: 500;
     padding-left: 14px; border-left: 1px solid var(--slate-200);
 }
-.lk-header-right { display: flex; align-items: center; gap: 10px; }
+.lk-header-right { display: flex; align-items: center; gap: 6px; }
 .lk-header-btn {
-    position: relative; width: 36px; height: 36px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--slate-200);
-    background: #fff;
+    position: relative; width: 40px; height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
     display: flex; align-items: center; justify-content: center;
-    cursor: pointer; color: var(--slate-500);
-    transition: all 0.2s ease;
+    cursor: pointer; color: var(--slate-600);
+    transition: background 0.15s ease;
 }
-.lk-header-btn:hover { border-color: var(--link-color); color: var(--link-color); background: var(--link-tint); }
+.lk-header-btn:hover { background: rgba(15,23,42,0.06); color: var(--slate-900); }
 .lk-badge {
-    position: absolute; top: -4px; right: -4px;
-    min-width: 18px; height: 18px;
-    background: var(--link-color); color: #fff;
+    position: absolute; top: -2px; right: -2px;
+    min-width: 16px; height: 16px;
+    background: #D93025; color: #fff;
     font-size: 0.6rem; font-weight: 700;
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    border: 2px solid #fff;
+    border: 2px solid var(--md-surface);
 }
 .lk-avatar {
-    width: 36px; height: 36px; border-radius: 50%;
-    background: linear-gradient(145deg, var(--link-color), var(--link-dark));
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--link-color);
     color: #fff;
-    font-size: 0.78rem; font-weight: 700;
+    font-size: 0.78rem; font-weight: 500;
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(42,122,53,0.3), inset 0 1px 0 rgba(255,255,255,0.2);
-    border: 2px solid #fff;
 }
 
-/* SIDEBAR */
+/* SIDEBAR — Material 3 Navigation Drawer */
 .lk-sidebar {
-    position: fixed; top: 60px; left: 0; bottom: 0; width: 244px;
-    background: rgba(255,255,255,0.7);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-right: 1px solid rgba(15,23,42,0.06);
-    padding: 16px 0; z-index: 50; overflow-y: auto;
+    position: fixed; top: 64px; left: 0; bottom: 0; width: 256px;
+    background: var(--md-surface-container);
+    padding: 12px; z-index: 50; overflow-y: auto;
 }
-.lk-sidebar-nav { display: flex; flex-direction: column; gap: 2px; padding: 0 12px; }
+.lk-sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
 .lk-nav-label {
-    font-size: 0.64rem; font-weight: 700;
+    font-size: 0.7rem; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.09em;
-    color: var(--slate-400);
-    padding: 14px 12px 6px;
+    color: var(--slate-500);
+    padding: 16px 16px 8px;
 }
 .lk-nav-item {
     position: relative;
-    display: flex; align-items: center; gap: 11px;
-    padding: 9px 12px;
-    border-radius: var(--radius-md);
-    font-size: 0.84rem; font-weight: 500;
-    color: var(--slate-600);
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 16px;
+    height: 44px;
+    border-radius: var(--radius-full);
+    font-size: 0.875rem; font-weight: 500;
+    color: var(--slate-700);
     cursor: pointer; border: none; background: none;
     width: 100%; text-align: left;
-    transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+    transition: background 0.15s ease, color 0.15s ease;
     font-family: var(--font-body);
 }
-.lk-nav-item:hover { background: rgba(15,23,42,0.035); color: var(--slate-900); }
+.lk-nav-item:hover { background: rgba(15,23,42,0.055); }
 .lk-nav-item.active {
-    background: linear-gradient(135deg, var(--link-tint), #E4F9E7);
-    color: var(--link-darker);
+    background: var(--md-primary-container);
+    color: var(--md-on-primary-container);
     font-weight: 700;
-    box-shadow: 0 1px 2px rgba(42,122,53,0.08), 0 4px 10px -4px rgba(42,122,53,0.25);
 }
-.lk-nav-item.active::before {
-    content: '';
-    position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
-    width: 3px; height: 18px; border-radius: var(--radius-full);
-    background: linear-gradient(180deg, var(--link-color), var(--link-dark));
-}
-.lk-nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
-.lk-nav-item.active svg { filter: drop-shadow(0 1px 1px rgba(42,122,53,0.2)); }
+.lk-nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
 .lk-nav-item .nav-count {
     margin-left: auto;
-    font-size: 0.66rem; font-weight: 700;
-    background: linear-gradient(135deg, var(--link-color), var(--link-dark)); color: #fff;
+    font-size: 0.68rem; font-weight: 700;
+    background: var(--link-color); color: #fff;
     min-width: 20px; height: 20px;
     border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 2px 6px rgba(42,122,53,0.3);
 }
-.lk-nav-divider { height: 1px; background: rgba(15,23,42,0.06); margin: 8px 16px; }
+.lk-nav-divider { height: 1px; background: rgba(15,23,42,0.08); margin: 8px 16px; }
 
 /* MAIN */
-.lk-main { margin-left: 244px; padding: 28px 32px 80px; min-height: calc(100vh - 60px); }
+.lk-main { margin-left: 244px; padding: 28px 32px 80px; min-height: calc(100vh - 64px); }
 .lk-page { display: none; }
 .lk-page.active { display: block; animation: lkPageIn 0.35s var(--ease-out, cubic-bezier(0.16,1,0.3,1)); }
 @keyframes lkPageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
@@ -203,90 +198,65 @@ body {
 .lk-page-header h1 { font-family: var(--font-display); font-size: 1.45rem; font-weight: 700; margin-bottom: 2px; color: var(--slate-900); }
 .lk-page-header p { font-size: 0.84rem; color: var(--slate-400); }
 
-/* HERO BANNER */
+/* HERO BANNER — Material 3 tonal surface (flat primary fill, no glow
+   blobs or multi-stop gradients — M3 conveys depth through color and
+   shape, not shine) */
 .lk-hero {
-    background:
-        radial-gradient(ellipse 480px 320px at 88% -20%, rgba(255,209,102,0.22), transparent 60%),
-        radial-gradient(ellipse 420px 380px at -10% 120%, rgba(94,234,212,0.16), transparent 60%),
-        linear-gradient(135deg, #2E8A3A 0%, #1F6B2B 55%, #123D1A 100%);
+    background: var(--link-color);
     border-radius: var(--radius-2xl);
-    padding: 38px 42px;
-    margin-bottom: 26px;
+    padding: 32px 36px;
+    margin-bottom: 24px;
     color: white;
     position: relative;
-    overflow: hidden;
-    box-shadow: 0 20px 44px -18px rgba(20,60,26,0.55);
-}
-.lk-hero::before {
-    content: '';
-    position: absolute;
-    top: -50%; right: -10%;
-    width: 420px; height: 420px;
-    background: radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%);
-    pointer-events: none;
-}
-.lk-hero::after {
-    content: '';
-    position: absolute;
-    bottom: -35%; left: 8%;
-    width: 320px; height: 320px;
-    background: radial-gradient(circle, rgba(94,234,212,0.14) 0%, transparent 70%);
-    pointer-events: none;
 }
 .lk-hero-left { position: relative; z-index: 1; }
 .lk-hero-greeting {
-    font-size: 0.88rem;
-    font-weight: 500;
-    opacity: 0.8;
-    margin-bottom: 6px;
-    letter-spacing: 0.03em;
+    font-size: 0.875rem;
+    font-weight: 400;
+    opacity: 0.9;
+    margin-bottom: 4px;
 }
 .lk-hero-title {
     font-family: var(--font-display);
-    font-size: 2.15rem;
-    font-weight: 700;
+    font-size: 1.75rem;
+    font-weight: 500;
     color: white;
-    margin-bottom: 6px;
-    letter-spacing: -0.015em;
-    text-shadow: 0 2px 20px rgba(0,0,0,0.12);
+    margin-bottom: 4px;
+    letter-spacing: 0;
 }
-.lk-hero-title span { color: var(--link-gold-light); }
+.lk-hero-title span { font-weight: 700; }
 .lk-hero-sub {
-    font-size: 0.92rem;
-    color: rgba(255,255,255,0.75);
+    font-size: 0.875rem;
+    color: rgba(255,255,255,0.85);
     font-weight: 400;
 }
 .lk-hero-kids { position: relative; z-index: 1; display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
 .lk-hero-kid-chip {
     display: flex; align-items: center; gap: 8px;
-    background: rgba(255,255,255,0.14);
-    border: 1px solid rgba(255,255,255,0.22);
-    backdrop-filter: blur(6px);
+    background: rgba(255,255,255,0.16);
     border-radius: var(--radius-full);
     padding: 5px 14px 5px 5px;
 }
 .lk-hero-kid-avatar {
     width: 26px; height: 26px; border-radius: 50%;
-    background: linear-gradient(135deg, var(--acc-2, var(--link-gold-light)), var(--acc-1, var(--link-gold)));
+    background: var(--acc-1, var(--link-gold));
     color: #fff;
-    font-size: 0.62rem; font-weight: 800;
+    font-size: 0.62rem; font-weight: 700;
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3);
 }
-.lk-hero-kid-name { font-size: 0.78rem; font-weight: 600; color: #fff; }
+.lk-hero-kid-name { font-size: 0.78rem; font-weight: 500; color: #fff; }
 
-/* CARDS */
+/* CARDS — Material 3 "elevated card": flat surface, minimal shadow */
 .lk-card {
-    background: white;
-    border: 1px solid rgba(15,23,42,0.07);
-    border-radius: var(--radius-xl);
+    background: var(--md-surface);
+    border-radius: var(--radius-lg);
     padding: 24px;
     margin-bottom: 16px;
     box-shadow: var(--shadow-sm);
-    transition: box-shadow 0.25s ease, transform 0.25s ease;
+    transition: box-shadow 0.2s ease;
 }
-.lk-card:hover { box-shadow: var(--shadow-md); border-color: rgba(15,23,42,0.09); }
+.lk-card:hover { box-shadow: var(--shadow-md); }
 .lk-card-head {
     display: flex; align-items: center; justify-content: space-between;
     padding-bottom: 14px;
@@ -321,37 +291,34 @@ body {
 .lk-stat-val { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; line-height: 1.2; color: var(--slate-900); }
 .lk-stat-lbl { font-size: 0.73rem; font-weight: 500; color: var(--slate-400); text-transform: uppercase; letter-spacing: 0.06em; }
 
-/* BUTTONS */
+/* BUTTONS — Material 3: solid fill, fully pill-shaped, flat state-layer
+   on hover instead of gradient + shadow + lift */
 .btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 9px 18px;
-    font-size: 0.83rem; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px;
+    font-size: 0.875rem; font-weight: 500;
     cursor: pointer; border: none;
-    transition: all 0.2s ease;
+    border-radius: var(--radius-full);
+    transition: background 0.15s ease, box-shadow 0.15s ease;
     text-decoration: none;
     font-family: var(--font-body);
 }
 .btn-primary {
-    background: linear-gradient(135deg, var(--link-color), var(--link-dark));
+    background: var(--link-color);
     color: #fff;
-    border-radius: var(--radius-md);
-    box-shadow: 0 2px 6px rgba(42,122,53,0.25), inset 0 1px 0 rgba(255,255,255,0.15);
 }
-.btn-primary:hover { box-shadow: 0 6px 16px rgba(42,122,53,0.32), inset 0 1px 0 rgba(255,255,255,0.15); transform: translateY(-1px); }
+.btn-primary:hover { background: var(--link-dark); box-shadow: var(--shadow-sm); }
 .btn-secondary {
-    background: #fff; color: var(--slate-700);
-    border: 1px solid var(--slate-300);
-    border-radius: var(--radius-md);
-}
-.btn-secondary:hover { background: var(--slate-50); border-color: var(--slate-400); }
-.btn-ghost {
     background: transparent; color: var(--link-color);
     border: 1px solid var(--slate-300);
-    border-radius: var(--radius-full);
-    padding: 8px 18px;
 }
-.btn-ghost:hover { background: var(--link-tint); border-color: var(--link-border); }
-.btn-sm { padding: 6px 14px; font-size: 0.77rem; }
+.btn-secondary:hover { background: var(--md-primary-container); border-color: var(--link-color); }
+.btn-ghost {
+    background: transparent; color: var(--link-color);
+    border: none;
+}
+.btn-ghost:hover { background: var(--md-primary-container); }
+.btn-sm { padding: 7px 16px; font-size: 0.8125rem; }
 
 /* TABS */
 .lk-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--slate-200); margin-bottom: 16px; overflow-x: auto; }
@@ -533,24 +500,19 @@ body {
 .info-row .label { color: var(--slate-400); font-weight: 500; }
 .info-row .value { color: var(--slate-900); font-weight: 600; text-align: right; }
 
-/* CANTEEN — Cash App / Venmo style wallet card. Recolors per active child
-   via data-accent (set in JS on tab switch) so switching kids feels
-   personal, echoing the Life360-style per-person identity color. */
+/* CANTEEN — Material 3 balance card: solid tonal fill (per active child,
+   via data-accent set in JS on tab switch), no gradient sheen or glow. */
 .canteen-bal {
     text-align: center;
-    padding: 34px 24px 26px;
-    background:
-        radial-gradient(ellipse 320px 220px at 85% -25%, rgba(255,255,255,0.22), transparent 60%),
-        linear-gradient(135deg, var(--acc-2, var(--link-color)), var(--acc-1, var(--link-dark)) 75%);
+    padding: 32px 24px 26px;
+    background: var(--acc-1, var(--link-color));
     border-radius: var(--radius-2xl);
-    box-shadow: 0 16px 36px -16px var(--acc-1, rgba(42,122,53,0.5));
     margin-bottom: 18px;
     position: relative;
-    overflow: hidden;
-    transition: background 0.4s ease, box-shadow 0.4s ease;
+    transition: background 0.3s ease;
 }
-.canteen-bal-amt { font-family: var(--font-display); font-size: 2.6rem; font-weight: 700; line-height: 1; margin-bottom: 4px; color: #fff; text-shadow: 0 2px 16px rgba(0,0,0,0.12); }
-.canteen-bal-lbl { font-size: 0.74rem; font-weight: 700; color: rgba(255,255,255,0.8); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; }
+.canteen-bal-amt { font-family: var(--font-display); font-size: 2.5rem; font-weight: 500; line-height: 1; margin-bottom: 4px; color: #fff; }
+.canteen-bal-lbl { font-size: 0.75rem; font-weight: 500; color: rgba(255,255,255,0.85); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; }
 
 /* DOC ITEMS */
 .doc-item {
@@ -576,7 +538,7 @@ body {
 .progress { height: 8px; background: var(--slate-100); border-radius: var(--radius-full); overflow: hidden; }
 .progress-fill {
     height: 100%; border-radius: var(--radius-full);
-    background: linear-gradient(90deg, var(--link-color), #34D399);
+    background: var(--link-color);
     transition: width 0.5s ease;
 }
 
@@ -592,39 +554,72 @@ body {
 }
 .lk-empty h3 { font-size: 0.92rem; font-weight: 700; color: var(--slate-600); margin-bottom: 2px; }
 
-/* TOAST */
+/* TOAST — Material 3 Snackbar: dark neutral surface, rounded, no color */
 #toastBox { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 9999; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
-/* BOTTOM NAV — floating pill, app-like */
+/* FAB — Material 3 Extended Floating Action Button. The signature Google-app
+   pattern (Gmail compose, Google Pay "Add money") for a page's single most
+   important action, instead of a small inline button in the header. */
+.lk-fab {
+    position: fixed;
+    right: 32px; bottom: 32px;
+    z-index: 90;
+    display: inline-flex; align-items: center; gap: 12px;
+    height: 56px;
+    padding: 0 24px 0 20px;
+    border-radius: var(--radius-lg);
+    background: var(--md-primary-container);
+    color: var(--md-on-primary-container);
+    border: none;
+    font-family: var(--font-body);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: var(--shadow-md);
+    transition: box-shadow 0.2s ease, background 0.2s ease;
+}
+.lk-fab:hover { box-shadow: var(--shadow-lg); }
+.lk-fab svg { width: 24px; height: 24px; flex-shrink: 0; }
+@media (max-width: 768px) {
+    .lk-fab { right: 20px; bottom: 96px; }
+}
+
+/* BOTTOM NAV — Material 3 Navigation Bar: full-width surface, per-item
+   pill "indicator" that sits behind the icon only (not the label) */
 .lk-bnav {
-    display: none; position: fixed; bottom: 14px; left: 14px; right: 14px;
+    display: none; position: fixed; bottom: 0; left: 0; right: 0;
     z-index: 100;
+    background: var(--md-surface-container);
+    box-shadow: 0 -1px 3px rgba(0,0,0,0.06);
 }
 .lk-bnav-inner {
     display: flex; align-items: center; justify-content: space-around;
-    height: 62px; max-width: 520px; margin: 0 auto;
-    background: rgba(255,255,255,0.88);
-    backdrop-filter: blur(20px) saturate(1.6);
-    -webkit-backdrop-filter: blur(20px) saturate(1.6);
-    border: 1px solid rgba(15,23,42,0.06);
-    border-radius: var(--radius-2xl);
-    box-shadow: 0 12px 32px -12px rgba(15,23,42,0.28), 0 2px 8px rgba(15,23,42,0.06);
+    height: 80px; max-width: 560px; margin: 0 auto;
+    padding-top: 12px;
 }
 .lk-bnav-item {
     position: relative;
-    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
     background: none; border: none; cursor: pointer;
-    color: var(--slate-400);
-    font-size: 0.6rem; font-weight: 600;
-    padding: 6px 12px;
-    border-radius: var(--radius-lg);
+    color: var(--slate-600);
+    font-size: 0.75rem; font-weight: 500;
+    padding: 0;
     font-family: var(--font-body);
-    transition: color 0.2s ease, background 0.2s ease;
+    flex: 1;
+    min-width: 0;
 }
-.lk-bnav-item.active { color: var(--link-dark); background: var(--link-tint); }
-.lk-bnav-item:hover { color: var(--link-color); }
-.lk-bnav-item svg { width: 20px; height: 20px; }
+.lk-bnav-icon {
+    display: flex; align-items: center; justify-content: center;
+    width: 64px; height: 32px;
+    border-radius: var(--radius-full);
+    transition: background 0.2s ease;
+}
+.lk-bnav-item.active .lk-bnav-icon { background: var(--md-primary-container); }
+.lk-bnav-item.active { color: var(--slate-900); font-weight: 700; }
+.lk-bnav-item.active .lk-bnav-icon svg { color: var(--md-on-primary-container); }
+.lk-bnav-item svg { width: 22px; height: 22px; }
+.lk-bnav-label { line-height: 1; }
 
 /* HOME GRID — bento layout: featured tiles span 2 columns, rest fill in */
 .lk-home-grid {
@@ -650,27 +645,19 @@ body {
     grid-column: span 1;
     overflow: hidden;
 }
-.lk-home-tile::before {
-    content: '';
-    position: absolute; inset: 0 0 auto 0; height: 3px;
-    background: linear-gradient(90deg, var(--acc-1, var(--link-color)), var(--acc-2, var(--link-color)));
-    opacity: 0.9;
-}
 .lk-home-tile:hover {
-    box-shadow: var(--shadow-lg);
-    transform: translateY(-3px);
-    border-color: rgba(15,23,42,0.09);
+    box-shadow: var(--shadow-md);
+    background: var(--md-surface-container-high);
 }
-.lk-home-tile:active { transform: translateY(-1px) scale(0.99); }
+.lk-home-tile:active { background: var(--md-surface-container-high); }
 .lk-home-tile-icon {
     width: 46px; height: 46px;
     border-radius: var(--radius-md);
-    background: linear-gradient(150deg, var(--acc-bg, var(--link-tint)), #fff);
+    background: var(--acc-bg, var(--link-tint));
     display: flex; align-items: center; justify-content: center;
     color: var(--acc-1, var(--link-color));
     flex-shrink: 0;
     margin-bottom: auto;
-    box-shadow: inset 0 0 0 1px rgba(15,23,42,0.05), 0 2px 6px -2px var(--acc-1, rgba(42,122,53,0.35));
 }
 .lk-home-tile-icon svg { width: 21px; height: 21px; }
 .lk-home-tile-body { display: flex; flex-direction: column; gap: 2px; padding-top: 16px; width: 100%; }
@@ -691,11 +678,12 @@ body {
 [data-accent="indigo"]  { --acc-1: var(--acc-indigo-1);  --acc-2: var(--acc-indigo-2);  --acc-bg: var(--acc-indigo-bg); }
 
 /* Generic accent-colored avatar circle — used for camper avatars anywhere
-   in the app (hero chips, My Children, message senders, canteen tabs) */
+   in the app (hero chips, My Children, message senders, canteen tabs).
+   Material-style: a solid fill with white initials (like Gmail/Contacts
+   default avatars), not a gradient. */
 .lk-avatar-accent {
-    background: linear-gradient(135deg, var(--acc-2, var(--link-tint)), var(--acc-1, var(--link-color)));
+    background: var(--acc-1, var(--link-color));
     color: #fff;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.25), 0 2px 8px -2px var(--acc-1, rgba(42,122,53,0.4));
 }
 .lk-home-tile.featured {
     grid-column: span 2;
@@ -754,8 +742,8 @@ body {
 }
 .canteen-quick-btn:hover { border-color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.2); }
 .canteen-quick-btn.sel { border-color: #fff; background: #fff; color: var(--acc-1, var(--link-color)); }
-.canteen-bal .btn-primary { background: #fff; color: var(--acc-1, var(--link-color)); box-shadow: 0 2px 10px rgba(0,0,0,0.15); }
-.canteen-bal .btn-primary:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.2); transform: translateY(-1px); }
+.canteen-bal .btn-primary { background: #fff; color: var(--acc-1, var(--link-color)); }
+.canteen-bal .btn-primary:hover { background: rgba(255,255,255,0.9); }
 .canteen-bal .btn-secondary { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); color: #fff; backdrop-filter: blur(6px); }
 .canteen-bal .btn-secondary:hover { background: rgba(255,255,255,0.2); }
 
@@ -770,54 +758,44 @@ body {
 /* PAGE HERO (inner pages — compact branded strip) */
 .lk-page-hero {
     display: flex; align-items: center; gap: 18px;
-    padding: 22px 26px;
-    background: linear-gradient(120deg, #fff 0%, var(--link-tint) 150%);
-    border: 1px solid rgba(15,23,42,0.06);
-    border-radius: var(--radius-xl);
+    padding: 20px 24px;
+    background: var(--md-surface);
+    border-radius: var(--radius-lg);
     margin-bottom: 24px;
-    box-shadow: var(--shadow-sm);
 }
 .lk-page-hero-icon {
     width: 48px; height: 48px;
     border-radius: var(--radius-md);
-    background: linear-gradient(150deg, var(--link-color), var(--link-dark));
+    background: var(--md-primary-container);
     display: flex; align-items: center; justify-content: center;
-    color: #fff; flex-shrink: 0;
-    box-shadow: 0 4px 12px -2px rgba(42,122,53,0.4);
+    color: var(--md-on-primary-container); flex-shrink: 0;
 }
 .lk-page-hero-icon svg { width: 23px; height: 23px; }
 .lk-page-hero h1 {
     font-family: var(--font-display);
-    font-size: 1.4rem; font-weight: 700;
+    font-size: 1.375rem; font-weight: 500;
     color: var(--slate-900); margin-bottom: 2px;
 }
-.lk-page-hero p { font-size: 0.8rem; color: var(--slate-400); }
+.lk-page-hero p { font-size: 0.8125rem; color: var(--slate-500); }
 
 /* CHILD CARDS — each camper gets a consistent identity color (Life360-style
-   per-person color coding), carried via data-accent on the card element */
+   per-person color coding), carried via data-accent on the card element.
+   Material style: flat surface, tonal avatar fill, no colored border bar. */
 .lk-child-card {
     position: relative;
     display: flex; align-items: center; gap: 14px;
-    padding: 16px 16px 16px 20px;
-    background: #fff;
-    border: 1px solid rgba(15,23,42,0.07);
+    padding: 16px;
+    background: var(--md-surface);
     border-radius: var(--radius-lg);
     margin-bottom: 10px;
     cursor: pointer;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-    box-shadow: var(--shadow-sm);
-    overflow: hidden;
+    transition: background 0.15s ease;
 }
-.lk-child-card::before {
-    content: '';
-    position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-    background: linear-gradient(180deg, var(--acc-2, var(--link-color)), var(--acc-1, var(--link-dark)));
-}
-.lk-child-card:hover { border-color: rgba(15,23,42,0.1); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.lk-child-card:hover { background: var(--md-surface-container-high); }
 .lk-child-avatar {
     width: 46px; height: 46px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    font-size: .8rem; font-weight: 700;
+    font-size: .8rem; font-weight: 500;
     flex-shrink: 0;
 }
 .lk-child-info { flex: 1; min-width: 0; }
