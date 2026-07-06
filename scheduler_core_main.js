@@ -5860,7 +5860,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     for (const ff of _freeFills) {
                         try {
                             const _ffKind = _kindByCell75[String(ff.bunk) + '|' + ff.si];
-                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
+                            let ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
+                            // ★ Rainy fallback: rain shrinks the sport pool to the few
+                            //   indoor fields (often all pinned by league events), so a
+                            //   Sports tile can have ZERO legal sport candidates. Rather
+                            //   than leave the bunk Free, retry kind-unrestricted so an
+                            //   indoor special can take the slot — the realistic indoor
+                            //   alternative when the gyms are taken.
+                            if (!ok && _ffKind === 'sport' && window.isRainyDay === true) {
+                                ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, undefined);
+                            }
                             if (ok) _ffOk++; else _ffSkip++;
                         } catch (e) {
                             _ffSkip++;

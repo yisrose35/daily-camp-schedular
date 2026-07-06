@@ -3089,9 +3089,12 @@ window.getGlobalSpecialActivities = function(respectRainyDay=true) {
     if(!respectRainyDay)return allActivities;
     const isRainyMode=window.isRainyDayModeActive?.()||window.isRainyDay===true;
     if(isRainyMode){
-        console.log('[SpecialActivities] Rainy mode - filtering for indoor/rainy activities');
+        // Log ONCE per rainy-mode activation — this getter runs in solver/render
+        // hot loops and used to flood the console with hundreds of copies.
+        if(!window.__saRainyFilterLogged){window.__saRainyFilterLogged=true;console.log('[SpecialActivities] Rainy mode - filtering for indoor/rainy activities');}
         return allActivities.filter(s=>s.rainyDayOnly===true||s.rainyDayExclusive===true||s.isIndoor===true);
     }
+    window.__saRainyFilterLogged=false;
     return allActivities.filter(s=>s.rainyDayOnly!==true&&s.rainyDayExclusive!==true);
 };
 window.getRainyDayOnlySpecials = function() { return rainyDayActivities.filter(s=>s.available!==false); };

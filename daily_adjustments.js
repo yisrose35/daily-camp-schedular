@@ -1508,6 +1508,10 @@ function activateMidDayRainyMode(customStartTime = null) {
   console.log(`[RainyDay] ✂️ Split at ${minutesToTime(rainStartMin)}: kept ${st.keptDone} done + ${st.keptInProgress} in-progress (≥75%), erased ${st.erasedInProgress} in-progress (<75%) + ${st.erasedFuture} future` +
               (st.unknown ? `, ${st.unknown} untouched (no time info)` : ''));
 
+  // League games live only in leagueAssignments — split them at the cut too
+  // (keep the games already played, drop the rained-out afternoon fixtures).
+  try { _rainySplitLeagueAssignmentsAt(rainStartMin); } catch (_eLgSplit) { console.warn('[RainyDay] league split failed:', _eLgSplit); }
+
   // Persist the split schedule + recount rotation. Both rotation stores are
   // DERIVED from scheduleAssignments (RotationCloud.save delete-then-upserts
   // the date's rows; rebuildHistoricalCounts rescans local dailies), so the
@@ -1588,6 +1592,9 @@ function activateSunsOutAt(clearMin) {
 
   const st = split.stats;
   console.log(`[RainyDay] ☀️ Sun's out at ${minutesToTime(clearMin)}: kept ${st.keptDone} done + ${st.keptInProgress} in-progress (≥75%), erased ${st.erasedInProgress} in-progress (<75%) + ${st.erasedFuture} future`);
+
+  // Split the league map at the clear time too (mirrors the rain cut).
+  try { _rainySplitLeagueAssignmentsAt(clearMin); } catch (_eLgSplit) { console.warn('[RainyDay] league split failed:', _eLgSplit); }
 
   // Persist + recount — the kept sunny morning AND the kept rainy segment both
   // stay in the rotation counts (both count stores derive from the entries).
@@ -1886,6 +1893,92 @@ function _rainyBuildMidDayRegenScope(assignments, divisionTimes, divisions, tMin
     });
   });
   return { scope, regenTotal };
+}
+
+// Pure — mirrored verbatim in tests/rainy_midday_split_sim.js; keep in sync.
+// League games live ONLY in leagueAssignments (league periods keep their
+// per-bunk schedule slots EMPTY by design — the grid overlays the matchups),
+// so the schedule split can't see them. Split the league map with the same
+// block-fate rule: game over by the cut → keep; not started → drop;
+// in progress → keep iff ≥ keepFraction done. Keys are division names (or
+// bunk names for specialty leagues — resolved to their division's slots).
+// Returns { map, dropped } — map is a NEW object.
+function _rainySplitLeagueMapAt(leagueAssignments, divisionTimes, bunkToDiv, tMin, keepFraction) {
+  const kf = (typeof keepFraction === 'number') ? keepFraction : RAIN_KEEP_FRACTION;
+  const out = {};
+  let dropped = 0;
+  Object.keys(leagueAssignments || {}).forEach(key => {
+    const src = leagueAssignments[key];
+    if (!src || typeof src !== 'object') { out[key] = src; return; }
+    const divName = (divisionTimes || {})[key] ? key : ((bunkToDiv || {})[key] || null);
+    const slots = (divName && divisionTimes[divName]) || [];
+    const dst = Array.isArray(src) ? [] : {};
+    Object.keys(src).forEach(k => {
+      const v = src[k];
+      if (v == null) return;
+      const si = parseInt(k, 10);
+      const s = (!isNaN(si) && slots[si]) || {};
+      const ss = (s.startMin != null) ? s.startMin : null;
+      const se = (s.endMin != null) ? s.endMin : null;
+      let keep;
+      if (se == null) keep = true;                 // no time info — leave alone
+      else if (se <= tMin) keep = true;            // game finished before the cut
+      else if (ss == null || ss >= tMin) keep = false; // hadn't started
+      else keep = ((tMin - ss) / (se - ss)) >= kf; // in progress at the cut
+      if (keep) dst[k] = JSON.parse(JSON.stringify(v));
+      else dropped++;
+    });
+    out[key] = dst;
+  });
+  return { map: out, dropped };
+}
+
+// Production wrapper: split window.leagueAssignments at the cut.
+function _rainySplitLeagueAssignmentsAt(tMin) {
+  const divisions = window.divisions || {};
+  const bunkToDiv = {};
+  Object.entries(divisions).forEach(([dn, di]) =>
+    (((di || {}).bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+  const r = _rainySplitLeagueMapAt(window.leagueAssignments || {}, window.divisionTimes || {}, bunkToDiv, tMin);
+  window.leagueAssignments = r.map;
+  if (r.dropped) console.log(`[RainyDay] ✂️ dropped ${r.dropped} post-cut league game(s) from leagueAssignments`);
+  return r.dropped;
+}
+
+// Restore PRE-CUT league games after a cut-scoped generate. The pre-gen wipe
+// clears leagueAssignments and the solver (which skips leagues under rain, and
+// only re-rolls post-cut periods otherwise) doesn't put the morning games
+// back — without this, an afternoon Generate erased the games already played.
+// Only slots that START before the cut are restored, and only when the gen
+// didn't write its own entry there.
+function _rainyRestorePreCutLeagues(snapshot, tMin) {
+  const divisions = window.divisions || {};
+  const bunkToDiv = {};
+  Object.entries(divisions).forEach(([dn, di]) =>
+    (((di || {}).bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+  const dt = window.divisionTimes || {};
+  const la = window.leagueAssignments = window.leagueAssignments || {};
+  let restored = 0;
+  Object.keys(snapshot || {}).forEach(key => {
+    const src = snapshot[key];
+    if (!src || typeof src !== 'object') return;
+    const divName = dt[key] ? key : (bunkToDiv[key] || null);
+    const slots = (divName && dt[divName]) || [];
+    Object.keys(src).forEach(k => {
+      const v = src[k];
+      if (v == null) return;
+      const si = parseInt(k, 10);
+      const s = (!isNaN(si) && slots[si]) || {};
+      const ss = (s.startMin != null) ? s.startMin : null;
+      if (ss != null && ss >= tMin) return; // post-cut → the gen owns it
+      if (!la[key]) la[key] = Array.isArray(src) ? [] : {};
+      if (la[key][k] == null) {
+        la[key][k] = JSON.parse(JSON.stringify(v));
+        restored++;
+      }
+    });
+  });
+  return restored;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -5774,8 +5867,12 @@ async function runOptimizer() {
     _daOptimizerRunning = true;
     // ★ Mid-day rain cut: set when THIS run installed the auto slot-scope, so
     //   the outer finally only clears a scope it owns (per-tile regen manages
-    //   its own __regenSlotScope lifecycle).
+    //   its own __regenSlotScope lifecycle). _cutLeagueSnapshot preserves the
+    //   pre-cut league games across the wipe (they live only in
+    //   leagueAssignments, which the schedule keep-snapshot can't protect).
     let _midDayCutScopeApplied = false;
+    let _cutLeagueSnapshot = null;
+    let _cutMinForLeagues = null;
     try {
 
     // ★ Pull the authoritative LEAGUE HISTORY from the cloud right before generating,
@@ -6023,6 +6120,12 @@ async function runOptimizer() {
                 );
                 window.__regenSlotScope = _cutScope.scope;
                 _midDayCutScopeApplied = true;
+                // League matchups live only in leagueAssignments — snapshot the
+                // (already-split, pre-cut-only) games so they survive the wipe.
+                try {
+                    _cutLeagueSnapshot = JSON.parse(JSON.stringify(window.leagueAssignments || {}));
+                    _cutMinForLeagues = _weatherCutMin;
+                } catch (_eLgSnap) { _cutLeagueSnapshot = null; }
                 console.log('[Optimizer] ✂️ Weather cut active at ' + minutesToTime(_weatherCutMin) +
                             ' (' + (window.isRainyDay ? 'rainy' : 'regular') + ' from here) — regenerating ONLY ' +
                             _cutScope.regenTotal + ' post-cut slot(s); everything before the cut is preserved');
@@ -6273,6 +6376,16 @@ async function runOptimizer() {
     window._generationInProgress = false;
     delete window.selectedDivisionsForGeneration;
     delete window.__allowedBunkSet;
+    // ★ Weather cut: put the PRE-CUT league games back before the post-gen
+    //   save. The wipe cleared leagueAssignments; the solver skips leagues
+    //   under rain and only re-rolls post-cut periods otherwise, so the
+    //   morning games already played would be lost without this.
+    if (_midDayCutScopeApplied && _cutLeagueSnapshot && _cutMinForLeagues != null) {
+      try {
+        const _lgRestored = _rainyRestorePreCutLeagues(_cutLeagueSnapshot, _cutMinForLeagues);
+        if (_lgRestored) console.log('[Optimizer] ✂️ restored ' + _lgRestored + ' pre-cut league game(s) after the scoped gen');
+      } catch (_eLgRest) { console.warn('[Optimizer] pre-cut league restore failed:', _eLgRest); }
+    }
   }
 
 if (success) {

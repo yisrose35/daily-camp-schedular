@@ -155,6 +155,43 @@ function filterBlocksWithScope(blocks, scheduleAssignments, regenSlotScope) {
   });
 }
 
+// ── Pure re-implementation of the LEAGUE map split ──────────────────────────
+// (mirrors daily_adjustments.js _rainySplitLeagueMapAt — keep in sync)
+// League games live ONLY in leagueAssignments (per-bunk slots stay empty by
+// design), keyed by division (or bunk for specialty leagues) → slot index.
+
+const RAIN_KEEP_FRACTION_LG = 0.75;
+
+function rainySplitLeagueMapAt(leagueAssignments, divisionTimes, bunkToDiv, tMin, keepFraction) {
+  const kf = (typeof keepFraction === 'number') ? keepFraction : RAIN_KEEP_FRACTION_LG;
+  const out = {};
+  let dropped = 0;
+  Object.keys(leagueAssignments || {}).forEach(key => {
+    const src = leagueAssignments[key];
+    if (!src || typeof src !== 'object') { out[key] = src; return; }
+    const divName = (divisionTimes || {})[key] ? key : ((bunkToDiv || {})[key] || null);
+    const slots = (divName && divisionTimes[divName]) || [];
+    const dst = Array.isArray(src) ? [] : {};
+    Object.keys(src).forEach(k => {
+      const v = src[k];
+      if (v == null) return;
+      const si = parseInt(k, 10);
+      const s = (!isNaN(si) && slots[si]) || {};
+      const ss = (s.startMin != null) ? s.startMin : null;
+      const se = (s.endMin != null) ? s.endMin : null;
+      let keep;
+      if (se == null) keep = true;
+      else if (se <= tMin) keep = true;
+      else if (ss == null || ss >= tMin) keep = false;
+      else keep = ((tMin - ss) / (se - ss)) >= kf;
+      if (keep) dst[k] = JSON.parse(JSON.stringify(v));
+      else dropped++;
+    });
+    out[key] = dst;
+  });
+  return { map: out, dropped };
+}
+
 // rotation_cloud.js saveRotationCounts / scheduler_core_utils rebuildHistoricalCounts
 // counting rule (simplified): skip null / continuation / transition / Free.
 function countRotation(assignments) {
@@ -432,6 +469,39 @@ test('sunny→rainy→sunny sequence: every kept segment stays in the rotation c
   assert.deepStrictEqual([...scope.A.regen], [3], 'only the post-sun-cut slot regenerates');
   assert.deepStrictEqual(Object.keys(scope.A.keep).map(Number).sort(), [0, 1, 2],
     'both kept segments protected byte-for-byte');
+});
+
+test('league map split: played games kept, rained-out fixtures dropped, 75% rule at the cut', () => {
+  const divisionTimes = { Div1: [
+    { startMin: 600, endMin: 660 },
+    { startMin: 660, endMin: 720 },
+    { startMin: 720, endMin: 780 },
+  ] };
+  const bunkToDiv = { A: 'Div1' };
+  const la = {
+    Div1: {
+      0: { matchups: [{ home: 'Cobras', away: 'Vipers' }] },   // 600-660: played
+      1: { matchups: [{ home: 'Lions', away: 'Bears' }] },     // 660-720: in progress
+      2: { matchups: [{ home: 'Hawks', away: 'Eagles' }] },    // 720-780: not started
+    },
+    A: { 1: { matchups: [{ home: 'S1', away: 'S2' }] } },      // specialty league, bunk-keyed
+  };
+
+  // Cut at 700: slot 1 is 40/60 = 67% done → dropped (both keys).
+  let r = rainySplitLeagueMapAt(la, divisionTimes, bunkToDiv, 700);
+  assert.ok(r.map.Div1[0], 'played game kept');
+  assert.strictEqual(r.map.Div1[1], undefined, '67%-done game dropped');
+  assert.strictEqual(r.map.Div1[2], undefined, 'future fixture dropped');
+  assert.strictEqual(r.map.A[1], undefined, 'bunk-keyed specialty league resolves via its division');
+  assert.strictEqual(r.dropped, 3);
+
+  // Cut at 710: slot 1 is 50/60 = 83% done → kept.
+  r = rainySplitLeagueMapAt(la, divisionTimes, bunkToDiv, 710);
+  assert.ok(r.map.Div1[1] && r.map.A[1], 'in-progress ≥75% game kept in both keys');
+  assert.strictEqual(r.dropped, 1, 'only the future fixture dropped');
+
+  // Input not mutated.
+  assert.ok(la.Div1[1] && la.Div1[2], 'source map untouched');
 });
 
 test('bunks outside the passed divisions are never scanned or returned; input not mutated', () => {
