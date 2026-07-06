@@ -14,6 +14,17 @@
 (function() {
     'use strict';
 
+    // ★★★ CB-37: other-scheduler field & division names are user-controlled camp
+    // config and were rendered RAW into the lock-warning panel / detail cards /
+    // badge innerHTML → cross-scheduler stored XSS (a teammate's malicious field
+    // or division name executes in this user's session). No escaper existed;
+    // add one (CampUtils delegate + complete &<>"' fallback) and wrap every sink.
+    const _gflEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
     // =========================================================================
     // GLOBAL LOCK REGISTRY
     // =========================================================================
@@ -62,19 +73,54 @@
         if (!fieldName || typeof fieldName !== 'string' || !slots || slots.length === 0) return false;
 
         const normalizedField = fieldName.toLowerCase().trim();
-        
+        const _newS = (lockInfo && lockInfo.startMin != null) ? lockInfo.startMin : null;
+        const _newE = (lockInfo && lockInfo.endMin != null) ? lockInfo.endMin : null;
+
         for (const slotIdx of slots) {
             if (!this._locks[slotIdx]) {
                 this._locks[slotIdx] = {};
             }
-            
+
             // Check if already locked
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
-                // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy} (${existing.leagueName || existing.activity || existing.reason})`);
-                return false;
+                // ★ TIME-AWARE COLLISION: slot indices are PER-DIVISION, so the
+                //   SAME index is a different clock time in each grade's grid. A
+                //   pinned event at 2:50pm (div A, index 1) and a league game at
+                //   1:25pm (div B, index 1) collide on the same (index, field) key
+                //   even though they never overlap in time. The old code refused
+                //   the second lock outright, so the field was left UNPROTECTED at
+                //   its real time and the solver double-booked it (observed: a
+                //   league game and a bunk activity on the same court). Only refuse
+                //   when the two windows ACTUALLY overlap; for disjoint times keep
+                //   BOTH by storing the new lock under a deterministic time-
+                //   qualified key. isFieldLockedByTime scans every key, so the
+                //   preserved lock is still found by the solver's time-based check.
+                const _exS = existing.startMin, _exE = existing.endMin;
+                const _timesKnown = (_newS != null && _newE != null && _exS != null && _exE != null);
+                const _overlap = _timesKnown ? (_newS < _exE && _exS < _newE) : true;
+                if (_overlap) {
+                    // console.warn(`[GLOBAL_LOCKS] ⚠️ CONFLICT: "${fieldName}" at slot ${slotIdx} already locked by ${existing.lockedBy}`);
+                    return false;
+                }
+                // Disjoint times sharing a per-division index → preserve both.
+                const _altKey = slotIdx + '#' + _newS;
+                if (!this._locks[_altKey]) this._locks[_altKey] = {};
+                const _alt = this._locks[_altKey][normalizedField];
+                if (_alt) {
+                    const _aS = _alt.startMin, _aE = _alt.endMin;
+                    const _aOverlap = (_aS == null || _aE == null) ? true : (_newS < _aE && _aS < _newE);
+                    if (_aOverlap) return false; // genuine same-time conflict at the alt key
+                }
+                this._locks[_altKey][normalizedField] = {
+                    ...lockInfo,
+                    lockType: 'global',
+                    fieldName: fieldName,
+                    timestamp: Date.now()
+                };
+                continue;
             }
-            
+
             this._locks[slotIdx][normalizedField] = {
     ...lockInfo,
     lockType: 'global',
@@ -106,9 +152,15 @@
      * @param {string} allowedDivision - The division that CAN still use this field
      * @param {string} reason - Description (e.g., "Elective (2nd Grade)")
      */
-    GlobalFieldLocks.lockFieldForDivision = function(fieldName, slots, allowedDivision, reason) {
+    GlobalFieldLocks.lockFieldForDivision = function(fieldName, slots, allowedDivision, reason, timeRange) {
         if (!this._initialized) this.reset();
         if (!fieldName || !slots || slots.length === 0 || !allowedDivision) return false;
+        // ★ Optional explicit {startMin, endMin}: lets cross-grade time checks
+        //   (isFieldLockedByTime) match this lock WITHOUT deriving the window from
+        //   the allowed division's slot grid — so an elective is reliably off-limits
+        //   to other grades even when their grids don't line up by slot index.
+        const _trStart = timeRange && timeRange.startMin;
+        const _trEnd = timeRange && timeRange.endMin;
         
         const normalizedField = fieldName.toLowerCase().trim();
         
@@ -135,6 +187,8 @@
                 allowedDivision: allowedDivision,
                 reason: reason || `Elective for ${allowedDivision}`,
                 fieldName: fieldName,
+                startMin: (_trStart != null ? _trStart : undefined),
+                endMin: (_trEnd != null ? _trEnd : undefined),
                 timestamp: Date.now()
             };
             
@@ -211,6 +265,12 @@
                         for (const lockedFieldKey in slotLocks) {
                             if (!exSet.has(lockedFieldKey)) continue;
                             const lock = slotLocks[lockedFieldKey];
+                            // ★ COMBO-MARKER FIX (see isFieldLockedByTime): a marker
+                            //   propagated onto the combined field by a sibling sub
+                            //   must not block the OTHER sub — subs never block each
+                            //   other. Kill switch: window.__comboSiblingUnblock = false.
+                            if (lock._fromComboPropagation === true &&
+                                window.__comboSiblingUnblock !== false) continue;
                             if (lock.lockType === 'division' && lock.allowedDivision &&
                                 divisionContext && divisionContext === lock.allowedDivision) continue;
                             let lStart = lock.startMin, lEnd = lock.endMin;
@@ -236,6 +296,27 @@
                         }
                     }
                 }
+            }
+        }
+
+        // ★ CROSS-GRADE SAFETY NET: slot indices are per-division — slot N is a
+        //   different clock time in each grade's grid — so the index scan above is
+        //   blind to a lock placed on ANOTHER grade's grid. The most important case
+        //   is a grade-level ELECTIVE: it reserves its facility for its OWN grade
+        //   only and must be off-limits to EVERY other grade/division at that
+        //   wall-clock time. When we know the asking division, re-check by the actual
+        //   time window so an elective (or any time-locked field) on a different grid
+        //   still blocks this caller. Allowed-division (own-grade) locks are skipped
+        //   inside isFieldLockedByTime, so a grade is never blocked from its own
+        //   elective. No-ops when the division or its slot times can't be resolved.
+        if (divisionContext && typeof this.isFieldLockedByTime === 'function'
+            && window.divisionTimes && window.divisionTimes[divisionContext]) {
+            const _dts = window.divisionTimes[divisionContext];
+            const _qs = _dts[slots[0]] && _dts[slots[0]].startMin;
+            const _qe = _dts[slots[slots.length - 1]] && _dts[slots[slots.length - 1]].endMin;
+            if (_qs != null && _qe != null) {
+                const _byTime = this.isFieldLockedByTime(fieldName, _qs, _qe, divisionContext);
+                if (_byTime) return _byTime;
             }
         }
 
@@ -335,6 +416,17 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
                 for (const lockedFieldKey in slotLocks) {
                     if (!exSet.has(lockedFieldKey)) continue;
                     const lock = slotLocks[lockedFieldKey];
+                    // ★ COMBO-MARKER FIX: a lock PROPAGATED onto the combined field
+                    //   by lockComboPartners when a SIBLING sub was locked only means
+                    //   "some sub is busy" — it blocks the combined field itself
+                    //   (direct-hit scan above) but must NOT block the OTHER sub:
+                    //   subs never block each other. Without this skip, using
+                    //   New Gym 1 froze New Gym 2 for the whole camp (live: NG2
+                    //   idle all day while worse courts filled). Only a REAL lock
+                    //   on the counterpart (someone actually using/pinning it)
+                    //   blocks. Kill switch: window.__comboSiblingUnblock = false.
+                    if (lock._fromComboPropagation === true &&
+                        window.__comboSiblingUnblock !== false) continue;
                     // Skip division locks the caller is allowed for
                     if (lock.lockType === 'division' && lock.allowedDivision &&
                         divisionContext && divisionContext === lock.allowedDivision) continue;
@@ -595,7 +687,21 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         this._otherSchedulerDateKey = dateKey;
         this._otherSchedulerFieldUsage = {};
         this._otherSchedulerSchedules = {};
-        
+
+        // ★★★ CB-50: drop the PRIOR date's other-scheduler locks from _locks. This
+        // reset cleared the usage maps but never _locks, so an 'other_scheduler'
+        // field/slot lock from date A persisted when viewing date B and falsely
+        // blocked a then-free field. Remove only 'other_scheduler'-tagged locks —
+        // this user's own / league / pinned / elective locks are untouched.
+        if (this._locks) {
+            for (const _slotIdx in this._locks) {
+                const _sl = this._locks[_slotIdx];
+                for (const _f in _sl) {
+                    if (_sl[_f] && _sl[_f].lockedBy === 'other_scheduler') delete _sl[_f];
+                }
+            }
+        }
+
         const role = window.AccessControl?.getCurrentRole?.() || 'viewer';
         
         // Owners/Admins/Schedulers don't need to see "other" schedulers - they have full access
@@ -809,7 +915,7 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
                         Fields Already Scheduled by Other Schedulers
                     </div>
                     <div style="font-size: 0.85rem; color: #B45309; margin-top: 2px;">
-                        ${fieldCount} field${fieldCount !== 1 ? 's' : ''} in use by: ${otherDivisions.join(', ')}
+                        ${fieldCount} field${fieldCount !== 1 ? 's' : ''} in use by: ${otherDivisions.map(_gflEsc).join(', ')}
                     </div>
                 </div>
                 <button id="${PANEL_ID}-toggle" style="
@@ -859,8 +965,8 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         `;
         
         for (const [fieldName, usage] of fields) {
-            const timeLabels = usage.slotTimes.map(t => t.label).join(', ') || 'Multiple times';
-            const divisionList = usage.divisions.join(', ');
+            const timeLabels = usage.slotTimes.map(t => _gflEsc(t.label)).join(', ') || 'Multiple times';
+            const divisionList = usage.divisions.map(_gflEsc).join(', ');
             const bunkCount = usage.bunks.length;
             
             html += `
@@ -871,7 +977,7 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
                     padding: 12px;
                 ">
                     <div style="font-weight: 600; color: #78350F; margin-bottom: 6px;">
-                        🏟️ ${fieldName}
+                        🏟️ ${_gflEsc(fieldName)}
                     </div>
                     <div style="font-size: 0.85rem; color: #92400E;">
                         <div>📅 Times: ${timeLabels}</div>
@@ -935,7 +1041,7 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
                     border: 1px solid #F59E0B;
                     margin-left: 6px;
                 `;
-                badge.innerHTML = `🔒 ${usage.divisions.join(', ')}`;
+                badge.innerHTML = `🔒 ${usage.divisions.map(_gflEsc).join(', ')}`;
                 badge.title = `In use by: ${usage.bunks.slice(0, 5).join(', ')}${usage.bunks.length > 5 ? '...' : ''}`;
                 nameEl.appendChild(badge);
             }

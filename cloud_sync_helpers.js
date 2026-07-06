@@ -21,32 +21,7 @@
     // Ensures complete field structure before save
     // =========================================================================
     
-    function parseTimeToMinutes(timeStr) {
-        if (!timeStr || typeof timeStr !== 'string') return null;
-        
-        let s = timeStr.trim().toLowerCase();
-        let mer = null;
-        
-        if (s.includes("am") || s.includes("pm")) {
-            mer = s.includes("am") ? "am" : "pm";
-            s = s.replace(/am|pm/g, "").trim();
-        }
-        
-        const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!m) return null;
-        
-        let hh = parseInt(m[1], 10);
-        const mm = parseInt(m[2], 10);
-        
-        if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-        
-        if (mer) {
-            if (hh === 12) hh = mer === "am" ? 0 : 12;
-            else if (mer === "pm") hh += 12;
-        }
-        
-        return hh * 60 + mm;
-    }
+    function parseTimeToMinutes(timeStr) { return window.CampUtils.parseTimeToMinutes(timeStr); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
     
     /**
      * Normalize a single field to ensure complete structure
@@ -108,19 +83,47 @@
     // HELPER: SYNC SPECIAL ACTIVITIES
     // =========================================================================
 
+    // Case-insensitive de-dupe of special-activity rows. This camp's data can
+    // hold duplicate rows that differ only by case ("Sushi" vs "sushi") — a
+    // cloud-sync casing drift between the top-level and app1 stores, which
+    // facilities.js then reconstructs into a phantom default (no access
+    // restriction). Plain exact-name de-dupe lets both survive, and the
+    // unrestricted phantom defeats the user's restriction. Collapse by
+    // lowercased name, PREFERRING the row that carries an enabled access
+    // restriction (the real configured one) and, on a tie, the row that has a
+    // location (the phantom default is blank). Single source of truth, reused
+    // by app1.js's saveGlobalSpecialActivities and special_activities.js's
+    // getAllSpecialActivities.
+    window.dedupeSpecialsByName = function(list) {
+        const byKey = new Map();
+        (Array.isArray(list) ? list : []).forEach(function(a) {
+            if (!a || !a.name) return;
+            const k = String(a.name).trim().toLowerCase();
+            const ex = byKey.get(k);
+            if (!ex) { byKey.set(k, a); return; }
+            const exR = !!(ex.accessRestrictions && ex.accessRestrictions.enabled);
+            const aR  = !!(a.accessRestrictions  && a.accessRestrictions.enabled);
+            if (aR && !exR) { byKey.set(k, a); return; }          // restricted copy wins
+            if (aR === exR && !ex.location && a.location) byKey.set(k, a); // tie → prefer one with a location
+        });
+        return Array.from(byKey.values());
+    };
+
     /**
      * Save special activities to both local and cloud
      */
     window.saveGlobalSpecialActivities = function(activities) {
+        // ★ Heal case-variant duplicates before persisting (see dedupeSpecialsByName).
+        activities = window.dedupeSpecialsByName(activities);
         // Save to app1 structure (for compatibility)
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
         settings.app1.specialActivities = activities;
-        
+
         // Also save at root level for easier access
         window.saveGlobalSettings?.("app1", settings.app1);
         window.saveGlobalSettings?.("specialActivities", activities);
-        
+
         console.log("☁️ Special activities queued for sync:", activities.length);
     };
 

@@ -1,3 +1,4 @@
+
 // =================================================================
 // master_schedule_builder.js (UPDATED - REDESIGNED UI)
 // Beta v2.5
@@ -15,6 +16,20 @@
 
 (function(){
 'use strict';
+
+// ★★★ CB-27/28/29 (+ folds CB-49/86/87): module-level HTML escaper. Layer/tile
+// names (customActivity, leagueName) and event names (ev.event) are
+// user-controlled and were interpolated RAW into innerHTML — the band label,
+// the edit-popover input `value=` attribute, the drag-ghost, and the skeleton
+// tile header — yielding stored XSS. The local `_esc` (~L1484) is scoped to a
+// single function and not in scope at these sinks; this module-level helper
+// covers all of them. Complete `&<>"'` set → safe in element and attribute
+// context alike.
+const _mbEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+    ? window.CampUtils.escapeHtml(s)
+    : String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
@@ -48,6 +63,29 @@ function _mbAllLeaguesForGrade(grade) {
   );
 }
 try { window._mbAllLeaguesForGrade = _mbAllLeaguesForGrade; } catch (_) {}
+
+// Specialty leagues live in a SEPARATE store (gs.specialtyLeagues), keyed by
+// id with { name, enabled, divisions, ... }. Regular-league dropdowns read
+// leaguesByName and never see these, which is why a specialty-league tile used
+// to list regular leagues and miss the specialty ones.
+function _mbSpecialtyLeaguesForGrade(grade) {
+  const _gs = window.loadGlobalSettings?.() || {};
+  const sl = _gs.specialtyLeagues || {};
+  return Object.values(sl)
+    .filter(l => l && l.enabled !== false && l.name &&
+      Array.isArray(l.divisions) && l.divisions.includes(String(grade)))
+    .map(l => l.name);
+}
+try { window._mbSpecialtyLeaguesForGrade = _mbSpecialtyLeaguesForGrade; } catch (_) {}
+
+// Pick the right league list for a tile type: a specialty_league tile lists
+// specialty leagues, every other league tile lists regular leagues.
+function _mbLeaguesForGradeByType(grade, tileType) {
+  return tileType === 'specialty_league'
+    ? _mbSpecialtyLeaguesForGrade(grade)
+    : _mbAllLeaguesForGrade(grade);
+}
+try { window._mbLeaguesForGradeByType = _mbLeaguesForGradeByType; } catch (_) {}
 
 // Mutates a copied event so its league reference matches the new grade.
 // No-op for non-league events. If the target grade has no league, clears
@@ -112,6 +150,17 @@ const SNAP_MINS = 5;
 
 // --- Persistence ---
 function saveDraftToLocalStorage() {
+  // ★ Pre-guard: drop malformed/duplicate tiles + normalize bare times before the
+  //   draft is persisted, so corrupt tiles never enter the saved base skeleton.
+  try {
+    if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles && Array.isArray(dailySkeleton)) {
+      const _san = window.CampUtils.sanitizeSkeletonTiles(dailySkeleton);
+      if (_san && Array.isArray(_san.tiles) && (_san.dropped.length || _san.normalized)) {
+        dailySkeleton.length = 0;
+        Array.prototype.push.apply(dailySkeleton, _san.tiles);
+      }
+    }
+  } catch (e) { console.error('[MSB] skeleton sanitize on save failed (non-fatal):', e); }
   try {
     if (dailySkeleton && dailySkeleton.length > 0) {
       localStorage.setItem(SKELETON_DRAFT_KEY, JSON.stringify(dailySkeleton));
@@ -386,7 +435,14 @@ function showModal(config) {
     
     overlay.querySelector('.ms-modal-close').onclick = () => close(null);
     overlay.querySelector('.ms-modal-cancel').onclick = () => close(null);
-    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    // Backdrop click closes — but only when the click GENUINELY started on the
+    // backdrop. Without the mousedown guard, highlighting text in an input and
+    // releasing the mouse over the backdrop fires a click whose target is the
+    // overlay (the common ancestor of the down/up points) → the modal would
+    // close mid-selection.
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) close(null); };
     
     overlay.querySelector('.ms-modal-confirm').onclick = () => {
       const result = {};
@@ -413,6 +469,133 @@ function showModal(config) {
   });
 }
 
+// ★ Smart Tile "Guarantee swap" control (shared by the create + edit dialogs).
+//   Injects a checkbox; when ticked it HIDES the Fallback field (in swap mode
+//   Main 2 IS the open side, so no separate fallback) and shows an explanation of
+//   the switch. Carries the flag out of the modal via a hidden [data-field] input
+//   that showModal's value collector reads (same pattern as the split bunk picker).
+function _mbSmartSwapPostRender(overlay, defaultOn) {
+  if (!overlay) return;
+  const fields = overlay.querySelector('.ms-modal-fields');
+  if (!fields) return;
+  const fbInput = overlay.querySelector('[data-field="fallbackActivity"]');
+  const fbRow = fbInput ? fbInput.closest('.ms-modal-field') : null;
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'guaranteeSwap');
+  hidden.value = defaultOn ? 'true' : 'false';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;';
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#5b21b6;">'
+    + '<input type="checkbox" class="mb-gs-cb"' + (defaultOn ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;flex:none;">'
+    + 'Guarantee each bunk gets both (swap)</label>'
+    + '<div class="mb-gs-explain" style="' + (defaultOn ? '' : 'display:none;') + 'font-size:11px;color:#6d28d9;margin-top:8px;line-height:1.5;">'
+    + 'The division splits into two groups across the two periods. One group does <b>Main 1</b> first, then switches to <b>Main 2</b>; the other does <b>Main 2</b> first, then <b>Main 1</b>. <b>Every bunk gets one of each.</b> Main 2 covers everyone not on Main 1, so no separate Fallback is needed, and the split adjusts to capacity so neither period runs short.'
+    + '</div>';
+  if (fbRow && fbRow.parentNode === fields) fields.insertBefore(wrap, fbRow);
+  else fields.appendChild(wrap);
+  fields.appendChild(hidden);
+  const cb = wrap.querySelector('.mb-gs-cb');
+  const explain = wrap.querySelector('.mb-gs-explain');
+  function _gsSync() {
+    const on = !!cb.checked;
+    hidden.value = on ? 'true' : 'false';
+    if (explain) explain.style.display = on ? 'block' : 'none';
+    if (fbRow) fbRow.style.display = on ? 'none' : '';
+  }
+  cb.addEventListener('change', _gsSync);
+  _gsSync();
+}
+
+// ★ "Away" (off-campus) control for Sports + League tile edit dialogs.
+//   Injects a checkbox; when ticked it reveals a zone picker listing the
+//   off-campus zones (window.getAwayZones). A tile marked Away is restricted at
+//   generation to the chosen zone's fields, and the zone's travel time is added
+//   to/from the tile. Carries the boolean out of the modal via a hidden
+//   [data-field="isAway"] input (same pattern as the smart-swap control); the
+//   zone <select> carries data-field="awayZone" so showModal collects it too.
+function _mbTileSupportsAway(ev) {
+  if (!ev) return false;
+  if (ev.type === 'league' || ev.type === 'specialty_league') return true;
+  if (ev.type === 'sports') return true;
+  return /\bsport/i.test(String(ev.event || ''));
+}
+
+function _mbAwayPostRender(overlay, ev) {
+  if (!overlay) return;
+  const fields = overlay.querySelector('.ms-modal-fields');
+  if (!fields) return;
+  const esc = (s) => (window.CampUtils?.escapeHtml ? window.CampUtils.escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s));
+  const zones = (typeof window.getAwayZones === 'function') ? window.getAwayZones() : [];
+
+  const curZone = (ev.awayZone && zones.some(z => z.name === ev.awayZone)) ? ev.awayZone : (zones[0] ? zones[0].name : '');
+  const defaultOn = !!ev.isAway && !!curZone;
+  const hasZones = zones.length > 0;
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'isAway');
+  hidden.value = defaultOn ? 'true' : 'false';
+
+  const optsHtml = zones.map(z => {
+    const t = z.travelTimeMin > 0 ? ' — ' + z.travelTimeMin + ' min travel each way' : '';
+    return '<option value="' + esc(z.name) + '"' + (z.name === curZone ? ' selected' : '') + '>' + esc(z.name) + esc(t) + '</option>';
+  }).join('');
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;';
+  const _mode = (ev.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+  const bodyHtml = hasZones
+    ? ('<div class="mb-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
+        + '<select class="ms-modal-input mb-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin:10px 0 4px;">How many go away?</label>'
+        + '<select class="ms-modal-input mb-away-mode" data-field="awayMode" style="width:100%;">'
+        + '<option value="exclusive"' + (_mode === 'exclusive' ? ' selected' : '') + '>All away — only off-campus fields</option>'
+        + '<option value="mixed"' + (_mode === 'mixed' ? ' selected' : '') + '>Either / or — some away, some stay on campus</option>'
+        + '</select>'
+        + '<div style="font-size:11px;color:#9a3412;margin-top:6px;line-height:1.5;">Adds the zone\'s travel time to and from. <strong>All away</strong> forces every game to the off-campus fields; <strong>Either/or</strong> also allows on-campus fields, so games spill back home once the zone fills.</div>'
+        + '</div>')
+    : ('<div style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.5;">No off-campus zones yet. Add one in <strong>Setup → Location Zones</strong> (mark it “Off-campus” and set a travel time), then re-open this tile.</div>');
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';font-size:13px;font-weight:600;color:#9a3412;">'
+    + '<input type="checkbox" class="mb-away-cb"' + (defaultOn ? ' checked' : '') + (hasZones ? '' : ' disabled') + ' style="width:16px;height:16px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';flex:none;">'
+    + 'Away (off-campus)</label>'
+    + bodyHtml;
+  fields.appendChild(wrap);
+  fields.appendChild(hidden);
+
+  const cb = wrap.querySelector('.mb-away-cb');
+  const body = wrap.querySelector('.mb-away-body');
+  function _awaySync() {
+    const on = !!(cb && cb.checked);
+    hidden.value = on ? 'true' : 'false';
+    if (body) body.style.display = on ? 'block' : 'none';
+  }
+  if (cb) cb.addEventListener('change', _awaySync);
+  _awaySync();
+}
+
+// ★ Delete button for the Smart Tile EDIT dialog — it previously had none (you had
+//   to cancel and use the tile's action bar). Injected into the modal footer;
+//   deletes the tile via the existing deleteTile() and closes the dialog.
+function _mbInjectDeleteButton(overlay, tileId) {
+  if (!overlay || !tileId) return;
+  const footer = overlay.querySelector('.ms-modal-footer');
+  if (!footer || footer.querySelector('.ms-modal-delete')) return;
+  const btn = document.createElement('button');
+  btn.className = 'ms-btn ms-modal-delete';
+  btn.textContent = '🗑 Delete';
+  btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
+  btn.onclick = function () {
+    if (typeof deleteTile === 'function') deleteTile(tileId);
+    const c = overlay.querySelector('.ms-modal-cancel');
+    if (c) c.click(); else overlay.remove();
+  };
+  footer.insertBefore(btn, footer.firstChild);
+}
+
 function showConfirm(message) {
   return new Promise((resolve) => {
     const existing = document.getElementById('ms-modal-overlay');
@@ -436,7 +619,9 @@ function showConfirm(message) {
     
     overlay.querySelector('.ms-modal-cancel').onclick = () => { overlay.remove(); resolve(false); };
     overlay.querySelector('.ms-modal-confirm-btn').onclick = () => { overlay.remove(); resolve(true); };
-    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) { overlay.remove(); resolve(false); } };
   });
 }
 
@@ -460,7 +645,9 @@ function showAlert(message) {
     
     document.body.appendChild(overlay);
     overlay.querySelector('.ms-modal-ok').onclick = () => { overlay.remove(); resolve(); };
-    overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(); } };
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) { overlay.remove(); resolve(); } };
   });
 }
 
@@ -468,7 +655,8 @@ function showAlert(message) {
 // COPY GRADE MODAL — Copy skeleton from one division to others
 // =================================================================
 function showCopyGradeModal(skeleton, onApply) {
-  const divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  const _rawDivs = window.availableDivisions || Object.keys(window.divisions || {});
+  const divisions = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivs.slice()) : _rawDivs;
   if (divisions.length < 2) { showAlert('Need at least 2 grades to copy between.'); return; }
 
   // Find which divisions have events
@@ -576,15 +764,23 @@ function showCopyGradeModal(skeleton, onApply) {
   renderTargets();
 
   modal.querySelector('#cg-cancel').onclick = () => overlay.remove();
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  let _downOnOverlay = false;
+  overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+  overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) overlay.remove(); };
 
   applyBtn.onclick = () => {
     const sourceDiv = fromSelect.value;
     if (!sourceDiv || selectedTargets.size === 0) return;
 
-    // Get source events
-    const sourceEvents = skeleton.filter(ev => ev.division === sourceDiv);
-    if (sourceEvents.length === 0) { overlay.remove(); showAlert('Source grade has no events to copy.'); return; }
+    // Get source events. ★ Exclude league / specialty-league tiles: leagues are a
+    // camp-level system, not a per-grade layout choice. Silently copying a grade's
+    // league layer into other grades makes the auto builder schedule league games
+    // for grades the user never set up (the "why are there leagues with no league
+    // layer?" surprise from a copied layout). All other layer types — sport,
+    // special, swim, custom — copy as before.
+    const _isLeagueType = (t) => { const x = String(t || '').toLowerCase(); return x === 'league' || x === 'specialty_league'; };
+    const sourceEvents = skeleton.filter(ev => ev.division === sourceDiv && !_isLeagueType(ev.type));
+    if (sourceEvents.length === 0) { overlay.remove(); showAlert('Source grade has no copyable events (league tiles are not copied).'); return; }
 
     // Remove existing events for target divisions
     let updated = skeleton.filter(ev => !selectedTargets.has(ev.division));
@@ -927,6 +1123,68 @@ async function deleteTile(id) {
   }
 }
 
+function _buildSplitBunkPicker(overlay, divName, existingGroup1) {
+  const sortNum = (arr) => [...arr].sort((a, b) => {
+    const nA = parseInt(a.match(/\d+/)?.[0] || 0);
+    const nB = parseInt(b.match(/\d+/)?.[0] || 0);
+    return nA - nB || a.localeCompare(b);
+  });
+  const allBunks = sortNum(((window.divisions || {})[divName]?.bunks || []).map(String));
+  if (allBunks.length === 0) return;
+
+  const half = Math.ceil(allBunks.length / 2);
+  const g1Set = new Set(
+    existingGroup1?.length
+      ? sortNum(existingGroup1.map(String).filter(b => allBunks.includes(b)))
+      : allBunks.slice(0, half)
+  );
+  const g2Set = new Set(allBunks.filter(b => !g1Set.has(b)));
+
+  const pickerWrap = document.createElement('div');
+  pickerWrap.style.cssText = 'margin-top:12px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;';
+  pickerWrap.innerHTML =
+    '<div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px;">Bunk Groups'
+    + '<span style="font-size:10px;font-weight:400;color:#64748b;"> — click a bunk to move it</span></div>'
+    + '<div style="display:flex;gap:12px;">'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#1e40af;margin-bottom:4px;">● Group 1 → starts at Main 1</div>'
+    + '<div id="split-g1-panel" style="min-height:32px;background:#eff6ff;border:1px dashed #93c5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:4px;">● Group 2 → starts at Main 2</div>'
+    + '<div id="split-g2-panel" style="min-height:32px;background:#f5f3ff;border:1px dashed #c4b5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '</div>';
+
+  const hiddenInput = document.createElement('input');
+  hiddenInput.type = 'hidden';
+  hiddenInput.setAttribute('data-field', 'group1Bunks');
+  pickerWrap.appendChild(hiddenInput);
+
+  const updateHidden = () => { hiddenInput.value = JSON.stringify(sortNum([...g1Set])); };
+
+  const renderChips = () => {
+    const p1 = pickerWrap.querySelector('#split-g1-panel');
+    const p2 = pickerWrap.querySelector('#split-g2-panel');
+    p1.innerHTML = ''; p2.innerHTML = '';
+    const makeChip = (bunk, inG1) => {
+      const c = document.createElement('span');
+      c.textContent = bunk;
+      c.title = 'Click to move to Group ' + (inG1 ? '2' : '1');
+      c.style.cssText = 'cursor:pointer;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:500;user-select:none;'
+        + (inG1 ? 'background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;' : 'background:#ede9fe;border:1px solid #c4b5fd;color:#7c3aed;');
+      c.addEventListener('click', () => {
+        if (inG1) { g1Set.delete(bunk); g2Set.add(bunk); }
+        else { g2Set.delete(bunk); g1Set.add(bunk); }
+        updateHidden(); renderChips();
+      });
+      return c;
+    };
+    sortNum([...g1Set]).forEach(b => p1.appendChild(makeChip(b, true)));
+    sortNum([...g2Set]).forEach(b => p2.appendChild(makeChip(b, false)));
+  };
+
+  const fieldsContainer = overlay.querySelector('.ms-modal-fields') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
+  if (fieldsContainer) fieldsContainer.appendChild(pickerWrap);
+  updateHidden(); renderChips();
+}
+
 async function editTile(id) {
   const ev = dailySkeleton.find(e => e.id === id);
   if (!ev) return;
@@ -937,18 +1195,23 @@ async function editTile(id) {
       fields: [
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
-        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
-        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
-        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
-      ]
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+        { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: ev.smartData?.pairGroup || '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
+      ],
+      postRender: (overlay) => { _mbSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap)); _mbInjectDeleteButton(overlay, ev.id); }
     });
     if (!result || !result.main1 || !result.main2) return;
+    const _gsOn = result.guaranteeSwap === 'true';
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
-    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null };
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const _editDivName = ev.division;
+    const _editExistingG1 = ev.group1Bunks || null;
     const result = await showModal({
       title: 'Edit Split Tile',
       fields: [
@@ -956,7 +1219,8 @@ async function editTile(id) {
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
         { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
         { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
-      ]
+      ],
+      postRender: function(overlay) { _buildSplitBunkPicker(overlay, _editDivName, _editExistingG1); _mbInjectDeleteButton(overlay, ev.id); }
     });
     if (!result || !result.main1 || !result.main2) return;
     const event1 = mapEventNameForOptimizer(result.main1);
@@ -964,6 +1228,7 @@ async function editTile(id) {
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
     ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+    ev.group1Bunks = result.group1Bunks ? JSON.parse(result.group1Bunks) : null;
 
   } else if (ev.type === 'elective') {
     const locations = getAllLocations();
@@ -980,6 +1245,7 @@ async function editTile(id) {
         { name: 'activities', label: 'Reserve Locations', type: 'checkbox-group', options: locationOptions, default: ev.electiveActivities || [] }
       ],
       postRender: (overlay) => {
+        _mbInjectDeleteButton(overlay, ev.id);
         const sportSel = overlay.querySelector('[data-field="sport"]');
         if (!sportSel) return;
         sportSel.addEventListener('change', () => {
@@ -1025,6 +1291,7 @@ async function editTile(id) {
         { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: seLocOptions, default: ev.electiveActivities || [] }
       ],
       postRender: (overlay) => {
+        _mbInjectDeleteButton(overlay, ev.id);
         const sportSel = overlay.querySelector('[data-field="sport"]');
         if (!sportSel) return;
         sportSel.addEventListener('change', () => {
@@ -1063,12 +1330,9 @@ async function editTile(id) {
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
       const _lbn = _gs.leaguesByName || {};
-      // Only show leagues assigned to this event's grade.
-      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
-        _lbn[ln] && _lbn[ln].enabled !== false &&
-        Array.isArray(_lbn[ln].divisions) &&
-        _lbn[ln].divisions.includes(String(ev.division))
-      );
+      // Leagues assigned to this event's grade — specialty tiles list specialty
+      // leagues, regular tiles list regular leagues.
+      const _gradeLeagues = _mbLeaguesForGradeByType(ev.division, ev.type);
       if (_gradeLeagues.length === 1) {
         // Single league for this grade → assign silently, no picker.
         if (ev.leagueName !== _gradeLeagues[0]) {
@@ -1086,29 +1350,52 @@ async function editTile(id) {
     if (hasLocations) {
       modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups, default: ev.reservedFields || [] });
     }
-    const result = await showModal({ title: 'Edit Event', fields: modalFields });
+    const _supportsAway = _mbTileSupportsAway(ev);
+    const result = await showModal({ title: 'Edit Event', fields: modalFields, postRender: (ov) => { if (_supportsAway) _mbAwayPostRender(ov, ev); _mbInjectDeleteButton(ov, ev.id); } });
     if (!result || !result.eventName?.trim()) return;
     const reservedFields = result.reservedFields || [];
     ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.reservedFields = reservedFields;
     ev.location = reservedFields.length === 1 ? reservedFields[0] : (reservedFields.length > 1 ? null : ev.location);
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+    // ★ Away (off-campus) flag — restricts generation to the chosen zone's fields + travel.
+    if (_supportsAway) {
+      const _awayOn = (result.isAway === 'true' || result.isAway === true);
+      if (_awayOn && result.awayZone) {
+        ev.isAway = true; ev.awayZone = result.awayZone;
+        ev.awayMode = (result.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+      } else { delete ev.isAway; delete ev.awayZone; delete ev.awayMode; }
+    }
   }
 
-  // Re-stamp travel info since location may have changed
-  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
-  if (_editTravelLoc) {
-    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
-    if (_eti) {
-      ev._travelPre = _eti.preMin;
-      ev._travelPost = _eti.postMin;
-      ev._travelZone = _eti.zoneName;
-      ev._travelMode = _eti.mode;
+  // Re-stamp travel info. An Away tile draws travel straight from its chosen
+  // off-campus zone (the actual field is decided at generation time); otherwise
+  // travel is inferred from the tile's reserved location/field.
+  if (ev.isAway && ev.awayZone) {
+    const _az = (window.getAwayZones?.() || []).find(z => z.name === ev.awayZone);
+    if (_az && _az.travelTimeMin > 0) {
+      ev._travelPre = _az.travelTimeMin;
+      ev._travelPost = _az.travelTimeMin;
+      ev._travelZone = _az.name;
+      ev._travelMode = 'deduct';
     } else {
       delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
     }
   } else {
-    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+    if (_editTravelLoc) {
+      const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+      if (_eti) {
+        ev._travelPre = _eti.preMin;
+        ev._travelPost = _eti.postMin;
+        ev._travelZone = _eti.zoneName;
+        ev._travelMode = _eti.mode;
+      } else {
+        delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+      }
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
   }
 
   markUnsavedChanges();
@@ -1346,9 +1633,14 @@ const DAW_LAYER_TYPES = [
   { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
   { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
   { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
-  { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
-  { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
-  { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+  // swim/lunch/snacks are no longer addable as quick layers — they come from
+  //   General Activities (facility editor) so their facility config (capacity/
+  //   sharing) connects. Kept here (hidden:true) ONLY so legacy saved layers of
+  //   these types still render/edit; they're filtered out of the palette + the
+  //   type dropdown below.
+  { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true, hidden:true },
+  { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true, hidden:true },
+  { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true, hidden:true },
   { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
   { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
   { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
@@ -1357,6 +1649,11 @@ const DAW_LAYER_TYPES = [
 
 const DAW_PIXELS_PER_MINUTE = 3;
 let dawLayers = {}; // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+// ★ Day 24: the layer set used by the most recent renderDAWGrid call —
+//   `dawLayers` in the standalone master view, but the externalLayers arg in
+//   the Daily Adjustments auto view. openAutoBunkOverridesPanel reads this so
+//   the "Bunks" override panel finds the grade's layers in BOTH contexts.
+let _lastDAWLayerSource = null;
 let dawSelectedBand = null;
 let dawDragData = null;
 
@@ -1435,14 +1732,14 @@ function renderDAWPalette() {
   };
 
   let html = '';
-  DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
+  DAW_LAYER_TYPES.filter(t => !t.anchor && !t.hidden).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
       <span class="ms-daw-tile-name">${t.name}</span>
     </div>`;
   });
 
-  DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
+  DAW_LAYER_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
       <span class="ms-daw-tile-name">${t.name}</span>
@@ -1450,14 +1747,36 @@ function renderDAWPalette() {
     </div>`;
   });
 
+  // ★ FN-40: each custom GENERAL ACTIVITY (facility editor → General
+  //   Activities) gets its own pinned tile, pre-bound to its facility —
+  //   dropping it creates a custom layer with customActivity/customField set
+  //   ("Main activity" happens at the Auditorium, like Swim at the Pool).
+  const _esc = window.CampUtils?.escapeHtml || (s => String(s));
+  const _gaItems = (window.getGeneralActivityPaletteItems?.() || []);
+  if (_gaItems.length) {
+    html += '<div class="ms-daw-tile-divider"></div><div class="ms-daw-tile-label">General Activities</div>';
+    _gaItems.forEach(ga => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_esc(ga.name)}" data-ga-facility="${_esc(ga.facility)}" data-ga-quicktype="${_esc(ga.quickType || 'custom')}" title="${_esc(ga.name + ' @ ' + ga.facility)}">
+        <span class="ms-daw-tile-dot" style="background:#d97706;"></span>
+        <span class="ms-daw-tile-name">${_esc(ga.name)}</span>
+        <span class="ms-daw-tile-badge">PIN</span>
+      </div>`;
+    });
+  }
+
   html += '<div class="ms-daw-tile-footer"><div class="ms-daw-tile-hint">Drag a layer onto a grade row to place it. Click a band to edit.</div></div>';
   pal.innerHTML = html;
 
   // Drag from palette
   pal.querySelectorAll('.ms-daw-tile').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
-      dawDragData = { source: 'palette', type: tile.dataset.type };
+      dawDragData = { source: 'palette', type: tile.dataset.type, gaName: tile.dataset.gaName || null, gaFacility: tile.dataset.gaFacility || null, gaQuickType: tile.dataset.gaQuicktype || null };
       e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+      // ★ FN-40: carry the general-activity binding alongside the layer type
+      //   (incl. quickType so swim/lunch/snacks/dinner apply their behavior).
+      if (tile.dataset.gaName) {
+        e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '', quickType: tile.dataset.gaQuicktype || 'custom' }));
+      }
       e.dataTransfer.effectAllowed = 'copy';
       tile.classList.add('ms-daw-tile-dragging');
     });
@@ -1747,22 +2066,27 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   // When called externally (from DA), use provided layers + callbacks
   const isExternal = !!externalEl;
   const layerSource = isExternal ? externalLayers : dawLayers;
+  _lastDAWLayerSource = layerSource; // ★ Day 24: remember for openAutoBunkOverridesPanel
   const onChanged = externalCallbacks?.onLayersChanged || null;
   const onSave = isExternal ? (onChanged || function(){}) : saveDAWLayers;
   const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
 
   const divisions = window.divisions || {};
   const _gradesRaw = Object.keys(divisions).filter(d => !divisions[d].isParent);
-  const grades = (typeof window.getUserDivisionOrder === 'function')
+  let grades = (typeof window.getUserDivisionOrder === 'function')
     ? window.getUserDivisionOrder(_gradesRaw)
     : _gradesRaw.sort((a, b) => {
         const na = parseInt(a), nb = parseInt(b);
         if (!isNaN(na) && !isNaN(nb)) return na - nb;
         return a.localeCompare(b);
       });
+  // ★ Per-day presence: hide grades not around on the viewed date's weekday.
+  if (typeof window.filterDivisionsByDate === 'function') grades = window.filterDivisionsByDate(grades);
 
   if (grades.length === 0) {
-    gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
+    gridEl.innerHTML = _gradesRaw.length > 0
+      ? '<div style="padding:40px;text-align:center;color:#8888aa;">No grades are scheduled to be here on this day.</div>'
+      : '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
     return;
   }
 
@@ -1844,7 +2168,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     const layerCount = Math.max(1, layers.length);
     const colWidth = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
-    html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
+    html += `<div class="ms-daw-grade-col" data-grade="${_mbEsc(gradeKey)}" style="width:${colWidth}px;">`;
 
     // ── Thin grade header (outside the scrolling track) ──
     // Count bunk overrides for any bunk in this grade so the user knows from
@@ -1860,10 +2184,11 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       ? ` <span class="ms-daw-grade-ov-badge" title="${_gradeOvCount} bunk override${_gradeOvCount === 1 ? '' : 's'} applied — open Daily Adjustments → Bunk Overrides" style="background:#f59e0b;color:#fff;font-size:9px;font-weight:700;border-radius:99px;padding:1px 5px;margin-left:3px;letter-spacing:0;">⚙ ${_gradeOvCount}</span>`
       : '';
     html += `<div class="ms-daw-grade-header">
-      <span class="ms-daw-grade-tag">${gradeKey}</span>${_ovBadge}
+      <span class="ms-daw-grade-tag">${_mbEsc(gradeKey)}</span>${_ovBadge}
       <span class="ms-daw-grade-info">${bunkCount} bunks</span>
-      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
-      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
+      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${_mbEsc(gradeKey)}" title="Add a new layer to this grade">+</button>
+      <button class="ms-daw-grade-btn" data-action="bunk-overrides" data-grade="${_mbEsc(gradeKey)}" title="Override individual bunks' activities (Day 24)">Bunks</button>
+      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${_mbEsc(gradeKey)}" title="Remove all layers from this grade">Clear</button>
     </div>`;
 
     // Collect period boundary pixel positions for this grade (used by notch clip-paths)
@@ -1888,7 +2213,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     }
 
     // ── Timeline track ──
-    html += `<div class="ms-daw-track" data-grade="${gradeKey}" data-boundaries="${uniqueBoundaries.join(',')}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+    html += `<div class="ms-daw-track" data-grade="${_mbEsc(gradeKey)}" data-boundaries="${uniqueBoundaries.join(',')}" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
     // Horizontal gridlines
     for (let m = globalStart; m < globalEnd; m += 30) {
@@ -1973,12 +2298,23 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         _ovDots += `</div>`;
       }
 
-      html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
-        data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
-        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
+      // ★ Grade connection glow: linked custom activities (shared connectionId)
+      //   get a colored inner ring + 🔗 marker so the cross-grade "same time"
+      //   link is visible. Hue is derived from the group id so groups read apart.
+      let _connRing = '', _connClass = '', _connVar = '';
+      if (layer.connectionId) {
+        _connClass = ' ms-daw-band-connected';
+        _connVar = ` --conn-hue:${_dawConnHue(layer.connectionId)};`;
+        _connRing = `<div class="ms-daw-band-conn"></div><span class="ms-daw-band-conn-link" title="Connected across grades — scheduled at the same time">🔗</span>`;
+      }
+
+      html += `<div class="ms-daw-band${_connClass} ${dawSelectedBand === layer.id ? 'selected' : ''}"
+        data-id="${layer.id}" data-type="${layer.type}" data-grade="${_mbEsc(gradeKey)}"${layer.connectionId ? ' data-conn="' + _mbEsc(layer.connectionId) + '"' : ''}
+        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}${_connVar}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
-        <span class="band-label">${layer.leagueName || typeDef?.name || layer.type}</span>
+        ${_connRing}
+        <span class="band-label">${_mbEsc(layer.customActivity || layer.leagueName || typeDef?.name || layer.type)}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         ${_ovDots}
         <div class="band-resize band-resize-bottom"></div>
@@ -2067,7 +2403,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         document.body.appendChild(ghost);
       }
       const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
-      ghost.innerHTML = '<div>' + (typeDef?.name || layer.type) + '</div>'
+      ghost.innerHTML = '<div>' + _mbEsc(layer.customActivity || typeDef?.name || layer.type) + '</div>'
         + '<div id="daw-drag-ghost-time" style="font-weight:400;color:#94a3b8;margin-top:2px;">'
         + minutesToTime(layer.startMin) + ' – ' + minutesToTime(layer.endMin) + '</div>';
       ghost.style.display = 'block';
@@ -2270,7 +2606,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         //   logic. 0 → block, 1 → auto-assign, 2+ → prompt user to pick.
         let _pickedLeague = null;
         if (type === 'league' || type === 'specialty_league') {
-          const _gradeLeagues = _mbAllLeaguesForGrade(grade);
+          const _gradeLeagues = _mbLeaguesForGradeByType(grade, type);
           if (_gradeLeagues.length === 0) {
             await showAlert('No leagues are assigned to ' + grade +
               '. Add this grade to a league in League Setup before dropping a league layer here.');
@@ -2309,6 +2645,22 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
 
         if (_pickedLeague) _newLayer.leagueName = _pickedLeague;
 
+        // ★ FN-40: a general-activity tile drop binds the custom layer to its
+        //   activity + facility (the proven customActivity/customField lane).
+        if (type === 'custom' && e.dataTransfer.types.includes('text/daw-ga')) {
+          try {
+            const _ga = JSON.parse(e.dataTransfer.getData('text/daw-ga') || '{}');
+            if (_ga && _ga.name) {
+              _newLayer.customActivity = _ga.name;
+              if (_ga.facility) _newLayer.customField = _ga.facility;
+              // ★ Carry quickType so a Swim/Lunch/Snacks/Dinner general activity
+              //   applies that behavior in the solver (normalized at STEP 1.5).
+              const _qt = String(_ga.quickType || '').toLowerCase();
+              if (_qt && _qt !== 'custom') _newLayer.quickType = _qt;
+            }
+          } catch (_eGa) {}
+        }
+
         layerSource[grade].push(_newLayer);
 
         onSave();
@@ -2332,6 +2684,10 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
             startMin: Math.max(globalStart, newStart),
             endMin: Math.min(globalEnd, newEnd),
           };
+          // ★ A cross-grade copy must NOT inherit the source's connection group —
+          //   the user links grades explicitly via the layer editor.
+          delete _copyLayer.connectionId;
+          delete _copyLayer._connectionAnchor;
           _mbRemapLeagueForGrade(_copyLayer, grade);
           layerSource[grade].push(_copyLayer);
         } else {
@@ -2364,6 +2720,21 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         layerSource[grade] = [];
         onSave();
         onRender();
+      }
+    };
+  });
+
+  // ★ Day 24: Bunk overrides — open the per-bunk DAW grid for this grade so
+  //   the user can override any bunk's activity for any layer slot.
+  //   `openAutoBunkOverridesPanel` is module-scope; the click handler is
+  //   guarded so a missing function doesn't break the rest of the toolbar.
+  gridEl.querySelectorAll('[data-action="bunk-overrides"]').forEach(btn => {
+    btn.onclick = () => {
+      const grade = btn.dataset.grade;
+      if (typeof openAutoBunkOverridesPanel === 'function') {
+        openAutoBunkOverridesPanel(grade);
+      } else {
+        try { (window.showAlert || window.alert)('Bunk overrides panel unavailable.'); } catch (_e) {}
       }
     };
   });
@@ -2406,10 +2777,92 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
   document.addEventListener('keydown', window._dawKeyHandler);
 }
 
+// Resolve the sharing config a general activity was given in the Facilities UI so
+//   the layer edit modal pre-fills the SAME capacity + inter-grade-sharing grades —
+//   exactly the way name and location already carry over. Returns { capacity,
+//   allowedGrades } or null when the activity/facility configures no sharing.
+//   The facility stores inter-grade sharing as allowedPairs ("gradeA|gradeB"); the
+//   default toggle seeds same-grade self-pairs for ALL grades, so only pairs whose
+//   two grades DIFFER represent true inter-grade sharing — those are the grades the
+//   modal should pre-check.
+function _dawFacilitySharingDefaults(activityName, fieldName) {
+  try {
+    if (!activityName || typeof window.getCustomActivitySharingInfo !== 'function') return null;
+    const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+    const info = window.getCustomActivitySharingInfo(activityName, fieldName || null, null, gs);
+    if (!info || info.shareType === 'not_sharable') return null;
+    const gset = {};
+    const pairs = info.allowedPairs || {};
+    Object.keys(pairs).forEach(k => {
+      if (!pairs[k]) return;
+      const parts = String(k).split('|');
+      if (parts.length === 2 && parts[0] !== parts[1]) { gset[parts[0]] = 1; gset[parts[1]] = 1; }
+    });
+    let allowedGrades = Object.keys(gset);
+    if (allowedGrades.length === 0 && Array.isArray(info.allowedDivisions)) {
+      allowedGrades = info.allowedDivisions.map(String).filter(Boolean);
+    }
+    const cap = (info.capacity && isFinite(info.capacity) && info.capacity > 0) ? info.capacity : null;
+    if (!cap && allowedGrades.length === 0) return null;
+    return { capacity: cap, allowedGrades: allowedGrades };
+  } catch (_e) { return null; }
+}
+
+// ★ GRADE CONNECTION ("same time across grades"). A connection links the SAME
+//   custom activity across several grades so the auto builder places it at the
+//   IDENTICAL start time for all of them. Membership is stored as a shared
+//   `layer.connectionId` on each grade's matching custom layer.
+//
+// _dawConnHue(connId)  — deterministic hue (0-359) so each group glows a
+//   distinct, stable color across renders.
+function _dawConnHue(connId) {
+  let h = 0; const s = String(connId || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+// _dawApplyGradeConnection — rebuild a connection group from the popover's
+//   checked grades. `checkedGrades` is the set of OTHER grades to lock to the
+//   same time as `layer` (a custom layer in `grade`). Matching is by activity
+//   name; the closest-window layer in each grade is chosen. A resulting group
+//   of <2 members is cleared entirely (a link needs two grades).
+function _dawApplyGradeConnection(layer, grade, checkedGrades, layerSource) {
+  if (!layer || (layer.type || '').toLowerCase() !== 'custom') return;
+  const actLow = String(layer.customActivity || '').toLowerCase().trim();
+  const oldId = layer.connectionId || null;
+  // Tear down any existing group sharing this layer's id, so we rebuild cleanly.
+  if (oldId) {
+    Object.keys(layerSource).forEach(g => (layerSource[g] || []).forEach(l => {
+      if (l && l.connectionId === oldId) delete l.connectionId;
+    }));
+  }
+  const members = [layer];
+  if (actLow) {
+    (checkedGrades || []).forEach(g => {
+      const cands = (layerSource[g] || []).filter(l =>
+        l && (l.type || '').toLowerCase() === 'custom' &&
+        String(l.customActivity || '').toLowerCase().trim() === actLow);
+      if (!cands.length) return;
+      cands.sort((a, b) => Math.abs((a.startMin || 0) - (layer.startMin || 0)) - Math.abs((b.startMin || 0) - (layer.startMin || 0)));
+      if (members.indexOf(cands[0]) < 0) members.push(cands[0]);
+    });
+  }
+  if (members.length >= 2 && actLow) {
+    const id = oldId || ('conn_' + Math.random().toString(36).slice(2, 9));
+    members.forEach(l => { l.connectionId = id; });
+  }
+}
+
 function showDAWPopover(bandEl, layer, grade, opts) {
   const onSave = opts?.onSave || saveDAWLayers;
   const onRender = opts?.onRender || renderDAWGrid;
-  
+  const layerSource = opts?.layerSource || dawLayers;
+  // Pre-fill sharing from the facility general-activity config when this layer has
+  //   no override of its own yet (so the inter-grade-sharing grades show the same
+  //   way name/location already do, and a blind Save can't silently clear them).
+  const _facShareDef = (layer && layer.type === 'custom' && !layer.customSharing)
+    ? _dawFacilitySharingDefaults(layer.customActivity, layer.customField) : null;
+
   // Remove existing
   document.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
   // Remove existing overlays too
@@ -2554,13 +3007,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       </div>`;
       })()}
       ${(layer.type === 'league' || layer.type === 'specialty_league') ? (() => {
-        const _gs = window.loadGlobalSettings?.() || {};
-        const _lbn = _gs.leaguesByName || {};
-        const _gradeLeagues = Object.keys(_lbn).filter(n =>
-          _lbn[n] && _lbn[n].enabled !== false &&
-          Array.isArray(_lbn[n].divisions) &&
-          _lbn[n].divisions.includes(String(grade))
-        );
+        const _gradeLeagues = _mbLeaguesForGradeByType(grade, layer.type);
         if (_gradeLeagues.length <= 1) return ''; // auto-assigned, no picker needed
         return `
       <div class="ms-daw-pop-divider"></div>
@@ -2635,7 +3082,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <div class="ms-daw-pop-field">
         <label>Activity Name</label>
         <div class="ms-daw-pop-row">
-          <input type="text" id="daw-pop-custom-name" value="${layer.customActivity || ''}" placeholder="e.g. Home Run Derby" style="flex:1;">
+          <input type="text" id="daw-pop-custom-name" value="${_mbEsc(layer.customActivity || '')}" placeholder="e.g. Home Run Derby" style="flex:1;">
         </div>
       </div>
       <div class="ms-daw-pop-field">
@@ -2710,7 +3157,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <div class="ms-daw-pop-field">
         <label>Max bunks at a time</label>
         <div class="ms-daw-pop-row">
-          <input type="number" id="daw-pop-custom-share-cap" min="1" max="99" value="${(layer.customSharing && layer.customSharing.capacity) ? layer.customSharing.capacity : ''}" placeholder="no limit" style="flex:1;">
+          <input type="number" id="daw-pop-custom-share-cap" min="1" max="99" value="${(layer.customSharing && layer.customSharing.capacity) ? layer.customSharing.capacity : (_facShareDef && _facShareDef.capacity ? _facShareDef.capacity : '')}" placeholder="no limit" style="flex:1;">
         </div>
         <div class="ms-daw-pop-hint">The most bunks that can be doing this activity simultaneously (the facility's capacity). Leave blank for no limit.</div>
       </div>
@@ -2719,13 +3166,43 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         <div id="daw-pop-custom-share-grades" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
           ${(() => {
             const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-            const allG = Object.keys(divs);
-            const sel = (layer.customSharing && Array.isArray(layer.customSharing.allowedGrades)) ? layer.customSharing.allowedGrades.map(String) : [];
+            const allG = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(Object.keys(divs)) : Object.keys(divs);
+            const sel = (layer.customSharing && Array.isArray(layer.customSharing.allowedGrades)) ? layer.customSharing.allowedGrades.map(String) : ((_facShareDef && Array.isArray(_facShareDef.allowedGrades)) ? _facShareDef.allowedGrades.map(String) : []);
             return allG.map(g => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (sel.includes(String(g)) ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-share-grade-cb" value="' + g + '"' + (sel.includes(String(g)) ? ' checked' : '') + ' style="width:13px;height:13px;">' + g + '</label>').join('');
           })()}
         </div>
         <div class="ms-daw-pop-hint">Check the grades that may use this activity at the SAME time (up to the cap above). Grades you leave unchecked still get the activity, but never at the same time as a different grade. Leave all unchecked for no grade restriction.</div>
       </div>
+      ${(() => {
+        // ★ Connect Across Grades — link this custom activity to the same activity
+        //   in other grades so the auto builder schedules them all at the SAME
+        //   start time (whatever time it picks). Connected bands glow.
+        const actLow = String(layer.customActivity || '').toLowerCase().trim();
+        const divsC = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+        const allGc = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(Object.keys(divsC)) : Object.keys(divsC);
+        const matches = allGc.filter(g => String(g) !== String(grade) && actLow &&
+          (layerSource[g] || []).some(l => l && (l.type || '').toLowerCase() === 'custom' &&
+            String(l.customActivity || '').toLowerCase().trim() === actLow));
+        const head = `<div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Connect Across Grades <span style="font-weight:400;font-size:10px;letter-spacing:0;text-transform:none;color:#cbd5e1;">same time</span></div>`;
+        if (!actLow) {
+          return head + `<div class="ms-daw-pop-hint">Name this activity above first, then you can lock it to the same time as the same activity in other grades.</div>`;
+        }
+        if (matches.length === 0) {
+          return head + `<div class="ms-daw-pop-hint">No other grade has a "${_mbEsc(layer.customActivity)}" activity yet. Add it to another grade to connect them.</div>`;
+        }
+        const curId = layer.connectionId || null;
+        const cbs = matches.map(g => {
+          const checked = !!(curId && (layerSource[g] || []).some(l => l && l.connectionId === curId));
+          return '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (checked ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-conn-grade-cb" value="' + _mbEsc(String(g)) + '"' + (checked ? ' checked' : '') + ' style="width:13px;height:13px;">' + _mbEsc(String(g)) + '</label>';
+        }).join('');
+        return head + `
+      <div class="ms-daw-pop-field">
+        <label>Lock to the same time as</label>
+        <div id="daw-pop-conn-grades" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${cbs}</div>
+        <div class="ms-daw-pop-hint">Checked grades all get "${_mbEsc(layer.customActivity)}" at the SAME start time — whatever time the auto builder chooses. Their bands glow to show the link.</div>
+      </div>`;
+      })()}
       ` : ''}
     </div>
     <div class="ms-daw-pop-actions">
@@ -2813,6 +3290,9 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     };
   }
   popover.querySelectorAll('.daw-bunk-cb').forEach(cb => {
+    cb.onchange = function() { this.closest('label').style.background = this.checked ? '#dbeafe' : '#fff'; };
+  });
+  popover.querySelectorAll('.daw-conn-grade-cb').forEach(cb => {
     cb.onchange = function() { this.closest('label').style.background = this.checked ? '#dbeafe' : '#fff'; };
   });
 
@@ -2929,6 +3409,10 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       } else {
         layer.customSharing = null;
       }
+      // ★ Connect Across Grades: rebuild this activity's connection group from
+      //   the checked grades so they all schedule at the SAME start time.
+      const connGrades = Array.from(popover.querySelectorAll('.daw-conn-grade-cb:checked')).map(cb => cb.value);
+      _dawApplyGradeConnection(layer, grade, connGrades, layerSource);
     }
     document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
     popover.remove();
@@ -2970,13 +3454,15 @@ function openAutoBunkOverridesPanel(grade) {
     const divisions = window.divisions || {};
     const div = divisions[grade];
     if (!div) { window.showAlert?.('Division not found.'); return; }
-    const bunks = (div.bunks || []).slice().sort((a, b) => {
-        const na = parseInt(String(a).match(/\d+/)?.[0] || 0);
-        const nb = parseInt(String(b).match(/\d+/)?.[0] || 0);
-        return na - nb || String(a).localeCompare(String(b));
-    });
+    // ★ FN-49: keep the user's Camp Structure order (no alphanumeric re-sort)
+    const bunks = (div.bunks || []).slice();
     if (bunks.length === 0) { window.showAlert?.('No bunks in this division.'); return; }
-    const layers = (dawLayers[grade] || []).slice().sort((a, b) => a.startMin - b.startMin);
+    // ★ Day 24: read the layers the grid ACTUALLY rendered — in the DA auto
+    //   view that's the externalLayers arg (daAutoLayers), not the module
+    //   dawLayers (which only holds the master-view template). Without this the
+    //   panel found no layers in the DA context and silently returned.
+    const _laySrc = _lastDAWLayerSource || dawLayers;
+    const layers = ((_laySrc && _laySrc[grade]) || []).slice().sort((a, b) => a.startMin - b.startMin);
     if (layers.length === 0) {
         window.showAlert?.('No layers in this grade yet. Add a layer first.');
         return;
@@ -3011,7 +3497,9 @@ function openAutoBunkOverridesPanel(grade) {
     // Build overlay
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
-    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    let _downOnOverlay = false;
+    overlay.addEventListener('mousedown', (e) => { _downOnOverlay = (e.target === overlay); });
+    overlay.onclick = (e) => { if (e.target === overlay && _downOnOverlay) overlay.remove(); };
     const panel = document.createElement('div');
     panel.style.cssText = 'background:#fff;border-radius:14px;width:100%;max-width:1500px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 40px rgba(0,0,0,0.3);overflow:hidden;';
     overlay.appendChild(panel);
@@ -3159,7 +3647,7 @@ async function dawAddLayerDialog(grade) {
   const divStart = parseTimeToMinutes(div.startTime) || 540;
   const divEnd = parseTimeToMinutes(div.endTime) || 960;
   
-  const typeOptions = DAW_LAYER_TYPES.map(t => ({ value: t.type, label: t.name }));
+  const typeOptions = DAW_LAYER_TYPES.filter(t => !t.hidden).map(t => ({ value: t.type, label: t.name }));
   
   const result = await showModal({
     title: `Add Layer to ${grade}`,
@@ -3193,7 +3681,7 @@ async function dawAddLayerDialog(grade) {
 
   // ★ Multi-league picker for auto builder Add Layer dialog
   if (result.type === 'league' || result.type === 'specialty_league') {
-    const _gradeLeagues = _mbAllLeaguesForGrade(grade);
+    const _gradeLeagues = _mbLeaguesForGradeByType(grade, result.type);
     if (_gradeLeagues.length === 0) {
       await showAlert('No leagues are assigned to ' + grade +
         '. Add this grade to a league in League Setup before adding a league layer here.');
@@ -3365,6 +3853,32 @@ function renderDAW() {
   renderDAWExpandSection();
   renderDAWGrid();
 }
+
+// ★ FN-45: remote layer-template changes (another device or tab) re-hydrate
+//   storage — reload + re-render the DAW so this editor doesn't save a stale
+//   template wholesale over the other writer's layers. Skipped mid-drag and
+//   while the local editor holds unsaved changes (last-writer-wins on save).
+(function () {
+  let _dawRefreshTimer = null;
+  function _refreshDAWFromStorage() {
+    if (_dawRefreshTimer) clearTimeout(_dawRefreshTimer);
+    _dawRefreshTimer = setTimeout(() => {
+      _dawRefreshTimer = null;
+      try {
+        if (dawDragData) return;
+        if (typeof hasUnsavedChanges !== 'undefined' && hasUnsavedChanges) return;
+        const pal = document.getElementById('daw-palette');
+        if (pal && pal.offsetParent !== null) renderDAW();
+        // Not visible: nothing cached to refresh — renderDAW() re-runs
+        // loadDAWLayers() the next time the auto view opens.
+      } catch (e) { console.warn('[MS] hydrate refresh failed:', e); }
+    }, 250);
+  }
+  window.addEventListener('campistry-cloud-hydrated', _refreshDAWFromStorage);
+  window.addEventListener('storage', (e) => {
+    if (e && e.key === 'CAMPISTRY_LOCAL_CACHE') _refreshDAWFromStorage();
+  });
+})();
 function updateToolbarStatus() {
   const statusGroup = document.querySelector('.ms-toolbar-group.status');
   if (statusGroup) {
@@ -3435,15 +3949,34 @@ function renderPalette() {
     { label: 'Leagues', types: ['league', 'specialty_league'] },
     { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
   ];
-  
+
+  // ★ FN-48: every custom general activity (facilities registry) gets its own
+  //   pinned tile — same lane as the auto-mode palette. The tile carries
+  //   gaName/gaFacility so the drop pre-binds the event + facility and only
+  //   asks for the times.
+  const _gaItems = (window.getGeneralActivityPaletteItems?.() || []);
+  if (_gaItems.length) {
+    categories.push({
+      label: 'General Activities',
+      tiles: _gaItems.map(ga => ({
+        type: 'custom',
+        name: ga.name,
+        style: 'background:#fef3c7;color:#92400e;',
+        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+        gaName: ga.name,
+        gaFacility: ga.facility
+      }))
+    });
+  }
+
   categories.forEach((cat, catIndex) => {
     const label = document.createElement('div');
     label.className = 'ms-tile-label';
     label.textContent = cat.label;
     palette.appendChild(label);
-    
-    cat.types.forEach(type => {
-      const tile = TILES.find(t => t.type === type);
+
+    const catTiles = cat.tiles || cat.types.map(type => TILES.find(t => t.type === type));
+    catTiles.forEach(tile => {
       if (!tile) return;
       
       const el = document.createElement('div');
@@ -3574,20 +4107,26 @@ function softenColor(hexColor) {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
-// --- Column Order Persistence ---
+// --- Column Order ---
+// ★ Column order = the DISPLAY order: getUserDivisionOrder = the Me priority order
+//   with the UI-only app1.viewColumnOrder reorder applied on top. Dragging a grade
+//   column here (saveColumnOrder) changes only how the schedule LOOKS; the solver and
+//   field-quality seniority ignore viewColumnOrder and keep using the Me order, so the
+//   look can be 3-2-1 while priority stays 1-2-3.
 function getColumnOrder() {
   const all = window.availableDivisions || [];
-  const g = window.loadGlobalSettings?.() || {};
-  const saved = g.app1?.manualColumnOrder;
-  if (!Array.isArray(saved) || saved.length === 0) return [...all];
-  const valid = saved.filter(d => all.includes(d));
-  return [...valid, ...all.filter(d => !valid.includes(d))];
+  return (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder([...all])
+    : [...all];
 }
 
 function saveColumnOrder(order) {
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
-  g.app1.manualColumnOrder = [...order];
+  // DISPLAY-ONLY key — dragging a grade column changes only how the schedule LOOKS.
+  // The solver/field-quality priority ignores app1.viewColumnOrder (it uses the Me
+  // order via _getMeDivisionOrder), so the look can be 3-2-1 while priority stays 1-2-3.
+  g.app1.viewColumnOrder = [...order];
   window.saveGlobalSettings?.('app1', g.app1);
   window.forceSyncToCloud?.();
 }
@@ -3637,10 +4176,16 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = getColumnOrder();
+  // ★ Per-day presence: hide grades not around on the viewed date's weekday.
+  //   getColumnOrder() stays unfiltered (it also feeds order persistence).
+  let availableDivisions = getColumnOrder();
+  const _allColCount = availableDivisions.length;
+  if (typeof window.filterDivisionsByDate === 'function') availableDivisions = window.filterDivisionsByDate(availableDivisions);
 
   if (availableDivisions.length === 0) {
-    grid.innerHTML = `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">
+    grid.innerHTML = _allColCount > 0
+      ? `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">No grades are scheduled to be here on this day. Adjust "Days present" in Setup.</div>`
+      : `<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">
       No divisions found. Please go to Setup to create divisions.
     </div>`;
     return;
@@ -3722,6 +4267,55 @@ function renderGrid() {
 
 
 
+// Click a tile → floating action bar with Edit + Delete (mirrors the Daily
+// Adjustments tile action bar so the delete affordance is identical across
+// both builders).
+function _msShowTileActionBar(tileEl) {
+  const existing = document.getElementById('ms-tile-action-bar');
+  if (existing) existing.remove();
+
+  const id = tileEl.dataset.id;
+  if (!id) return;
+  selectTile(id);
+
+  const bar = document.createElement('div');
+  bar.id = 'ms-tile-action-bar';
+  bar.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:4px;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px;';
+
+  const rect = tileEl.getBoundingClientRect();
+  bar.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+  bar.style.left = Math.max(rect.left, 8) + 'px';
+
+  const btnStyle = 'padding:5px 12px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;';
+
+  const editBtn = document.createElement('button');
+  editBtn.textContent = 'Edit';
+  editBtn.style.cssText = btnStyle + 'background:#f1f5f9;color:#374151;';
+  editBtn.onmouseenter = () => { editBtn.style.background = '#e2e8f0'; };
+  editBtn.onmouseleave = () => { editBtn.style.background = '#f1f5f9'; };
+  editBtn.onclick = () => { bar.remove(); editTile(id); };
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'Delete';
+  delBtn.style.cssText = btnStyle + 'background:#fef2f2;color:#dc2626;';
+  delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
+  delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
+  delBtn.onclick = () => { bar.remove(); deleteTile(id); };
+
+  bar.appendChild(editBtn);
+  bar.appendChild(delBtn);
+  document.body.appendChild(bar);
+
+  const closeHandler = (e) => {
+    if (!bar.contains(e.target) && e.target !== tileEl && !tileEl.contains(e.target)) {
+      bar.remove();
+      deselectAllTiles();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
 function addClickToSelectListeners() {
   grid.querySelectorAll('.grid-event').forEach(el => {
     let _downX, _downY, _clickTimer;
@@ -3733,14 +4327,14 @@ function addClickToSelectListeners() {
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(el.dataset.id); return; }
       clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => { editTile(el.dataset.id); }, 280);
+      _clickTimer = setTimeout(() => { _msShowTileActionBar(el); }, 280);
     };
 
-    el.ondblclick = async (e) => {
+    el.ondblclick = (e) => {
       e.stopPropagation();
       clearTimeout(_clickTimer);
       if (e.target.classList.contains('resize-handle')) return;
-      await deleteTile(el.dataset.id);
+      _msShowTileActionBar(el);
     };
   });
 
@@ -3799,27 +4393,38 @@ function renderEventTile(ev, top, height) {
     else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
     else tile = TILES.find(t => t.type === 'custom');
   }
-  const style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
+  //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
+    style = 'background:#5eead4;color:#115e59;border:2px solid #14b8a6;';
+  }
+  // ★ Connected smart tiles (same pairGroup) get a matching colored glow so you can
+  //   see at a glance which two tiles swap together.
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.pairGroup) {
+    const _gc = { '1': '#f59e0b', '2': '#3b82f6', '3': '#10b981', '4': '#a855f7' }[String(ev.smartData.pairGroup)] || '#f59e0b';
+    style += ';box-shadow:0 0 0 3px ' + _gc + ', 0 0 9px ' + _gc + ';';
+  }
   
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
   
   let innerHtml = `
     <div class="tile-header">
-      <strong style="font-size:11px;">${ev.event}</strong>
-      <div style="font-size:10px;opacity:0.9;">${ev.startTime}-${ev.endTime}</div>
+      <strong style="font-size:11px;">${_mbEsc(ev.event)}</strong>
+      <div style="font-size:10px;opacity:0.9;">${_mbEsc(ev.startTime)}-${_mbEsc(ev.endTime)}</div>
     </div>
   `;
 
   if (ev.location) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.location}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${_mbEsc(ev.location)}</div>`;
   } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective') {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.map(_mbEsc).join(', ')}</div>`;
   }
-  
-  
+
+
   if (ev.leagueName) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.leagueName}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.leagueName)}</div>`;
   }
   if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
     const _gs = window.loadGlobalSettings?.() || {};
@@ -3830,7 +4435,7 @@ function renderEventTile(ev, top, height) {
   }
 
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-    const actList = ev.electiveActivities.slice(0, 3).join(', ');
+    const actList = ev.electiveActivities.slice(0, 3).map(_mbEsc).join(', ');
     const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
@@ -3839,11 +4444,11 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'swim_elective') {
     const _seActs = ev.electiveActivities || [];
     if (_seActs.length > 0) {
-      const _seList = _seActs.slice(0, 3).join(', ');
+      const _seList = _seActs.slice(0, 3).map(_mbEsc).join(', ');
       const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
-      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.swimLocation || 'Pool'} + ${_seList}${_seMore}</div>`;
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.swimLocation || 'Pool')} + ${_seList}${_seMore}</div>`;
     } else {
-      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.swimLocation || 'Pool'} + Elective</div>`;
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.swimLocation || 'Pool')} + Elective</div>`;
     }
     if (ev._preChangeMin || ev._postChangeMin) {
       const _sePre = ev._preChangeMin || 0;
@@ -3854,12 +4459,19 @@ function renderEventTile(ev, top, height) {
   }
 
   if (ev.type === 'smart' && ev.smartData) {
-    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
+    if (ev.smartData.guaranteeSwap) {
+      innerHtml += `<div style="font-size:9px;font-weight:700;margin-top:2px;">⇄ ${_mbEsc(ev.smartData.main1)} ↔ ${_mbEsc(ev.smartData.main2)} · all get both</div>`;
+    } else {
+      innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${_mbEsc(ev.smartData.fallbackActivity)}</div>`;
+    }
   }
   
   // ★ v2.5: Show split tile sub-events
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
+  }
+  if (ev.type === 'split' && ev.group1Bunks?.length) {
+    innerHtml += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">custom groups</div>`;
   }
   // Split tile with swim → show change badge
   if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
@@ -3966,13 +4578,16 @@ function addDropListeners(selector) {
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
-            { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim' },
-            { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
-            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
-          ]
+            { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
+            { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+            { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
+          ],
+          postRender: (overlay) => _mbSmartSwapPostRender(overlay, false)
         });
         if (!result || !result.main1 || !result.main2) return;
-        
+        const _gsOn = result.guaranteeSwap === 'true';
+
         newEvent = {
           id: Date.now().toString(),
           type: 'smart',
@@ -3980,7 +4595,7 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
-          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' }
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null }
         };
       }
       // ★ v2.5: SPLIT TILE - Fixed to match daily adjustments (Main 1/Main 2 + mapEventNameForOptimizer)
@@ -4017,6 +4632,7 @@ function addDropListeners(selector) {
             if (main1Input) main1Input.addEventListener('input', checkSwim);
             if (main2Input) main2Input.addEventListener('input', checkSwim);
             checkSwim();
+            _buildSplitBunkPicker(overlay, divName, null);
           }
         });
         if (!result || !result.main1 || !result.main2) return;
@@ -4050,7 +4666,8 @@ function addDropListeners(selector) {
             { ...event2, event: event2.event || result.main2 }
           ],
           _preChangeMin: mbSplitPre || undefined,
-          _postChangeMin: mbSplitPost || undefined
+          _postChangeMin: mbSplitPost || undefined,
+          group1Bunks: result.group1Bunks ? JSON.parse(result.group1Bunks) : null
         };
 
         console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents, (mbSplitPre || mbSplitPost) ? '(change: ' + mbSplitPre + 'pre/' + mbSplitPost + 'post)' : '');
@@ -4168,6 +4785,31 @@ function addDropListeners(selector) {
           swimLocation: defaultPool,
           electiveActivities: chosen,
           reservedFields: Array.from(new Set([...(defaultPool ? [defaultPool] : []), ...chosen]))
+        };
+      }
+      // ★ FN-48: GENERAL-ACTIVITY tile — the name + facility come pre-bound
+      //   from the facilities registry; only the time window is asked
+      //   (mirrors the swim/lunch flow).
+      else if (tileData.type === 'custom' && tileData.gaName) {
+        const result = await showModal({
+          title: tileData.gaName,
+          description: 'Pinned at ' + (tileData.gaFacility || 'its facility') + '. Set the time window for ' + divName + '.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
+          ]
+        });
+        if (!result) return;
+        const _gaFlds = tileData.gaFacility ? [tileData.gaFacility] : [];
+        newEvent = {
+          id: Date.now().toString(),
+          type: 'pinned',
+          event: tileData.gaName,
+          division: divName,
+          startTime: result.startTime,
+          endTime: result.endTime,
+          reservedFields: _gaFlds,
+          location: tileData.gaFacility || null
         };
       }
       // ★ v2.5: CUSTOM PINNED - Now uses grouped locations from locationZones (matches DA bunk overrides)
@@ -4812,11 +5454,7 @@ function parseTimeToMinutes(str) {
   return h * 60 + (m || 0);
 }
 
-function minutesToTime(min) {
-  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return `${h}:${m.toString().padStart(2, '0')}${ap}`;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 window.initMasterScheduler = init;
 

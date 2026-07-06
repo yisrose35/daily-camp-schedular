@@ -116,7 +116,12 @@ function createDefaultZone(name, isDefault) {
         maxConcurrent: 99,
         fields: [],
         specialActivities: [],
-        locations: {}
+        locations: {},
+        // Per-grade availability windows (off-campus zones). Keyed by grade/division
+        // name → array of { start: "HH:MM", end: "HH:MM" }. A grade WITH windows can
+        // only use this zone's facilities inside one of them; a grade with none is
+        // unrestricted (available all day).
+        gradeWindows: {}
     };
 }
 
@@ -159,8 +164,23 @@ function validateZone(zone, zoneName) {
         maxConcurrent: parseInt(zone.maxConcurrent) || 99,
         fields: validatedFields,
         specialActivities: validatedSpecials,
-        locations: (zone.locations && typeof zone.locations === 'object') ? zone.locations : {}
+        locations: (zone.locations && typeof zone.locations === 'object') ? zone.locations : {},
+        gradeWindows: _validateGradeWindows(zone.gradeWindows)
     };
+}
+
+// Normalize the per-grade availability windows: { grade: [{start,end}, ...] }.
+function _validateGradeWindows(gw) {
+    const out = {};
+    if (!gw || typeof gw !== 'object') return out;
+    Object.keys(gw).forEach(grade => {
+        const wins = Array.isArray(gw[grade]) ? gw[grade] : [];
+        const clean = wins
+            .filter(w => w && typeof w === 'object' && w.start && w.end)
+            .map(w => ({ start: String(w.start), end: String(w.end) }));
+        if (clean.length) out[grade] = clean;
+    });
+    return out;
 }
 
 // =========================================================================
@@ -409,6 +429,71 @@ function renderDetailPane() {
         modeRow.appendChild(modeHint);
         modeRow.appendChild(modeSelect);
         offCampusSection.appendChild(modeRow);
+
+        // -- PER-GRADE AVAILABILITY WINDOWS --
+        const _esc = (s) => (window.CampUtils?.escapeHtml ? window.CampUtils.escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s));
+        const gwSection = document.createElement("div");
+        gwSection.style.cssText = "margin-top:10px; padding:12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px;";
+        const grades = Object.keys(window.divisions || {});
+        zone.gradeWindows = zone.gradeWindows || {};
+
+        const renderGW = () => {
+            let h = '<div style="font-size:0.85rem; font-weight:600; color:#92400E;">Grade availability (optional)</div>'
+                + '<div style="font-size:0.75rem; color:#92400E; margin:4px 0 8px;">Limit when each grade may use this zone. A grade with a window can only get these off-campus facilities inside it; a grade with no window can use it anytime.</div>';
+            const entries = Object.keys(zone.gradeWindows).filter(g => (zone.gradeWindows[g] || []).length);
+            if (entries.length) {
+                h += '<div style="display:flex; flex-direction:column; gap:6px; margin-bottom:10px;">';
+                entries.forEach(g => {
+                    (zone.gradeWindows[g] || []).forEach((w, idx) => {
+                        h += '<div style="display:flex; align-items:center; gap:8px; background:#fff; border:1px solid #FDE68A; border-radius:6px; padding:5px 8px;">'
+                            + '<span style="font-weight:600; font-size:0.82rem; color:#374151;">' + _esc(g) + '</span>'
+                            + '<span style="font-size:0.82rem; color:#6B7280;">' + _esc(w.start) + ' – ' + _esc(w.end) + '</span>'
+                            + '<button data-gw-del="' + _esc(g) + '|' + idx + '" style="margin-left:auto; background:#FEF2F2; color:#DC2626; border:1px solid #FECACA; border-radius:5px; padding:2px 8px; cursor:pointer; font-size:0.75rem;">Remove</button>'
+                            + '</div>';
+                    });
+                });
+                h += '</div>';
+            }
+            if (grades.length) {
+                const opts = grades.map(g => '<option value="' + _esc(g) + '">' + _esc(g) + '</option>').join('');
+                h += '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">'
+                    + '<select class="gw-grade" style="padding:5px; border:1px solid #FCD34D; border-radius:6px; font-size:0.8rem; background:#fff;">' + opts + '</select>'
+                    + '<input type="time" class="gw-start" style="padding:5px; border:1px solid #FCD34D; border-radius:6px; font-size:0.8rem;">'
+                    + '<span style="color:#92400E; font-size:0.8rem;">to</span>'
+                    + '<input type="time" class="gw-end" style="padding:5px; border:1px solid #FCD34D; border-radius:6px; font-size:0.8rem;">'
+                    + '<button class="gw-add" style="background:#92400E; color:#fff; border:none; border-radius:6px; padding:5px 12px; cursor:pointer; font-size:0.8rem; font-weight:600;">Add</button>'
+                    + '</div>';
+            } else {
+                h += '<div style="font-size:0.78rem; color:#92400E;">No grades found yet — set up divisions/grades first.</div>';
+            }
+            gwSection.innerHTML = h;
+            gwSection.querySelectorAll('[data-gw-del]').forEach(btn => {
+                btn.onclick = () => {
+                    const parts = btn.getAttribute('data-gw-del').split('|');
+                    const g = parts[0], idx = parseInt(parts[1], 10);
+                    if (zone.gradeWindows[g]) {
+                        zone.gradeWindows[g].splice(idx, 1);
+                        if (!zone.gradeWindows[g].length) delete zone.gradeWindows[g];
+                    }
+                    saveData();
+                    renderGW();
+                };
+            });
+            const addBtn = gwSection.querySelector('.gw-add');
+            if (addBtn) addBtn.onclick = () => {
+                const g = gwSection.querySelector('.gw-grade').value;
+                const s = gwSection.querySelector('.gw-start').value;
+                const e = gwSection.querySelector('.gw-end').value;
+                if (!g || !s || !e) { alert('Pick a grade and both start and end times.'); return; }
+                if (_zHHMM(s) != null && _zHHMM(e) != null && _zHHMM(s) >= _zHHMM(e)) { alert('End time must be after start time.'); return; }
+                zone.gradeWindows[g] = zone.gradeWindows[g] || [];
+                zone.gradeWindows[g].push({ start: s, end: e });
+                saveData();
+                renderGW();
+            };
+        };
+        renderGW();
+        offCampusSection.appendChild(gwSection);
     }
 
     detailPaneEl.appendChild(offCampusSection);
@@ -633,12 +718,7 @@ function section(title, summary, builder) {
 // =========================================================================
 // HELPERS
 // =========================================================================
-function escapeHtml(str) {
-    if (str === null || str === undefined) return "";
-    const div = document.createElement("div");
-    div.textContent = String(str);
-    return div.innerHTML;
-}
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
 function makeEditable(el, save) {
     el.ondblclick = () => {
@@ -695,7 +775,14 @@ window.getZoneForField = function(fieldName){
     const zones = settings.locationZones || {};
     for(const [zoneName, zone] of Object.entries(zones)){
         if (!zone || typeof zone !== 'object') continue;
+        // A facility physically in a zone may be recorded in `fields` (added as a
+        // sports facility) OR in `locations` (added as a general facility). Both
+        // mean it lives in this zone — check both, so off-campus travel and
+        // away-zone restriction resolve regardless of how it was categorized.
+        // (Bug: TABC's courts were filed under `locations`, so a fields-only scan
+        // returned null and the away league never restricted to its own zone.)
         if(Array.isArray(zone.fields) && zone.fields.includes(fieldName)) return zone;
+        if(zone.locations && Object.prototype.hasOwnProperty.call(zone.locations, fieldName)) return zone;
     }
     return null;
 };
@@ -830,7 +917,16 @@ window.getFieldsInZone = function(zoneName) {
     if (!zoneName) return [];
     const settings = window.loadGlobalSettings?.() || {};
     const zone = settings.locationZones?.[zoneName];
-    return Array.isArray(zone?.fields) ? [...zone.fields] : [];
+    if (!zone || typeof zone !== 'object') return [];
+    // Union `fields` (sports facilities) with `locations` (general facilities):
+    // a facility in either bucket physically lives in the zone. Without the
+    // locations half, a zone whose courts were added as "locations" (e.g. TABC)
+    // reads as empty and an away league can't be restricted to it. De-duped.
+    const names = new Set(Array.isArray(zone.fields) ? zone.fields : []);
+    if (zone.locations && typeof zone.locations === 'object') {
+        Object.keys(zone.locations).forEach(n => names.add(n));
+    }
+    return [...names];
 };
 
 // Get all special activities in a zone
@@ -886,6 +982,77 @@ window.seamMergeTravelTime = function(assignments) {
         }
     });
     return cleared;
+};
+
+// =========================================================================
+// AWAY ZONES — off-campus zones usable as an "Away" destination for a tile.
+// A tile marked Away is restricted to one of these zones' fields, and the
+// zone's travelTimeMin drives the required to/from travel time.
+// =========================================================================
+window.getAwayZones = function() {
+    const settings = window.loadGlobalSettings?.() || {};
+    const zones = settings.locationZones || {};
+    const out = [];
+    Object.entries(zones).forEach(([zoneName, zone]) => {
+        if (!zone || typeof zone !== 'object') return;
+        if (zone.isOffCampus !== true) return;
+        out.push({
+            name: zone.name || zoneName,
+            travelTimeMin: parseInt(zone.travelTimeMin) || 0,
+            travelMode: (zone.travelMode === 'extend') ? 'extend' : 'deduct',
+            fields: Array.isArray(zone.fields) ? [...zone.fields] : []
+        });
+    });
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+};
+
+// Parse "HH:MM" (24h, from <input type=time>) or "H:MM AM/PM" → minutes from midnight.
+function _zHHMM(str) {
+    if (str == null) return null;
+    if (typeof str === 'number') return str;
+    const s = String(str).trim();
+    if (window.SchedulerCoreUtils?.parseTimeToMinutes) {
+        const m = window.SchedulerCoreUtils.parseTimeToMinutes(s);
+        if (m != null && !isNaN(m)) return m;
+    }
+    const m = s.match(/^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?$/);
+    if (!m) return null;
+    let h = parseInt(m[1], 10), mm = parseInt(m[2], 10);
+    const ap = m[3] ? m[3].toLowerCase() : '';
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    return h * 60 + mm;
+}
+
+// ★ Off-campus zone availability windows (per grade). Returns true if the given
+// field may be used by `grade` during [startMin,endMin]. On-campus fields, fields
+// with no zone, and grades with no configured window are unrestricted (true). A
+// grade WITH windows can only use the zone's fields fully inside one window.
+window.isOffCampusFieldAvailableForGrade = function(fieldName, grade, startMin, endMin) {
+    if (!fieldName) return true;
+    const zone = window.getZoneForField?.(fieldName);
+    if (!zone || zone.isOffCampus !== true) return true;
+    const gw = zone.gradeWindows || {};
+    const gradeStr = String(grade);
+    // Exact match first; fall back to case-insensitive scan (guards against
+    // minor UI vs solver key variations like "6th" vs "6th Grade").
+    let wins = gw[gradeStr] || gw[grade];
+    if (!wins) {
+        const gradeLower = gradeStr.toLowerCase();
+        for (const k of Object.keys(gw)) {
+            if (k.toLowerCase() === gradeLower) { wins = gw[k]; break; }
+        }
+    }
+    if (!Array.isArray(wins) || wins.length === 0) return true; // unrestricted for this grade
+    if (startMin == null || endMin == null) return true;
+    for (let i = 0; i < wins.length; i++) {
+        const ws = _zHHMM(wins[i].start), we = _zHHMM(wins[i].end);
+        if (ws == null || we == null) continue;
+        if (startMin >= ws && endMin <= we) return true;
+    }
+    console.log(`[ZoneWindow] Blocked: "${fieldName}" for grade "${gradeStr}" @${startMin}-${endMin} (zone "${zone.name || fieldName}", windows: ${JSON.stringify(wins)})`);
+    return false;
 };
 
 // Batch check multiple fields for zone membership

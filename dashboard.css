@@ -22,13 +22,14 @@
     --slate-900: #0F172A;
 
     --flow-color: #147D91;
-    --go-color: #0EA5E9;
+    --go-color: #10B981;
     --me-color: #F59E0B;
     --health-color: #6B21A8;
     --live-color: #2563EB;
     --snacks-color: #78350F;
     --link-color: #2A7A35;
     --notes-color: #C4891A;
+    --lite-color: #EE6A53;
 
     --font-display: 'Fraunces', Georgia, serif;
     --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -311,7 +312,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     flex-shrink: 0;
 }
 .stat-divisions .dash-stat-icon { background: rgba(20,125,145,0.08); color: var(--camp-green); }
-.stat-bunks .dash-stat-icon { background: rgba(14,165,233,0.08); color: var(--go-color); }
+.stat-bunks .dash-stat-icon { background: rgba(16,185,129,0.08); color: var(--go-color); }
 .stat-campers .dash-stat-icon { background: rgba(245,158,11,0.08); color: var(--me-color); }
 .stat-staff .dash-stat-icon { background: rgba(107,33,168,0.08); color: var(--health-color); }
 .dash-stat-content { display: flex; flex-direction: column; }

@@ -103,6 +103,51 @@
             const _allSpecials = _gsForCheck.app1?.specialActivities
                 || (window.getAllSpecialActivities ? window.getAllSpecialActivities() : []);
 
+            // ★ Shut-off race: resolve TODAY's Daily-Adjustments shut-offs from the
+            //   sources the solver actually populates. The earlier gate read
+            //   window.dailyDisabledFields / window.currentDayOverrides /
+            //   window.dailyDisabledSportsByField — none of which are ever set in
+            //   production, so its daily-disabled checks silently fell back to
+            //   empty and a pin could carry a DA-disabled field/sport forward. Read
+            //   the real per-date overrides (loadCurrentDailyData + the
+            //   campResourceOverrides_<date> localStorage mirror, keyed to the
+            //   authoritative gen-date) so a pin can never resurrect a shut-off.
+            const _pinDaily = (() => {
+                let ov = {}, dsbf = {};
+                try {
+                    const dd = window.loadCurrentDailyData?.() || {};
+                    ov = dd.overrides || {};
+                    dsbf = dd.dailyDisabledSportsByField || {};
+                } catch (_e) {}
+                try {
+                    if (!ov.disabledFields?.length && !ov.disabledSpecials?.length || !Object.keys(dsbf).length) {
+                        const _dk = window._activeGenDate || window.currentScheduleDate || '';
+                        if (_dk) {
+                            const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                            if (_s) {
+                                const _p = JSON.parse(_s);
+                                if (_p?.overrides) {
+                                    if (!ov.disabledFields?.length && Array.isArray(_p.overrides.disabledFields)) ov = { ...ov, disabledFields: _p.overrides.disabledFields };
+                                    if (!ov.disabledSpecials?.length && Array.isArray(_p.overrides.disabledSpecials)) ov = { ...ov, disabledSpecials: _p.overrides.disabledSpecials };
+                                }
+                                if (!Object.keys(dsbf).length && _p?.dailyDisabledSportsByField) dsbf = _p.dailyDisabledSportsByField;
+                            }
+                        }
+                    }
+                } catch (_e) {}
+                // Use ONLY the per-date DA overrides (ov) — authoritative for the
+                // gen-date and always fresh. window.currentDisabledFields is NOT
+                // used here: capture runs BEFORE the solver's STEP 1 rebuilds it,
+                // so at capture time it still holds the PREVIOUS run's union (e.g.
+                // yesterday's rainy outdoor disables) and would wrongly drop a pin
+                // that is perfectly legal today.
+                return {
+                    disabledFields: new Set((ov.disabledFields || []).map(String)),
+                    disabledSpecials: new Set((ov.disabledSpecials || []).map(String)),
+                    disabledSportsByField: dsbf || {}
+                };
+            })();
+
             // Returns true if this pinned entry is still legal under the
             // current field/special accessRestrictions for this bunk. The
             // gate mirrors AutoSolverEngine's grade-access check and the
@@ -136,6 +181,10 @@
                 let fld = null;
                 if (fieldName && fieldName !== 'Free') {
                     fld = _allFields.find(f => f && f.name === fieldName);
+                    // ★ Config-level shut-off: host field toggled UNAVAILABLE in
+                    //   Facilities (available:false). A placement pinned BEFORE the
+                    //   field was disabled must not be carried forward.
+                    if (fld && fld.available === false) return false;
                     if (fld?.accessRestrictions?.enabled && !_accessAllowsBunk(fld.accessRestrictions)) {
                         return false;
                     }
@@ -145,6 +194,16 @@
                 //    activity is a configured special)
                 if (actName) {
                     const sp = _allSpecials.find(s => s && s.name === actName);
+                    // ★ Config-level shut-off: special toggled UNAVAILABLE in
+                    //   Facilities (available:false). Drop the carried-forward pin
+                    //   so a disabled special is never restored into the schedule.
+                    if (sp && sp.available === false) return false;
+                    // ★ Shut-off race: a special turned OFF for TODAY in Daily
+                    //   Adjustments lives in overrides.disabledSpecials (NOT the
+                    //   config-level available flag), so the check above misses it.
+                    //   Drop the pin so a same-day-disabled special is never
+                    //   restored into the schedule.
+                    if (_pinDaily.disabledSpecials.has(String(actName))) return false;
                     if (sp?.accessRestrictions?.enabled && !_accessAllowsBunk(sp.accessRestrictions)) {
                         return false;
                     }
@@ -179,11 +238,19 @@
                 }
 
                 if (fieldName) {
-                    const dailyDisabled = window.dailyDisabledFields || window.currentDayOverrides?.disabledFields || [];
-                    if (Array.isArray(dailyDisabled) && dailyDisabled.map(String).includes(String(fieldName))) return false;
-                    const dsByField = window.dailyDisabledSportsByField || {};
-                    const ds = dsByField[fieldName];
+                    // Reliable per-date shut-off sources (see _pinDaily above).
+                    if (_pinDaily.disabledFields.has(String(fieldName))) return false;
+                    const ds = _pinDaily.disabledSportsByField[fieldName];
                     if (ds && actName && (ds.has?.(actName) || (Array.isArray(ds) && ds.includes(actName)))) return false;
+                }
+
+                // Bunk-Only Access (DA Resources → "only available for these bunk(s)
+                // today"). Drop a pin whose (facility, activity) is reserved for OTHER
+                // bunks today — the same restriction canBlockFit and the STEP 7.55
+                // sweep honor. The sweep EXEMPTS pinned slots, so without this a pin
+                // set before the restriction would resurrect the violation every regen.
+                if (actName && window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, actName, fieldName, _bunkGrade)) {
+                    return false;
                 }
 
                 // 4. Slice 4 audit fix — also check cooldown / FieldCombos
@@ -225,6 +292,17 @@
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
 
+                // ★ Staggered shared-room reserved WALL: the auto solver tags these
+                //   _pinned:true so every post-solve sweep treats them like lunch (a
+                //   wall it never demotes). But unlike a USER pin they must be
+                //   re-DERIVED from the layer config on every regeneration (the
+                //   stagger anchor depends on the live grade set / shifted days), not
+                //   frozen and carried forward. Skip them here so capture/restore
+                //   never snapshots an auto-derived wall as a user pin.
+                if (entry && entry._staggerReserved === true) {
+                    continue;
+                }
+
                 // Check if this is a pinned entry
                 if (entry && entry._pinned === true) {
                     // Drop pin if its activity isn't in any current registry.
@@ -254,8 +332,18 @@
 
                     capturedCount++;
 
-                    // Track field lock info
-                    const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    // Track field lock info.
+                    // ★ FACILITY RESERVATION: a pinned custom layer or pinned
+                    //   special carries its field in `_customField` /
+                    //   `_specialLocation` when `entry.field` itself is null
+                    //   (the layer-config representation). Fall back to those so
+                    //   the host facility is reserved for the pinned activity and
+                    //   can never be handed to another bunk — without this, a
+                    //   custom.pinned block with no `.field` registered NO lock.
+                    let fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                    if (!fieldName || fieldName === 'Free') {
+                        fieldName = entry._customField || entry._specialLocation || fieldName;
+                    }
                     if (fieldName && fieldName !== 'Free') {
                         _pinnedFieldLocks.push({
                             field: fieldName,

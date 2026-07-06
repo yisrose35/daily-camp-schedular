@@ -1,0 +1,1027 @@
+// =============================================================================
+// period_layout.js — generic-tile LAYOUT engine (manual-model-in-auto)
+// =============================================================================
+// The manual builder is simple because the human lays a SKELETON of generic
+// tiles ("sport here 10:30-11:00, swim here, special here") and the computer
+// only fills each tile with a concrete activity. Auto mode is hard because it
+// historically decided BOTH the timing AND the content at once, activity-first,
+// and the content gates (rotation / capacity / cooldown) would veto a placement
+// and leave a hole — a LAYOUT failure caused by a CONTENT constraint.
+//
+// This module does the LAYOUT half only, the manual way: given a bunk's per-day
+// DEMAND derived from the layers (1 swim+change, 1 lunch, 1 special·food,
+// 1 special·shiur, N sports, ...), it lays GENERIC kind-labeled tiles wall-to-
+// wall across each bell period — durations summing EXACTLY to the period via
+// window.PeriodPacker — with NO activity chosen and NO content gates. A later
+// FILL step drops a concrete activity into each generic tile; if a tile can't
+// be filled it stays generic/"TBD", but the wall-to-wall layout never breaks.
+//
+// Pin rule (from the user): a demand whose layer TIME-WINDOW equals its DURATION
+// has only one place it can sit, so it is PINNED (a wall). A demand whose window
+// is wider than its duration FLOATS — the packer positions it. The caller passes
+// `pinned` (already-placed walls) and `floating` (demands to position); this
+// module never decides pinned-ness — it just tiles the free remainder.
+//
+// PURE by construction: reads only its inputs, returns a plan, mutates nothing.
+// Layout is per-bunk INDEPENDENT for the GENERIC fillers (a "sport"/"special"
+// placeholder has no facility yet, so it competes for nothing — that is the later
+// FILL step's job). The ONE exception is a tile tied to a real shared layer with a
+// concrete facility (e.g. a re-floated Swim or "Main Activity" at an Auditorium):
+// the caller may inject `resourceGate` + `resourceCommit` to keep that facility
+// within its cross-grade capacity + allowedPairs AT PLACEMENT TIME, threaded across
+// bunks. Both are optional; without them the module is fully per-bunk independent.
+// node --test-able exactly like period_packer.js / period_orchestrator.js.
+// =============================================================================
+(function () {
+    'use strict';
+
+    var VERSION = '0.2.2';
+
+    function _getPacker(opts) {
+        if (opts && opts.packer) return opts.packer;
+        if (typeof window !== 'undefined' && window.PeriodPacker) return window.PeriodPacker;
+        if (typeof require === 'function') { try { return require('./period_packer.js'); } catch (e) { /* ignore */ } }
+        return null;
+    }
+
+    function _num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
+
+    // Subtract pinned walls overlapping [pStart,pEnd] → free [start,end] sub-windows.
+    function freeSubWindows(pStart, pEnd, occupied) {
+        var blocks = (occupied || [])
+            .filter(function (b) { return b && _num(b.startMin) != null && _num(b.endMin) != null && b.endMin > pStart && b.startMin < pEnd; })
+            .map(function (b) { return { s: Math.max(pStart, b.startMin), e: Math.min(pEnd, b.endMin) }; })
+            .sort(function (a, b) { return a.s - b.s; });
+        var out = [];
+        var cursor = pStart;
+        for (var i = 0; i < blocks.length; i++) {
+            if (blocks[i].s > cursor) out.push({ start: cursor, end: blocks[i].s });
+            if (blocks[i].e > cursor) cursor = blocks[i].e;
+        }
+        if (cursor < pEnd) out.push({ start: cursor, end: pEnd });
+        return out.filter(function (w) { return w.end - w.start > 0; });
+    }
+
+    function _durRange(dMin, dMax, gran) {
+        var lo = _num(dMin), hi = _num(dMax);
+        if (lo == null && hi == null) return [];
+        if (lo == null) lo = hi;
+        if (hi == null) hi = lo;
+        if (hi < lo) { var t = lo; lo = hi; hi = t; }
+        var out = [];
+        var start = Math.ceil(lo / gran) * gran;
+        for (var d = start; d <= hi; d += gran) out.push(d);
+        if (!out.length && hi >= gran) out.push(Math.floor(hi / gran) * gran);
+        return out;
+    }
+
+    // A stable key per demand "kind" so the packer's allowRepeat=false dedupes
+    // within a window (no two special·food, no two sports in one window) while a
+    // kind may still recur across windows (a fresh pack() call per window).
+    function _demandKey(d) {
+        return d.kind === 'special' ? ('special:' + (d.subcat || 'uncategorized')) : (d.kind || 'sport');
+    }
+
+    function _label(d) {
+        if (d.name) return d.name;
+        if (d.kind === 'special') {
+            var sc = d.subcat || 'uncategorized';
+            return 'Special: ' + sc.charAt(0).toUpperCase() + sc.slice(1);
+        }
+        if (d.kind === 'sport') return 'Sport';
+        return (d.kind || 'Activity').charAt(0).toUpperCase() + (d.kind || 'Activity').slice(1);
+    }
+
+    // Lay out ONE bunk's day: pinned walls stay; each non-break period's free
+    // remainder is tiled wall-to-wall with generic tiles from `floating`.
+    //
+    //  pinned:   [{kind,subcat,name,startMin,endMin}]  already-placed walls
+    //  floating: [{kind,subcat,name,durations?,dMin?,dMax?,window:[s,e],qty,score}]
+    //            qty omitted/Infinity => unlimited filler (sports). window omitted
+    //            => whole day. Specials should carry an exact qty (their floor).
+    function planBunkLayout(ctx) {
+        var packer = _getPacker(ctx);
+        var opts = ctx.opts || {};
+        var gran = opts.granularityMin || 5;
+        var minSeg = opts.minSegmentMin || 10;
+        var topN = opts.topN || 8;
+        var maxSegments = opts.maxSegments || 4;
+        // Optional LAYOUT gate: gate(block,template)->bool. Lets the caller veto a
+        // generic tile that breaks a SPACING rule (e.g. "no sport within 40min of a
+        // sport") — checked against already-placed tiles. NOT a content gate (it
+        // never decides WHICH activity); a sport blocked here is replaced by a
+        // special so the period still tiles wall-to-wall. Omitted => no gating.
+        var gate = (typeof ctx.gate === 'function') ? ctx.gate : null;
+        // Optional CROSS-BUNK RESOURCE gate: resourceGate(kind, grade, bunk, startMin, endMin)
+        // -> bool. Unlike `gate` (per-bunk rule spacing), this enforces SHARED-resource
+        // limits ACROSS grades — e.g. swim→pool capacity (counts bunks) + allowedPairs.
+        // The caller wires it to the engine's real facility-sharing check. A generic tile
+        // whose kind has no concrete shared facility (sport/special placeholders) returns
+        // true. Omitted => no cross-bunk gating.
+        var resourceGate = (typeof ctx.resourceGate === 'function') ? ctx.resourceGate : null;
+        // Optional COMMIT hook: resourceCommit(kind, grade, bunk, startMin, endMin, ref).
+        // Called once per committed tile that carries a `_ref.share` descriptor, so the
+        // caller can record a cross-bunk RESERVATION (e.g. "Auditorium busy for Majors
+        // 10:00–10:40"). resourceGate then reads those reservations to keep a shared
+        // layer within its facility's capacity + allowedPairs across grades — even for
+        // a facility NO grade has pinned yet (the "11 Exclusive Main Activities all at
+        // once" case that a live-bunkTimelines scan alone would miss). Reservations stay
+        // accurate because shared-`_ref.share` tiles are never relocated by the elastic /
+        // swap passes below (they are anchors; only the unlimited fillers flow around them).
+        var resourceCommit = (typeof ctx.resourceCommit === 'function') ? ctx.resourceCommit : null;
+        // Optional RELEASE hook: resourceRelease(kind, grade, bunk, startMin, endMin, ref).
+        // The inverse of resourceCommit — frees a reservation a tile previously held. The
+        // repair passes below RELOCATE already-committed special/sport tiles (swap-repair
+        // moves a contiguous run into an empty window; elastic/inverse-elastic shuffle
+        // fillers). A relocated tile's OLD reservation must be released and a NEW one taken
+        // at its new (start,end) — otherwise the seat ledger keeps the stale slot while the
+        // tile physically moves, and the next bunk's resourceGate sees a phantom seat (the
+        // cross-bunk over-placement leak). With no resourceRelease wired, relocations that
+        // would move a seat-bearing tile are SKIPPED (conservative: never leak).
+        var resourceRelease = (typeof ctx.resourceRelease === 'function') ? ctx.resourceRelease : null;
+        var _ctxGrade = ctx.grade, _ctxBunk = ctx.bunk;
+        // Move a single already-placed seat-bearing tile `T` to [ns,ne] (same duration),
+        // keeping the cross-bunk reservation ledger exact: release old, gate new, commit new.
+        // Returns true if the move is legal+done, false if it must be skipped (gate refused,
+        // or no release hook so we won't risk a stale reservation). Non-resource tiles
+        // (no _ref / not special|sport) move freely (nothing to track).
+        function _relocateSeatTile(T, ns, ne) {
+            var tracks = !!(T && T._ref && (T._ref.share || T.kind === 'special' || T.kind === 'sport'));
+            if (!tracks) { T.startMin = ns; T.endMin = ne; T.durationMin = ne - ns; return true; }
+            if (!resourceCommit) { T.startMin = ns; T.endMin = ne; T.durationMin = ne - ns; return true; } // caller isn't tracking seats at all
+            if (!resourceRelease) return false; // tracking but can't release → don't risk a stale seat
+            try { resourceRelease(T.kind, _ctxGrade, _ctxBunk, T.startMin, T.endMin, T._ref); } catch (e) {}
+            var rok = true; try { rok = resourceGate ? resourceGate(T.kind, _ctxGrade, _ctxBunk, ns, ne, T._ref) : true; } catch (e) { rok = true; }
+            if (!rok) { try { resourceCommit(T.kind, _ctxGrade, _ctxBunk, T.startMin, T.endMin, T._ref); } catch (e) {} return false; } // re-commit old, abort
+            T.startMin = ns; T.endMin = ne; T.durationMin = ne - ns;
+            try { resourceCommit(T.kind, _ctxGrade, _ctxBunk, ns, ne, T._ref); } catch (e) {}
+            return true;
+        }
+
+        var periods = (ctx.periods || []).filter(function (p) {
+            return p && !p.isBreak && _num(p.startMin) != null && _num(p.endMin) != null && p.endMin > p.startMin;
+        });
+        var pinned = (ctx.pinned || []).filter(function (b) { return b && _num(b.startMin) != null && _num(b.endMin) != null; });
+        var floating = ctx.floating || [];
+
+        // Two quotas per demand key:
+        //   remaining = FLOOR (qty) — drives the floor bonus + unmetSpecialFloors;
+        //               consumed once the floor is met. (sport => Infinity)
+        //   capRem    = CAP — the MAX times the kind may appear; drives candidate
+        //               eligibility. Specials may exceed their floor up to the cap
+        //               (so a sport-spacing-blocked window can still tile with an
+        //               extra special). Uncapped => Infinity.
+        var remaining = {}, capRem = {};
+        floating.forEach(function (d) {
+            var k = _demandKey(d);
+            var floor = (d.qty == null) ? Infinity : d.qty;
+            var cap = (d.cap == null) ? Infinity : d.cap;
+            remaining[k] = (remaining[k] == null) ? floor : Math.max(remaining[k], floor);
+            capRem[k] = (capRem[k] == null) ? cap : Math.max(capRem[k], cap);
+        });
+
+        var tiles = pinned.map(function (b) {
+            return { kind: b.kind || 'wall', subcat: b.subcat || null, name: b.name || b.event || b.kind || 'Block',
+                     startMin: b.startMin, endMin: b.endMin, durationMin: b.endMin - b.startMin, generic: false, pinned: true };
+        });
+
+        var stats = { periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0 };
+        var periodPlans = [];
+
+        if (!packer || typeof packer.pack !== 'function') {
+            return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining, error: 'no-packer' };
+        }
+
+        // Allowed durations for a demand (discrete list, or a granular range).
+        function _demandDurs(d) {
+            return (d.durations && d.durations.length)
+                ? d.durations.slice().filter(function (x) { return _num(x) != null; })
+                : _durRange(d.dMin, d.dMax, gran);
+        }
+        // Floor bonus drives the packer toward layers the bunk still OWES. Reads a
+        // quota VIEW (the live `remaining`, or a snapshot during a trial re-pack).
+        // A demand with a FINITE quota is a must-place FLOOR. STRUCTURAL required
+        // layers (swim/change/main/… — anything that is neither a special nor the
+        // unlimited filler) outrank special-subcategory floors, so e.g. a deferred
+        // Swim is guaranteed a slot before optional specials. The unlimited filler
+        // (sport — qty omitted ⇒ Infinity) never earns the bonus.
+        function floorBonus(seg, remView) {
+            var r = remView[seg._key];
+            if (!(r > 0 && r !== Infinity)) return 0;
+            if (seg.kind === 'special') return 1000;
+            return 100000; // structural required layer (swim, …) — effectively must-place
+        }
+        function _mkScoreFn(remView) {
+            return function (packing) {
+                var total = 0;
+                // Count the floor bonus ONLY up to what each key still OWES, per packing.
+                // A subcat can now appear several times in one window (categories repeat),
+                // but its FLOOR (qty) is met by the FIRST tile — the extras are over-floor
+                // and must NOT each re-earn the must-place bonus, or the packer would stack
+                // a floored subcat just to farm bonuses. `granted[_key]` caps it at the owed
+                // count so the floor is honored exactly once and the over-floor tiles are
+                // ranked on their own merits (content score + duration²).
+                var granted = {};
+                var scarceGranted = {};   // AIM-FOR-MAX: cap the scarcity bonus once-per-key (mirror floorBonus granted)
+                for (var i = 0; i < packing.segments.length; i++) {
+                    var s = packing.segments[i];
+                    var fb = floorBonus(s, remView);
+                    if (fb > 0) {
+                        var used = granted[s._key] || 0;
+                        if (used < remView[s._key]) granted[s._key] = used + 1; else fb = 0;
+                    }
+                    total += fb;
+                    // FILLER vs FLOOR, per the user's "even day" rule: give the MINIMUM
+                    // (floor) of each special, then fill the rest with SPORT — "one special,
+                    // then a sport, then a special, then a sport." The FLOOR specials are
+                    // already guaranteed by floorBonus (1000 / 100000 above), which dwarfs any
+                    // size reward, so "1 of each special" ALWAYS lands first and a sport can
+                    // never swallow a window the bunk still owes a special (the Majors fix).
+                    // PAST the floor the preference FLIPS to sport:
+                    //   • sport = the PREFERRED filler — a duration² size reward SLIGHTLY
+                    //     larger than a special's, so an extra SPORT beats an extra (over-floor)
+                    //     special and the remainder fills with sport (the even day). The bigger
+                    //     reward also means FEWER, LARGER sports (no slivers).
+                    //   • special = duration² size reward (fewer/larger). It wins the FLOOR
+                    //     slots via floorBonus and, in sports-FREE camps (no sport demand),
+                    //     still fills the whole day because it beats the 'activity' placeholder.
+                    //   • activity = abstract last-resort placeholder: a per-minute PENALTY.
+                    // (Was: sport PENALTY + special-only size reward, which made the layout
+                    // over-produce specials — uncat peaked at 32 across 38 bunks vs supply 17.)
+                    if (s.kind === 'activity') total -= 0.01 * s.durationMin;
+                    else if (s.kind === 'sport') total += 0.003 * s.durationMin * s.durationMin;
+                    else {
+                        total += 0.002 * s.durationMin * s.durationMin;
+                        // AIM-FOR-MAX: a SCARCE under-target must-have (shiur) carries a bounded
+                        // scarcity bonus on its demand (_ref._scarce, ~25×deficit) so it WINS this
+                        // leftover window over an abundant uncat/sport filler — letting it climb
+                        // toward its weekly target on this day. Far below floorBonus (1000/100000)
+                        // so it can NEVER displace a still-owed floor; 0 for non-scarce specials so
+                        // the tuned sport(0.003)>special(0.002) even-day balance is byte-identical.
+                        // Once-per-_key (like floorBonus granted) so the packer can't stack to farm it.
+                        var _sb = (s._ref && s._ref._scarce > 0) ? s._ref._scarce : 0;
+                        if (_sb > 0 && !scarceGranted[s._key]) { scarceGranted[s._key] = 1; total += _sb; }
+                    }
+                }
+                total -= 0.01 * packing.segments.length; // mild extra nudge toward fewer tiles
+                return total;
+            };
+        }
+
+        // Lay a packing's segments at absolute times from `start` (no commit).
+        function _laySegs(segs, start) {
+            var c = start, out = [];
+            for (var i = 0; i < segs.length; i++) {
+                out.push({ kind: segs[i].kind, subcat: segs[i].subcat || null, name: segs[i].name, _key: segs[i]._key, _ref: segs[i]._ref,
+                           startMin: c, endMin: c + segs[i].durationMin, durationMin: segs[i].durationMin });
+                c += segs[i].durationMin;
+            }
+            return out;
+        }
+        // Map a layout tile/segment ({kind,name,...}) to a rules-engine block
+        // ({type,event,...}) — the gate + rules.js blockMatchesDescriptor read
+        // .type/.event, so the template entries MUST expose them.
+        function _toBlock(x) {
+            var b = { type: x.kind, event: x.name, startMin: x.startMin, endMin: x.endMin };
+            if (x.kind === 'special') { b._assignedSpecial = x.name; b._specialLocation = x.name; }
+            return b;
+        }
+        // Every laid segment must pass the gate against the `base` tiles PLUS the
+        // other segments in this same window (so two tiles in one window are spacing-
+        // checked against each other too). `base` defaults to the live `tiles`.
+        // `contentGateOff` skips the content (spacing) gate but KEEPS the physical
+        // resourceGate (pool / shared-facility). The guaranteed-fill fallback uses it
+        // so a window never stays blank when only the spacing gate (not a hard
+        // resource) was the blocker.
+        function _gatePass(laid, base, contentGateOff) {
+            var useGate = gate && !contentGateOff;
+            if (!useGate && !resourceGate) return true;
+            var baseBlocks = useGate ? (base || tiles).map(_toBlock) : null;
+            for (var i = 0; i < laid.length; i++) {
+                if (useGate) {
+                    var block = _toBlock(laid[i]);
+                    var template = baseBlocks.concat(laid.slice(0, i).map(_toBlock)).concat(laid.slice(i + 1).map(_toBlock));
+                    var ok = true;
+                    try { ok = gate(block, template); } catch (e) { ok = true; }
+                    if (!ok) return false;
+                }
+                if (resourceGate) {
+                    var rok = true;
+                    try { rok = resourceGate(laid[i].kind, _ctxGrade, _ctxBunk, laid[i].startMin, laid[i].endMin, laid[i]._ref); } catch (e) { rok = true; }
+                    if (!rok) return false;
+                }
+            }
+            return true;
+        }
+        // First packing (best-scored first) whose laid segments all pass the gate.
+        function _pickGated(packings, start, base, contentGateOff) {
+            for (var p = 0; p < packings.length; p++) {
+                var laid = _laySegs(packings[p].segments, start);
+                if (_gatePass(laid, base, contentGateOff)) return laid;
+            }
+            return null;
+        }
+
+        // Build candidates for [wStart,wEnd] from `floating` (respecting the quota
+        // VIEWS, demand windows, and an optional kind exclusion), pack it exactly,
+        // and return the best gate-passing laid tiles (gated against `base`), or null.
+        // PURE — never mutates the live quotas; the caller commits on success. This is
+        // the single tiling primitive used by both the main pass and the elastic pass.
+        function _packWindow(wStart, wEnd, base, capView, remView, excludeKinds, outMeta) {
+            var len = wEnd - wStart;
+            if (len <= 0 || len % gran !== 0) { if (outMeta) outMeta.reason = 'window-not-granular'; return null; }
+            var cands = [];
+            for (var fi = 0; fi < floating.length; fi++) {
+                var d = floating[fi];
+                if (excludeKinds && excludeKinds.indexOf(d.kind) >= 0) continue;
+                var key = _demandKey(d);
+                if (!(capView[key] > 0)) continue;
+                var win = d.window;
+                if (win && (win[0] > wStart || win[1] < wEnd)) continue; // demand window must cover the sub-window
+                var durs = _demandDurs(d);
+                var validDurs = [], seen = {};
+                for (var di = 0; di < durs.length; di++) {
+                    var dur = durs[di];
+                    if (_num(dur) == null || dur < minSeg || dur > len || dur % gran !== 0 || seen[dur]) continue;
+                    seen[dur] = 1; validDurs.push(dur);
+                }
+                if (!validDurs.length) continue;
+                // CATEGORIES REPEAT, ACTIVITIES DON'T. A special subcategory with N
+                // distinct available activities (cap = N) may appear up to N times in a
+                // SINGLE window — fill later assigns each generic tile a DISTINCT activity,
+                // so no activity ever repeats. Emit up to that many synthetic candidate
+                // SLOTS (same _key/name/_ref, but a distinct `activity` so the no-repeat
+                // packer can place several), each offered at every valid duration. Without
+                // this a big window held only ONE "Special: Uncategorized" and the rest fell
+                // to the abstract "activity" placeholder (the live Leebi complaint). Bounds:
+                //   • cap (capView[key]) — an "exactly 1 Food" subcat (cap 1) never doubles;
+                //   • maxSegments — a window can't hold more tiles than that;
+                //   • len/shortestDur — can't physically fit more.
+                // Non-specials stay single: sports are spaced by the gate, and the unlimited
+                // filler ('activity'/'sport') is a last resort, not something to multiply.
+                var shortest = Math.min.apply(null, validDurs);
+                var reps = 1;
+                if (d.kind === 'special') {
+                    var capN = _num(capView[key]); if (capN == null) capN = 1; // finite for specials
+                    reps = Math.max(1, Math.min(capN, maxSegments, Math.floor(len / shortest) || 1));
+                }
+                for (var rc = 0; rc < reps; rc++) {
+                    var actKey = (reps > 1) ? (key + '#' + rc) : key;  // distinct slot id; shared _key
+                    for (var vd = 0; vd < validDurs.length; vd++) {
+                        cands.push({ activity: actKey, durationMin: validDurs[vd], kind: d.kind, subcat: d.subcat || null,
+                                     name: _label(d), score: (typeof d.score === 'number' ? d.score : (d.kind === 'sport' ? 1 : 0)),
+                                     _key: key, _ref: d });
+                    }
+                }
+            }
+            if (!cands.length) { if (outMeta) outMeta.reason = 'no-candidates'; return null; }
+            var scoreFn = _mkScoreFn(remView);
+            var packings = [];
+            try { packings = packer.pack({ periodLengthMin: len, candidates: cands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; }
+            catch (e) { if (outMeta) outMeta.reason = 'pack-error:' + (e && e.message); return null; }
+            if (!packings.length) { if (outMeta) outMeta.reason = 'no-exact-tiling'; return null; }
+            // Best gate-passing packing. If none pass — a filler (sport) is spacing-
+            // blocked here — retry with ONLY specials (floor-scored) so the window fills
+            // with something the bunk still OWES rather than dropping it. (When the
+            // caller already excluded the filler, cands are specials-only — no retry.)
+            var laid = _pickGated(packings, wStart, base);
+            if (!laid && gate && !excludeKinds) {
+                var spCands = cands.filter(function (c) { return c.kind === 'special'; });
+                var spPack = [];
+                if (spCands.length) { try { spPack = packer.pack({ periodLengthMin: len, candidates: spCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { spPack = []; } }
+                laid = _pickGated(spPack, wStart, base);
+            }
+            // GUARANTEED FILL — the day must be wall-to-wall. If every gated packing
+            // failed (the spacing gate, not a hard resource, blocked them), fill with
+            // NON-SPORT tiles and DROP the content gate: the camp's only spacing rule
+            // that matters here is between SPORTS, and we exclude sports in this pass,
+            // so nothing placed can be a "sport too close" violation; categories repeat
+            // freely so a special is always fair game. The physical resourceGate (pool /
+            // shared facility) STILL applies. This turns the old "all-packings-gated"
+            // BLANK ("+ Add" slot) into a real special tile while keeping sports spaced.
+            if (!laid && !excludeKinds) {
+                var nsCands = cands.filter(function (c) { return c.kind !== 'sport'; });
+                if (nsCands.length) {
+                    var nsPack = [];
+                    try { nsPack = packer.pack({ periodLengthMin: len, candidates: nsCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { nsPack = []; }
+                    laid = _pickGated(nsPack, wStart, base, true /* content gate off — specials repeat freely */);
+                }
+            }
+            if (!laid && outMeta) outMeta.reason = 'all-packings-gated';
+            return laid || null;
+        }
+        // Commit laid tiles into the live `tiles` + quotas; bump stats. (`rec` optional.)
+        function _applyLaid(laid, rec) {
+            for (var ci = 0; ci < laid.length; ci++) {
+                var seg = laid[ci];
+                var t = { kind: seg.kind, subcat: seg.subcat || null, name: seg.name, _key: seg._key, _ref: seg._ref,
+                          startMin: seg.startMin, endMin: seg.endMin, durationMin: seg.durationMin, generic: true, pinned: false,
+                          _origin: seg._origin || 'layout' };   // provenance: which pass placed this tile
+                tiles.push(t); if (rec) rec.tiles.push(t);
+                // consume floor + cap for any FINITE-quota demand (special floors AND
+                // structural required layers like swim); the unlimited filler is Infinity.
+                if (remaining[seg._key] > 0 && remaining[seg._key] !== Infinity) remaining[seg._key]--;
+                if (capRem[seg._key] > 0 && capRem[seg._key] !== Infinity) capRem[seg._key]--;
+                // record a cross-bunk reservation so the next bunk's resourceGate sees it:
+                //   • shared-`_ref.share` layers (Auditorium etc.) → facility capacity.
+                //   • generic special/sport tiles → per-CATEGORY SEAT count (the caller caps
+                //     concurrent specials-per-subcat / sports the way the pool caps swimmers).
+                // The caller's resourceCommit decides what to track from kind + _ref.
+                if (resourceCommit && seg._ref && (seg._ref.share || seg.kind === 'special' || seg.kind === 'sport' || seg.kind === 'swim')) {
+                    try { resourceCommit(seg.kind, _ctxGrade, _ctxBunk, seg.startMin, seg.endMin, seg._ref); } catch (e) {}
+                }
+                stats.tilesPlaced++;
+            }
+        }
+
+        for (var pi = 0; pi < periods.length; pi++) {
+            var period = periods[pi];
+            stats.periodsConsidered++;
+            var windows = freeSubWindows(period.startMin, period.endMin, tiles);
+            var planWindows = [];
+            for (var wi = 0; wi < windows.length; wi++) {
+                var w = windows[wi];
+                var len = w.end - w.start;
+                stats.windowsConsidered++;
+                var rec = { start: w.start, end: w.end, len: len, tiled: false, tiles: [], residualMin: len, reason: null };
+                if (len % gran !== 0) { rec.reason = 'window-not-granular'; planWindows.push(rec); stats.residualMin += len; continue; }
+                var _meta = {};
+                var laid = _packWindow(w.start, w.end, tiles, capRem, remaining, null, _meta);
+                if (!laid) { rec.reason = _meta.reason || 'no-fill'; planWindows.push(rec); stats.residualMin += len; continue; }
+                _applyLaid(laid, rec);
+                rec.tiled = true; rec.residualMin = 0;
+                stats.windowsTiled++;
+                planWindows.push(rec);
+            }
+            periodPlans.push({ period: period, windows: planWindows });
+        }
+
+        // ── ELASTIC FILL (gate-only, duration-aware) ─────────────────────────
+        // A window the packer left empty is NOT abandoned. Because every generic
+        // tile is DURATION-ELASTIC (its layer permits any duration in a range),
+        // we RELOCATE an elastic filler — a Sport — INTO the empty window at
+        // exactly the window length, then RE-PACK the slot it vacated with the
+        // still-available (possibly stretched) specials. Net: the sport slides to
+        // where the rule allows it (e.g. after Cleanup, clear of the other sport),
+        // and the freed slot is back-filled with specials grown to fit — the human
+        // "move the sport over, stretch the specials into its place" move. EVERY
+        // placement is gate-checked (sport↔sport spacing, special↔special spacing,
+        // no-sport-after-lunch, …) and NO quota/cap is ever exceeded, so it
+        // generalizes across the board to any rule and any kind. Default (no gate):
+        // off. Bounded: a couple of sweeps over the residual windows.
+        if (gate) {
+            for (var _ePass = 0; _ePass < 2; _ePass++) {
+                var _resid = [];
+                for (var ppi = 0; ppi < periodPlans.length; ppi++) {
+                    var pw = periodPlans[ppi].windows;
+                    for (var pwi = 0; pwi < pw.length; pwi++) { var rr = pw[pwi]; if (!rr.tiled && rr.len >= minSeg && rr.len % gran === 0) _resid.push(rr); }
+                }
+                if (!_resid.length) break;
+                var _progressed = false;
+                for (var ridx = 0; ridx < _resid.length; ridx++) {
+                    var W2 = _resid[ridx], L = W2.len, filled = false;
+                    // movable elastic filler tiles (generic, not pinned), Sport first.
+                    var movers = [];
+                    // shared layers (a `_ref.share` facility reservation) are anchors: never
+                    // relocate them — that would desync the cross-bunk reservation. Fillers only.
+                    for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt.kind !== 'swim' && tt._ref && !(tt._ref && tt._ref.share)) movers.push(tt); }
+                    movers.sort(function (a, b) {
+                        var af = (a.kind === 'sport' || a.kind === 'activity') ? 0 : 1;
+                        var bf = (b.kind === 'sport' || b.kind === 'activity') ? 0 : 1;
+                        return (af - bf) || (a.startMin - b.startMin);
+                    });
+                    for (var mvi = 0; mvi < movers.length && !filled; mvi++) {
+                        var T = movers[mvi];
+                        if (T.startMin === W2.start && T.durationMin === L) continue; // already exactly there
+                        if (_demandDurs(T._ref).indexOf(L) < 0) continue;             // T can't be exactly L
+                        var Twin = T._ref && T._ref.window;
+                        if (Twin && (Twin[0] > W2.start || Twin[1] < W2.start + L)) continue; // would leave T's window
+                        var baseNoT = [];
+                        for (var bi = 0; bi < tiles.length; bi++) if (tiles[bi] !== T) baseNoT.push(tiles[bi]);
+                        // T relocated to W (length L) must be gate-legal. Carry _key/_ref so the
+                        // resourceGate (seat check) reads the correct (subcat,duration) bucket —
+                        // without _ref it defaulted to 'uncategorized' and checked the wrong seat.
+                        var Tnew = { kind: T.kind, subcat: T.subcat, name: T.name, _key: T._key, _ref: T._ref, startMin: W2.start, endMin: W2.start + L };
+                        if (!_gatePass([Tnew], baseNoT)) continue;
+                        // Re-pack T's vacated slot [Rs,Re] with specials only (the sport is
+                        // leaving). Quota view = live quotas WITHOUT freeing T (it still
+                        // consumes its slot, just at W now) → caps can never be exceeded.
+                        var Rs = T.startMin, Re = T.endMin;
+                        var capView = {}, remView = {};
+                        Object.keys(capRem).forEach(function (k) { capView[k] = capRem[k]; });
+                        Object.keys(remaining).forEach(function (k) { remView[k] = remaining[k]; });
+                        var laidR = _packWindow(Rs, Re, baseNoT.concat([Tnew]), capView, remView, ['sport', 'activity']);
+                        if (!laidR) continue;
+                        // COMMIT: pull T out, drop it at W (length L), re-pack its old slot.
+                        var idxT = tiles.indexOf(T); if (idxT >= 0) tiles.splice(idxT, 1);
+                        // release T's OLD cross-bunk seat reservation — it's vacating [Rs,Re]; the
+                        // re-pack below fills that region with fresh (gated+committed) tiles. Without
+                        // this the old seat lingers as a phantom, wasting capacity for other bunks.
+                        if (resourceRelease && T._ref && (T._ref.share || T.kind === 'special' || T.kind === 'sport')) {
+                            try { resourceRelease(T.kind, _ctxGrade, _ctxBunk, Rs, Re, T._ref); } catch (e) {}
+                        }
+                        // free T's finite quota, then re-consume it at W (net zero) — keeps
+                        // structural/special caps exact across the relocation.
+                        if (remaining[T._key] != null && remaining[T._key] !== Infinity) remaining[T._key] = remaining[T._key] + 1;
+                        if (capRem[T._key] != null && capRem[T._key] !== Infinity) capRem[T._key] = capRem[T._key] + 1;
+                        stats.tilesPlaced--;
+                        var Tt = { kind: T.kind, subcat: T.subcat || null, name: T.name, _key: T._key, _ref: T._ref,
+                                   startMin: W2.start, endMin: W2.start + L, durationMin: L, generic: true, pinned: false };
+                        // commit via _applyLaid (was a raw push): consumes T's freed quota AND records
+                        // the cross-bunk seat reservation (resourceCommit) so the next bunk's gate sees it.
+                        _applyLaid([Tt], null);
+                        _applyLaid(laidR, null);
+                        W2.tiled = true; W2.residualMin = 0; W2.reason = 'elastic-fill';
+                        stats.windowsTiled++; stats.residualMin -= L;
+                        filled = true; _progressed = true;
+                    }
+                }
+                if (!_progressed) break;
+            }
+        }
+
+        // ── SWAP REPAIR (gate-only, general) ──────────────────────────────────
+        // A window the gate left untiled is NOT abandoned. To open a legal slot we
+        // relocate a CONTIGUOUS RUN of already-placed tiles whose durations sum to
+        // the empty window (a 40, or 30+10, 20+20, 4×10, …) into that window, and
+        // drop a replacement tile into the region they vacated — EVERY move re-checked
+        // against the gate (which carries ALL the camp's rules: sport↔sport spacing,
+        // special↔special spacing, no-sport-after-lunch, …). So the same "move that
+        // over and put the needed thing in its place" works across the board, for any
+        // rule and any kind. Bounded; default (no gate) leaves this off.
+        if (gate) {
+            var _resid = [];
+            for (var ppi = 0; ppi < periodPlans.length; ppi++) {
+                var pw = periodPlans[ppi].windows;
+                for (var pwi = 0; pwi < pw.length; pwi++) {
+                    var rr = pw[pwi];
+                    if (!rr.tiled && rr.len >= minSeg && rr.len % gran === 0) _resid.push(rr);
+                }
+            }
+            var _moved = [];                                  // tiles already relocated (no thrash)
+            var _isMoved = function (t) { for (var i = 0; i < _moved.length; i++) if (_moved[i] === t) return true; return false; };
+            for (var ridx = 0; ridx < _resid.length; ridx++) {
+                var W2 = _resid[ridx];
+                var L = W2.len;
+                // Replacement-tile candidates for the vacated region (a single tile of
+                // length L): the filler (sport/activity) first, then any special whose
+                // configured duration is exactly L and still has cap. The gate decides
+                // which is legal there.
+                var kCands = [];
+                for (var fk = 0; fk < floating.length; fk++) {
+                    var fd = floating[fk]; var kk = _demandKey(fd);
+                    // a shared layer (facility reservation) is never placed by the swap pass —
+                    // it would bypass the resourceGate + reservation; only the main pass places it.
+                    if (fd.share) continue;
+                    // sport/activity = the unlimited filler → always an eligible replacement.
+                    if (fd.kind === 'sport' || fd.kind === 'activity') { kCands.push({ kind: fd.kind, name: _label(fd), subcat: null, key: kk, win: fd.window }); continue; }
+                    // special OR structural (swim/…) → only if a configured duration == L AND cap remains.
+                    var durs = (fd.durations && fd.durations.length) ? fd.durations : _durRange(fd.dMin, fd.dMax, gran);
+                    if (capRem[kk] > 0 && durs.indexOf(L) >= 0) kCands.push({ kind: fd.kind, name: _label(fd), subcat: fd.subcat || null, key: kk, win: fd.window });
+                }
+                if (!kCands.length) continue;
+                // movable tiles (generic, not pinned, not already relocated), by time
+                var mov = [];
+                for (var mi = 0; mi < tiles.length; mi++) { var tt = tiles[mi]; if (tt.generic && !tt.pinned && tt.kind !== 'swim' && !_isMoved(tt) && !(tt._ref && tt._ref.share)) mov.push(tt); }
+                mov.sort(function (a, b) { return a.startMin - b.startMin; });
+
+                var done = false;
+                for (var s = 0; s < mov.length && !done; s++) {
+                    // grow a CONTIGUOUS run from s whose durations sum to exactly L
+                    var run = [mov[s]], sum = mov[s].durationMin, e = s;
+                    while (sum < L && e + 1 < mov.length && mov[e + 1].startMin === mov[e].endMin) { e++; run.push(mov[e]); sum += mov[e].durationMin; }
+                    if (sum !== L) continue;
+                    var Rs = run[0].startMin, Re = Rs + L;
+                    if (Rs === W2.start) continue;
+                    // SEAT SAFETY: relocating a seat-bearing run tile (special/sport/shared)
+                    // changes the slot its cross-bunk reservation occupies. We can only do that
+                    // without leaving a STALE reservation if the caller wired a resourceRelease
+                    // (release-old → commit-new). If it tracks seats (resourceCommit) but gave us
+                    // no release, skip this run — moving it would leak a phantom seat to the next
+                    // bunk (the over-placement bug). Non-tracked tiles relocate freely.
+                    if (resourceCommit && !resourceRelease) {
+                        var _runSeat = false;
+                        for (var _rs = 0; _rs < run.length; _rs++) { var _rt = run[_rs]; if (_rt._ref && (_rt._ref.share || _rt.kind === 'special' || _rt.kind === 'sport')) { _runSeat = true; break; } }
+                        if (_runSeat) continue;
+                    }
+                    var keep = [];
+                    for (var ki = 0; ki < tiles.length; ki++) { if (run.indexOf(tiles[ki]) < 0) keep.push(_toBlock(tiles[ki])); }
+                    for (var kc = 0; kc < kCands.length && !done; kc++) {
+                        var K = kCands[kc];
+                        if (K.win && (K.win[0] > Rs || K.win[1] < Re)) continue; // replacement would leave its window
+                        var kBlock = { type: K.kind, event: K.name, startMin: Rs, endMin: Re };
+                        if (K.kind === 'special') { kBlock._assignedSpecial = K.name; kBlock._specialLocation = K.name; }
+                        var okK = true; try { okK = gate(kBlock, keep); } catch (e2) { okK = true; }
+                        // SEAT GATE: the replacement special/sport must have a free seat at its
+                        // (subcat,duration) too — was missing, so swap-placed specials bypassed the cap.
+                        if (okK && resourceGate) { try { okK = resourceGate(K.kind, _ctxGrade, _ctxBunk, Rs, Re, { subcat: K.subcat || null, window: K.win || null }); } catch (e2b) { okK = true; } }
+                        if (!okK) continue;
+                        // relocate the run into W (sequential), gate-checking each move
+                        var cur = W2.start, movedBlocks = [], allOk = true;
+                        for (var r2 = 0; r2 < run.length; r2++) {
+                            var rt = run[r2];
+                            var rtw = rt._ref && rt._ref.window;
+                            if (rtw && (rtw[0] > cur || rtw[1] < cur + rt.durationMin)) { allOk = false; break; } // relocated tile would leave its window
+                            var rb = { type: rt.kind, event: rt.name, startMin: cur, endMin: cur + rt.durationMin };
+                            if (rt.kind === 'special') { rb._assignedSpecial = rt.name; rb._specialLocation = rt.name; }
+                            var okM = true; try { okM = gate(rb, keep.concat([kBlock]).concat(movedBlocks)); } catch (e3) { okM = true; }
+                            if (!okM) { allOk = false; break; }
+                            // SEAT GATE for the MOVED tile too: its new slot [cur, cur+dur]
+                            // must have a free seat (its own old slot is disjoint from W, so it
+                            // doesn't mask the count). Without this, swapping a special into an
+                            // over-subscribed window slipped past the cap (the live leak).
+                            if (resourceGate && rt._ref && (rt._ref.share || rt.kind === 'special' || rt.kind === 'sport')) {
+                                var okMR = true; try { okMR = resourceGate(rt.kind, _ctxGrade, _ctxBunk, cur, cur + rt.durationMin, rt._ref); } catch (e3b) { okMR = true; }
+                                if (!okMR) { allOk = false; break; }
+                            }
+                            movedBlocks.push(rb); cur += rt.durationMin;
+                        }
+                        if (!allOk) continue;
+                        // COMMIT: run -> W (in order), replacement K -> vacated region. Move each
+                        // run tile via _relocateSeatTile so its cross-bunk reservation follows it
+                        // (release old slot, take new) — keeping the seat ledger exact. Pre-checks
+                        // above guarantee each move is legal, so this won't roll back mid-run.
+                        var c2 = W2.start, _moveOk = true;
+                        for (var r3 = 0; r3 < run.length; r3++) {
+                            if (!_relocateSeatTile(run[r3], c2, c2 + run[r3].durationMin)) { _moveOk = false; break; }
+                            c2 += run[r3].durationMin; _moved.push(run[r3]);
+                        }
+                        if (!_moveOk) continue;
+                        // carry the demand window so a LATER relocation of this swap-placed tile
+                        // still respects its window (the elastic/run-swap guards read _ref.window).
+                        // commit via _applyLaid (was a raw push that skipped the seat reservation):
+                        // records the cross-bunk seat + consumes K's quota. _ref carries subcat + window
+                        // so resourceGate/Commit key the correct (subcat,duration) seat and later
+                        // relocations still respect the window.
+                        _applyLaid([{ kind: K.kind, subcat: K.subcat || null, name: K.name, _key: K.key, _ref: { window: K.win || null, subcat: K.subcat || null }, startMin: Rs, endMin: Re, durationMin: L }], null);
+                        W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
+                        stats.windowsTiled++; stats.residualMin -= L;
+                        done = true;
+                    }
+                }
+            }
+        }
+
+        // ── INVERSE-ELASTIC / SPECIAL-PULL (gate-only) ─────────────────────────────
+        // The MIRROR of ELASTIC FILL above. ELASTIC slides a SPORT into an empty window;
+        // but a window can be empty PRECISELY BECAUSE a sport is illegal there — it would
+        // sit too close to another sport (the spacing gate) — and every cap-limited
+        // special is already placed in EARLIER windows (the greedy main pass spent them
+        // first), so only a sport is left, the gate rejects it, and the slot blanks
+        // ("+ Add"). The user's fix, verbatim: "we need shifts in the tiles" — SHIFT a
+        // special INTO the blocked window and drop a SPORT where that special used to be
+        // (a window that DOES welcome a sport). We free one (then two) already-placed
+        // SPECIAL tile(s) by swapping each for a gate-legal sport in its OWN slot (same
+        // span ⇒ no new gap), returning its cap to the pool, then RE-PACK the blocked
+        // window with specials only. Every move is gate-checked and the freed special is
+        // re-consumed by the re-pack (net-zero caps/floors), so it generalizes: any
+        // window a sport-spacing rule would blank gets a special pulled in from a window
+        // where a sport is welcome. Bounded: single donors, then pairs.
+        if (gate) {
+            var _ieSport = null;
+            for (var _isd = 0; _isd < floating.length; _isd++) { if (floating[_isd].kind === 'sport') { _ieSport = floating[_isd]; break; } }
+            if (_ieSport) {
+                var _ieSportDurs = _demandDurs(_ieSport);
+                var _ieResid = [];
+                for (var _ipi = 0; _ipi < periodPlans.length; _ipi++) {
+                    var _ipw = periodPlans[_ipi].windows;
+                    for (var _iwj = 0; _iwj < _ipw.length; _iwj++) { var _irr = _ipw[_iwj]; if (!_irr.tiled && _irr.len >= minSeg && _irr.len % gran === 0) _ieResid.push(_irr); }
+                }
+                // A replacement sport at [s,e] must be gate-legal vs the base tiles (donors
+                // removed) PLUS the OTHER replacement sports in this same combo.
+                var _ieSportFits = function (sportTile, otherSports, baseNoDonors) {
+                    var sb = { type: 'sport', event: sportTile.name, startMin: sportTile.startMin, endMin: sportTile.endMin };
+                    var tmpl = [];
+                    for (var q = 0; q < baseNoDonors.length; q++) tmpl.push(_toBlock(baseNoDonors[q]));
+                    for (var q2 = 0; q2 < otherSports.length; q2++) if (otherSports[q2] !== sportTile) tmpl.push(_toBlock(otherSports[q2]));
+                    var ok = true; try { ok = gate(sb, tmpl); } catch (e) { ok = true; }
+                    return ok;
+                };
+                for (var _iri = 0; _iri < _ieResid.length; _iri++) {
+                    var _WW = _ieResid[_iri];
+                    if (_WW.tiled) continue;
+                    // placed special tiles that could donate: generic, not pinned/shared, a
+                    // sport legally fits their exact slot (sport demand window + duration list).
+                    var _ieDonors = [];
+                    for (var _idt = 0; _idt < tiles.length; _idt++) {
+                        var _dt = tiles[_idt];
+                        if (!_dt.generic || _dt.pinned || _dt.kind !== 'special') continue;
+                        if (_dt._ref && _dt._ref.share) continue;
+                        var _sw = _ieSport.window;
+                        if (_sw && (_sw[0] > _dt.startMin || _sw[1] < _dt.endMin)) continue;
+                        if (_ieSportDurs.indexOf(_dt.durationMin) < 0) continue; // sport can't be that exact length
+                        _ieDonors.push(_dt);
+                    }
+                    var _ieCombos = [];
+                    for (var _ia = 0; _ia < _ieDonors.length; _ia++) _ieCombos.push([_ieDonors[_ia]]);
+                    for (var _ja = 0; _ja < _ieDonors.length; _ja++) for (var _jb = _ja + 1; _jb < _ieDonors.length; _jb++) _ieCombos.push([_ieDonors[_ja], _ieDonors[_jb]]);
+                    var _ieFixed = false;
+                    for (var _ici = 0; _ici < _ieCombos.length && !_ieFixed; _ici++) {
+                        var _combo = _ieCombos[_ici];
+                        var _baseND = [];
+                        for (var _ibi = 0; _ibi < tiles.length; _ibi++) if (_combo.indexOf(tiles[_ibi]) < 0) _baseND.push(tiles[_ibi]);
+                        // the sport replacements that would sit in each donor's slot
+                        var _sportRepl = [];
+                        for (var _idi = 0; _idi < _combo.length; _idi++) {
+                            _sportRepl.push({ kind: 'sport', subcat: null, name: _label(_ieSport), _key: 'sport', _ref: _ieSport,
+                                              startMin: _combo[_idi].startMin, endMin: _combo[_idi].endMin, durationMin: _combo[_idi].durationMin, generic: true, pinned: false });
+                        }
+                        var _allOk = true;
+                        for (var _idj = 0; _idj < _sportRepl.length; _idj++) { if (!_ieSportFits(_sportRepl[_idj], _sportRepl, _baseND)) { _allOk = false; break; } }
+                        if (!_allOk) continue;
+                        // SEAT GATE for the replacement SPORTS: each must have a free sport seat at
+                        // its slot too (the donor special is vacating it, but sport is a different
+                        // category). Without this, sports dropped here bypassed the cross-bunk sport
+                        // cap. Skip the seat check if we can't release the donor seats (we won't
+                        // mutate seat-bearing tiles without a release hook — see commit below).
+                        var _ieDonorSeat = false;
+                        for (var _dsi = 0; _dsi < _combo.length; _dsi++) { var _dc = _combo[_dsi]; if (_dc._ref && (_dc._ref.share || _dc.kind === 'special' || _dc.kind === 'sport')) { _ieDonorSeat = true; break; } }
+                        if (_ieDonorSeat && resourceCommit && !resourceRelease) continue; // can't relocate seats safely
+                        if (resourceGate) {
+                            var _ieSeatOk = true;
+                            for (var _idj2 = 0; _idj2 < _sportRepl.length; _idj2++) {
+                                var _sr = _sportRepl[_idj2];
+                                try { if (!resourceGate(_sr.kind, _ctxGrade, _ctxBunk, _sr.startMin, _sr.endMin, _sr._ref)) { _ieSeatOk = false; break; } } catch (_e) {}
+                            }
+                            if (!_ieSeatOk) continue;
+                        }
+                        // trial caps with the donor(s) freed
+                        var _capView = {}, _remView = {};
+                        Object.keys(capRem).forEach(function (k) { _capView[k] = capRem[k]; });
+                        Object.keys(remaining).forEach(function (k) { _remView[k] = remaining[k]; });
+                        for (var _idk = 0; _idk < _combo.length; _idk++) {
+                            var _dk = _combo[_idk]._key;
+                            if (_capView[_dk] !== Infinity) _capView[_dk] = (_capView[_dk] || 0) + 1;
+                            if (_remView[_dk] !== Infinity) _remView[_dk] = (_remView[_dk] || 0) + 1;
+                        }
+                        // re-pack the blocked window with SPECIALS ONLY (no sport/activity),
+                        // gated against base + the new replacement sports.
+                        var _laidW = _packWindow(_WW.start, _WW.end, _baseND.concat(_sportRepl), _capView, _remView, ['sport', 'activity']);
+                        if (!_laidW) continue;
+                        // _laidW must consume EXACTLY the freed donor keys — else a donor would be
+                        // removed but not replaced in the window, leaving a phantom owed floor.
+                        var _used = {}, _need = {}, _allKeys = {}, _match = true;
+                        for (var _u = 0; _u < _laidW.length; _u++) { _used[_laidW[_u]._key] = (_used[_laidW[_u]._key] || 0) + 1; _allKeys[_laidW[_u]._key] = 1; }
+                        for (var _n = 0; _n < _combo.length; _n++) { _need[_combo[_n]._key] = (_need[_combo[_n]._key] || 0) + 1; _allKeys[_combo[_n]._key] = 1; }
+                        Object.keys(_allKeys).forEach(function (k) { if ((_used[k] || 0) !== (_need[k] || 0)) _match = false; });
+                        if (!_match) continue;
+                        // COMMIT: remove donors (restore their caps/floors), drop a sport in each
+                        // donor's slot, then lay the pulled-in specials across the blocked window.
+                        for (var _cdi = 0; _cdi < _combo.length; _cdi++) {
+                            var _D = _combo[_cdi];
+                            var _idx = tiles.indexOf(_D); if (_idx >= 0) tiles.splice(_idx, 1);
+                            // release the donor special's cross-bunk seat — it's leaving its slot (a
+                            // sport takes its place). Else the freed special seat lingers as a phantom.
+                            if (resourceRelease && _D._ref && (_D._ref.share || _D.kind === 'special' || _D.kind === 'sport')) {
+                                try { resourceRelease(_D.kind, _ctxGrade, _ctxBunk, _D.startMin, _D.endMin, _D._ref); } catch (e) {}
+                            }
+                            if (capRem[_D._key] != null && capRem[_D._key] !== Infinity) capRem[_D._key]++;
+                            if (remaining[_D._key] != null && remaining[_D._key] !== Infinity) remaining[_D._key]++;
+                            stats.tilesPlaced--;
+                        }
+                        // commit the sport replacements via _applyLaid (was a raw push that skipped
+                        // the cross-bunk seat reservation) so the next bunk's sport gate counts them.
+                        _applyLaid(_sportRepl, null);
+                        _applyLaid(_laidW, null);
+                        _WW.tiled = true; _WW.residualMin = 0; _WW.reason = 'inverse-elastic';
+                        stats.windowsTiled++; stats.residualMin -= _WW.len;
+                        _ieFixed = true;
+                    }
+                }
+            }
+        }
+
+        // ── GAP-CLOSE (scan the schedule for gaps; fill from the LAYERS; fewest tiles) ──
+        // A final reader: it scans the committed schedule for any free time still left
+        // inside a non-break period and fills it with the LARGEST layer items that fit,
+        // GREEDILY (not exact subset-sum) — so it closes windows the exact packer rejects
+        // (no exact tiling, an odd/off-grid length, or a window where only ONE of a kind
+        // could be packed at a time). Per gap minute the preference is: (1) a still-OWED
+        // floor demand, (2) the largest REAL content (a special / sport), then the generic
+        // placeholder; finally it GROWS an adjacent elastic filler to swallow any leftover
+        // sub-minSeg sliver (0 extra tiles). The whole point: fill the ENTIRE day with the
+        // FEWEST, LARGEST tiles drawn from the layers. Respects the rule gate, the cross-
+        // bunk resourceGate, every demand window, and all caps/floors (via _applyLaid).
+        var _gcTiles = 0, _gcGrew = 0;
+        function _pickFill(start, maxLen, base) {
+            var best = null;
+            for (var fi = 0; fi < floating.length; fi++) {
+                var d = floating[fi];
+                var key = _demandKey(d);
+                if (!(capRem[key] > 0)) continue;
+                var win = d.window;
+                var durs = _demandDurs(d).filter(function (x) { return _num(x) != null && x >= minSeg && x <= maxLen; });
+                if (win) durs = durs.filter(function (x) { return win[0] <= start && win[1] >= start + x; });
+                if (!durs.length) continue;
+                var dur = Math.max.apply(null, durs);                       // LARGEST that fits → fewest tiles
+                var seg = { kind: d.kind, subcat: d.subcat || null, name: _label(d), _key: key, _ref: d, startMin: start, endMin: start + dur, durationMin: dur };
+                if (!_gatePass([seg], base)) continue;
+                var owed = (remaining[key] > 0 && remaining[key] !== Infinity) ? 1 : 0;   // a still-owed floor wins
+                var content = (d.kind === 'activity') ? 0 : 1;                            // real layer content beats the placeholder
+                var score = owed * 1e6 + content * 1e3 + dur;
+                if (!best || score > best.score) best = { seg: seg, score: score };
+            }
+            return best;
+        }
+        // Grow an adjacent generic FILLER (sport/activity → continuous duration) to swallow
+        // [s,e] — 0 new tiles. Only fillers grow (a special is fixed to its configured
+        // durations). Gate-checked and kept within the filler's demand window.
+        function _growInto(s, e) {
+            for (var i = 0; i < tiles.length; i++) {
+                var t = tiles[i];
+                if (!t.generic || t.pinned) continue;
+                if (t.kind !== 'sport' && t.kind !== 'activity') continue;
+                var win = t._ref && t._ref.window;
+                var others = []; for (var a = 0; a < tiles.length; a++) if (tiles[a] !== t) others.push(tiles[a]);
+                if (t.endMin === s) {                                        // extend its END forward over the gap
+                    if (win && win[1] < e) continue;
+                    if (!_gatePass([{ kind: t.kind, subcat: t.subcat, name: t.name, _ref: t._ref, startMin: t.startMin, endMin: e }], others)) continue;
+                    t.endMin = e; t.durationMin = t.endMin - t.startMin; return true;
+                }
+                if (t.startMin === e) {                                      // extend its START back over the gap
+                    if (win && win[0] > s) continue;
+                    if (!_gatePass([{ kind: t.kind, subcat: t.subcat, name: t.name, _ref: t._ref, startMin: s, endMin: t.endMin }], others)) continue;
+                    t.startMin = s; t.durationMin = t.endMin - t.startMin; return true;
+                }
+            }
+            return false;
+        }
+        // FLOOR-FIRST: place any still-OWED finite-quota floor (a deferred structural layer
+        // or an unmet special-subcat floor) into a gap its window covers BEFORE the greedy
+        // filler runs. Otherwise a wide-window filler greedily consuming the floor's only
+        // feasible slot would silently DROP the floor while still reporting wall-to-wall.
+        // Most-constrained (narrowest-window) floors first. Returns true if it placed any.
+        function _placeOwedFloorsIn(per) {
+            var owed = [];
+            for (var fi = 0; fi < floating.length; fi++) {
+                var dd = floating[fi], kk = _demandKey(dd);
+                if (remaining[kk] > 0 && remaining[kk] !== Infinity && capRem[kk] > 0) owed.push(dd);
+            }
+            owed.sort(function (a, b) {
+                var aw = a.window ? (a.window[1] - a.window[0]) : Infinity;
+                var bw = b.window ? (b.window[1] - b.window[0]) : Infinity;
+                return aw - bw;
+            });
+            var any = false;
+            for (var oi = 0; oi < owed.length; oi++) {
+                var d = owed[oi], key = _demandKey(d), guard = 0;
+                while (remaining[key] > 0 && remaining[key] !== Infinity && capRem[key] > 0 && guard++ < 12) {
+                    var gw = freeSubWindows(per.startMin, per.endMin, tiles), placed = false;
+                    for (var gi = 0; gi < gw.length; gi++) {
+                        var ws = d.window ? Math.max(gw[gi].start, d.window[0]) : gw[gi].start;
+                        var we = d.window ? Math.min(gw[gi].end, d.window[1]) : gw[gi].end;
+                        if (we - ws < minSeg) continue;
+                        var durs = _demandDurs(d).filter(function (x) { return _num(x) != null && x >= minSeg && x <= (we - ws); });
+                        if (!durs.length) continue;
+                        var dur = Math.max.apply(null, durs);
+                        var seg = { kind: d.kind, subcat: d.subcat || null, name: _label(d), _key: key, _ref: d, startMin: ws, endMin: ws + dur, durationMin: dur };
+                        if (!_gatePass([seg], tiles)) continue;
+                        _applyLaid([seg], null); _gcTiles++; placed = true; any = true; break;
+                    }
+                    if (!placed) break;
+                }
+            }
+            return any;
+        }
+        for (var _gcPass = 0; _gcPass < 2; _gcPass++) {
+            var _gcProgress = false;
+            for (var gpi = 0; gpi < periods.length; gpi++) {
+                var _per = periods[gpi];
+                if (_placeOwedFloorsIn(_per)) _gcProgress = true;   // (0) owed floors before the greedy filler
+                var _gw = freeSubWindows(_per.startMin, _per.endMin, tiles);
+                for (var ggi = 0; ggi < _gw.length; ggi++) {
+                    var _cur = _gw[ggi].start, _gend = _gw[ggi].end;
+                    while (_gend - _cur >= minSeg) {                          // greedy largest-first
+                        var _pk = _pickFill(_cur, _gend - _cur, tiles);
+                        if (!_pk) break;
+                        _applyLaid([_pk.seg], null);
+                        _cur = _pk.seg.endMin; _gcTiles++; _gcProgress = true;
+                    }
+                    if (_cur < _gend && _growInto(_cur, _gend)) { _gcGrew++; _gcProgress = true; }
+                }
+            }
+            if (!_gcProgress) break;
+        }
+
+        // ── ABSORB "activity" PLACEHOLDER SLIVERS INTO AN ADJACENT SPECIAL ──────────
+        // Sports-free camps have no sport filler, so a window whose length the specials'
+        // FIXED durations can't tile exactly (e.g. a 30-min gap when the only specials are
+        // 20- and 40-min) gets a small "activity" placeholder for the remainder. The human
+        // fix the user described is "expand a special to cover it" — do exactly that: grow a
+        // touching generic SPECIAL tile over the activity sliver and drop the placeholder,
+        // so the day reads as real specials, never "Activity". Generic special tiles carry
+        // no fixed render duration (fill assigns the concrete activity), so a slightly
+        // longer special slot is fine. Only merges into a special whose demand window still
+        // covers the extended span and whose grown tile passes the gate; an activity with no
+        // adjacent special is left as-is (genuinely nothing to grow).
+        for (var _ai = tiles.length - 1; _ai >= 0; _ai--) {
+            var _act = tiles[_ai];
+            if (!_act || !_act.generic || _act.kind !== 'activity') continue;
+            var _bestSp = null;
+            for (var _si = 0; _si < tiles.length; _si++) {
+                var _sp = tiles[_si];
+                if (_sp === _act || !_sp.generic || _sp.kind !== 'special') continue;
+                if (_sp.endMin !== _act.startMin && _sp.startMin !== _act.endMin) continue; // must touch
+                var _ns = Math.min(_sp.startMin, _act.startMin), _ne = Math.max(_sp.endMin, _act.endMin);
+                var _sw = _sp._ref && _sp._ref.window;
+                if (_sw && (_sw[0] > _ns || _sw[1] < _ne)) continue;                         // would leave its window
+                var _oth = []; for (var _oi = 0; _oi < tiles.length; _oi++) if (tiles[_oi] !== _sp && tiles[_oi] !== _act) _oth.push(tiles[_oi]);
+                if (!_gatePass([{ kind: 'special', subcat: _sp.subcat, name: _sp.name, _ref: _sp._ref, startMin: _ns, endMin: _ne }], _oth)) continue;
+                if (!_bestSp || _sp.durationMin > _bestSp.durationMin) _bestSp = _sp;           // grow the largest neighbor
+            }
+            if (_bestSp) {
+                _bestSp.startMin = Math.min(_bestSp.startMin, _act.startMin);
+                _bestSp.endMin = Math.max(_bestSp.endMin, _act.endMin);
+                _bestSp.durationMin = _bestSp.endMin - _bestSp.startMin;
+                tiles.splice(_ai, 1);
+                _gcGrew++;
+                // the special's (subcat,duration) bucket CHANGED (e.g. @20→@30); record the seat
+                // for the grown span so the next bunk's gate counts it (the grow was gate-checked
+                // at the new span above, but the reservation was never updated → a leak).
+                if (resourceCommit && _bestSp._ref && _bestSp.kind === 'special') {
+                    try { resourceCommit('special', _ctxGrade, _ctxBunk, _bestSp.startMin, _bestSp.endMin, _bestSp._ref); } catch (_e) {}
+                }
+            }
+        }
+
+        stats.gapCloseTilesPlaced = _gcTiles;
+        stats.gapCloseGrew = _gcGrew;
+
+        // Recompute final coverage from the committed tiles (post GAP-CLOSE): mark each
+        // window tiled iff no free time remains, sum the true residual, and expose the
+        // remaining gaps for the caller's "scan the schedule for gaps" diagnostic.
+        var gaps = [], _fResid = 0, _fTiled = 0;
+        for (var fpi = 0; fpi < periodPlans.length; fpi++) {
+            var _pp = periodPlans[fpi];
+            for (var fwi = 0; fwi < _pp.windows.length; fwi++) {
+                var _rec = _pp.windows[fwi];
+                var _free = freeSubWindows(_rec.start, _rec.end, tiles), _freeMin = 0;
+                for (var fri = 0; fri < _free.length; fri++) {
+                    var _g = _free[fri];
+                    _freeMin += (_g.end - _g.start);
+                    gaps.push({ startMin: _g.start, endMin: _g.end, len: _g.end - _g.start, period: (_pp.period && _pp.period.name) || null, reason: _rec.reason || 'unfillable' });
+                }
+                if (_freeMin === 0) { _rec.tiled = true; _rec.residualMin = 0; _fTiled++; } else { _rec.residualMin = _freeMin; }
+                _fResid += _freeMin;
+            }
+        }
+        stats.windowsTiled = _fTiled;
+        stats.residualMin = _fResid;
+
+        tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+        return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining, gaps: gaps };
+    }
+
+    // Lay out all bunks (independent per bunk — no cross-bunk competition at the
+    // LAYOUT stage). `perBunk` maps bunk -> ctx-like object.
+    function planAllBunksLayout(o) {
+        var order = o.order || Object.keys(o.perBunk || {});
+        var opts = o.opts || {};
+        var layoutByBunk = {};
+        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0, gapCloseTilesPlaced: 0, gapCloseGrew: 0 };
+        for (var i = 0; i < order.length; i++) {
+            var bunk = order[i];
+            var b = (o.perBunk || {})[bunk];
+            if (!b) continue;
+            var res = planBunkLayout({
+                bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
+                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit, resourceRelease: o.resourceRelease
+            });
+            layoutByBunk[bunk] = res;
+            totals.bunks++;
+            totals.periodsConsidered += res.stats.periodsConsidered;
+            totals.windowsConsidered += res.stats.windowsConsidered;
+            totals.windowsTiled += res.stats.windowsTiled;
+            totals.residualMin += res.stats.residualMin;
+            totals.tilesPlaced += res.stats.tilesPlaced;
+            totals.gapCloseTilesPlaced += (res.stats.gapCloseTilesPlaced || 0);
+            totals.gapCloseGrew += (res.stats.gapCloseGrew || 0);
+            // fully wall-to-wall = no free time left after GAP-CLOSE (the true residual).
+            if (res.stats.residualMin === 0) totals.bunksFullyTiled++;
+            Object.keys(res.remaining || {}).forEach(function (k) {
+                if (res.remaining[k] > 0 && res.remaining[k] !== Infinity) {
+                    totals.unmetFloors += res.remaining[k];
+                    if (k.indexOf('special:') === 0) totals.unmetSpecialFloors += res.remaining[k];
+                }
+            });
+        }
+        return { layoutByBunk: layoutByBunk, stats: totals };
+    }
+
+    var api = {
+        VERSION: VERSION,
+        freeSubWindows: freeSubWindows,
+        planBunkLayout: planBunkLayout,
+        planAllBunksLayout: planAllBunksLayout,
+        _durRange: _durRange,
+        _demandKey: _demandKey
+    };
+
+    if (typeof window !== 'undefined') {
+        window.PeriodLayout = api;
+        if (typeof console !== 'undefined') console.log('[PeriodLayout] v' + VERSION + ' loaded');
+    }
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = api;
+    }
+})();

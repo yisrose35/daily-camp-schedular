@@ -5,6 +5,15 @@
 // Respects access control - only shows divisions user can generate
 // Persists field locks between generation runs
 // ============================================================================
+// ★★★ CB-103 — DEAD CODE (not loaded by any HTML). This module self-registers
+//   window.DivisionSelector and its ONLY caller is rbac_integration.js — but NO .html
+//   loads division_selector.js OR rbac_integration.js. The page that ships, flow.html,
+//   loads rbac_init.js, which never references DivisionSelector. So this whole module +
+//   rbac_integration.js are inert. NOTE for anyone reviving it: renderDivisionSelector
+//   interpolates division/subdivision names into modal.innerHTML UNESCAPED — escape them
+//   (window.CampUtils.escapeHtml) before wiring this into a live page. Left in place
+//   (not deleted) — removal is out of scope for the audit pass.
+// ============================================================================
 
 (function() {
     'use strict';
@@ -205,8 +214,10 @@
         }
 
         // Click outside to close
+        let _mdModal = false;
+        modal.addEventListener('mousedown', (e) => { _mdModal = (e.target === modal); });
         modal.onclick = (e) => {
-            if (e.target === modal) {
+            if (e.target === modal && _mdModal) {
                 modal.remove();
                 if (onCancel) onCancel();
             }

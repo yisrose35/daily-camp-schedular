@@ -165,7 +165,16 @@
                      window.CampistryDB?.getRole?.() ||
                      localStorage.getItem('campistry_role') ||
                      'viewer';
-        return role === 'owner' || role === 'admin';
+        // ★ LG-2: schedulers may now write camp_state_kv (leagues / league
+        //   history / config). Previously owner/admin only, so a scheduler's
+        //   saves were dropped here and never reached cloud while the league
+        //   code logged "saved to cloud". Requires migration 009 (scheduler
+        //   INSERT/UPDATE on camp_state_kv) to actually land — until then the
+        //   upsert is caught (non-fatal) by executeBatchSync. Viewers stay
+        //   read-only. NOTE: camp_state_kv writes are whole-key/last-writer-wins
+        //   (no merge except app1/campistryMe fetch-merge), so a scheduler with a
+        //   stale in-memory copy can overwrite another writer's value for a key.
+        return role === 'owner' || role === 'admin' || role === 'scheduler';
     }
 
     function _canReadCampState() {
@@ -548,7 +557,25 @@
             try {
                 const json = JSON.stringify(lite);
                 localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
-                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+                // ★ #V2-1 tail: CAMPISTRY_LOCAL_CACHE is a write-only CROSS-TAB BEACON — its
+                //   VALUE is never read anywhere (the app1 'storage' listener reacts to the
+                //   KEY changing, then re-reads campGlobalSettings_v1 / IDB). Writing the full
+                //   ~839KB config here was an EXACT duplicate of the line above, doubling the
+                //   config's localStorage footprint (~1.6MB) and pushing it toward quota.
+                //   Write a tiny unique beacon instead — the storage event still fires (and
+                //   the campGlobalSettings_v1 write above already triggers the same listener).
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
+                // ★ Cross-camp guard: stamp the local cache with the camp that
+                //   wrote it. campGlobalSettings_v1 + the IDB snapshot are
+                //   BROWSER-WIDE keys — without this stamp, opening a different
+                //   camp on the same browser let hydration merge the previous
+                //   camp's settings into the new camp's cloud (that is how
+                //   foreign special activities slipped into a camp's config).
+                //   The hydrate path refuses + purges on stamp mismatch.
+                try {
+                    const _ownCampId = window.CampistryDB?.getCampId?.();
+                    if (_ownCampId) localStorage.setItem('campistry_settings_camp_id', String(_ownCampId));
+                } catch (_) {}
                 try { sessionStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
                 try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             } catch (innerE) {
@@ -687,6 +714,21 @@
                 return;
             }
             log('Skipping camp_state sync — role cannot access camp_state table (changes saved locally)');
+            // ★★★ CB-111 (+CB-67): v3.13 lets a scheduler EDIT camp config
+            // (facilities / specials / setup) in the UI with no permission toast,
+            // but the cloud write is dropped here by RLS — the edit looks like it
+            // took, yet is invisible on other devices and is overwritten on the
+            // owner's next sync. Surface it ONCE per session so the silent loss
+            // isn't mistaken for a successful save.
+            try {
+                if (!window.__cb111Warned) {
+                    window.__cb111Warned = true;
+                    var _m111 = 'Your role can’t save camp-setup changes to the cloud — edits stay on this device only and may be overwritten. Ask an owner/admin to make config changes.';
+                    if (typeof window.showToast === 'function') window.showToast(_m111, 'warning');
+                    else if (typeof window.toast === 'function') window.toast(_m111, 'warning');
+                    else console.warn('[Hooks] CB-111: ' + _m111);
+                }
+            } catch (_e111) { /* non-fatal */ }
             _pendingChanges = {};
             _lastSyncTime = Date.now();
             return;
@@ -763,6 +805,7 @@
             // client gets the response, causing the echo-suppression check
             // to miss and triggering a redundant re-hydrate.
             _lastSelfWriteAt = Date.now();
+            _recordSelfWriteStamp(nowIso); // ★ deterministic self-echo guard (see _selfWrittenStamps)
 
             // Cache the access token while we have a fresh async context.
             // The beforeunload handler (which runs synchronously) needs a
@@ -854,10 +897,13 @@
         // keys like camperRoster, families, enrollments).  That re-read
         // then becomes the new _localCache — permanently losing those keys
         // until the next cloud hydration restores them.
-        const localSettings = getLocalSettings();
-        const allChanges = { ...localSettings, ..._pendingChanges };
-        _pendingChanges = allChanges;
-
+        // ★★★ CB-14: flush ONLY the keys this device actually changed
+        // (_pendingChanges, populated per-key by saveGlobalSettings →
+        // queueSettingChange). The previous code merged the ENTIRE local
+        // settings snapshot into _pendingChanges, so a force-sync re-upserted
+        // every camp_state_kv key with updated_at=NOW — clobbering newer values
+        // another device had written to keys this device never touched.
+        // "Force" means flush-now (bypass the debounce), not re-push everything.
         await executeBatchSync();
 
         return true;
@@ -870,6 +916,23 @@
     async function verifiedScheduleSave(dateKey, data, attempt = 1) {
         if (!dateKey) dateKey = window.currentScheduleDate;
         if (!data) {
+            // ★★★ CROSS-DATE CORRUPTION GUARD (lazy build) ★★★
+            // Building the payload from window.scheduleAssignments is only safe
+            // when the in-memory schedule actually BELONGS to dateKey. The owner
+            // stamp (window._scheduleAssignmentsDate) is kept atomic with every
+            // schedule data write (date-change load, cloud hydrate, realtime
+            // merge, generation). If it disagrees with dateKey, a concurrent
+            // navigation / hydrate has swapped another day's schedule into
+            // memory — serializing THAT under dateKey would silently corrupt the
+            // cloud row (the exact bug this guards). Refuse instead. Inert when
+            // the stamp is unset (degrades to prior behavior). The next
+            // coherent save on the real owner date persists normally.
+            const _owner = window._scheduleAssignmentsDate;
+            if (_owner && dateKey && _owner !== dateKey) {
+                console.warn('[VERIFIED SAVE] ★ REFUSED lazy save: in-memory schedule belongs to ' +
+                             _owner + ' but target is ' + dateKey + ' — preventing cross-date corruption');
+                return { success: false, skipped: 'owner-mismatch', target: 'skipped' };
+            }
             // ★ FIX: include _perBunkSlotsData + manualSkeleton + _autoGenerated.
             //   Without these, the auto-build's per-bunk geometry was stripped
             //   from the cloud row on every post-generation save. On reload,
@@ -898,12 +961,22 @@
             if (window.dailyOverrideSkeleton && Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length > 0) {
                 data.manualSkeleton = data.manualSkeleton || window.dailyOverrideSkeleton;
             }
+            // ★ Pre-guard the cloud schedule record too: sanitize the skeleton written
+            //   into daily_schedules so this copy can't re-seed corrupt tiles into
+            //   campDailyData_v1 / window.manualSkeleton on a later reload. No-op when
+            //   CampUtils isn't loaded or the skeleton is already clean.
+            if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles && Array.isArray(data.manualSkeleton)) {
+                data.manualSkeleton = window.CampUtils.sanitizeSkeletonTiles(data.manualSkeleton).tiles;
+            }
             // Forward _autoGenerated flag if present in the localStorage row so
             //   load path picks the auto-mode rebuild branch.
             try {
                 const _lsRow = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}')[dateKey];
                 if (_lsRow?._autoGenerated) data._autoGenerated = true;
             } catch (_) {}
+            // Bind the payload to its owner date so ScheduleDB.saveSchedule's
+            // authoritative guard can confirm it (we proved _owner===dateKey above).
+            data._belongsToDate = dateKey;
         }
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
@@ -998,6 +1071,16 @@
                     return result;
                 }
 
+                // ★ The empty-save guard intentionally rejected a wipe-shaped payload
+                //   (e.g. a resource-override sync firing on tab-focus before the
+                //   schedule re-bundles). It returns success:true with target
+                //   'wipe-blocked-*' and is NOT a failure — don't log an error, don't
+                //   retry (a retry just re-blocks → console spam), don't toast.
+                if (result?.target && String(result.target).indexOf('wipe-blocked') === 0) {
+                    log('[VERIFIED SAVE] Skipped wipe-shaped payload (empty-save guard):', result.target);
+                    return result;
+                }
+
                 // 'cloud-unverified' = upsert succeeded but the post-save
                 // SELECT didn't see the row yet (Supabase replication
                 // delay). The data IS in the cloud — retrying would just
@@ -1057,12 +1140,22 @@
         try {
             if (!window.scheduleAssignments) return 0;
             const validNames = new Set();
+            // Seed from the CANONICAL set (fields + specials + allSports + sportMetaData).
+            // The old inline list omitted sportMetaData sports and the live special
+            // list, so generated sports/specials were treated as orphans and nulled
+            // on every load — punching "+ Add" holes into a saved schedule.
+            try {
+                const canon = window.SchedulerCoreUtils?.getValidActivityNames?.();
+                if (canon && typeof canon.forEach === 'function') canon.forEach(n => n && validNames.add(n));
+            } catch (_) {}
             try {
                 const settings = window.loadGlobalSettings?.() || {};
                 const app1 = settings.app1 || {};
                 (app1.fields || []).forEach(f => (f.activities || []).forEach(a => a && validNames.add(a)));
                 (app1.specialActivities || []).forEach(s => s?.name && validNames.add(s.name));
                 (settings.specialActivities || []).forEach(s => s?.name && validNames.add(s.name));
+                Object.keys(app1.sportMetaData || {}).forEach(n => n && validNames.add(n));
+                (app1.allSports || []).forEach(s => { const n = typeof s === 'string' ? s : s?.name; if (n) validNames.add(n); });
                 (settings.facilities || []).forEach(fac => {
                     (fac.activities || []).forEach(a => a && validNames.add(a));
                     (fac.specialActivityNames || []).forEach(n => n && validNames.add(n));
@@ -1076,15 +1169,23 @@
                     if (n) validNames.add(n);
                 });
             } catch (_) {}
-            // System slot types — never treat as orphans.
-            ['Free', 'Lunch', 'Snack', 'Snacks', 'Dismissal',
+            // Live special list — specials sometimes live only in the runtime copy.
+            try {
+                const live = (typeof window.getAllSpecialActivities === 'function') ? window.getAllSpecialActivities() : null;
+                if (Array.isArray(live)) live.forEach(s => s?.name && validNames.add(s.name));
+            } catch (_) {}
+            // System / wall / custom-layer slot types — never treat as orphans.
+            ['Free', 'Free Play', 'No Field', 'Lunch', 'Snack', 'Snacks', 'Dismissal',
              'Swim', 'Pool', 'League Game',
              'Transition/Buffer', 'Transition', 'Buffer',
-             'Lineup', 'Regroup', 'Bus'].forEach(n => validNames.add(n));
+             'Lineup', 'Regroup', 'Bus',
+             'Change', 'Cleanup', 'Main Activity', 'Davening', 'Mincha', 'Canteen', 'Custom'].forEach(n => validNames.add(n));
 
             // Empty registry -> bail rather than nuke everything (registry
             // probably hasn't loaded yet).
             if (validNames.size === 0) return 0;
+            // Case-insensitive match (config vs. placed names can differ in case).
+            const validLower = new Set([...validNames].map(n => String(n).toLowerCase()));
 
             let nulled = 0;
             Object.keys(window.scheduleAssignments).forEach(bunk => {
@@ -1096,9 +1197,17 @@
                     // write `_activity: 'League: <name>'`; transitions and
                     // continuation cells carry their own type markers.
                     if (slot._isTransition || slot._league || slot.continuation) return;
+                    // ★ NEVER null generator-placed or pinned content. The orphan
+                    //   reconcile exists only to turn a STALE MANUAL reference (an
+                    //   activity another device deleted) into a "+ Add" gap. Auto
+                    //   activities are valid by construction; nulling them silently
+                    //   deleted parts of generated schedules on every reload / date
+                    //   switch. Anything the solver placed or that is pinned is safe.
+                    if (slot._autoMode || slot._autoSpecial || slot._autoGenerated || slot._generic ||
+                        slot._fixed || slot._pinned || slot._isPrep || slot._bunkOverride) return;
                     const name = slot._activity || slot.activity || slot.event;
                     if (typeof name === 'string' && name.startsWith('League:')) return;
-                    if (name && !validNames.has(name)) {
+                    if (name && !validLower.has(String(name).toLowerCase())) {
                         slots[i] = null;
                         nulled++;
                     }
@@ -1139,6 +1248,13 @@
                 if (result.data.leagueAssignments) {
                     window.leagueAssignments = result.data.leagueAssignments;
                 }
+                // ★★★ CROSS-DATE GUARD: keep the date stamp coherent with the data we just
+                // hydrated. Without this, force-loading a date other than the current one
+                // leaves window.scheduleAssignments holding dateKey's data while the stamp
+                // still names the old date — a save would then write dateKey's data under
+                // the wrong key (the stamp would falsely "match"). Stamp it to dateKey so
+                // the cross-date save guard stays accurate.
+                window._scheduleAssignmentsDate = dateKey;
                 
                 // ★★★ FIX: Properly hydrate unifiedTimes ★★★
                 if (result.data.unifiedTimes?.length > 0) {
@@ -1264,7 +1380,25 @@
             // (Previously missing! The handler returned true without saving.)
             // ═══════════════════════════════════════════════════════════════
             try {
-                localStorage.setItem('campDailyData_v1', JSON.stringify(data));
+                // ★ #V2-1: PROACTIVE date cap. Previously campDailyData_v1 grew UNBOUNDED
+                //   (every date ever) and only pruned REACTIVELY to 3 dates once a
+                //   QuotaExceededError fired — by which point localStorage was already at
+                //   ~143% and auto-save had been silently skipping. Cap a COPY to the most
+                //   recent ~45 dates (>6 weeks — covers the rotation month-window) so it
+                //   stays bounded; the in-memory `data` and the cloud-bound payload keep
+                //   every date (cloud is per-date, so dropping old dates from the LOCAL
+                //   mirror is lossless).
+                let _lsWrite = data;
+                try {
+                    const _DRE = /^\d{4}-\d{2}-\d{2}$/;
+                    const _dk = Object.keys(data).filter(k => _DRE.test(k));
+                    if (_dk.length > 45) {
+                        _dk.sort();
+                        _lsWrite = Object.assign({}, data);
+                        _dk.slice(0, _dk.length - 45).forEach(k => { delete _lsWrite[k]; });
+                    }
+                } catch (_) { _lsWrite = data; }
+                localStorage.setItem('campDailyData_v1', JSON.stringify(_lsWrite));
             } catch (e) {
                 if (e.name === 'QuotaExceededError') {
                     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1387,7 +1521,15 @@
 
                     unsaved.forEach((dk, index) => {
                         setTimeout(() => {
-                            window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
+                            // ★★★ CB-19: do NOT skipFilter the secondary-date
+                            // fanout. data[dk] is the full local row (all
+                            // divisions, merged from cloud); skipFilter wrote that
+                            // whole-camp snapshot into a scheduler's OWN row for the
+                            // propagated date (stamped NOW), shadowing the owner.
+                            // Without skipFilter, filterScheduleToMyBunks scopes a
+                            // scheduler to their own bunks (owner = no-op). Empty
+                            // scope → empty-save guard blocks it (CB-6/18).
+                            window.ScheduleDB.saveSchedule(dk, data[dk], { allowCrossDate: true })
                                 .then(r => {
                                     if (r?.success) {
                                         window._secondarySaveLog[dk] = Date.now();
@@ -1663,7 +1805,26 @@
             }
 
             if (cloudState) {
-                const localState = getLocalSettings();
+                let localState = getLocalSettings();
+
+                // ★ Cross-camp guard: the local cache (campGlobalSettings_v1 +
+                //   IDB snapshot) is browser-wide, not camp-scoped. If it was
+                //   written by a DIFFERENT camp (stamp mismatch), merging it
+                //   below would push that camp's keys into THIS camp's cloud —
+                //   the newer-local-wins branch and the missing-key backfill
+                //   both do it. Refuse the merge and purge the foreign cache;
+                //   the cloud state is the truth for this camp.
+                try {
+                    const _stamp = localStorage.getItem('campistry_settings_camp_id');
+                    if (_stamp && campId && _stamp !== String(campId)) {
+                        console.warn('🛑 [IntegrationHooks] Local settings cache belongs to camp ' + _stamp + ' but this session is camp ' + campId + ' — discarding the foreign local cache (cloud wins).');
+                        try { localStorage.removeItem(CONFIG.LOCAL_STORAGE_KEY); } catch (_) {}
+                        try { localStorage.removeItem('campistry_settings_camp_id'); } catch (_) {}
+                        try { window.LocalCacheIDB?.clear?.(); } catch (_) {}
+                        _localCache = {};
+                        localState = {};
+                    }
+                } catch (_eCampGuard) {}
 
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
@@ -1847,10 +2008,49 @@
 
     let _campStateChannel = null;
     let _lastSelfWriteAt = 0;
+    // ── Deterministic self-echo guard ───────────────────────────────────────
+    // We stamp our own camp_state_kv upserts with `updated_at: nowIso`
+    // (executeBatchSync) and there is NO updated_at trigger on the table
+    // (migration 001 = column DEFAULT only), so Supabase realtime echoes that
+    // EXACT stamp back to us. Recording the stamps we wrote lets the realtime
+    // handler recognize and drop our own echoes with certainty — unlike the 3s
+    // window below, this can't be defeated by replication delay, and unlike a
+    // content hash it doesn't care whether the written value changed. This is
+    // what stops the hydrate→save→echo→hydrate re-render loop at its source.
+    let _selfWrittenStamps = [];
+    function _normStampMs(s) {
+        if (s == null) return NaN;
+        var str = String(s).trim().replace(' ', 'T');
+        // Realtime serializes timestamptz in UTC; if it arrives WITHOUT a
+        // timezone designator, Date.parse would read it as local time — append
+        // 'Z' so our nowIso and the echoed value normalize to the same instant.
+        if (!/(?:[zZ]|[+\-]\d\d:?\d\d)$/.test(str)) str += 'Z';
+        return Date.parse(str);
+    }
+    function _recordSelfWriteStamp(iso) {
+        _selfWrittenStamps.push({ iso: String(iso), ms: _normStampMs(iso), at: Date.now() });
+        // An echo always lands within seconds; cap the list and drop >60s-old.
+        if (_selfWrittenStamps.length > 64) {
+            var cutoff = Date.now() - 60000;
+            _selfWrittenStamps = _selfWrittenStamps.filter(function (e) { return e.at >= cutoff; });
+        }
+    }
+    function _isSelfWriteEcho(updatedAt) {
+        if (updatedAt == null) return false;
+        var raw = String(updatedAt);
+        var ms = _normStampMs(updatedAt);
+        for (var i = 0; i < _selfWrittenStamps.length; i++) {
+            var e = _selfWrittenStamps[i];
+            if (e.iso === raw) return true;                              // exact string match
+            if (!isNaN(ms) && !isNaN(e.ms) && e.ms === ms) return true;  // same instant, any format
+        }
+        return false;
+    }
     let _lastHydrationDispatchAt = 0;       // throttle: min interval between dispatches
     let _lastHydrationHash = null;          // content hash: skip if cloud unchanged
     const HYDRATION_THROTTLE_MS = 10000;    // 10s — cloud doesn't change faster than this in practice
     let _campStateDebounceTimer = null;
+    let _campStateRemoteKeys = null;        // ★ LG-8: keys changed remotely, drained after re-hydrate
     let _campStateSubscribed = false;
     let _campStateReconnectTimer = null;
     let _campStateReconnectAttempts = 0;
@@ -1881,17 +2081,49 @@
                     table: 'camp_state_kv',
                     filter: `camp_id=eq.${campId}`
                 }, function (payload) {
+                    // ★ Deterministic self-echo guard (PRIMARY): if this change
+                    //   carries an updated_at stamp we just wrote, it's our own
+                    //   echo — drop it. Replication delay can't defeat this the
+                    //   way it defeats the 3s window below, so THIS is what stops
+                    //   the self-echo re-hydrate loop. The time window stays as a
+                    //   fallback for any write path that didn't record a stamp.
+                    if (payload && payload.new && _isSelfWriteEcho(payload.new.updated_at)) {
+                        log('camp_state change ignored (self echo — stamp match)');
+                        return;
+                    }
                     // Self-echo guard: our own UPSERT just fired this event.
                     if (Date.now() - _lastSelfWriteAt < 3000) {
                         log('camp_state change ignored (self echo)');
                         return;
                     }
+                    // ★ LG-8: remember WHICH key changed so we can notify the
+                    //   in-memory module stores after re-hydrating. leagues.js,
+                    //   specialty_leagues.js and special_activities.js each register a
+                    //   key-filtered 'campistry-remote-change' listener to refresh
+                    //   their store — but nothing ever dispatched that event, so a
+                    //   focused tab kept a STALE store and its next whole-key save
+                    //   clobbered the remote edit (no merge). Accumulate across the
+                    //   debounced burst.
+                    var _ck = (payload && payload.new && payload.new.key) ||
+                              (payload && payload.old && payload.old.key) || null;
+                    if (_ck) { (_campStateRemoteKeys || (_campStateRemoteKeys = new Set())).add(_ck); }
                     // Debounce — bulk edits in Me arrive as a rapid burst.
                     if (_campStateDebounceTimer) clearTimeout(_campStateDebounceTimer);
                     _campStateDebounceTimer = setTimeout(async function () {
                         _campStateDebounceTimer = null;
                         log('camp_state remote change — re-hydrating');
                         await hydrateFromCloud();
+                        // ★ LG-8: _localCache is fresh now — tell the in-memory stores
+                        //   which keys changed so they pull the new value. Their
+                        //   refreshFromStorage has its own just-saved protection
+                        //   window, so this can't clobber a local edit in flight.
+                        try {
+                            var _keys = _campStateRemoteKeys ? Array.from(_campStateRemoteKeys) : [];
+                            _campStateRemoteKeys = null;
+                            for (var _i = 0; _i < _keys.length; _i++) {
+                                window.dispatchEvent(new CustomEvent('campistry-remote-change', { detail: { key: _keys[_i] } }));
+                            }
+                        } catch (_e) { /* non-fatal */ }
                     }, 200);
                 })
                 .subscribe(function (status) {
@@ -2019,6 +2251,19 @@
             const newDateKey = e.target.value;
             if (!newDateKey) { window._pendingDateTransition = null; return; }
 
+            // ★★★ TRANSITION SERIALIZATION (cross-date corruption root fix) ★★★
+            // Two date-changes must NEVER run concurrently: they share
+            // window.scheduleAssignments, so an overlapping save-old/load-new from a
+            // second navigation (e.g. a fast user clicking date C while date B is still
+            // loading) interleaves and writes one day's schedule under another day's key.
+            // Serialize: if a transition is already running, wait for it to finish before
+            // starting this one. Bounded so a stuck transition can't deadlock navigation.
+            const _txnWaitStart = Date.now();
+            while (window.__dateTxnInProgress && (Date.now() - _txnWaitStart) < 12000) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+            window.__dateTxnInProgress = true;
+
             // Safety net: even if anything below throws, the transition flag
             // must eventually clear so save hooks don't stay blocked forever.
             const _txnSafety = setTimeout(() => {
@@ -2044,7 +2289,17 @@
             // ═══════════════════════════════════════════════════════════════
             if (oldDateKey && oldDateKey !== newDateKey) {
                 const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
-                if (currentBunks > 0) {
+                // ★★★ CROSS-DATE CORRUPTION GUARD ★★★
+                // Only auto-save oldDateKey if the in-memory schedule STILL belongs to it.
+                // If a racing date-change handler already swapped in another date's data,
+                // saving here would write the wrong day's schedule under oldDateKey —
+                // silently corrupting it (the exact bug this guards against). Inert when
+                // the stamp is unset (degrades to prior behavior).
+                const _memDate = window._scheduleAssignmentsDate;
+                if (_memDate && _memDate !== oldDateKey) {
+                    console.warn('🔗 SKIP auto-save before date change: in-memory data belongs to ' +
+                                 _memDate + ', not ' + oldDateKey + ' — avoiding cross-date corruption');
+                } else if (currentBunks > 0) {
                     console.log('🔗 Auto-saving before date change:', currentBunks, 'bunks');
                     showNotification('Saving...', 'info');
                     try {
@@ -2069,7 +2324,11 @@
                 if (result?.success && result.data) {
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
                     window.leagueAssignments = result.data.leagueAssignments || {};
-                    
+                    // ★★★ CROSS-DATE GUARD: in-memory schedule now belongs to newDateKey.
+                    // Keeps the date stamp coherent so the save guard never false-blocks a
+                    // later edit/save on this date, and a racing save-old can detect drift.
+                    window._scheduleAssignmentsDate = newDateKey;
+
                     // ★★★ FIX: Properly hydrate unifiedTimes ★★★
                     if (result.data.unifiedTimes?.length > 0) {
                         window.unifiedTimes = result.data.unifiedTimes;
@@ -2102,6 +2361,21 @@
                         rainyDayStartTime: window.rainyDayStartTime,
                         source: result.source
                     });
+                } else if (result && result.success) {
+                    // ★ FN-14 FIX: the load SUCCEEDED but this date has NO saved schedule
+                    //   (a fresh/empty date). The old code had no else branch, so
+                    //   window.scheduleAssignments kept the PREVIOUS date's data and
+                    //   _scheduleAssignmentsDate kept the previous date — a generate/save
+                    //   here then mis-stamped to that stale date, leaving the SELECTED date
+                    //   empty (the FN-14 empty-gen). Clear in-memory and bind the stamp to
+                    //   the selected date. Gated on result.success so it ONLY fires on a
+                    //   confirmed-empty result, never a transient load error → it can never
+                    //   blank a date that actually has data.
+                    window.scheduleAssignments = {};
+                    window.leagueAssignments = {};
+                    window._scheduleAssignmentsDate = newDateKey;
+                    if (window.updateTable) { try { window.updateTable(); } catch (_e) {} }
+                    console.log('🔗 No saved schedule for', newDateKey, '— cleared in-memory (fresh/empty date, FN-14 guard)');
                 }
             }
 
@@ -2113,6 +2387,8 @@
                 if (window._pendingDateTransition && window._pendingDateTransition.to === newDateKey) {
                     window._pendingDateTransition = null;
                 }
+                // ★★★ Release the transition lock so a queued navigation can proceed.
+                window.__dateTxnInProgress = false;
             }
         });
 
@@ -2144,9 +2420,56 @@
                     return;
                 }
 
+                // ★★★ CROSS-DATE GUARD: if the in-memory schedule's owner stamp
+                // disagrees with the date we'd queue under, memory belongs to
+                // another day (a concurrent hydrate/realtime swapped it). Queueing
+                // it under dateKey would corrupt that day. Skip — the coherent
+                // owner date will autosave correctly on its own.
+                const _ownerStamp = window._scheduleAssignmentsDate;
+                if (_ownerStamp && dateKey && _ownerStamp !== dateKey) {
+                    console.warn('🔗 SKIP autosave queue: in-memory belongs to ' + _ownerStamp + ', not ' + dateKey);
+                    return;
+                }
+
+                // ★★★ DAY 16 FIX: Don't queue a wipe-shaped save during init.
+                // Every call to saveCurrentDailyData(key, value) — including
+                // ones for UNRELATED settings — triggers this wrapper, which
+                // queues a full scheduleAssignments save based on whatever's
+                // currently in window.scheduleAssignments. During page init,
+                // before cloud hydration completes, scheduleAssignments is
+                // empty {}, so the queued payload is empty too. The debounce
+                // delay then fires the empty save AFTER hydration brings in
+                // the real data — overwriting cloud with empty.
+                //
+                // Skip the queue when the payload would wipe: no bunks at
+                // all, or bunks present but ZERO scheduled activities (the
+                // "structural skeleton" wipe-shape we observed in cloud).
+                // unifiedTimes is NOT a safe signal because some configs
+                // (period-based scheduling) keep it empty even on healthy
+                // schedules. Legitimate post-edit/post-gen flows save via
+                // verifiedScheduleSave / doCloudSaveWithVerification anyway.
+                const sa = window.scheduleAssignments || {};
+                const bunkCount = Object.keys(sa).length;
+                if (bunkCount === 0) return;
+                let hasAnyActivity = false;
+                outer: for (const bk of Object.keys(sa)) {
+                    const arr = sa[bk];
+                    if (!Array.isArray(arr)) continue;
+                    for (const slot of arr) {
+                        if (slot && typeof slot === 'object') {
+                            const act = slot._activity || slot.activity || slot.field || slot.sport;
+                            if (act && act !== 'Free' && act !== '+ Add') {
+                                hasAnyActivity = true;
+                                break outer;
+                            }
+                        }
+                    }
+                }
+                if (!hasAnyActivity) return;
+
                 // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
                 const data = {
-                    scheduleAssignments: window.scheduleAssignments || {},
+                    scheduleAssignments: sa,
                     leagueAssignments: window.leagueAssignments || {},
                     unifiedTimes: window.unifiedTimes || [],
                     divisionTimes: window.divisionTimes || {},
@@ -2173,6 +2496,11 @@
         window.addEventListener('campistry-generation-complete', async (e) => {
             const dateKey = e.detail?.dateKey || window.currentScheduleDate;
             if (!dateKey) return;
+
+            // ★★★ CROSS-DATE STAMP: generation just produced the in-memory schedule
+            // for dateKey — bind the owner stamp so the verified save below (and any
+            // concurrent autosave) is recognized as coherent, not refused as cross-date.
+            window._scheduleAssignmentsDate = dateKey;
 
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
             console.log('🔗 Generation complete for', dateKey, '-', bunkCount, 'bunks');
@@ -2203,6 +2531,104 @@
 
             // Then do verified cloud save (no artificial delay)
             await verifiedScheduleSave(dateKey);
+
+            // ★ FN-59 TRIP WATCHDOG: trips are the user's strongest statement
+            // about the day — every slot overlapping a saved trip MUST show the
+            // trip, no matter what the generation pipeline did. The in-engine
+            // writes cover normal runs, but cold-start hydration races can
+            // still drop them on some generations. After the dust settles,
+            // re-assert trips from the saved store onto the final schedule and
+            // re-save if anything was missing.
+            setTimeout(() => {
+                try {
+                    const dk = dateKey;
+                    if (!dk || window.currentScheduleDate !== dk) return;
+                    let trips = [];
+                    try { const s = localStorage.getItem('campDailyTrips_' + dk); if (s) trips = JSON.parse(s); } catch (e) {}
+                    if (!Array.isArray(trips) || !trips.length) return;
+                    const divisions = window.divisions || {};
+                    const sa = window.scheduleAssignments || {};
+                    let fixedCells = 0;
+                    trips.forEach(trip => {
+                        const tS0 = trip.startMin != null ? trip.startMin : null;
+                        const tE0 = trip.endMin != null ? trip.endMin : null;
+                        if (tS0 == null || tE0 == null) return;
+                        const rawDivs = Array.isArray(trip.division) ? trip.division : [trip.division];
+                        rawDivs.forEach(divName => {
+                            const info = divisions[divName];
+                            if (!info) return;
+                            // clip to the division's day window (same as the engine
+                            // writer) so the anchor span both writers produce agrees
+                            let dS = null, dE = null;
+                            try {
+                                dS = window.CampUtils?.parseTimeToMinutes?.(info.startTime);
+                                dE = window.CampUtils?.parseTimeToMinutes?.(info.endTime);
+                            } catch (eC) {}
+                            const tS = (dS != null) ? Math.max(tS0, dS) : tS0;
+                            const tE = (dE != null) ? Math.min(tE0, dE) : tE0;
+                            if (tE <= tS) return;
+                            (info.bunks || []).forEach(bunk => {
+                                const arr = sa[String(bunk)];
+                                if (!Array.isArray(arr)) return;
+                                // slot times: prefer the per-bunk grid, fall back to
+                                // entry stamps, then division slots
+                                const pbs = window._perBunkSlots?.[divName]?.[String(bunk)]
+                                    || window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)]
+                                    || null;
+                                const dts = Array.isArray(window.divisionTimes?.[divName]) ? window.divisionTimes[divName] : null;
+                                let isFirst = true;
+                                for (let i = 0; i < arr.length; i++) {
+                                    let s = (pbs && pbs[i] && pbs[i].startMin != null) ? pbs[i].startMin
+                                        : (arr[i] && arr[i]._startMin != null) ? arr[i]._startMin
+                                        : (dts && dts[i] && dts[i].startMin != null) ? dts[i].startMin : null;
+                                    let e = (pbs && pbs[i] && pbs[i].endMin != null) ? pbs[i].endMin
+                                        : (arr[i] && arr[i]._endMin != null) ? arr[i]._endMin
+                                        : (dts && dts[i] && dts[i].endMin != null) ? dts[i].endMin : null;
+                                    if (s == null || e == null) continue;
+                                    if (!(s < tE && e > tS)) continue;
+                                    if (arr[i] && arr[i]._isTrip) {
+                                        // normalize the anchor's span to the full trip window
+                                        if (isFirst && !arr[i].continuation && (arr[i]._startMin !== tS || arr[i]._endMin !== tE)) {
+                                            arr[i]._startMin = tS; arr[i]._endMin = tE; fixedCells++;
+                                        }
+                                        isFirst = false; continue;
+                                    }
+                                    arr[i] = {
+                                        field: trip.event || 'Trip', sport: null,
+                                        _activity: trip.event || 'Trip',
+                                        _isTrip: true, _tripEvent: trip.event || 'Trip',
+                                        _tripId: trip.id || null,
+                                        _fixed: true, _pinned: true, _activityLocked: true,
+                                        _autoMode: true, continuation: !isFirst,
+                                        // anchor spans the FULL trip window so the view
+                                        // shows one continuous block; continuations keep
+                                        // slot times and are skipped by renderers
+                                        _startMin: isFirst ? tS : s,
+                                        _endMin: isFirst ? tE : e
+                                    };
+                                    isFirst = false;
+                                    fixedCells++;
+                                }
+                            });
+                        });
+                    });
+                    if (fixedCells > 0) {
+                        console.warn('🔗 [FN-59 watchdog] re-asserted ' + fixedCells + ' missing trip slot(s) — re-saving');
+                        try {
+                            const DK2 = 'campDailyData_v1';
+                            const all2 = JSON.parse(localStorage.getItem(DK2) || '{}');
+                            if (!all2[dk]) all2[dk] = {};
+                            all2[dk].scheduleAssignments = window.scheduleAssignments || {};
+                            all2[dk]._savedAt = Date.now();
+                            localStorage.setItem(DK2, JSON.stringify(all2));
+                        } catch (e2) {}
+                        try { verifiedScheduleSave(dk); } catch (e3) {}
+                        try { window.dispatchEvent(new CustomEvent('campistry-schedule-refreshed', { detail: { dateKey: dk } })); } catch (e4) {}
+                    }
+                } catch (eW) {
+                    console.warn('🔗 [FN-59 watchdog] error:', eW && eW.message);
+                }
+            }, 2000);
 
             // ★★★ Update rotation history for ALL bunks ★★★
             // Manual edits call peiUpdateRotationHistory per bunk, but auto-gen never did.
@@ -2303,7 +2729,36 @@
                         console.log('🔗 Skipping merge - operation in progress');
                         return;
                     }
-                    
+
+                    // ★★★ CROSS-DATE GUARD (cloud corruption root fix) ★★★
+                    // window.scheduleAssignments only ever holds the CURRENTLY-VIEWED
+                    // date. A realtime change for any OTHER date must NOT be merged
+                    // into memory — doing so clobbers the viewed day's schedule and
+                    // desyncs the owner stamp, so the next autosave/save-old writes the
+                    // wrong day's data under the current date's cloud key (silent
+                    // cross-date corruption). For non-viewed dates we only refresh that
+                    // date's localStorage cache (cloud stays authoritative on navigate).
+                    if (change.dateKey && window.currentScheduleDate && change.dateKey !== window.currentScheduleDate) {
+                        try {
+                            const DAILY_KEY = 'campDailyData_v1';
+                            const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                            if (result?.success && result.recordCount === 0) {
+                                delete allData[change.dateKey];
+                            } else if (result?.success && result.data) {
+                                allData[change.dateKey] = {
+                                    scheduleAssignments: result.data.scheduleAssignments || {},
+                                    leagueAssignments: result.data.leagueAssignments || {},
+                                    unifiedTimes: result.data.unifiedTimes || [],
+                                    divisionTimes: result.data.divisionTimes || {}
+                                };
+                            }
+                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        } catch (e) { /* ignore localStorage errors */ }
+                        console.log('🔗 Remote change for non-current date ' + change.dateKey +
+                                    ' — cached to localStorage; in-memory (' + window.currentScheduleDate + ') untouched');
+                        return;
+                    }
+
                     if (result?.success && result.recordCount === 0) {
                         // ★ Cloud empty = owner deleted everything → full clear
                         console.log('🔗 Cloud is empty — clearing all local data');
@@ -2312,6 +2767,7 @@
                         window.divisionTimes = {};
                         window.unifiedTimes = [];
                         window._localGenerationTimestamp = 0;
+                        window._scheduleAssignmentsDate = change.dateKey; // owner stamp coherent with cleared memory
                         try {
                             var DAILY_KEY = 'campDailyData_v1';
                             var allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
@@ -2344,7 +2800,8 @@
                         }
                         
                         window.scheduleAssignments = merged;
-                        
+                        window._scheduleAssignmentsDate = change.dateKey; // owner stamp coherent with merged remote data
+
                         // Also merge league assignments (keyed by DIVISION NAME, not bunk)
                         if (result.data.leagueAssignments) {
                             const cloudLeagues = result.data.leagueAssignments || {};
@@ -2375,12 +2832,18 @@
                         try {
                             const DAILY_KEY = 'campDailyData_v1';
                             const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                            // ★★★ CB-9: carry forward LOCAL_ONLY per-day fields the
+                            // realtime merge doesn't rebuild, so a remote update
+                            // doesn't wipe this date's local-only adjustments.
+                            const _prevRow = allData[dateKey] || {};
+                            const _LOCAL_ONLY = ['bunkActivityOverrides', 'overrides', 'autoSkeleton', '_autoGenerated', '_autoBuildTimelines', '_autoGenMeta', 'manualSkeleton', 'skeleton', 'dailyDisabledSportsByField', 'dailyFieldAvailability', 'disabledSpecialtyLeagues', 'dailyActivityBunkRestrictions', 'leagueRoundState', 'leagueDayCounters'];
                             allData[dateKey] = {
                                 scheduleAssignments: merged,
                                 leagueAssignments: window.leagueAssignments || {},
                                 unifiedTimes: window.unifiedTimes || [],
                                 divisionTimes: window.divisionTimes || {}
                             };
+                            _LOCAL_ONLY.forEach(f => { if (allData[dateKey][f] === undefined && _prevRow[f] !== undefined) allData[dateKey][f] = _prevRow[f]; });
                             localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                         } catch (e) { /* ignore localStorage errors */ }
                         
@@ -2520,6 +2983,27 @@
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
                     window.leagueAssignments = result.data.leagueAssignments || {};
                 }
+                // ★★★ CROSS-DATE GUARD: stamp the date this reloaded data belongs to.
+                window._scheduleAssignmentsDate = dateKey;
+
+                // ★★★ CB-64: also purge the date's rotation history, mirroring the
+                // single-date sibling (calendar.js eraseCurrentDailyData L1209/1238).
+                // Previously eraseAllSchedules deleted the schedule but left the
+                // date's cloud rotation_counts rows + historicalCountedDates intact,
+                // so a later generation re-merged phantom counts for the erased day
+                // (over-counting → unfair rotation). Delete the cloud counts (only on
+                // full access, so a scheduler erase doesn't drop other schedulers'
+                // counts) and rebuild historicalCounts from what remains.
+                try {
+                    if (hasFullAccess && window.RotationCloud?.deleteDate) {
+                        await window.RotationCloud.deleteDate(dateKey);
+                    }
+                    if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                        await window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                    }
+                } catch (eRot64) {
+                    console.warn('🔗 [Hooks] CB-64 rotation cleanup failed (non-fatal):', eRot64);
+                }
 
                 if (window.updateTable) {
                     window.updateTable();
@@ -2567,6 +3051,10 @@
                 if (window.dailyOverrideSkeleton && Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length > 0) {
                     payload.manualSkeleton = payload.manualSkeleton || window.dailyOverrideSkeleton;
                 }
+                // ★ Pre-guard the cloud schedule record (see twin above).
+                if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles && Array.isArray(payload.manualSkeleton)) {
+                    payload.manualSkeleton = window.CampUtils.sanitizeSkeletonTiles(payload.manualSkeleton).tiles;
+                }
                 try {
                     const _lsRow = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}')[dateKey];
                     if (_lsRow?._autoGenerated) payload._autoGenerated = true;
@@ -2583,7 +3071,14 @@
                 try {
                     const DAILY_KEY = 'campDailyData_v1';
                     const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                    // ★★★ CB-9: carry forward LOCAL_ONLY per-day fields the cloud
+                    // payload doesn't carry, so a tab-close final save doesn't wipe
+                    // the current date's daily-adjustment overrides etc. (mirrors
+                    // setLocalSchedule's LOCAL_ONLY_FIELDS preservation).
+                    const _prevRow = allData[dateKey] || {};
+                    const _LOCAL_ONLY = ['bunkActivityOverrides', 'overrides', 'autoSkeleton', '_autoGenerated', '_autoBuildTimelines', '_autoGenMeta', 'manualSkeleton', 'skeleton', 'dailyDisabledSportsByField', 'dailyFieldAvailability', 'disabledSpecialtyLeagues', 'dailyActivityBunkRestrictions', 'leagueRoundState', 'leagueDayCounters'];
                     allData[dateKey] = payload;
+                    _LOCAL_ONLY.forEach(f => { if (allData[dateKey][f] === undefined && _prevRow[f] !== undefined) allData[dateKey][f] = _prevRow[f]; });
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                 } catch (err) {
                     logError('Final save failed:', err);
@@ -2840,4 +3335,132 @@
     console.log('   Commands: diagnoseScheduleSync(), verifiedScheduleSave(), forceLoadScheduleFromCloud()');
     console.log('   v6.8: Scheduler role guard for camp_state + localStorage fallback hydration');
 
+})();
+
+// =====================================================================
+// ★ CROSS-SCHEDULER CONFLICT NOTIFICATIONS — RECEIVER (MS-4)
+// The post-edit conflict flow inserts rows into the `notifications`
+// table ("notify other scheduler" / "bypassed"), but nothing ever READ
+// them — the other user was never actually notified. This receiver:
+//  1. on load + via realtime INSERT, fetches my unread notifications
+//  2. shows dismissible cards (dismiss = mark read in the table)
+//  3. flags the conflicting entries on the loaded date
+//     (entry._conflictFlagged → red tile in the auto grid)
+// =====================================================================
+(function () {
+    'use strict';
+    let _notifChannel = null;
+
+    function _client() {
+        return window.CampistryDB?.getClient?.() || window.supabaseClient || window.supabase;
+    }
+
+    async function fetchAndShow() {
+        try {
+            const c = _client();
+            const uid = window.CampistryDB?.getUserId?.();
+            if (!c || !uid || !c.from) return;
+            const { data, error } = await c.from('notifications')
+                .select('id,type,title,message,metadata,created_at')
+                .eq('user_id', uid).eq('read', false)
+                .in('type', ['schedule_conflict', 'schedule_bypassed'])
+                .order('created_at', { ascending: false }).limit(20);
+            if (error || !data || !data.length) return;
+            showCards(data);
+            flagTiles(data);
+        } catch (e) { /* non-fatal */ }
+    }
+
+    function flagTiles(notifs) {
+        try {
+            // MS-4g: grid re-renders rebuild entry objects, wiping the
+            // _conflictFlagged mark — so also maintain a render-proof map
+            // (dateKey|bunk|location → true) that blockStyle consults.
+            const map = {};
+            notifs.forEach(n => {
+                const md = n.metadata || {};
+                if (!md.dateKey || !md.location) return;
+                (md.bunks || []).forEach(b => { map[md.dateKey + '|' + b + '|' + md.location] = true; });
+            });
+            window.__conflictFlagMap = map;
+            const dk = window.currentScheduleDate;
+            if (!dk) return;
+            let flagged = 0;
+            notifs.forEach(n => {
+                const md = n.metadata || {};
+                if (md.dateKey !== dk) return;
+                (md.bunks || []).forEach(b => {
+                    const arr = (window.scheduleAssignments || {})[b] || [];
+                    arr.forEach(e => {
+                        if (!e || e.continuation) return;
+                        const f = (typeof e.field === 'object') ? (e.field && e.field.name) : e.field;
+                        if (md.location && String(f) === String(md.location) && !e._conflictFlagged) {
+                            e._conflictFlagged = true;
+                            flagged++;
+                        }
+                    });
+                });
+            });
+            if (flagged > 0 || Object.keys(map).length > 0) {
+                console.log('🔗 [ConflictNotify] flagged ' + flagged + ' conflicting cell(s) on ' + dk + ' (map: ' + Object.keys(map).length + ')');
+                try { window.renderStaggeredView?.(); } catch (e) {}
+                try { window.updateTable?.(); } catch (e) {}
+                try { window.dispatchEvent(new CustomEvent('campistry-schedule-refreshed', { detail: { dateKey: dk } })); } catch (e) {}
+            }
+        } catch (e) { /* non-fatal */ }
+    }
+
+    function showCards(notifs) {
+        let host = document.getElementById('campistry-conflict-notices');
+        if (host) host.remove();
+        host = document.createElement('div');
+        host.id = 'campistry-conflict-notices';
+        host.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99999;max-width:380px;display:flex;flex-direction:column;gap:8px;';
+        const esc = (window.CampUtils && window.CampUtils.escapeHtml) || function (s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+            });
+        };
+        notifs.slice(0, 5).forEach(n => {
+            const card = document.createElement('div');
+            card.style.cssText = 'background:#fff7ed;border:1px solid #f59e0b;border-left:4px solid #f59e0b;border-radius:8px;padding:10px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.18);font-size:0.85rem;color:#78350f;';
+            card.innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
+                + '<div><strong>' + esc(n.title || 'Schedule notice') + '</strong>'
+                + '<div style="margin-top:4px;line-height:1.35;">' + esc(n.message || '') + '</div></div>'
+                + '<button title="Dismiss" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:#92400e;flex-shrink:0;">&#10005;</button></div>';
+            card.querySelector('button').addEventListener('click', async function () {
+                card.remove();
+                try { await _client().from('notifications').update({ read: true }).eq('id', n.id); } catch (e) {}
+                if (host.children.length === 0) host.remove();
+                // MS-4g: dismissing clears this notification's red flags + repaints
+                try {
+                    const md = n.metadata || {};
+                    const m = window.__conflictFlagMap || {};
+                    (md.bunks || []).forEach(b => { delete m[md.dateKey + '|' + b + '|' + md.location]; });
+                    window.updateTable?.();
+                    window.renderStaggeredView?.();
+                } catch (e) {}
+            });
+            host.appendChild(card);
+        });
+        document.body.appendChild(host);
+    }
+
+    function subscribe() {
+        try {
+            const c = _client();
+            const uid = window.CampistryDB?.getUserId?.();
+            if (!c || !uid || !c.channel || _notifChannel) return;
+            _notifChannel = c.channel('campistry-notif-' + uid)
+                .on('postgres_changes',
+                    { event: 'INSERT', schema: 'public', table: 'notifications', filter: 'user_id=eq.' + uid },
+                    function () { fetchAndShow(); })
+                .subscribe();
+            console.log('🔗 [ConflictNotify] realtime subscription active');
+        } catch (e) { /* non-fatal */ }
+    }
+
+    // start after auth/init settles; re-flag when the date's schedule reloads
+    setTimeout(function () { fetchAndShow(); subscribe(); }, 6000);
+    window.__refreshConflictNotifications = fetchAndShow;
 })();

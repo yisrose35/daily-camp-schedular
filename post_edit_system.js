@@ -37,6 +37,19 @@
 
     console.log('📝 Post-Generation Edit System v3.3 (UI Client) loading...');
 
+    // ★★★ CB-7: this file had NO HTML escaper, interpolating user-controlled
+    // bunk / activity / field / location names raw into innerHTML across the
+    // edit modal, conflict panel, drag tooltip and availability banner — a
+    // broad stored/attribute XSS (a bunk or field named with an <img onerror>
+    // executes in the editor's session). Delegate to the shared CampUtils
+    // escaper (complete &<>"' set) with a local fallback so it works even if
+    // campistry_utils.js hasn't loaded yet.
+    const escHtml = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
@@ -273,7 +286,18 @@
             maxCapacity = 2;
         }
         
-        const editableBunks = getEditableBunks();
+        // ★ MS-4b: conflict classification uses GENERATION scope — see
+        // unified_schedule_system.checkLocationConflict for the rationale
+        let _conflictOwnScope = null;
+        try {
+            const _gd = window.AccessControl?.getGeneratableDivisions?.();
+            const _allDivCount = Object.keys(window.divisions || {}).length;
+            if (Array.isArray(_gd) && _gd.length > 0 && _allDivCount > 0 && _gd.length < _allDivCount) {
+                _conflictOwnScope = new Set();
+                _gd.forEach(dn => (((window.divisions || {})[dn] || {}).bunks || []).forEach(b => _conflictOwnScope.add(String(b))));
+            }
+        } catch (_eScope) { /* fall back */ }
+        const editableBunks = _conflictOwnScope || getEditableBunks();
         const conflicts = [];
         const usageBySlot = {};
         
@@ -423,7 +447,9 @@
         console.log(`[PostEdit] 📅 Bypass save using date key: ${dateKey}`);
         
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped the write-only `scheduleAssignments_${dateKey}` mirror — it was
+            // never read anywhere (the recovery path reads campDailyData_v1[dateKey] below), so it
+            // only burned localStorage quota and hastened QuotaExceededError on the canonical write.
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -475,9 +501,9 @@
         
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
         const userId = window.CampistryDB?.getUserId?.() || null;
-        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        const dateKey = window.currentScheduleDate || window.currentDate || new Date().toISOString().split('T')[0];
         if (!campId) return;
-        
+
         try {
             const affectedDivisions = new Set();
             const divisions = window.divisions || {};
@@ -486,17 +512,23 @@
                     if (divData.bunks?.includes(bunk)) affectedDivisions.add(divName);
                 }
             }
-            
+
+            // ★ camp_users stores division scope in assigned_divisions
+            // (selecting the nonexistent `divisions` column errored the whole
+            // query, so notifications were NEVER sent)
             const { data: schedulers } = await supabase
-                .from('camp_users').select('user_id, divisions')
+                .from('camp_users').select('user_id, assigned_divisions')
                 .eq('camp_id', campId).neq('user_id', userId);
-            if (!schedulers) return;
-            
+
             const notifyUsers = [];
-            for (const scheduler of schedulers) {
-                const theirDivisions = scheduler.divisions || [];
+            for (const scheduler of (schedulers || [])) {
+                if (!scheduler.user_id) continue;
+                const theirDivisions = scheduler.assigned_divisions || [];
                 if (theirDivisions.some(d => affectedDivisions.has(d))) notifyUsers.push(scheduler.user_id);
             }
+            // ★ the camp OWNER schedules every division but is not a
+            // camp_users row — include them (camp_id is the owner's uid)
+            if (campId && campId !== userId && !notifyUsers.includes(campId)) notifyUsers.push(campId);
             if (notifyUsers.length === 0) return;
             
             const notifications = notifyUsers.map(targetUserId => ({
@@ -606,19 +638,10 @@
                            document.getElementById('datePicker')?.value ||
                            new Date().toISOString().split('T')[0];
         
-        const storageKey = `scheduleAssignments_${currentDate}`;
-        try {
-            localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
-        } catch (e) { console.error('[PostEdit] Failed to save to localStorage:', e); }
-        
-        const unifiedKeyWithDate = `campDailyData_v1_${currentDate}`;
-        try {
-            const dailyData = JSON.parse(localStorage.getItem(unifiedKeyWithDate) || '{}');
-            dailyData.scheduleAssignments = window.scheduleAssignments;
-            dailyData._postEditAt = Date.now();
-            localStorage.setItem(unifiedKeyWithDate, JSON.stringify(dailyData));
-        } catch (e) { console.error('[PostEdit] Failed to save to unified storage (per-date):', e); }
-        
+        // ★ CB-52: removed the two write-only mirrors `scheduleAssignments_${currentDate}` and
+        // `campDailyData_v1_${currentDate}` — neither is read anywhere in the repo; they only burned
+        // localStorage quota and brought the canonical campDailyData_v1 write (below) closer to
+        // QuotaExceededError. The canonical map keyed by currentDate is the real read/recovery path.
         try {
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
@@ -675,7 +698,9 @@
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
         
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+        let _mdModalOverlay = false;
+        overlay.addEventListener('mousedown', (e) => { _mdModalOverlay = (e.target === overlay); });
+        overlay.addEventListener('click', (e) => { if (e.target === overlay && _mdModalOverlay) closeModal(); });
         const escHandler = (e) => { if (e.key === 'Escape') { closeModal(); document.removeEventListener('keydown', escHandler); } };
         document.addEventListener('keydown', escHandler);
         
@@ -684,6 +709,464 @@
 
     function closeModal() {
         document.getElementById(OVERLAY_ID)?.remove();
+    }
+
+    // =========================================================================
+    // BUNK MINI REPORT — inline "what has this bunk done" panel for post-edit
+    // Surfaces rotation history + today's schedule + open fields so the user
+    // doesn't have to leave the edit modal and open the reports page.
+    //   • Access-filtered: only activities this bunk is actually allowed to do.
+    //   • Shows each activity's configured max usage / limit.
+    //   • Live: highlights the activity you're typing/picking and flags repeats
+    //     or limit breaches (re-rendered via renderBunkReportBody on input).
+    // =========================================================================
+
+    // Configured max-usage per activity (specials carry maxUsage/maxUsagePeriod;
+    // sports have no rotation cap → unlimited). Returns { max, period } | null.
+    function _reportActivityLimit(activityName, specialsCfg) {
+        const key = (activityName || '').toLowerCase().trim();
+        for (const s of specialsCfg) {
+            if (!s || !s.name || s.name.toLowerCase().trim() !== key) continue;
+            const mx = parseInt(s.maxUsage, 10);
+            if (mx > 0) return { max: mx, period: s.maxUsagePeriod || null };
+        }
+        return null;
+    }
+
+    // Whether this bunk is allowed to do the activity (honors accessRestrictions).
+    // Specials use the exposed duplicate-safe check; sports are allowed if any
+    // hosting field is open to the bunk's division. Fails OPEN so a lookup bug
+    // never wrongly hides a legitimate option.
+    function _reportBunkCanAccess(activityName, bunk, divName, gs) {
+        try {
+            const RE = window.RotationEngine;
+            if (RE && RE.isSpecialActivity && RE.isSpecialActivity(activityName)) {
+                if (typeof window.isSpecialAvailableForBunk === 'function') {
+                    return window.isSpecialAvailableForBunk(activityName, divName, bunk, gs);
+                }
+                return true;
+            }
+            const key = (activityName || '').toLowerCase().trim();
+            const fields = ((gs && gs.app1) || {}).fields || [];
+            const hosts = fields.filter(f => (f.activities || [])
+                .some(a => String(a).toLowerCase().trim() === key));
+            if (!hosts.length) return true; // unknown mapping — don't hide
+            for (const f of hosts) {
+                const ar = f.accessRestrictions;
+                if (!ar || !ar.enabled) return true;            // an open field hosts it
+                const divs = ar.divisions || {};
+                if (!Object.keys(divs).length) return true;     // toggled on, no grades = misconfig → open
+                const dk = (String(divName) in divs) ? String(divName)
+                    : ((divName in divs) ? divName : null);
+                if (dk === null) continue;                       // this field blocks the division
+                const bunkList = divs[dk];
+                if (!Array.isArray(bunkList) || bunkList.length === 0) return true; // all bunks in div
+                const bunkStr = String(bunk), bunkNum = parseInt(bunk, 10);
+                if (bunkList.some(b => String(b) === bunkStr || parseInt(b, 10) === bunkNum)) return true;
+            }
+            return false;
+        } catch (e) {
+            return true; // fail open
+        }
+    }
+
+    // Normalize a checkLocationConflict result into a report availability entry.
+    // Status is derived from usage vs capacity (NOT hasConflict) so a sharable
+    // field with room left reads as 'partial', not falsely 'free'. `users` holds
+    // the occupying bunk/activity when the field is full (conflicts populated).
+    function _reportAvailEntry(check) {
+        const usage = Math.max(0, check.currentUsage || 0);
+        const max = Math.max(1, check.maxCapacity || 1);
+        const status = usage <= 0 ? 'free' : (usage < max ? 'partial' : 'busy');
+        const seen = new Set();
+        const users = [];
+        (check.conflicts || []).forEach(c => {
+            const key = (c.bunk || '') + '|' + (c.activity || '');
+            if (seen.has(key)) return;
+            seen.add(key);
+            users.push({ bunk: c.bunk, activity: c.activity });
+        });
+        return { status, usage, max, users };
+    }
+
+    // Expose so the unified editor can normalize with identical semantics.
+    window.PostEditReportAvail = _reportAvailEntry;
+
+    // ── Cloud rotation counts ──────────────────────────────────────────────
+    // The authoritative per-bunk/activity usage lives in the cloud
+    // (rotation_counts, synced from camp state), NOT local historicalCounts
+    // which can be stale after another scheduler generates. RotationCloud.load()
+    // is async (30s-cached), so the report renders immediately with the local
+    // count, then re-renders once the cloud snapshot resolves.
+    let _reportCloudCache = null;
+    function _ciGet(obj, key) {
+        if (!obj) return undefined;
+        if (obj[key] != null) return obj[key];
+        const lk = String(key).toLowerCase().trim();
+        for (const k in obj) if (k.toLowerCase().trim() === lk) return obj[k];
+        return undefined;
+    }
+    function _cloudDaysSince(lastDateStr) {
+        if (!lastDateStr) return null;
+        const today = window.currentScheduleDate ||
+            (typeof window.currentDate === 'string' ? window.currentDate : null);
+        if (!today) return null;
+        const a = new Date(today + 'T12:00:00'), b = new Date(lastDateStr + 'T12:00:00');
+        if (isNaN(a) || isNaN(b)) return null;
+        return Math.max(0, Math.round((a - b) / 86400000));
+    }
+    // Fire the async cloud load after the panel mounts; re-render the body with
+    // the proper counts once it resolves. Self-contained so no caller wiring.
+    function _reportScheduleCloudHydrate(bunk, divName, ctx, startMin, endMin) {
+        try {
+            if (!window.RotationCloud || typeof window.RotationCloud.load !== 'function') return;
+            setTimeout(() => {
+                if (!document.getElementById('post-edit-report-body')) return;
+                Promise.resolve(window.RotationCloud.load()).then(data => {
+                    if (!data || !data.counts) return;
+                    _reportCloudCache = data;
+                    try { window.RotationEngine?.mergeCloudData?.(data); } catch (_) { }
+                    const el = document.getElementById('post-edit-report-body');
+                    if (!el) return;
+                    const sel = document.getElementById('post-edit-activity')?.value || '';
+                    el.innerHTML = renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, sel, startMin, endMin);
+                }).catch(() => { });
+            }, 0);
+        } catch (_) { /* offline / no cloud — keep local counts */ }
+    }
+
+    // Build the location + availability context the report needs for the
+    // "Open fields at this time" section. Self-contained so the report can be
+    // rendered from any modal (including the unified_schedule_system editor)
+    // without the caller precomputing anything.
+    function _reportBuildContext(bunk, startMin, endMin) {
+        const locations = getAllLocations();
+        const unifiedTimes = window.unifiedTimes || [];
+        const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
+        const locationAvailMap = {};
+        for (const loc of locations) {
+            try {
+                locationAvailMap[loc.name] = _reportAvailEntry(checkLocationConflict(loc.name, slots, bunk));
+            } catch (_) {
+                locationAvailMap[loc.name] = { status: 'free', usage: 0, max: 1, users: [] };
+            }
+        }
+        return _reportAugmentFields(bunk, startMin, endMin, locations, locationAvailMap);
+    }
+
+    // checkLocationConflict only sees normal entry.field usage. League games live
+    // in window.leagueAssignments matchup strings and pinned/custom tiles reserve
+    // their real facility via entry._reservedFields — both invisible to it. Fold
+    // those in (from the unified helpers) so the report's field sections include
+    // league venues + custom pinned fields and mark them busy. Works on copies so
+    // the caller's dropdown data is untouched. Returns { locations, locationAvailMap }.
+    function _titleCaseField(s) {
+        return String(s || '').replace(/\b\w/g, c => c.toUpperCase());
+    }
+    function _reportAugmentFields(bunk, startMin, endMin, locations, locationAvailMap) {
+        const outLocs = (locations || []).slice();
+        const outMap = Object.assign({}, locationAvailMap || {});
+        try {
+            const lg = (typeof window.getLeagueFieldsInTimeRange === 'function')
+                ? window.getLeagueFieldsInTimeRange(startMin, endMin) : null;
+            const pn = (typeof window.getPinnedReservedFieldsInTimeRange === 'function')
+                ? window.getPinnedReservedFieldsInTimeRange(startMin, endMin, bunk) : null;
+            const known = new Map(outLocs.map(l => [String(l.name).toLowerCase().trim(), l]));
+            const mark = (set, label) => {
+                if (!set || typeof set.forEach !== 'function') return;
+                set.forEach(nl => {
+                    const key = String(nl).toLowerCase().trim();
+                    if (!key) return;
+                    let loc = known.get(key);
+                    if (!loc) {
+                        loc = { name: _titleCaseField(key), type: 'field', capacity: 1, activities: [] };
+                        known.set(key, loc);
+                        outLocs.push(loc);
+                    }
+                    const prev = outMap[loc.name] || { status: 'free', usage: 0, max: 1, users: [] };
+                    const users = (prev.users && prev.users.length) ? prev.users : [{ activity: label, bunk: '' }];
+                    outMap[loc.name] = { status: 'busy', usage: Math.max(1, prev.usage || 0), max: prev.max || 1, users };
+                });
+            };
+            mark(lg, 'League game');
+            mark(pn, 'Reserved (pinned)');
+        } catch (e) { debugLog('reportAugmentFields error', e); }
+        return { locations: outLocs, locationAvailMap: outMap };
+    }
+    // Expose so the unified editor's context builder folds in the same fields.
+    window.PostEditReportAugment = _reportAugmentFields;
+
+    // Re-renderable inner body of the report. `selectedActivity` is the value
+    // currently in the modal's activity field, used for live highlighting/flags.
+    function renderBunkReportBody(bunk, divName, locations, locationAvailMap, selectedActivity, startMin, endMin) {
+        try {
+            const RE = window.RotationEngine;
+            const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const app1 = gs.app1 || {};
+            const specialsCfg = (window.getGlobalSpecialActivities && window.getGlobalSpecialActivities())
+                || app1.specialActivities || [];
+            const selKey = (selectedActivity || '').toLowerCase().trim();
+            // Prefer the authoritative cloud snapshot when it has loaded.
+            const cloudCounts = _reportCloudCache && _reportCloudCache.counts
+                ? (_ciGet(_reportCloudCache.counts, bunk) || {}) : null;
+            const cloudLast = _reportCloudCache && _reportCloudCache.lastDone
+                ? (_ciGet(_reportCloudCache.lastDone, bunk) || {}) : null;
+            const _skip = (name) => {
+                const low = (name || '').toLowerCase().trim();
+                return !low || low === 'free' || low === 'free play'
+                    || low.indexOf('transition') !== -1 || low.indexOf('lunch') !== -1
+                    || low.indexOf('buffer') !== -1 || low.indexOf('regroup') !== -1;
+            };
+
+            // --- 1) What this bunk already has scheduled TODAY ---
+            const todayActs = [];
+            const todayLower = new Set();
+            (peiBunkActivities(bunk, divName) || []).forEach(a => {
+                const name = a.entry && a.entry._activity;
+                if (_skip(name)) return;
+                todayActs.push({ name, startMin: a.startMin });
+                todayLower.add(name.toLowerCase().trim());
+            });
+            todayActs.sort((a, b) => a.startMin - b.startMin);
+
+            // --- 2) Rotation totals: what they've done, how many times, vs limit ---
+            //        (access-filtered to only what this bunk may do) ---
+            const masterActs = (RE && RE.getAllActivityNames) ? RE.getAllActivityNames() : [];
+            const masterSet = new Set(masterActs.map(a => (a || '').toLowerCase().trim()));
+            const allActs = masterActs.filter(act => _reportBunkCanAccess(act, bunk, divName, gs));
+            const accessibleSet = new Set(allActs.map(a => (a || '').toLowerCase().trim()));
+            const done = [];
+            const never = [];
+            allActs.forEach(act => {
+                const key = (act || '').toLowerCase().trim();
+                // Count: cloud snapshot is authoritative; fall back to local.
+                let count;
+                if (cloudCounts) count = _ciGet(cloudCounts, act) || 0;
+                else count = (RE && RE.getActivityCount) ? (RE.getActivityCount(bunk, act) || 0) : 0;
+                // Recency: derive from cloud lastDone when available.
+                let daysSince;
+                if (cloudLast) daysSince = _cloudDaysSince(_ciGet(cloudLast, act));
+                else daysSince = (RE && RE.getDaysSinceActivity) ? RE.getDaysSinceActivity(bunk, act) : null;
+                const isToday = todayLower.has(key);
+                const limit = _reportActivityLimit(act, specialsCfg);
+                const rec = { act, count, daysSince, isToday, limit, sel: key === selKey };
+                if (count > 0 || isToday) done.push(rec); else never.push(rec);
+            });
+            done.sort((a, b) => (b.count - a.count) || a.act.localeCompare(b.act));
+            never.sort((a, b) => a.act.localeCompare(b.act));
+
+            // --- 2b) Suggestions: what this bunk SHOULD get next ---
+            // Primary source is the same rotation+availability scorer the auto
+            // Quick-Pick uses (open now, fair by history). If nothing is open we
+            // fall back to a pure history ranking (new first, then longest-ago).
+            const doneByKey = {};
+            done.forEach(d => { doneByKey[d.act.toLowerCase().trim()] = d; });
+            const reasonFor = (key) => {
+                const d = doneByKey[key];
+                if (!d || d.count <= 0) return 'new for this bunk';
+                if (d.daysSince && d.daysSince >= 1) return `not in ${d.daysSince}d`;
+                return `only ${d.count}× so far`;
+            };
+            const suggestions = [];
+            const sugSeen = new Set();
+            const pushSug = (activity, field, open) => {
+                const k = (activity || '').toLowerCase().trim();
+                if (!k || sugSeen.has(k) || todayLower.has(k)) return;
+                if (masterSet.has(k) && !accessibleSet.has(k)) return; // restricted
+                const d = doneByKey[k];
+                if (d && d.limit && d.count >= d.limit.max) return;    // at limit
+                sugSeen.add(k);
+                suggestions.push({ activity, field: field && field !== activity ? field : null, reason: reasonFor(k), open });
+            };
+            try {
+                const cand = (typeof peiAutoFillCandidates === 'function')
+                    ? peiAutoFillCandidates(bunk, divName, startMin, endMin) : [];
+                for (const c of cand) { pushSug(c.activity, c.field, true); if (suggestions.length >= 3) break; }
+            } catch (_) { /* scorer unavailable */ }
+            if (suggestions.length < 3) {
+                // History fallback: never-done first, then longest-since / least-played.
+                const pool = [...never.map(n => ({ act: n.act, ds: Infinity, ct: 0 })),
+                    ...done.map(d => ({ act: d.act, ds: (d.daysSince == null ? 0 : d.daysSince), ct: d.count }))]
+                    .sort((a, b) => (b.ds - a.ds) || (a.ct - b.ct) || a.act.localeCompare(b.act));
+                for (const p of pool) { pushSug(p.act, null, false); if (suggestions.length >= 3) break; }
+            }
+
+            // --- 3) Field status at THIS time slot (fields + facility-hosted
+            //        general activities; specials are activities, not courts) ---
+            const fieldLocs = (locations || []).filter(l => l.type === 'field' || l.type === 'general');
+            const openF = [], busyF = [];
+            fieldLocs.forEach(l => {
+                const av = locationAvailMap[l.name] || { status: 'free', usage: 0, max: 1, users: [] };
+                (av.status === 'busy' ? busyF : openF).push({ l, av });
+            });
+            // Open ones first (free before partial), then busy alphabetical.
+            openF.sort((a, b) => (a.av.status === b.av.status ? a.l.name.localeCompare(b.l.name) : (a.av.status === 'free' ? -1 : 1)));
+            busyF.sort((a, b) => a.l.name.localeCompare(b.l.name));
+
+            const recencyLabel = (d) => {
+                if (d === 0) return 'today';
+                if (d === 1) return 'yesterday';
+                if (d && d > 1) return d + 'd ago';
+                return null;
+            };
+            const periodLabel = (p) => p === 'half' ? '/half' : p === 'week' ? '/wk' : p === 'month' ? '/mo' : '';
+
+            // --- Summary stats ---
+            const triedCount = done.filter(d => d.count > 0).length;
+            const totalDone = done.reduce((s, d) => s + d.count, 0);
+            const maxCount = Math.max(1, ...done.map(d => d.count));
+
+            // --- Live note for the activity currently being entered ---
+            const note = (bg, bd, fg, txt) => `<div style="display:flex;gap:7px;align-items:flex-start;background:${bg};border:1px solid ${bd};color:${fg};border-radius:8px;padding:8px 11px;font-size:0.78rem;line-height:1.35;margin-bottom:12px;"><span style="width:6px;height:6px;border-radius:50%;background:${fg};margin-top:6px;flex:0 0 auto;"></span><span>${txt}</span></div>`;
+            let noteHtml = '';
+            if (selKey) {
+                const inDone = done.find(d => d.sel);
+                const inNever = never.find(d => d.sel);
+                const known = inDone || inNever;
+                if (known) {
+                    if (todayLower.has(selKey)) {
+                        noteHtml = note('#fef2f2', '#fecaca', '#b91c1c', `<b>${escHtml(known.act)}</b> is already scheduled for this bunk today.`);
+                    } else if (inDone && inDone.limit && inDone.count >= inDone.limit.max) {
+                        noteHtml = note('#fef2f2', '#fecaca', '#b91c1c', `<b>${escHtml(known.act)}</b> is at its limit (${inDone.count}/${inDone.limit.max}${periodLabel(inDone.limit.period)}).`);
+                    } else if (inNever) {
+                        noteHtml = note('#f0fdf4', '#bbf7d0', '#15803d', `First time — this bunk hasn't done <b>${escHtml(known.act)}</b> yet.`);
+                    } else {
+                        const rec = recencyLabel(inDone.daysSince);
+                        noteHtml = note('#eff6ff', '#bfdbfe', '#1d4ed8', `<b>${escHtml(inDone.act)}</b>: done ${inDone.count}×${inDone.limit ? ` (max ${inDone.limit.max}${periodLabel(inDone.limit.period)})` : ''}${rec ? `, last ${rec}` : ''}.`);
+                    }
+                } else if (masterSet.has(selKey) && !accessibleSet.has(selKey)) {
+                    noteHtml = note('#fffbeb', '#fde68a', '#b45309', `<b>${escHtml(selectedActivity.trim())}</b> is restricted — this bunk isn't allowed to do it.`);
+                }
+            }
+
+            // --- Reusable bits ---
+            const chip = (label, bg, fg, extra) => `<span style="display:inline-flex;align-items:center;background:${bg};color:${fg};border-radius:20px;padding:3px 10px;font-size:0.72rem;font-weight:500;margin:0 4px 4px 0;">${label}${extra || ''}</span>`;
+            const sectionTitle = (t, badge) => `<div style="display:flex;align-items:center;gap:6px;margin:14px 0 7px 0;"><span style="font-weight:700;color:#6b7280;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.05em;">${t}</span>${badge != null ? `<span style="background:#eef2ff;color:#4338ca;font-size:0.65rem;font-weight:700;border-radius:10px;padding:1px 7px;">${badge}</span>` : ''}<span style="flex:1;height:1px;background:#f0f0f2;"></span></div>`;
+            const empty = (t) => `<div style="color:#9ca3af;font-size:0.75rem;font-style:italic;">${t}</div>`;
+
+            // --- Stat strip ---
+            const statPill = (n, l, c) => `<div style="flex:1;text-align:center;background:#f9fafb;border:1px solid #eef0f2;border-radius:8px;padding:7px 4px;">
+                <div style="font-size:1.05rem;font-weight:700;color:${c};line-height:1.1;">${n}</div>
+                <div style="font-size:0.62rem;color:#9ca3af;text-transform:uppercase;letter-spacing:0.04em;margin-top:1px;">${l}</div></div>`;
+            const statHtml = `<div style="display:flex;gap:8px;margin-bottom:6px;">
+                ${statPill(totalDone, 'Total done', '#4338ca')}
+                ${statPill(triedCount, 'Activities', '#0f766e')}
+                ${statPill(never.length, 'Not tried', '#b45309')}
+            </div>`;
+
+            // --- Suggestions (clickable → fills the activity field) ---
+            const sugHtml = suggestions.length ? `
+                <div style="background:#f5f6ff;border:1px solid #e0e3fb;border-radius:10px;padding:10px 12px;margin:12px 0 2px;">
+                    <div style="font-weight:700;color:#4338ca;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:7px;">Suggested for this bunk</div>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                        ${suggestions.map(s => `<button type="button" class="pe-suggest-btn" data-activity="${escHtml(s.activity)}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;text-align:left;background:#fff;border:1px solid #d9ddf7;border-radius:8px;padding:7px 10px;cursor:pointer;font-family:inherit;">
+                            <span style="display:flex;flex-direction:column;line-height:1.2;">
+                                <span style="font-weight:600;color:#312e81;font-size:0.82rem;">${escHtml(s.activity)}${s.field ? `<span style="font-weight:400;color:#9ca3af;font-size:0.72rem;"> @ ${escHtml(s.field)}</span>` : ''}</span>
+                                <span style="color:#6366f1;font-size:0.68rem;">${escHtml(s.reason)}${s.open ? ' · open now' : ''}</span>
+                            </span>
+                            <span style="color:#6366f1;font-size:0.9rem;font-weight:700;flex:0 0 auto;">+</span>
+                        </button>`).join('')}
+                    </div>
+                </div>` : '';
+
+            // --- Scheduled today ---
+            const todayHtml = todayActs.length
+                ? todayActs.map(a => chip(escHtml(a.name), '#dbeafe', '#1e40af')).join('')
+                : empty('Nothing scheduled yet today');
+
+            // --- Rotation balance (bar rows) ---
+            const doneRows = done.length
+                ? done.map(d => {
+                    const rec = d.isToday ? 'today' : (recencyLabel(d.daysSince) || '');
+                    const atLimit = d.limit && d.count >= d.limit.max;
+                    const pct = Math.round((d.count / maxCount) * 100);
+                    const barColor = atLimit ? '#ef4444' : (d.sel ? '#4f46e5' : '#818cf8');
+                    const rowBg = d.sel ? 'background:#eef2ff;' : '';
+                    const limitBadge = d.limit ? `<span style="color:${atLimit ? '#dc2626' : '#9ca3af'};font-weight:500;">/${d.limit.max}${periodLabel(d.limit.period)}</span>` : '';
+                    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;${rowBg}">
+                        <span style="flex:0 0 34%;color:#374151;font-size:0.76rem;${d.sel ? 'font-weight:700;' : 'font-weight:500;'}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(d.act)}</span>
+                        <span style="flex:1;height:7px;background:#eef0f5;border-radius:4px;overflow:hidden;"><span style="display:block;height:100%;width:${pct}%;background:${barColor};border-radius:4px;"></span></span>
+                        <span style="flex:0 0 auto;font-size:0.74rem;color:${atLimit ? '#dc2626' : '#4b5563'};font-weight:700;white-space:nowrap;">${d.count}${limitBadge}</span>
+                        <span style="flex:0 0 52px;text-align:right;font-size:0.68rem;color:#9ca3af;white-space:nowrap;">${rec}</span>
+                    </div>`;
+                }).join('')
+                : empty('No prior activity history');
+
+            // --- Not yet done ---
+            const neverHtml = never.length
+                ? never.map(d => {
+                    const bg = d.sel ? '#c7d2fe' : '#fef3c7';
+                    const fg = d.sel ? '#3730a3' : '#92400e';
+                    const ex = d.limit ? `<span style="opacity:0.65;font-weight:400;margin-left:5px;">max ${d.limit.max}${periodLabel(d.limit.period)}</span>` : '';
+                    return chip(escHtml(d.act), bg, fg, ex);
+                }).join('')
+                : empty('Every accessible activity has been done');
+
+            // --- Open fields now ---
+            const openHtml = openF.length
+                ? openF.map(({ l, av }) => {
+                    const partial = av.status === 'partial';
+                    const ex = partial ? `<span style="opacity:0.7;font-weight:400;margin-left:5px;">${av.usage}/${av.max}</span>` : '';
+                    return chip(escHtml(l.name), partial ? '#fef9c3' : '#dcfce7', partial ? '#854d0e' : '#166534', ex);
+                }).join('')
+                : empty('No open fields at this time');
+
+            // --- In-use fields (with what's occupying them) ---
+            const usedHtml = busyF.length
+                ? busyF.map(({ l, av }) => {
+                    const who = [...new Set((av.users || []).map(u => u.activity || u.bunk).filter(Boolean))];
+                    const lbl = who.length ? `<span style="opacity:0.75;font-weight:400;margin-left:5px;">${escHtml(who.slice(0, 2).join(', '))}${who.length > 2 ? ` +${who.length - 2}` : ''}</span>` : '';
+                    return chip(escHtml(l.name), '#fee2e2', '#991b1b', lbl);
+                }).join('')
+                : empty('No fields in use at this time');
+
+            return `
+                ${noteHtml}
+                ${statHtml}
+                ${sugHtml}
+                ${sectionTitle('Scheduled today', todayActs.length || null)}
+                <div>${todayHtml}</div>
+                ${sectionTitle('Rotation balance', triedCount || null)}
+                <div style="max-height:168px;overflow-y:auto;margin:0 -2px;">${doneRows}</div>
+                ${sectionTitle('Not yet done', never.length || null)}
+                <div>${neverHtml}</div>
+                ${sectionTitle('Open fields now', openF.length || null)}
+                <div>${openHtml}</div>
+                ${sectionTitle('In use now', busyF.length || null)}
+                <div>${usedHtml}</div>`;
+        } catch (e) {
+            debugLog('renderBunkReportBody error', e);
+            return '';
+        }
+    }
+
+    // Shared collapsible card wrapper for the report (identical markup wherever
+    // the report is shown). `bodyHtml` is the pre-rendered inner body.
+    function _reportCardHtml(bunk, bodyHtml) {
+        return `
+            <details id="post-edit-bunk-report" open style="background:#fff;border:1px solid #e8eaed;border-radius:12px;padding:0;margin-bottom:16px;box-shadow:0 1px 3px rgba(16,24,40,0.05);overflow:hidden;">
+                <summary style="list-style:none;cursor:pointer;outline:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;background:linear-gradient(180deg,#fafbff,#f4f6fb);border-bottom:1px solid #eef0f4;">
+                    <span style="display:flex;align-items:center;gap:8px;">
+                        <span style="width:26px;height:26px;border-radius:7px;background:#eef2ff;color:#4338ca;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:800;">${escHtml((bunk || '?').trim().charAt(0).toUpperCase())}</span>
+                        <span style="display:flex;flex-direction:column;line-height:1.15;">
+                            <span style="font-weight:700;color:#111827;font-size:0.9rem;">${escHtml(bunk)}</span>
+                            <span style="font-weight:500;color:#9ca3af;font-size:0.68rem;">Activity report</span>
+                        </span>
+                    </span>
+                    <span style="width:8px;height:8px;border-right:2px solid #c4c7ce;border-bottom:2px solid #c4c7ce;transform:rotate(45deg);display:inline-block;margin-right:2px;"></span>
+                </summary>
+                <div id="post-edit-report-body" style="padding:12px 14px 14px;">${bodyHtml}</div>
+            </details>`;
+    }
+
+    function renderBunkMiniReport(bunk, divName, locations, locationAvailMap, startMin, endMin) {
+        try {
+            _reportScheduleCloudHydrate(bunk, divName, { locations, locationAvailMap }, startMin, endMin);
+            return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, locations, locationAvailMap, '', startMin, endMin));
+        } catch (e) {
+            debugLog('renderBunkMiniReport error', e);
+            return '';
+        }
     }
 
     function showEditModal(bunk, startMin, endMin, currentValue, onSave) {
@@ -703,7 +1186,44 @@
                 currentActivity = entry._activity || currentField || currentValue;
             }
         }
-        
+
+        // Compute per-location availability at this time slot
+        const locationAvailMap = {};
+        for (const loc of locations) {
+            locationAvailMap[loc.name] = _reportAvailEntry(checkLocationConflict(loc.name, slots, bunk));
+        }
+        // Report context: original availability + league/pinned fields folded in.
+        // Kept separate from the dropdown's `locations` so the picker is unchanged.
+        const _reportRC = _reportAugmentFields(bunk, startMin, endMin, locations, locationAvailMap);
+        const _avOrd = { free: 0, partial: 1, busy: 2 };
+        const fieldLocsSorted = [...locations.filter(l => l.type === 'field')].sort((a, b) =>
+            (_avOrd[(locationAvailMap[a.name] || {}).status] ?? 0) -
+            (_avOrd[(locationAvailMap[b.name] || {}).status] ?? 0)
+        );
+        const specialLocsSorted = [...locations.filter(l => l.type === 'special')].sort((a, b) =>
+            (_avOrd[(locationAvailMap[a.name] || {}).status] ?? 0) -
+            (_avOrd[(locationAvailMap[b.name] || {}).status] ?? 0)
+        );
+        function _locOptHtml(loc) {
+            const av = locationAvailMap[loc.name] || { status: 'free', usage: 0, max: 1 };
+            let label = escHtml(loc.name);
+            if (av.status === 'free') {
+                if (loc.capacity > 1) label += ` (cap:${loc.capacity})`;
+                label += ' ✓';
+            } else if (av.status === 'partial') {
+                label += ` — ${av.usage}/${av.max} in use`;
+            } else {
+                label += ' — in use';
+            }
+            return `<option value="${escHtml(loc.name)}" ${loc.name === currentField ? 'selected' : ''}>${label}</option>`;
+        }
+        const divName_ = peiGetDivForBunk(bunk);
+        const quickCandidates = peiAutoFillCandidates(bunk, divName_, startMin, endMin).slice(0, 5);
+        const quickPickHtml = quickCandidates.length > 0 ? `<div id="post-edit-quickpick" style="margin-top:2px;">
+            <label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;font-size:0.875rem;">Quick Pick <span style="font-weight:400;color:#9ca3af;font-size:0.75rem;">— best available for this slot</span></label>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">${quickCandidates.map(c => `<button class="pe-quick-btn" data-activity="${escHtml(c.activity)}" data-field="${escHtml(c.field || '')}" style="padding:5px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;white-space:nowrap;">${escHtml(c.activity)}${c.field && c.field !== c.activity ? ` <span style="font-size:0.7rem;color:#9ca3af">@ ${escHtml(c.field)}</span>` : ''}</button>`).join('')}</div>
+            </div>` : '';
+
         const minutesToTimeLabel = window.SchedulerCoreUtils?.minutesToTimeLabel || 
             function(mins) {
                 if (mins === null || mins === undefined) return '';
@@ -719,14 +1239,15 @@
                 <h2 style="margin:0;font-size:1.25rem;color:#1f2937;">Edit Schedule Cell</h2>
                 <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button>
             </div>
-            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;">
-                <div style="font-weight:600;color:#374151;">${bunk}</div>
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:16px;">
+                <div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div>
                 <div style="font-size:0.875rem;color:#6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div>
             </div>
+            ${renderBunkMiniReport(bunk, divName_, _reportRC.locations, _reportRC.locationAvailMap, startMin, endMin)}
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label>
-                    <input type="text" id="post-edit-activity" value="${currentActivity}" placeholder="e.g., Basketball"
+                    <input type="text" id="post-edit-activity" value="${escHtml(currentActivity)}" placeholder="e.g., Basketball"
                         style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Enter CLEAR or FREE to empty this slot</div>
                 </div>
@@ -734,21 +1255,14 @@
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label>
                     <select id="post-edit-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;">
                         <option value="">-- No specific location --</option>
-                        <optgroup label="Fields">
-                            ${locations.filter(l => l.type === 'field').map(l => 
-                                `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`
-                            ).join('')}
-                        </optgroup>
-                        <optgroup label="Special Activities">
-                            ${locations.filter(l => l.type === 'special').map(l => 
-                                `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`
-                            ).join('')}
-                        </optgroup>
+                        <optgroup label="Fields">${fieldLocsSorted.map(_locOptHtml).join('')}</optgroup>
+                        <optgroup label="Special Activities">${specialLocsSorted.map(_locOptHtml).join('')}</optgroup>
                     </select>
                 </div>
                 <div id="post-edit-conflict" style="display:none;"></div>
+                ${quickPickHtml}
                 <div style="display:flex;gap:10px;margin-top:4px;">
-                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill</button>
+                    <button id="post-edit-autofill" style="flex:1;padding:11px;border:2px dashed #a5b4fc;border-radius:8px;background:#eef2ff;color:#4338ca;font-size:0.95rem;cursor:pointer;font-weight:600;">⚡ Auto Fill &amp; Apply</button>
                 </div>
                 <div style="display:flex;gap:10px;margin-top:8px;">
                     <button id="post-edit-cancel" style="flex:1;padding:12px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:1rem;cursor:pointer;font-weight:500;">Cancel</button>
@@ -760,21 +1274,55 @@
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
 
+        // Live-refresh the report body to reflect the activity being typed/picked.
+        let _reportRaf = null;
+        function refreshReport() {
+            const body = document.getElementById('post-edit-report-body');
+            if (!body) return;
+            if (_reportRaf) cancelAnimationFrame(_reportRaf);
+            _reportRaf = requestAnimationFrame(() => {
+                const sel = (document.getElementById('post-edit-activity')?.value || '');
+                body.innerHTML = renderBunkReportBody(bunk, divName_, _reportRC.locations, _reportRC.locationAvailMap, sel, startMin, endMin);
+            });
+        }
+        document.getElementById('post-edit-activity').addEventListener('input', refreshReport);
+
         document.getElementById('post-edit-autofill').onclick = () => {
-            const divName = peiGetDivForBunk(bunk);
-            const pick = peiAutoFill(bunk, divName, startMin, endMin);
+            const pick = quickCandidates[0] || peiAutoFill(bunk, divName_, startMin, endMin);
             if (!pick) { alert('No suitable activity found based on current constraints.'); return; }
-            document.getElementById('post-edit-activity').value = pick.activity;
-            const loc = document.getElementById('post-edit-location');
-            if (pick.field) {
-                for (let i = 0; i < loc.options.length; i++) {
-                    if (loc.options[i].value === pick.field) { loc.selectedIndex = i; break; }
-                }
-            } else {
-                loc.selectedIndex = 0;
-            }
-            checkAndShowConflicts();
+            const locationVal = (pick.field && pick.field !== pick.activity) ? pick.field : null;
+            const conflictCheck = locationVal ? checkLocationConflict(locationVal, slots, bunk) : null;
+            closeModal();
+            onSave({
+                activity: pick.activity, location: locationVal,
+                startMin, endMin,
+                hasConflict: !!conflictCheck?.hasConflict,
+                conflicts: conflictCheck?.conflicts || [],
+                editableConflicts: conflictCheck?.editableConflicts || [],
+                nonEditableConflicts: conflictCheck?.nonEditableConflicts || [],
+                resolutionChoice: 'notify'
+            });
+            peiShowBanner('Auto-filled: ' + pick.activity, 'success', true);
         };
+
+        modal.querySelectorAll('.pe-quick-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.getElementById('post-edit-activity').value = btn.dataset.activity;
+                const loc = document.getElementById('post-edit-location');
+                const fieldVal = btn.dataset.field;
+                if (fieldVal) {
+                    for (let i = 0; i < loc.options.length; i++) {
+                        if (loc.options[i].value === fieldVal) { loc.selectedIndex = i; break; }
+                    }
+                } else {
+                    loc.selectedIndex = 0;
+                }
+                modal.querySelectorAll('.pe-quick-btn').forEach(b => { b.style.background = '#fff'; b.style.borderColor = '#d1d5db'; });
+                btn.style.background = '#dbeafe'; btn.style.borderColor = '#3b82f6';
+                checkAndShowConflicts();
+                refreshReport();
+            };
+        });
 
         // Delete button
         document.getElementById('post-edit-delete').onclick = () => {
@@ -821,24 +1369,24 @@
                         <span style="font-size:1.25rem;">⚠️</span>
                         <strong style="color:#92400e;">Location Conflict Detected</strong>
                     </div>
-                    <p style="margin:0 0 8px 0;color:#78350f;font-size:0.875rem;"><strong>${location}</strong> is already in use:</p>`;
-                
+                    <p style="margin:0 0 8px 0;color:#78350f;font-size:0.875rem;"><strong>${escHtml(location)}</strong> is already in use:</p>`;
+
                 if (editableBunks.length > 0) {
-                    html += `<div style="margin-bottom:8px;padding:8px;background:#d1fae5;border-radius:6px;"><div style="font-size:0.8rem;color:#065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
+                    html += `<div style="margin-bottom:8px;padding:8px;background:#d1fae5;border-radius:6px;"><div style="font-size:0.8rem;color:#065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.map(escHtml).join(', ')}</div></div>`;
                 }
-                
+
                 if (nonEditableBunks.length > 0) {
-                    html += `<div style="margin-bottom:8px;padding:8px;background:#fee2e2;border-radius:6px;"><div style="font-size:0.8rem;color:#991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div>
+                    html += `<div style="margin-bottom:8px;padding:8px;background:#fee2e2;border-radius:6px;"><div style="font-size:0.8rem;color:#991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.map(escHtml).join(', ')}</div></div>
                     <div style="margin-top:12px;">
                         <div style="font-weight:500;color:#374151;margin-bottom:8px;font-size:0.875rem;">How to handle their bunks?</div>
                         <div style="display:flex;flex-direction:column;gap:8px;">
                             <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;">
                                 <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;">
-                                <div><div style="font-weight:500;color:#374151;">📧 Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & send warning</div></div>
+                                <div><div style="font-weight:500;color:#374151;">Override &amp; flag the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflicting activity is flagged and they're notified</div></div>
                             </label>
                             <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;">
                                 <input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;">
-                                <div><div style="font-weight:500;color:#374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size:0.75rem;color:#6b7280;">Override permissions and use smart regeneration</div></div>
+                                <div><div style="font-weight:500;color:#374151;">Override &amp; reschedule the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflict is auto-rescheduled and they're notified</div></div>
                             </label>
                         </div>
                     </div>`;
@@ -1158,7 +1706,7 @@
         const br = s.block.getBoundingClientRect();
         let tip = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur}min)</span>`;
         const c = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
-        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => x.bunk).join(', ')}</span>`;
+        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => escHtml(x.bunk)).join(', ')}</span>`;
         peiShowTooltip(br.right + 8, s.direction === 'bottom' ? br.bottom : br.top, tip);
         peiShowConflictIndicator(s.block, c);
     }
@@ -1349,7 +1897,7 @@
         const br = s.block.getBoundingClientRect();
         let tip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
         const c = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
-        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => x.bunk).join(', ')}</span>`;
+        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => escHtml(x.bunk)).join(', ')}</span>`;
         peiShowTooltip(br.right + 8, br.top, tip);
         peiShowConflictIndicator(s.block, c);
     }
@@ -1433,18 +1981,18 @@
     function peiShowAddModal(bunk, divName, startMin, endMin) {
         document.getElementById('pei-add-overlay')?.remove();
         const locations = getAllLocations();
-        const fieldOpts = locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}">${l.name}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('');
-        const specOpts = locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+        const fieldOpts = locations.filter(l => l.type === 'field').map(l => `<option value="${escHtml(l.name)}">${escHtml(l.name)}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('');
+        const specOpts = locations.filter(l => l.type === 'special').map(l => `<option value="${escHtml(l.name)}">${escHtml(l.name)}</option>`).join('');
         // Build constraint-aware suggestions by generating many candidates and taking top 8
         const allCandidates = peiAutoFillCandidates(bunk, divName, startMin, endMin);
         const suggestions = allCandidates.slice(0, 8);
-        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.map(a => `<button class="pei-suggestion-btn" data-activity="${a.activity}" data-field="${a.field || ''}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${a.activity}${a.field && a.field !== a.activity ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${a.field}</span>` : ''}</button>`).join('')}</div></div>` : '';
+        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.map(a => `<button class="pei-suggestion-btn" data-activity="${escHtml(a.activity)}" data-field="${escHtml(a.field || '')}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${escHtml(a.activity)}${a.field && a.field !== a.activity ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${escHtml(a.field)}</span>` : ''}</button>`).join('')}</div></div>` : '';
 
         const overlay = document.createElement('div'); overlay.id = 'pei-add-overlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:100003;display:flex;align-items:center;justify-content:center;animation:pei-fade-in 0.2s ease-out';
         overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:28px;min-width:420px;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 80px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;"><h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Add New Activity</h2><button id="pei-add-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button></div>
-            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;"><div style="font-weight:600;color:#374151;">${bunk}</div><div style="font-size:0.875rem;color:#6b7280;">${peiToLabel(startMin)} – ${peiToLabel(endMin)} (${endMin - startMin}min)</div></div>
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;"><div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div><div style="font-size:0.875rem;color:#6b7280;">${peiToLabel(startMin)} – ${peiToLabel(endMin)} (${endMin - startMin}min)</div></div>
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div><label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label><input type="text" id="pei-add-activity" placeholder="e.g., Basketball" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;"></div>
                 <div><label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label><select id="pei-add-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;"><option value="">-- No location --</option>${fieldOpts ? '<optgroup label="Fields">' + fieldOpts + '</optgroup>' : ''}${specOpts ? '<optgroup label="Specials">' + specOpts + '</optgroup>' : ''}</select></div>
@@ -1457,7 +2005,9 @@
         document.body.appendChild(overlay);
 
         const closeAdd = () => overlay.remove();
-        overlay.addEventListener('click', e => { if (e.target === overlay) closeAdd(); });
+        let _mdAddOverlay = false;
+        overlay.addEventListener('mousedown', e => { _mdAddOverlay = (e.target === overlay); });
+        overlay.addEventListener('click', e => { if (e.target === overlay && _mdAddOverlay) closeAdd(); });
         document.getElementById('pei-add-close').onclick = closeAdd;
         document.getElementById('pei-add-cancel').onclick = closeAdd;
         document.getElementById('pei-add-time-toggle').onclick = () => { const sec = document.getElementById('pei-add-time-section'); const hidden = sec.style.display === 'none'; sec.style.display = hidden ? 'block' : 'none'; document.getElementById('pei-add-time-arrow').textContent = hidden ? '▼' : '▶'; };
@@ -1500,8 +2050,8 @@
         const el = document.getElementById('pei-add-conflict-status');
         if (!el || !location) { if (el) el.style.display = 'none'; return; }
         const c = PEI_ConflictEngine.check(bunk, startMin, endMin, location, -1);
-        if (!c.hasConflict) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;font-size:0.85rem;display:block;'; el.innerHTML = '✅ ' + location + ' is available'; }
-        else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + location + ' in use by: ' + c.fieldConflicts.map(x => x.bunk).join(', '); }
+        if (!c.hasConflict) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;font-size:0.85rem;display:block;'; el.innerHTML = '✅ ' + escHtml(location) + ' is available'; }
+        else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + escHtml(location) + ' in use by: ' + c.fieldConflicts.map(x => escHtml(x.bunk)).join(', '); }
     }
 
     // ── Auto-fill (constraint-aware) ──
@@ -1860,6 +2410,26 @@
             }
         });
 
+        // ★ DATA-LOSS GUARD: if EVERY target slot was occupied by another
+        // activity, the write loop above skipped all of them and wrote NOTHING —
+        // but step 3 already cleared oldSlots, so the dragged block would be
+        // silently DELETED (the newSlotIndices.length===0 revert above does not
+        // cover this case). Restore the block to its original slots, re-render to
+        // snap it back, drop the undo snapshot, and abort.
+        const _wroteSomething = newSlotIndices.some(idx => assignments[idx] && assignments[idx]._postEdited);
+        if (!_wroteSomething) {
+            debugLog('PEI: all target slots occupied — reverting (no silent delete)');
+            oldSlots.forEach((idx, i) => {
+                if (i === 0) assignments[idx] = cleanEntry;
+                else assignments[idx] = { field: cleanEntry.field, sport: cleanEntry.sport, _activity: cleanEntry._activity, continuation: true };
+            });
+            window._postEditInProgress = false;
+            _peiUndoStack.pop(); // remove the snapshot we just pushed
+            if (typeof peiShowBanner === 'function') peiShowBanner('Cannot move there — those slots are occupied', 'error', true);
+            if (typeof window.updateTable === 'function') window.updateTable(); // snap the block back to its original position
+            return;
+        }
+
         // Make sure first written slot is the primary (non-continuation)
         const firstWritten = newSlotIndices.find(idx => assignments[idx] && assignments[idx]._postEdited);
         if (firstWritten !== undefined && assignments[firstWritten]) {
@@ -2168,12 +2738,9 @@
             document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         // Save to localStorage
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
-            const perDateKey = `campDailyData_v1_${dateKey}`;
-            const perDateData = JSON.parse(localStorage.getItem(perDateKey) || '{}');
-            perDateData.scheduleAssignments = window.scheduleAssignments;
-            perDateData._postEditAt = Date.now();
-            localStorage.setItem(perDateKey, JSON.stringify(perDateData));
+            // ★ CB-52: removed the write-only `scheduleAssignments_${dateKey}` and
+            // `campDailyData_v1_${dateKey}` mirrors (never read anywhere) — only the canonical
+            // campDailyData_v1 map below is read. Drops two redundant per-edit quota writes.
             const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDaily[dateKey]) allDaily[dateKey] = {};
             allDaily[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -2456,6 +3023,55 @@
     // =========================================================================
 
     window.initPostEditSystem = initPostEditSystem;
+
+    // Bunk activity report — exposed so any edit modal (including the active
+    // one in unified_schedule_system.js) can render the same panel. Builds its
+    // own location/availability context from the time range.
+    window.PostEditReport = {
+        // opts.locations / opts.locationAvailMap let the caller pass a correctly
+        // computed availability map (the unified editor knows the right per-bunk
+        // slots); otherwise a best-effort context is built here.
+        panelHtml(bunk, divName, startMin, endMin, selectedActivity, opts) {
+            try {
+                divName = divName || peiGetDivForBunk(bunk);
+                const ctx = (opts && opts.locationAvailMap) ? opts : _reportBuildContext(bunk, startMin, endMin);
+                _reportScheduleCloudHydrate(bunk, divName, ctx, startMin, endMin);
+                return _reportCardHtml(bunk, renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || '', startMin, endMin));
+            } catch (e) { debugLog('PostEditReport.panelHtml error', e); return ''; }
+        },
+        bodyHtml(bunk, divName, startMin, endMin, selectedActivity, opts) {
+            try {
+                divName = divName || peiGetDivForBunk(bunk);
+                const ctx = (opts && opts.locationAvailMap) ? opts : _reportBuildContext(bunk, startMin, endMin);
+                return renderBunkReportBody(bunk, divName, ctx.locations, ctx.locationAvailMap, selectedActivity || '', startMin, endMin);
+            } catch (e) { debugLog('PostEditReport.bodyHtml error', e); return ''; }
+        }
+    };
+
+    // One-time delegation: clicking a suggestion fills the modal's activity
+    // field (works for both the <input> and the unified <select>) and fires
+    // input/change so the report + conflict UI refresh.
+    if (!window.__peSuggestWired) {
+        window.__peSuggestWired = true;
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest && e.target.closest('.pe-suggest-btn');
+            if (!btn) return;
+            e.preventDefault(); e.stopPropagation();
+            const act = btn.getAttribute('data-activity');
+            const input = document.getElementById('post-edit-activity');
+            if (!act || !input) return;
+            input.value = act;
+            if (input.tagName === 'SELECT' && input.value !== act) {
+                const opt = document.createElement('option');
+                opt.value = act; opt.textContent = act;
+                input.appendChild(opt); input.value = act;
+            }
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            try { input.focus(); } catch (_) { }
+        }, true);
+    }
+
     if (!window.UnifiedScheduleSystem) {
         window.enhancedEditCell = enhancedEditCell;
         window.checkLocationConflict = checkLocationConflict;

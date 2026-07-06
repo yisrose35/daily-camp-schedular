@@ -139,7 +139,7 @@ textarea:focus {
 /* Tab panels — premium card look */
 .tab-content {
   display: none;
-  margin-top: 6px;
+  margin-top: 0;
   background: var(--bg-secondary, #FFFFFF);
   border-radius: 10px;
   border: 1px solid rgba(226, 232, 240, 0.8);
@@ -150,6 +150,27 @@ textarea:focus {
 .tab-content.active {
   display: block;
 }
+
+/* Fill the viewport: the active card always reaches the bottom of the screen
+   (84px = 60px header + 12px top + 12px bottom app-content padding) */
+@media (min-width: 769px) {
+  .tab-content.active {
+    min-height: calc(100vh - 84px);
+  }
+}
+
+/* Workspace tabs (Master Scheduler / Daily Adjustments) render their own
+   full-height shell card — drop the outer card chrome so the workspace owns
+   the whole content area edge-to-edge with a single internal scroller. */
+#master-scheduler.tab-content,
+#daily-adjustments.tab-content,
+#print.tab-content {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+#master-scheduler-content .ms-container { border-radius: 12px !important; }
 
 /* Tables — clean, modern */
 table {
@@ -1659,7 +1680,7 @@ label.override-checkbox span {
 .pc-container {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 60px);
+    height: calc(100vh - 84px);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     color: #1E293B;
     background: #F1F5F9;
@@ -2093,6 +2114,11 @@ label.override-checkbox span {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--slate-600, #475569);
+  white-space: nowrap;
+}
+
+.header-right {
+  flex-shrink: 0;
 }
 
 .header-date-input {
@@ -2351,7 +2377,7 @@ body.sidebar-open .sidebar-backdrop {
 /* Content area */
 .app-content {
   flex: 1;
-  padding: 1.2rem 1.5rem 1.5rem;
+  padding: 0.75rem 1rem;
   min-width: 0;
 }
 
@@ -4064,7 +4090,7 @@ a:hover {
   font-size: 0.85rem;
 }
 /* === MASTER SCHEDULER STYLES === */
-.ms-container { display:flex; gap:0; height:calc(100vh - 78px); min-height:300px; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
+.ms-container { display:flex; gap:0; height:calc(100vh - 84px); min-height:300px; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
 
 /* ── Manual Sidebar (light) ── */
 .ms-sidebar { width:172px; min-width:172px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; height:100%; max-height:100%; overflow:hidden; }
@@ -4219,6 +4245,18 @@ a:hover {
 .ms-daw-band .band-resize::after { content:''; display:block; width:12px; height:3px; background:rgba(0,0,0,0.25); border-radius:2px; }
 .ms-daw-band .band-resize-top { top:0; }
 .ms-daw-band .band-resize-bottom { bottom:0; }
+/* Grade connection ("same time across grades"): colored inner ring + glow + link badge.
+   The inner ring sits inside the band bounds so it stays visible even when the band
+   carries a notch clip-path; the outer pulse is a nice-to-have on un-notched bands. */
+.ms-daw-band-conn { position:absolute; inset:0; border-radius:7px; pointer-events:none; z-index:3;
+  border:2px solid hsl(var(--conn-hue,210),85%,45%);
+  box-shadow: inset 0 0 9px hsla(var(--conn-hue,210),90%,50%,0.55); }
+.ms-daw-band-connected { animation:ms-daw-conn-pulse 2.2s ease-in-out infinite; }
+.ms-daw-band-conn-link { position:absolute; top:1px; left:3px; font-size:9px; line-height:1; z-index:4; pointer-events:none; filter:drop-shadow(0 0 1px #fff); }
+@keyframes ms-daw-conn-pulse {
+  0%,100% { box-shadow:0 1px 3px rgba(0,0,0,0.1),0 0 0 1px rgba(0,0,0,0.05); }
+  50%     { box-shadow:0 1px 3px rgba(0,0,0,0.1),0 0 0 1px rgba(0,0,0,0.05),0 0 10px hsla(var(--conn-hue,210),90%,55%,0.7); }
+}
 
 /* ── Centered Modal Popover ── */
 .ms-daw-popover-overlay { position:fixed; inset:0; background:rgba(15,23,42,0.3); backdrop-filter:blur(3px); z-index:9990; animation:ms-daw-fade-in 0.15s ease; }

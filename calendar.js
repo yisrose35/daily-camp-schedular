@@ -24,7 +24,12 @@
     const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
     const SMART_TILE_SPECIAL_HISTORY_KEY = "smartTileSpecialHistory_v1";
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
-    const SPECIALTY_LEAGUE_HISTORY_KEY = "specialtyLeagueHistory_v1";
+    // ★ LG-3: must match the engine's actual backup key
+    //   (scheduler_core_specialty_leagues.js SPECIALTY_HISTORY_KEY). The old value
+    //   "specialtyLeagueHistory_v1" was missing the "camp" prefix, so New Half /
+    //   Erase All / backup / export all operated on a phantom key — the real
+    //   specialty history was never cleared (stale rounds resurrected) or backed up.
+    const SPECIALTY_LEAGUE_HISTORY_KEY = "campSpecialtyLeagueHistory_v1";
     const LEGACY_GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const LEGACY_GLOBAL_REGISTRY_KEY = "campistry_global_registry";
 
@@ -203,7 +208,17 @@
     
     window.loadCurrentDailyData = function() {
         const all = window.loadAllDailyData();
-        const date = window.currentScheduleDate;
+        // ★ FN-14 / shut-off race: during a generation run, prefer the
+        //   authoritative gen-date snapshot (window._activeGenDate, set by
+        //   runOptimizer after the FN-17 settle guard) over
+        //   window.currentScheduleDate — which the code elsewhere documents can
+        //   transiently REVERT to the previously-loaded date mid-gen. If the
+        //   override loader read currentScheduleDate during that revert window,
+        //   it would load the WRONG day's daily-adjustment overrides (disabled
+        //   fields/specials/leagues), so a facility shut off for the gen date
+        //   could slip back into the schedule. _activeGenDate is null outside a
+        //   generation, so normal UI reads are unchanged.
+        const date = window._activeGenDate || window.currentScheduleDate;
         if (!all[date]) {
             all[date] = {
                 scheduleAssignments: {},
@@ -219,10 +234,35 @@
             };
         }
         all[date].leagueDayCounters = all[date].leagueDayCounters || {};
+        // ★ FUTURE-DATE RESOURCE PERSISTENCE: fill per-date resource overrides saved
+        // via the reliable app1 path (mirrors skeleton/trips). The daily_schedules sync
+        // SKIPS dates with no generated schedule, so a maintenance / field-unavailable
+        // note set today for a FUTURE date never synced through the schedule path. Here
+        // we fill ONLY-WHEN-MISSING so a real schedule's resources are never overwritten.
+        try {
+            var _rgs = window.loadGlobalSettings && window.loadGlobalSettings();
+            var _rbd = _rgs && _rgs.app1 && _rgs.app1.dailyResourcesByDate && _rgs.app1.dailyResourcesByDate[date];
+            if (_rbd && typeof _rbd === 'object') {
+                var _hasContent = function (v) {
+                    if (v === undefined || v === null) return false;
+                    if (Array.isArray(v)) return v.length > 0;
+                    if (typeof v === 'object') return Object.keys(v).some(function (k) {
+                        var vv = v[k];
+                        if (Array.isArray(vv)) return vv.length > 0;
+                        if (vv && typeof vv === 'object') return Object.keys(vv).length > 0;
+                        return vv !== undefined && vv !== null && vv !== false;
+                    });
+                    return !!v;
+                };
+                Object.keys(_rbd).forEach(function (rk) {
+                    if (!_hasContent(all[date][rk])) all[date][rk] = _rbd[rk];
+                });
+            }
+        } catch (_eRes) { /* ignore — non-fatal enrichment */ }
         window.currentDailyData = all[date];
         return window.currentDailyData;
     };
-    
+
     window.loadPreviousDailyData = function() {
         try {
             const [Y, M, D] = window.currentScheduleDate.split('-').map(Number);
@@ -257,14 +297,51 @@ all[date].updated_at = new Date().toISOString();
             window.currentDailyData = all[date];
             // 🟢 UNIFIED SAVING: Delegate to Bridge (Same way as Divisions)
             // 'daily_schedules' is the special key the bridge uses to bundle/unbundle this data
+            // ★ Only push the bundle when this date has a MATERIALIZED schedule (≥1 real
+            //   activity). An empty/preview payload — e.g. a resource-override sync firing
+            //   on tab-focus before the schedule re-bundles (loadCurrentOverrides), or a
+            //   future-date note — is rejected by the empty-save guard (all-empty-preview),
+            //   which spammed the console and triggered verified-save retries. Per-date
+            //   resource overrides still persist via the app1 mirror below; clearing a real
+            //   day goes through delete, not an empty save — so skipping here loses nothing.
+            var _saReal = false, _saScan = all[date] && all[date].scheduleAssignments;
+            if (_saScan && typeof _saScan === 'object') {
+                for (var _bk in _saScan) {
+                    var _sl = _saScan[_bk];
+                    if (_sl && typeof _sl === 'object') { for (var _sk in _sl) { if (_sl[_sk]) { _saReal = true; break; } } }
+                    else if (_sl) { _saReal = true; }
+                    if (_saReal) break;
+                }
+            }
             if (typeof window.saveGlobalSettings === 'function') {
-                console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
-                window.saveGlobalSettings('daily_schedules', all);
+                if (_saReal) {
+                    console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
+                    window.saveGlobalSettings('daily_schedules', all);
+                }
             } else {
                 // Fallback if bridge is missing
                 console.warn("⚠️ Bridge not found, falling back to local save");
                 safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
             }
+
+            // ★ FUTURE-DATE RESOURCE PERSISTENCE: mirror per-date RESOURCE overrides
+            // (field/activity unavailable for scheduled maintenance, disabled sports,
+            // disabled specialty leagues) into app1.dailyResourcesByDate and sync via the
+            // reliable 'app1' path — the same route the per-date skeleton/trips use. The
+            // daily_schedules sync above SKIPS dates with no generated schedule, so a
+            // note set today for a FUTURE date would be lost on a fresh session/device.
+            // This path round-trips through camp_state_kv so it's ready on the day.
+            try {
+                var _RES_KEYS = ['overrides', 'dailyDisabledSportsByField', 'dailyFieldAvailability', 'disabledSpecialtyLeagues', 'dailyActivityBunkRestrictions'];
+                if (_RES_KEYS.indexOf(key) > -1 && typeof window.loadGlobalSettings === 'function' && typeof window.saveGlobalSettings === 'function') {
+                    var _sgs = window.loadGlobalSettings() || {};
+                    if (!_sgs.app1) _sgs.app1 = {};
+                    if (!_sgs.app1.dailyResourcesByDate) _sgs.app1.dailyResourcesByDate = {};
+                    if (!_sgs.app1.dailyResourcesByDate[date]) _sgs.app1.dailyResourcesByDate[date] = {};
+                    _sgs.app1.dailyResourcesByDate[date][key] = value;
+                    window.saveGlobalSettings('app1', _sgs.app1);
+                }
+            } catch (_eResSave) { /* ignore — daily_schedules path above is the fallback */ }
         } catch (e) {
             console.error("Failed to save daily data:", e);
         }
@@ -327,6 +404,10 @@ all[date].updated_at = new Date().toISOString();
                 // Clear rotation_counts for our bunks only
                 await window.RotationCloud?.clearForBunks?.(myBunks);
 
+                // ★★★ CB-90: clear rotation-event completions for OUR bunks only
+                // (scheduler scope) so a reset re-places events for them.
+                try { window.RotationEvents?.clearAllCompleted?.(null, myBunks); } catch (e) { /* non-fatal */ }
+
                 // Scrub rotationHistory.bunks for our bunks only
                 var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
                 var bunkSet = new Set(myBunks);
@@ -345,6 +426,17 @@ all[date].updated_at = new Date().toISOString();
                 Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
                 safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
                 window.saveGlobalSettings?.('smartTileHistory', _smartHist);
+
+                // ★★★ CB-71: scrub manualUsageOffsets for our bunks too. The owner
+                // branch clears it, but the scheduler branch omitted it — so a manual
+                // count offset (e.g. Swim=5 set in the analytics editor) survived the
+                // reset and the new period still treated the activity as already-done.
+                // (historicalCountedDates is date-keyed/global, intentionally left to
+                // the owner — scoping it per-bunk is meaningless and would clobber
+                // other schedulers' tracking.)
+                var _muo = window.loadGlobalSettings?.('manualUsageOffsets') || {};
+                Object.keys(_muo).forEach(function(bk) { if (bunkSet.has(bk)) delete _muo[bk]; });
+                window.saveGlobalSettings?.('manualUsageOffsets', _muo);
 
                 console.log('✅ Scheduler rotation history cleared for', myBunks.length, 'bunks');
                 alert('Rotation history reset for your divisions!');
@@ -392,6 +484,11 @@ all[date].updated_at = new Date().toISOString();
 
             // Clear rotation_counts table in Supabase
             await window.RotationCloud?.clearAll?.();
+
+            // ★★★ CB-90: also wipe rotation-event completion stamps. Without this,
+            // a full rotation-history reset left evt.completedBunks intact, so a
+            // regenerated event permanently skipped every previously-marked bunk.
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { /* non-fatal */ }
 
             // Clear league round state
             window.leagueRoundState = {};
@@ -478,6 +575,9 @@ all[date].updated_at = new Date().toISOString();
                 // 3. Clear rotation counts for our bunks
                 await window.RotationCloud?.clearForBunks?.(myBunks);
 
+                // ★★★ CB-90: clear rotation-event completions for our bunks (scheduler scope)
+                try { window.RotationEvents?.clearAllCompleted?.(null, myBunks); } catch (e) { /* non-fatal */ }
+
                 // 4. Scrub local rotation history for our bunks
                 var bunkSet = new Set(myBunks);
                 var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
@@ -492,6 +592,13 @@ all[date].updated_at = new Date().toISOString();
                 Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
                 safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
                 window.saveGlobalSettings?.('smartTileHistory', _smartHist);
+
+                // ★★★ CB-71: scrub manualUsageOffsets for our bunks (owner branch
+                // clears it; scheduler branch omitted it → stale offset carried into
+                // the new half).
+                var _muoNH = window.loadGlobalSettings?.('manualUsageOffsets') || {};
+                Object.keys(_muoNH).forEach(function(bk) { if (bunkSet.has(bk)) delete _muoNH[bk]; });
+                window.saveGlobalSettings?.('manualUsageOffsets', _muoNH);
 
                 clearBunksFromGlobals(myBunks);
 
@@ -586,6 +693,10 @@ all[date].updated_at = new Date().toISOString();
 
             // Clear rotation_counts table in Supabase
             await window.RotationCloud?.clearAll?.();
+
+            // ★★★ CB-90: wipe rotation-event completion stamps for the new half too
+            // (otherwise a regenerated event skips every bunk marked done last half).
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { /* non-fatal */ }
 
             // Reset league standings and playoff state
             try {
@@ -782,6 +893,12 @@ all[date].updated_at = new Date().toISOString();
 
             const bunkSet = new Set(bunksToDelete);
             let recordsModified = 0, recordsDeleted = 0, bunksRemoved = 0;
+            // ★★★ CB-74: track per-record write failures. Previously a mid-loop
+            // delete/update error was only counted-or-not and the function ALWAYS
+            // returned success:true, so the caller cleared local state and reported
+            // success while the cloud still held those bunks → cloud/local diverge
+            // and the "deleted" bunks resurrect from cloud on the next load.
+            let writeFailures = 0, firstWriteError = null;
 
             for (const record of allRecords) {
                 const scheduleData = record.schedule_data || {};
@@ -795,13 +912,20 @@ all[date].updated_at = new Date().toISOString();
                 if (!modified) continue;
                 if (Object.keys(assignments).length === 0) {
                     const { error } = await client.from('daily_schedules').delete().eq('id', record.id);
-                    if (!error) recordsDeleted++;
+                    if (!error) recordsDeleted++; else { writeFailures++; firstWriteError = firstWriteError || error.message; }
                 } else {
                     const { error } = await client.from('daily_schedules')
                         .update({ schedule_data: { ...scheduleData, scheduleAssignments: assignments, leagueAssignments: leagues }, updated_at: new Date().toISOString() })
                         .eq('id', record.id);
-                    if (!error) recordsModified++;
+                    if (!error) recordsModified++; else { writeFailures++; firstWriteError = firstWriteError || error.message; }
                 }
+            }
+            if (writeFailures > 0) {
+                return {
+                    success: false,
+                    error: (firstWriteError || 'Some records failed to update') + ' (' + writeFailures + ' record(s) failed — cloud may be partially deleted)',
+                    recordsModified, recordsDeleted, bunksRemoved, writeFailures
+                };
             }
             return { success: true, recordsModified, recordsDeleted, bunksRemoved };
         } catch (e) {
@@ -1048,7 +1172,8 @@ all[date].updated_at = new Date().toISOString();
                 // Merge remaining data into window globals
                 window.scheduleAssignments = result.data.scheduleAssignments || {};
                 window.leagueAssignments = result.data.leagueAssignments || {};
-                
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with delete-reload (cross-date guard)
+
                 // Update localStorage
                 const all = window.loadAllDailyData();
                 all[dateKey] = {
@@ -1163,6 +1288,10 @@ all[date].updated_at = new Date().toISOString();
             if (window.RotationCloud?.deleteDate) {
                 window.RotationCloud.deleteDate(dateKey);
             }
+            // ★★★ CB-90: also clear THIS date's rotation-event completion stamps,
+            // so a regen of the erased day re-places the event for those bunks
+            // instead of treating them as already-done.
+            try { window.RotationEvents?.clearCompletedForDate?.(dateKey); } catch (e) { /* non-fatal */ }
             // ★ Delete stale schedule_proposals for this date
             try {
                 const _client = window.CampistryDB?.client || window.supabase;
@@ -1184,8 +1313,17 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // CLEAN LEAGUE HISTORY for the deleted date (regular + specialty)
         // ═══════════════════════════════════════════════════════════════
-        window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
-        window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+        // ★ LG-5: cleanupDateFromHistory is UNSCOPED — it rolls back EVERY league's
+        //   gameLog / teamSports / matchupHistory / gamesPerDate for the date. That
+        //   is correct only for an owner/admin full-day delete. A SCHEDULER deleted
+        //   just their own divisions' bunks, so running this would destroy other
+        //   schedulers'/the owner's league results for that date. Skip it for
+        //   schedulers — their own leagues' history is reconciled by the day-reset
+        //   (rollbackDayRecords) the next time they regenerate the date.
+        if (role !== 'scheduler') {
+            window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
+            window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+        }
 
         // ═══════════════════════════════════════════════════════════════
         // REBUILD ROTATION COUNTS after delete
@@ -1199,11 +1337,27 @@ all[date].updated_at = new Date().toISOString();
         try {
             const _allDaily = window.loadAllDailyData?.() || {};
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = {};
+            // ★★★ CB-72: a scheduler's local loadAllDailyData holds ONLY their bunks,
+            // so the unconditional `_rotHist.bunks = {}` full rebuild truncated every
+            // other scheduler's rotation history (then saved the truncated map
+            // globally). Scope the wipe+rebuild to the scheduler's own bunks; owner/
+            // admin (who hold the full local cache) still rebuild everything.
+            let _scopedBunkSet72 = null;
+            if (role === 'scheduler') {
+                const _myDivs72 = window.AccessControl?.getGeneratableDivisions?.() || [];
+                const _myBunks72 = getBunksForDivisions(_myDivs72) || [];
+                _scopedBunkSet72 = new Set(_myBunks72.map(String));
+                Object.keys(_rotHist.bunks || {}).forEach(function (bk) {
+                    if (_scopedBunkSet72.has(String(bk))) delete _rotHist.bunks[bk];
+                });
+            } else {
+                _rotHist.bunks = {};
+            }
             Object.entries(_allDaily).forEach(function ([dk, dayData]) {
                 const _ts = new Date(dk + 'T12:00:00').getTime() || Date.now();
                 const _sched = dayData?.scheduleAssignments || {};
                 Object.keys(_sched).forEach(function (bk) {
+                    if (_scopedBunkSet72 && !_scopedBunkSet72.has(String(bk))) return; // scheduler: only own bunks
                     (_sched[bk] || []).forEach(function (entry) {
                         if (entry?._activity && !entry.continuation && !entry._isTransition) {
                             const _aLower = entry._activity.toLowerCase();
@@ -1390,6 +1544,22 @@ all[date].updated_at = new Date().toISOString();
             if (typeof window.saveGlobalSettings === 'function') {
                 window.saveGlobalSettings('leagueRoundState', {});
             }
+
+            // ★★★ CB-57: clear the rotation-history globalSettings keys too.
+            // Erase-ALL wiped cloud rotation_counts + every daily schedule but
+            // left historicalCounts / historicalCountedDates / rotationHistory /
+            // manualUsageOffsets (and the swim/activity history mirrors) intact,
+            // so the next generation double-counts against phantom history from
+            // now-deleted days. Clear them in memory AND in globalSettings
+            // (which mirrors to localStorage + queues the cloud KV write).
+            ['historicalCounts', 'historicalCountedDates', 'rotationHistory', 'manualUsageOffsets', 'swimRotationHistory', 'activityHistory'].forEach(function (k) {
+                try { window[k] = {}; } catch (_) {}
+                try { if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings(k, {}); } catch (_) {}
+            });
+            try { window.RotationEngine?.clearAllHistory?.(); } catch (_) {}
+            // ★★★ CB-90: Erase-ALL must also wipe rotation-event completion stamps,
+            // else a regenerated event skips every previously-marked bunk.
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (_) {}
 
             console.log("✅ All daily data erased");
 
@@ -1651,7 +1821,9 @@ all[date].updated_at = new Date().toISOString();
                         divisions: unifiedState.divisions || {},
                         bunks: unifiedState.bunks || []
                     }));
-                    safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", unifiedJSON);
+                    // ★ #V2-1 tail: CAMPISTRY_LOCAL_CACHE = cross-tab beacon only (value never
+                    //   read; campGlobalSettings_v1 written above triggers the same listener).
+                    safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
                 }
                 
                 if (backup.rotationHistory) {
@@ -1724,11 +1896,20 @@ all[date].updated_at = new Date().toISOString();
             }
             
             const currentState = window.loadGlobalSettings?.() || {};
-            
+
+            // ★ Quota: do NOT duplicate the full multi-date schedule cache
+            //   (campDailyData_v1, ~700KB) into the auto-save snapshot. It was the
+            //   single biggest blob and the #1 cause of the auto-save quota trip —
+            //   the snapshot roughly DOUBLED localStorage. The schedule is already
+            //   persisted canonically in campDailyData_v1 (local) AND in the cloud
+            //   (daily_schedules, authoritative); restoreAutoSave reloads the page,
+            //   so the cloud rehydrates the schedule. The snapshot now carries only
+            //   settings + histories — the point-in-time rollback that isn't
+            //   otherwise recoverable. (Full backups still capture the schedule via
+            //   a separate campDailyData_v1 entry — see the backup keys list.)
             const snapshot = {
                 timestamp: Date.now(),
                 [UNIFIED_CACHE_KEY]: JSON.stringify(currentState),
-                [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
                 [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY),
                 [LEAGUE_HISTORY_KEY]: localStorage.getItem(LEAGUE_HISTORY_KEY),
                 [SPECIALTY_LEAGUE_HISTORY_KEY]: localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY),
@@ -1785,13 +1966,17 @@ all[date].updated_at = new Date().toISOString();
             
             if (snap[UNIFIED_CACHE_KEY]) {
                 safeLocalStorageSet(LEGACY_GLOBAL_SETTINGS_KEY, snap[UNIFIED_CACHE_KEY]);
-                safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", snap[UNIFIED_CACHE_KEY]);
+                // ★ #V2-1 tail: CAMPISTRY_LOCAL_CACHE = cross-tab beacon only (value never read).
+                safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
                 
                 // Update memory cache via setCloudState
                 if (typeof window.setCloudState === 'function') {
                     const state = JSON.parse(snap[UNIFIED_CACHE_KEY]);
                     
-                    // Inject schedules if present in snapshot, so they sync too
+                    // ★ Schedules are no longer stored in the snapshot (see
+                    //   performAutoSave) — they live in campDailyData_v1 + the cloud.
+                    //   Older snapshots may still carry it, so honor it when present;
+                    //   otherwise the reload below rehydrates the schedule from cloud.
                     if (snap[DAILY_DATA_KEY]) {
                         state.daily_schedules = JSON.parse(snap[DAILY_DATA_KEY]);
                     }

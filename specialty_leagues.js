@@ -269,12 +269,7 @@
     /**
      * ★ Escape HTML to prevent XSS attacks
      */
-    function escapeHtml(str) {
-        if (str === null || str === undefined) return "";
-        const div = document.createElement("div");
-        div.textContent = String(str);
-        return div.innerHTML;
-    }
+    function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     function getPlaceSuffix(n) {
         const s = ['th', 'st', 'nd', 'rd'];
@@ -358,14 +353,7 @@
         return hh * 60 + mm;
     }
 
-    function minutesToTimeLabel(min) {
-        if (min === null || min === undefined || isNaN(min)) return '';
-        const h24 = Math.floor(min / 60);
-        const m = String(min % 60).padStart(2, "0");
-        const ap = h24 >= 12 ? "PM" : "AM";
-        const h12 = h24 % 12 || 12;
-        return `${h12}:${m} ${ap}`;
-    }
+    function minutesToTimeLabel(min) { return window.CampUtils.minutesToTimeLabel(min); }  // → campistry_utils.js (canonical; identical for valid input, null/NaN→'')
 
     function findSlotIndexForTime(targetMin) {
         const times = window.unifiedTimes || [];
@@ -455,7 +443,17 @@
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             // ★ Preserve playoff sub-object — see leagues.js for the same fix.
-            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined,
+            // ★ LG-23: preserve the advanced options the SCHEDULER reads directly but
+            //   that this allowlist used to silently drop on every save — conferences +
+            //   inter-conference settings (matchup generation), gamesPerFieldSlot
+            //   (assignMatchupsToFieldsAndSlots), and per-team sports[]. Omitted when
+            //   absent (undefined → dropped by JSON), so normal leagues are unaffected.
+            conferences: Array.isArray(league.conferences) ? league.conferences : undefined,
+            allowInterConference: typeof league.allowInterConference === 'boolean' ? league.allowInterConference : undefined,
+            interConferencePriority: (league.interConferencePriority != null) ? league.interConferencePriority : undefined,
+            gamesPerFieldSlot: (typeof league.gamesPerFieldSlot === 'number' && league.gamesPerFieldSlot > 0) ? league.gamesPerFieldSlot : undefined,
+            sports: Array.isArray(league.sports) ? league.sports : undefined
         };
 
         // ★ Filter out orphaned divisions (divisions that no longer exist)
@@ -2149,7 +2147,21 @@
                 );
 
                 if (existingIdx >= 0) {
-                    league.games[existingIdx] = newGame;
+                    // ★ LG-29: MERGE, don't replace. Wholesale replacement overwrote
+                    //   the existing game with all-null scores, destroying results
+                    //   already entered (e.g. by the FN-58s auto-save) with no warning.
+                    //   Mirror the regular-league import (leagues.js): keep the existing
+                    //   matches + their scores, append only matchups not already present
+                    //   (team pair, either order).
+                    const existing = league.games[existingIdx];
+                    if (!existing.matches) existing.matches = [];
+                    newGame.matches.forEach(nm => {
+                        const found = existing.matches.find(em =>
+                            (em.teamA === nm.teamA && em.teamB === nm.teamB) ||
+                            (em.teamA === nm.teamB && em.teamB === nm.teamA)
+                        );
+                        if (!found) existing.matches.push(nm);
+                    });
                 } else {
                     league.games.push(newGame);
                 }
@@ -2378,6 +2390,19 @@
     // ★ Export helper functions for external use
     window.refreshSpecialtyLeagues = refreshFromStorage;
     window.cleanupSpecialtyLeagues = cleanup;
+
+    // ★ LG-10: public saver. calendar.js startNewHalf (~L702) and
+    // playoff_hub.js (~L74) both mutate window.specialtyLeagues in place
+    // (standings/playoff reset, bracket persist) then call
+    // window.saveSpecialtyLeaguesData() — but it was never defined, so those
+    // resets/brackets were never written to cloud/localStorage. saveData is
+    // module-private; expose it here. window.specialtyLeagues is the same
+    // object reference saveData serializes (declared once, never reassigned),
+    // so external in-place mutations persist. Force cloud sync — both callers
+    // are cross-session persistence operations.
+    window.saveSpecialtyLeaguesData = function() {
+        try { saveData(true); } catch (e) { console.warn('[saveSpecialtyLeaguesData] failed:', e); }
+    };
     
     // ★ Export getter that always returns current state
     window.getSpecialtyLeagues = function() {
@@ -2386,6 +2411,127 @@
 
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
+
+    // =========================================================================
+    // ★ FN-58: AUTO-SAVED GAME RESULTS — public API for the specialty engine
+    // =========================================================================
+    // The specialty scheduler calls syncGamesFromGeneration after every
+    // generation that covers a specialty league's day, so games appear in
+    // Game Results automatically (no "Import from Schedule" click). A
+    // regeneration calls it again with the day's NEW games: the date's
+    // auto-saved games are replaced, but scores already entered for matchups
+    // that still exist are preserved. Date deletion calls
+    // removeAutoGamesForDate. Games the user added manually (no importedFrom
+    // flag) are never touched.
+
+    function _slPairKey(a, b) { return [a, b].sort().join('|'); }
+    function _slIsAutoGame(g) { return g && (g.importedFrom === 'auto' || g.importedFrom === 'schedule'); }
+
+    window.SpecialtyLeaguesAPI = window.SpecialtyLeaguesAPI || {};
+
+    window.SpecialtyLeaguesAPI.syncGamesFromGeneration = function (leagueId, dateKey, gameEntries) {
+        try {
+            // ★ LG-4: the results store is normally hydrated only when the Specialty
+            //   Leagues tab is opened (initSpecialtyLeagues → loadData). If a generation
+            //   runs without the tab ever being opened, the store is empty and this sync
+            //   silently no-ops — the day's games never reach the results page / cloud.
+            //   Hydrate on demand so the write lands regardless of tab state.
+            if (Object.keys(specialtyLeagues).length === 0) { try { loadData(); } catch (_e) {} }
+            const league = specialtyLeagues[leagueId];
+            if (!league || !dateKey) return false;
+            if (!Array.isArray(league.games)) league.games = [];
+
+            const oldByLabelPair = {};
+            const oldByPair = {};
+            const oldPairCount = {};
+            league.games.forEach(function (g) {
+                if (g.date !== dateKey || !_slIsAutoGame(g)) return;
+                (g.matches || []).forEach(function (m) {
+                    if (m.scoreA == null && m.scoreB == null) return;
+                    const pk = _slPairKey(m.teamA, m.teamB);
+                    oldByLabelPair[(g.gameLabel || '') + '|' + pk] = m;
+                    oldByPair[pk] = m;
+                    oldPairCount[pk] = (oldPairCount[pk] || 0) + 1;
+                });
+            });
+
+            league.games = league.games.filter(function (g) { return !(g.date === dateKey && _slIsAutoGame(g)); });
+
+            const newPairCount = {};
+            (gameEntries || []).forEach(function (ge) {
+                (ge && ge.matches || []).forEach(function (m) {
+                    const pk = _slPairKey(m.teamA, m.teamB);
+                    newPairCount[pk] = (newPairCount[pk] || 0) + 1;
+                });
+            });
+
+            let totalMatches = 0;
+            (gameEntries || []).forEach(function (ge) {
+                if (!ge || !Array.isArray(ge.matches) || ge.matches.length === 0) return;
+                const numMatch = String(ge.gameLabel || '').match(/Game\s*(\d+)/i);
+                league.games.push({
+                    date: dateKey,
+                    gameLabel: ge.gameLabel || 'Game',
+                    gameNumber: ge.gameNumber != null ? ge.gameNumber : (numMatch ? parseInt(numMatch[1], 10) : null),
+                    matches: ge.matches.map(function (m) {
+                        const pk = _slPairKey(m.teamA, m.teamB);
+                        let old = oldByLabelPair[(ge.gameLabel || '') + '|' + pk];
+                        if (!old && oldPairCount[pk] === 1 && newPairCount[pk] === 1) old = oldByPair[pk];
+                        const aligned = old && old.teamA === m.teamA;
+                        return {
+                            teamA: m.teamA,
+                            teamB: m.teamB,
+                            scoreA: old ? (aligned ? old.scoreA : old.scoreB) : null,
+                            scoreB: old ? (aligned ? old.scoreB : old.scoreA) : null,
+                            field: m.field || null
+                        };
+                    }),
+                    importedFrom: 'auto',
+                    importedAt: new Date().toISOString()
+                });
+                totalMatches += ge.matches.length;
+            });
+
+            league.games.sort(function (a, b) {
+                return (a.date || '').localeCompare(b.date || '') || (a.gameNumber || 0) - (b.gameNumber || 0);
+            });
+
+            recalcStandings(league);
+            saveData();
+            console.log('[SPECIALTY_LEAGUES] 🔄 Auto-saved ' + (gameEntries || []).length + ' game(s) / ' + totalMatches + ' match(es) for "' + (league.name || leagueId) + '" on ' + dateKey);
+            return true;
+        } catch (e) {
+            console.error('[SPECIALTY_LEAGUES] syncGamesFromGeneration failed:', e);
+            return false;
+        }
+    };
+
+    window.SpecialtyLeaguesAPI.removeAutoGamesForDate = function (dateKey, leagueIds) {
+        try {
+            if (!dateKey) return;
+            // ★ LG-4: hydrate on demand (see syncGamesFromGeneration) so a date-delete
+            //   that runs before the tab is opened still clears the auto games.
+            if (Object.keys(specialtyLeagues).length === 0) { try { loadData(); } catch (_e) {} }
+            const ids = (Array.isArray(leagueIds) && leagueIds.length > 0) ? leagueIds : Object.keys(specialtyLeagues);
+            let changed = false;
+            ids.forEach(function (id) {
+                const lg = specialtyLeagues[id];
+                if (!lg || !Array.isArray(lg.games)) return;
+                const before = lg.games.length;
+                lg.games = lg.games.filter(function (g) { return !(g.date === dateKey && _slIsAutoGame(g)); });
+                if (lg.games.length !== before) {
+                    changed = true;
+                    recalcStandings(lg);
+                }
+            });
+            if (changed) {
+                saveData();
+                console.log('[SPECIALTY_LEAGUES] 🗑️ Removed auto-saved games for ' + dateKey);
+            }
+        } catch (e) {
+            console.error('[SPECIALTY_LEAGUES] removeAutoGamesForDate failed:', e);
+        }
+    };
 
     console.log("[SPECIALTY_LEAGUES] Module v2.2.7 loaded");
 

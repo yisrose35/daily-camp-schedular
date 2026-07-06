@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" data-product="lite">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Campistry Lite</title>
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+
+    <!-- PWA / add-to-home-screen -->
+    <link rel="manifest" href="manifest_lite.webmanifest">
+    <meta name="theme-color" content="#EE6A53">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Campistry">
+    <link rel="apple-touch-icon" href="Campistry_logo.png">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+
+    <!-- FOUC prevention (same pattern as index/dashboard) -->
+    <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
+    <link rel="stylesheet" href="campistry-unified.css">
+    <link rel="stylesheet" href="campistry_lite.css" onload="document.documentElement.classList.add('css-ready')">
+    <noscript><style>html body { opacity: 1 !important; }</style></noscript>
+</head>
+<body>
+
+    <!-- Boot / auth splash -->
+    <div id="liteSplash" class="lite-splash">
+        <img src="Campistry_clean.png" alt="Campistry" class="lite-splash-logo">
+        <div class="lite-splash-title">Campistry <span>Lite</span></div>
+        <div class="lite-splash-spinner"></div>
+        <div class="lite-splash-status" id="liteSplashStatus">Signing you in&hellip;</div>
+    </div>
+
+    <!-- App shell (hidden until authenticated + hydrated) -->
+    <div id="liteApp" class="lite-app" style="display:none;">
+
+        <header class="lite-header">
+            <div class="lite-header-brand">
+                <img src="Campistry_logo.png" alt="" class="lite-header-logo">
+                <div class="lite-header-text">
+                    <div class="lite-header-title">Campistry <span>Lite</span></div>
+                    <div class="lite-header-sub" id="liteCampName"></div>
+                </div>
+            </div>
+            <div class="lite-header-actions">
+                <span class="lite-role-badge" id="liteRoleBadge"></span>
+                <button class="lite-icon-btn" id="liteMenuBtn" aria-label="Menu">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Overflow menu -->
+        <div class="lite-menu" id="liteMenu" style="display:none;">
+            <div class="lite-menu-user" id="liteMenuUser"></div>
+            <a href="dashboard.html" class="lite-menu-item" id="liteMenuDashboard">Open full Campistry</a>
+            <button class="lite-menu-item lite-menu-danger" id="liteSignOut">Sign out</button>
+        </div>
+
+        <main class="lite-main" id="liteMain">
+            <!-- Views are rendered here by campistry_lite.js -->
+            <section class="lite-view" id="view-today"></section>
+            <section class="lite-view" id="view-roster" style="display:none;"></section>
+            <section class="lite-view" id="view-league" style="display:none;"></section>
+            <section class="lite-view" id="view-staff" style="display:none;"></section>
+            <section class="lite-view" id="view-messaging" style="display:none;"></section>
+        </main>
+
+        <nav class="lite-tabbar" id="liteTabbar">
+            <!-- Tabs injected by campistry_lite.js based on role -->
+        </nav>
+    </div>
+
+    <!-- Toast -->
+    <div class="lite-toast" id="liteToast" style="display:none;"></div>
+
+    <!-- ===== Core stack (order matters: config → SDK → client → RBAC → data) ===== -->
+    <script src="config.js"></script>
+    <script>
+        // Non-blocking SDK loader (same pattern as flow.html): load the Supabase
+        // SDK, then supabase_client.js in its onload so init order is guaranteed.
+        (function () {
+            var s = document.createElement('script');
+            s.src = (window.location.protocol === 'file:')
+                ? 'supabase-js-local.js'
+                : 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+            s.onload = function () {
+                var chain = [
+                    'supabase_client.js',
+                    'access_control.js',
+                    'supabase_permissions.js',
+                    'supabase_schedules.js',
+                    'division_times_system.js',
+                    'campistry_lite.js'
+                ];
+                (function next(i) {
+                    if (i >= chain.length) return;
+                    var t = document.createElement('script');
+                    t.src = chain[i];
+                    t.onload = function () { next(i + 1); };
+                    t.onerror = function () {
+                        console.error('[Lite] Failed to load ' + chain[i]);
+                        next(i + 1);
+                    };
+                    document.body.appendChild(t);
+                })(0);
+            };
+            s.onerror = function () {
+                var el = document.getElementById('liteSplashStatus');
+                if (el) el.textContent = 'Could not reach the network. Check your connection and reload.';
+            };
+            document.body.appendChild(s);
+        })();
+    </script>
+</body>
+</html>

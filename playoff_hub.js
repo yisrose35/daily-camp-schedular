@@ -23,16 +23,24 @@
     var _kind = 'regular';
     var _editStyleAfterRounds = false;  // when true, show Step 1 even though rounds exist
 
-    function escHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+    function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
     // -------------------------------------------------------------------------
     // Persistence
     // -------------------------------------------------------------------------
     function _save() {
+        // ★★★ CB-123: the Playoff Hub renders a fully-interactive bracket editor
+        // with NO role gate (every sibling league control IS role-gated). _save()
+        // is the SOLE persistence path for all ~24 bracket mutations, so gating it
+        // here stops a viewer / read-only user from writing the shared
+        // leaguesByName / specialtyLeagues mirror — the concrete harm. Owner/admin/
+        // scheduler (canEdit) are unaffected.
+        try {
+            if (window.AccessControl && typeof window.AccessControl.canEdit === 'function' && window.AccessControl.canEdit() === false) {
+                console.warn('[PlayoffHub] CB-123: read-only role — bracket changes are not saved');
+                return;
+            }
+        } catch (_) {}
         // ★ Re-bind _league to the LIVE entry in the registry. loadLeaguesData
         //   creates fresh objects via validateLeague on every focus/sync, so a
         //   reference held since open() is stale and our mutations on it never
@@ -57,6 +65,13 @@
             if (typeof window.saveGlobalSettings === 'function') {
                 try { window.saveGlobalSettings('specialtyLeagues', sl); } catch (_) {}
             }
+            // ★★★ CB-122: also persist via the canonical saver, which writes the
+            // campistryGlobalSettings localStorage mirror that loadLeaguesData reads
+            // FIRST on cold load. _save previously wrote only saveGlobalSettings
+            // (cloud + IDB), so a reload / 2nd device before cloud hydration restored
+            // a bracket-less league and a subsequent league save clobbered the cloud
+            // bracket.
+            if (typeof window.saveSpecialtyLeaguesData === 'function') { try { window.saveSpecialtyLeaguesData(); } catch (_) {} }
         } else {
             var lbn = window.leaguesByName || {};
             var liveR = _league && lbn[_league.name];
@@ -67,6 +82,11 @@
             if (typeof window.saveGlobalSettings === 'function') {
                 try { window.saveGlobalSettings('leaguesByName', lbn); } catch (_) {}
             }
+            // ★★★ CB-122: persist via the canonical saver too (writes the
+            // campistryGlobalSettings localStorage mirror loadLeaguesData reads first
+            // on cold load) — otherwise the bracket is lost if a league save/gen
+            // fires before cloud hydration on reload / a 2nd device.
+            if (typeof window.saveLeaguesData === 'function') { try { window.saveLeaguesData(); } catch (_) {} }
         }
     }
 
@@ -856,7 +876,9 @@
             '</div>';
         document.body.appendChild(_overlayEl);
         _overlayEl.querySelector('.ph-close').onclick = close;
-        _overlayEl.addEventListener('click', function (e) { if (e.target === _overlayEl) close(); });
+        let _mdPlayoffOverlay = false;
+        _overlayEl.addEventListener('mousedown', function (e) { _mdPlayoffOverlay = (e.target === _overlayEl); });
+        _overlayEl.addEventListener('click', function (e) { if (e.target === _overlayEl && _mdPlayoffOverlay) close(); });
         document.addEventListener('keydown', _escListener);
         _render();
     }

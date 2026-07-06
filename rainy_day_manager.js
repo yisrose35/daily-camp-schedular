@@ -14,6 +14,18 @@
 (function() {
 'use strict';
 
+// ★★★ CB-35: field & special-activity names are user-controlled camp config and
+// were interpolated RAW into the rainy-day config-panel innerHTML — both as text
+// (rd-item-name) and inside double-quoted data-* attributes (data-field=,
+// data-special=) → stored XSS + attribute breakout. No escaper existed in this
+// file; add one (CampUtils delegate + complete &<>"' fallback, safe in element
+// and attribute context) and wrap every name sink.
+const _rdEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+    ? window.CampUtils.escapeHtml(s)
+    : String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 // =============================================================
 // STATE
 // =============================================================
@@ -240,36 +252,12 @@ function setAutoSkeletonSwitch(enabled) {
 /**
  * Parse time string to minutes (e.g., "2:30pm" -> 870)
  */
-function parseTimeToMinutes(str) {
-    if (!str || typeof str !== "string") return null;
-    let s = str.trim().toLowerCase();
-    let mer = null;
-    if (s.endsWith("am") || s.endsWith("pm")) {
-        mer = s.endsWith("am") ? "am" : "pm";
-        s = s.replace(/am|pm/g, "").trim();
-    }
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === "am" ? 0 : 12;
-        else if (mer === "pm") hh += 12;
-    }
-    return hh * 60 + mm;
-}
+function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
 /**
  * Convert minutes to time string (e.g., 870 -> "2:30pm")
  */
-function minutesToTime(min) {
-    let h = Math.floor(min / 60);
-    let m = min % 60;
-    const ap = h >= 12 ? 'pm' : 'am';
-    h = h % 12 || 12;
-    return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 /**
  * Get current time in minutes since midnight
@@ -1174,8 +1162,8 @@ function createRainyDayToggleUI(container, onToggle) {
                     </div>
                     <select id="rainy-skeleton-select" class="rainy-settings-select">
                         <option value="">-- None Selected --</option>
-                        ${availableSkeletons.map(name => 
-                            `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
+                        ${availableSkeletons.map(name =>
+                            `<option value="${_rdEsc(name)}" ${name === rainySkeletonName ? 'selected' : ''}>${_rdEsc(name)}</option>`
                         ).join('')}
                     </select>
                 </div>
@@ -1551,14 +1539,14 @@ function createRainyDayConfigPanel(container) {
                     return `
                         <div class="rd-item-row ${isIndoor ? 'indoor' : ''}">
                             <div>
-                                <div class="rd-item-name">${f.name}</div>
+                                <div class="rd-item-name">${_rdEsc(f.name)}</div>
                                 <span class="rd-item-badge ${isIndoor ? 'rd-badge-indoor' : 'rd-badge-outdoor'}">
                                     ${isIndoor ? '🏠 Indoor' : '🌳 Outdoor'}
                                 </span>
                             </div>
                             <label class="rd-mini-toggle">
                                 <input type="checkbox" 
-                                       data-field="${f.name}" 
+                                       data-field="${_rdEsc(f.name)}"
                                        ${isIndoor ? 'checked' : ''}>
                                 <span class="track"></span>
                                 <span class="thumb"></span>
@@ -1583,12 +1571,12 @@ function createRainyDayConfigPanel(container) {
                     return `
                         <div class="rd-item-row ${isRainyOnly ? 'rainy-only' : ''}">
                             <div>
-                                <div class="rd-item-name">${s.name}</div>
+                                <div class="rd-item-name">${_rdEsc(s.name)}</div>
                                 ${isRainyOnly ? '<span class="rd-item-badge rd-badge-rainy">🌧️ Rainy Day Only</span>' : ''}
                             </div>
                             <label class="rd-mini-toggle">
                                 <input type="checkbox" 
-                                       data-special="${s.name}" 
+                                       data-special="${_rdEsc(s.name)}"
                                        ${isRainyOnly ? 'checked' : ''}>
                                 <span class="track"></span>
                                 <span class="thumb"></span>

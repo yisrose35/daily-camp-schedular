@@ -29,6 +29,21 @@ function saveRotationEvents(events) {
     g.rotationEvents = events;
     window.saveGlobalSettings?.('rotationEvents', events);
     window.forceSyncToCloud?.();
+    // ★★★ CB-67: rotationEvents lives in camp_state_kv, which RLS makes
+    // owner/admin-write-only (integration_hooks _canWriteCampState gate drops the
+    // queued change for schedulers). Auto-gen completion stamps a scheduler makes
+    // are therefore saved LOCALLY but never reach the cloud — yet the call chain
+    // reported success, so the owner sees the event as not-done. Surface it so the
+    // loss isn't silent. (Full cross-user persistence requires widening the
+    // camp_state RLS policy + a 2-account test — tracked as [LIVE], not done here
+    // to avoid a speculative multi-user regression.)
+    try {
+        if (window.CloudPermissions?.hasFullAccess?.() === false) {
+            console.warn('[RotationEvents] CB-67: rotation-event changes saved LOCALLY ONLY — '
+                + 'scheduler role cannot write rotationEvents to camp_state (RLS). '
+                + 'Completion stamps will not sync to other users until an owner/admin regenerates.');
+        }
+    } catch (e) { /* non-fatal */ }
 }
 
 function getEventById(id) {
@@ -74,11 +89,7 @@ function getBunkGrade(bunkName) {
     return found ? found.grade : null;
 }
 
-function minutesToTime(min) {
-    let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-    h = h % 12 || 12;
-    return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 // Format YYYY-MM-DD → MM/DD/YYYY for display
 function formatDate(dateKey) {
@@ -100,25 +111,7 @@ function parseDateInput(str) {
     return null;
 }
 
-function parseTimeToMinutes(str) {
-    if (typeof str === 'number') return str;
-    if (!str) return null;
-    let s = str.toLowerCase().trim();
-    let mer = null;
-    if (s.includes('am')) mer = 'am';
-    else if (s.includes('pm')) mer = 'pm';
-    s = s.replace(/am|pm/g, '').trim();
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (isNaN(hh) || isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === 'am' ? 0 : 12;
-        else if (mer === 'pm') hh += 12;
-    }
-    return hh * 60 + mm;
-}
+function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
 function isDateInRange(dateKey, start, end) {
     return dateKey >= start && dateKey <= end;
@@ -540,6 +533,42 @@ function clearCompletedForDate(dateKey, allowedBunks) {
     return cleared;
 }
 
+// ★★★ CB-90: wipe ALL completion stamps across every rotation event (all dates).
+// clearCompletedForDate only prunes the CURRENT date (called at gen STEP 0), so a
+// schedule delete / "Erase ALL" / "Start New Half" left completedBunks intact —
+// regenerating the new half then skipped every already-marked bunk permanently
+// (they showed as done although their schedules were wiped + counters reset).
+// This is the completion-side analog of the historicalCounts reset those paths
+// already do. Optional dateKeys[] limits the wipe to specific dates.
+function clearAllCompleted(dateKeys, bunkFilter) {
+    const events = loadRotationEvents();
+    const scopedDates = Array.isArray(dateKeys) && dateKeys.length > 0;
+    const dateSet = scopedDates ? new Set(dateKeys.map(String)) : null;
+    const scopedBunks = Array.isArray(bunkFilter) && bunkFilter.length > 0;
+    const bunkSet = scopedBunks ? new Set(bunkFilter.map(String)) : null;
+    let cleared = 0;
+    const _wipeDate = (evt, dk) => {
+        const arr = evt.completedBunks[dk];
+        if (!Array.isArray(arr)) return;
+        if (scopedBunks) {
+            const before = arr.length;
+            evt.completedBunks[dk] = arr.filter(b => !bunkSet.has(String(b)));
+            cleared += before - evt.completedBunks[dk].length;
+            if (evt.completedBunks[dk].length === 0) delete evt.completedBunks[dk];
+        } else {
+            cleared += arr.length;
+            delete evt.completedBunks[dk];
+        }
+    };
+    events.forEach(evt => {
+        if (!evt.completedBunks) return;
+        const dates = scopedDates ? [...dateSet] : Object.keys(evt.completedBunks);
+        dates.forEach(dk => _wipeDate(evt, dk));
+    });
+    if (cleared > 0) saveRotationEvents(events);
+    return cleared;
+}
+
 /**
  * Write rotation event blocks into bunk timelines (for auto-scheduler integration).
  * Called from scheduler_core_auto.js after the main scheduling pass.
@@ -745,7 +774,7 @@ function renderEventCard(evt, dateKey, isActive) {
     // Bind events
     card.querySelector('.re-delete-btn')?.addEventListener('click', async () => {
         if (typeof window.daShowConfirm === 'function') {
-            const ok = await window.daShowConfirm('Delete "' + evt.name + '"? This cannot be undone.', { danger: true, confirmText: 'Delete' });
+            const ok = await window.daShowConfirm('Delete "' + escapeHtml(evt.name) + '"? This cannot be undone.', { danger: true, confirmText: 'Delete' });
             if (ok) { deleteEvent(evt.id); renderRotationEventsPane(card.closest('#da-rotation-events-container')); }
         } else {
             if (confirm('Delete "' + evt.name + '"?')) { deleteEvent(evt.id); renderRotationEventsPane(card.closest('#da-rotation-events-container')); }
@@ -758,7 +787,7 @@ function renderEventCard(evt, dateKey, isActive) {
 
     card.querySelector('.re-restart-btn')?.addEventListener('click', async () => {
         const confirmFn = typeof window.daShowConfirm === 'function' ? window.daShowConfirm : (msg) => Promise.resolve(confirm(msg));
-        const ok = await confirmFn('Restart "' + evt.name + '"? This will clear all completion records and start from scratch.', { danger: true, confirmText: 'Restart' });
+        const ok = await confirmFn('Restart "' + escapeHtml(evt.name) + '"? This will clear all completion records and start from scratch.', { danger: true, confirmText: 'Restart' });
         if (ok) {
             updateEvent(evt.id, { completedBunks: {} });
             renderRotationEventsPane(card.closest('#da-rotation-events-container'));
@@ -861,7 +890,10 @@ async function showCreateEventModal(containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunks = getAllBunks();
-    const allGrades = [...new Set(allBunks.map(b => b.grade))].sort();
+    // ★ FN-50: Camp Structure order, not alphabetical
+    const _rawGrades = [...new Set(allBunks.map(b => b.grade))];
+    const allGrades = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(_rawGrades) : _rawGrades.sort();
     const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
@@ -956,7 +988,7 @@ async function showCreateEventModal(containerEl) {
     const actualDays = getDatesBetween(startDate, endDate).length;
 
     alertFn(
-        'Created "' + result.name + '"<br><br>' +
+        'Created "' + escapeHtml(result.name) + '"<br><br>' +
         '<strong>' + totalBunks + ' bunks</strong>, ~' + slotsPerDay + '/day capacity<br>' +
         formatDate(startDate) + ' - ' + formatDate(endDate) + ' (' + actualDays + ' day' + (actualDays > 1 ? 's' : '') + ')' +
         (daysNeeded > actualDays ? '<br><br>Warning: May need ' + daysNeeded + ' days to finish all bunks — consider extending the date range.' : '')
@@ -967,7 +999,10 @@ async function showEditEventModal(evt, containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunksForEdit = getAllBunks();
-    const allGradesForEdit = [...new Set(allBunksForEdit.map(b => b.grade))].sort();
+    // ★ FN-50: Camp Structure order, not alphabetical
+    const _rawGradesE = [...new Set(allBunksForEdit.map(b => b.grade))];
+    const allGradesForEdit = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(_rawGradesE) : _rawGradesE.sort();
     const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
@@ -1135,10 +1170,7 @@ function getSchedulerHook() {
 // INIT
 // =================================================================
 
-function escapeHtml(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
 function removeSubtab() {
     const tab = document.querySelector('.da-subtab[data-tab="rotation-events"]');
@@ -1380,6 +1412,7 @@ const RotationEvents = {
     writeBlocksToTimelines,
     markCompleted,
     clearCompletedForDate,
+    clearAllCompleted, // ★ CB-90: full completion wipe for erase/new-half paths
     getSchedulerHook,
     getRemainingBunks,
     getCompletedBunks,

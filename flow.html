@@ -434,12 +434,24 @@
 </div>
 
                 <div id="schedule" class="tab-content">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                        <h3>Daily Schedule (View)</h3>
-                        <button onclick="window.validateSchedule?.()"
-                            style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;">
-                            Validate Schedule
-                        </button>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap;">
+                        <h3 style="margin:0;">Daily Schedule (View)</h3>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button onclick="window.SnapshotUI?.saveNow()"
+                                title="Save the current schedule so you can recall it later"
+                                style="background:#2e7d32;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;cursor:pointer;">
+                                Save
+                            </button>
+                            <button onclick="window.SnapshotUI?.openModal()"
+                                title="View and restore previously saved schedules"
+                                style="background:#147D91;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;cursor:pointer;">
+                                Saved
+                            </button>
+                            <button onclick="window.validateSchedule?.()"
+                                style="background:#ff9800;color:white;border:none;padding:8px 16px;border-radius:4px;font-weight:bold;cursor:pointer;">
+                                Validate Schedule
+                            </button>
+                        </div>
                     </div>
                     <div id="scheduleTable"></div>
                 </div>
@@ -487,6 +499,7 @@
     document.head.appendChild(s);
 })();
 </script>
+    <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
 <script src="supabase_permissions.js"></script>
 <script src="supabase_schedules.js"></script>
@@ -495,6 +508,7 @@
 <script src="integration_hooks.js"></script>
 
 <script src="schedule_versions_db.js"></script>
+<script src="schedule_snapshot_ui.js"></script>
 <script src="global_authority.js"></script>
 <script src="cloud_sync_helpers.js"></script>
 
@@ -667,6 +681,11 @@
     <script src="feasibility_oracle.js"></script>
     <script src="period_tiler.js"></script>
     <script src="day_packer.js"></script>
+    <script src="period_orchestrator.js"></script>
+    <script src="period_layout.js"></script>
+    <script src="gl_stagger.js"></script>
+    <script src="gl_bandplan.js"></script>
+    <script src="gl_align.js"></script>
     <script src="scheduler_core_auto.js"></script>
     <!-- v2 SOLVER (un-parked X2f-17): SA local-search optimizer with bucket-grid
          mutations. Gated by globalSettings.app1.solverVersion = 'v2'. v1 stays
@@ -704,6 +723,7 @@
 <script src="scheduler_core_specialty_leagues.js"></script>
 <script src="scheduler_core_leagues.js"></script>
 <script src="scheduler_logic_fillers.js"></script>
+<script src="field_quality_reopt.js"></script>
 <script src="scheduler_core_main.js"></script>
 <script src="schedule_orchestrator.js"></script>
 
@@ -711,6 +731,7 @@
     <script src="auto_schedule_grid.js"></script>
 <script src="unified_schedule_system.js"></script>
     <script src="schedule_calendar_views.js"></script>
+<script src="post_edit_field_change.js"></script>
 <script src="post_edit_system.js"></script>
 <script src="auto_fill_slot.js"></script>
 
@@ -723,12 +744,14 @@
 <script src="camper_locator.js"></script>
 <script src="validator.js"></script>
 <script src="auto_validator.js"></script>
-<script src="print_center.js"></script>
+<script src="print_center.js?v=20260617-rebuild39"></script>
 <script src="helper.js"></script>
 <script src="updates.js"></script>
     <script src="rbac_diagnostics.js"></script>
 <script src="campistry_diagnostics.js"></script>
 <script src="mobile_touch_drag.js"></script>
+<script src="badges.js"></script>
+<script src="easter_egg.js"></script>
     
 <!-- TAB NAVIGATION & SIDEBAR HANDLING -->
 <script>

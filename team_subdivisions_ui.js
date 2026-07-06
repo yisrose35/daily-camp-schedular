@@ -9,6 +9,17 @@
 (function() {
     'use strict';
 
+    // ★★★ CB-89: subdivision (group) names and division names are user-typed and
+    // were interpolated RAW into the subdivisions-card / member-modal innerHTML
+    // (and the edit-modal input value=) → stored XSS. No escaper existed; add one
+    // (CampUtils delegate + complete &<>"' fallback, safe in element + attribute
+    // context) and wrap every name sink.
+    const _tsuEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
     console.log("[TeamUI] Team & Divisions UI v2.1 loading...");
 
     const SUBDIVISION_COLORS = [
@@ -83,7 +94,7 @@
      */
     function renderDivisionPill(divName, meDivisions) {
         const color = (meDivisions && meDivisions[divName]?.color) || '#6B7280';
-        return `<span class="division-color-pill" style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:0.8rem;font-weight:500;margin:2px 3px 2px 0;background:${color}18;color:${color};border:1px solid ${color}35;">${divName}</span>`;
+        return `<span class="division-color-pill" style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:0.8rem;font-weight:500;margin:2px 3px 2px 0;background:${color}18;color:${color};border:1px solid ${color}35;">${_tsuEsc(divName)}</span>`;
     }
 
     /**
@@ -162,7 +173,7 @@
         return `
             <div class="subdivision-item" style="border-left: 4px solid ${sub.color || '#6B7280'};">
                 <div class="subdivision-info">
-                    <div class="subdivision-name">${sub.name}</div>
+                    <div class="subdivision-name">${_tsuEsc(sub.name)}</div>
                     <div class="subdivision-divisions" style="margin-top: 6px;">${divisionsList}</div>
                 </div>
                 <div class="subdivision-actions">
@@ -202,7 +213,7 @@
                     <div class="form-group">
                         <label for="sub-name">Group Name *</label>
                         <input type="text" id="sub-name" placeholder="e.g., Upper Camp, Boys Division"
-                            value="${isEdit ? existingSubdivision.name : ''}" required>
+                            value="${isEdit ? _tsuEsc(existingSubdivision.name) : ''}" required>
                     </div>
                     <div class="form-group">
                         <label for="sub-color">Color</label>
@@ -258,7 +269,9 @@
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-subdivision').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        let _mdModalA = false;
+        modal.addEventListener('mousedown', e => { _mdModalA = (e.target === modal); });
+        modal.addEventListener('click', e => { if (e.target === modal && _mdModalA) closeModal(); });
 
         document.getElementById('subdivision-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -411,6 +424,7 @@
                             <option value="admin">Admin - Full access to all divisions</option>
                             <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
+                            <option value="counselor">Counselor - Campistry Lite mobile app only</option>
                         </select>
                     </div>
                     <div class="form-group" id="subdivisions-group" style="display: none;">
@@ -426,7 +440,7 @@
                                     <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
                                         <input type="checkbox" name="subdivision" value="${sub.id}">
                                         <div style="display:flex;flex-direction:column;gap:2px;">
-                                            <span>${sub.name}</span>
+                                            <span>${_tsuEsc(sub.name)}</span>
                                             <div style="margin-top:2px;">${divPills}</div>
                                         </div>
                                     </label>`;
@@ -451,7 +465,9 @@
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-invite').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        let _mdModalB = false;
+        modal.addEventListener('mousedown', e => { _mdModalB = (e.target === modal); });
+        modal.addEventListener('click', e => { if (e.target === modal && _mdModalB) closeModal(); });
 
         document.getElementById('invite-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -505,6 +521,7 @@
                             <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
                             <option value="scheduler" ${member.role === 'scheduler' ? 'selected' : ''}>Scheduler</option>
                             <option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+                            <option value="counselor" ${member.role === 'counselor' ? 'selected' : ''}>Counselor</option>
                         </select>
                     </div>
                     <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
@@ -517,7 +534,7 @@
                             <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
                                 <input type="checkbox" name="subdivision" value="${sub.id}" ${member.subdivision_ids?.includes(sub.id) ? 'checked' : ''}>
                                 <div style="display:flex;flex-direction:column;gap:2px;">
-                                    <span>${sub.name}</span>
+                                    <span>${_tsuEsc(sub.name)}</span>
                                     <div style="margin-top:2px;">${divPills}</div>
                                 </div>
                             </label>`;
@@ -533,7 +550,9 @@
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-edit').addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        let _mdModalC = false;
+        modal.addEventListener('mousedown', e => { _mdModalC = (e.target === modal); });
+        modal.addEventListener('click', e => { if (e.target === modal && _mdModalC) closeModal(); });
 
         document.getElementById('edit-member-form').addEventListener('submit', async (e) => {
             e.preventDefault();

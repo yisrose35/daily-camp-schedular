@@ -6,7 +6,7 @@ console.log('📋 Campistry Me loading...');
 var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899','#84CC16','#6366F1','#14B8A6'];
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
-var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={};
+var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={};
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
@@ -101,7 +101,7 @@ function loadData(){
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
         families=me.families||{}; payments=me.payments||[];
-        broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{};
+        broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         formConfig=me.formConfig||null;
         // Ensure promoCodes live inside enrollSettings
@@ -138,11 +138,17 @@ function save(){
         // entries built from campStructure (startTime, endTime, parentDivision, etc.).
         // campStructure is the authoritative source for division/grade/bunk structure;
         // app1.loadData() derives everything from it, so we must not overwrite it here.
-        g.campistryMe={
+        // ★★★ CB-60: SPREAD the existing campistryMe first, then override only
+        // the keys this save() owns. The previous fixed object literal dropped
+        // every sub-key NOT listed here — forms, customFields, locale,
+        // campSettings, stripePublishableKey, etc. (each written by a sibling
+        // saver) — so an unrelated save() silently wiped them from cache + cloud.
+        g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
             broadcasts:broadcasts,
             bunkAssignments:bunkAsgn,
+            bunkManualCounts:bunkManualCounts,
             nextCamperId:nextCamperId,
             enrollments:enrollments,
             sessions:sessions,
@@ -150,7 +156,7 @@ function save(){
             formConfig:formConfig,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
-        };
+        });
         g.updated_at=new Date().toISOString();
 
         // saveGlobalSettings → setLocalSettings handles ALL persistence:
@@ -176,7 +182,21 @@ function save(){
         if(typeof window.refreshStarterBanner==='function'){
             try{window.refreshStarterBanner(rosterCount)}catch(ex){}
         }
-    }catch(e){console.error('[Me] Save:',e)}
+    }catch(e){
+        console.error('[Me] Save:',e);
+        // ★ #V2-7: surface the failure instead of swallowing it. A throw out of the
+        //   save means even the LOCAL write failed (saveGlobalSettings is local-first:
+        //   IDB has no quota + localStorage gets a stripped snapshot, so it normally
+        //   absorbs transient cloud errors silently). A throw therefore means the
+        //   user's edit may NOT be stored anywhere — they must be told, not left
+        //   believing it saved (the silent-loss UX gap; #V2-1 quota intersection).
+        try {
+            var _msg = 'Save failed — your changes may not be stored. Check available storage and try again.';
+            if (typeof toast === 'function') toast(_msg, 'error');
+            else if (window.daShowAlert) window.daShowAlert(_msg);
+            else if (typeof alert === 'function') alert(_msg);
+        } catch(_) { /* last-resort: never let the error handler itself throw */ }
+    }
 }
 
 // ═══ SIDEBAR ═════════════════════════════════════════════════════
@@ -201,7 +221,7 @@ function setupSearch(){
 }
 
 // ═══ HELPERS ═════════════════════════════════════════════════════
-function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML.replace(/"/g,'&quot;')}
 function je(s){return esc(s).replace(/'/g,"\\'")}
 function age(dob){if(!dob)return'';var a=Math.floor((Date.now()-new Date(dob).getTime())/31557600000);return a>=0&&a<25?a:''}
 
@@ -465,7 +485,7 @@ function renderFamilies(){
     if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started, or import campers and we\'ll detect families automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
     else e.forEach(function([id,f]){
         var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
-        h+='<div class="fam-card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button></div></div>';
+        h+='<div class="fam-card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
         (f.households||[]).forEach(function(hh){
             h+='<div class="hh"><div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">'+esc(hh.label||'Primary')+(hh.billingContact?' · Billing':'')+'</div>';
             (hh.parents||[]).forEach(function(p){h+='<div style="font-size:.8rem;margin-bottom:2px"><strong>'+esc(p.name)+'</strong>'+(p.phone?' — <a href="tel:'+esc(p.phone)+'" style="color:var(--me)">'+esc(p.phone)+'</a>':'')+'</div>'});
@@ -495,9 +515,14 @@ function openFamilyForm(id){
     h+='<div class="fr">'+ff('Parent 2 Name','fmP2',hh.parents&&hh.parents[1]?hh.parents[1].name:'')+ff('Parent 2 Phone','fmP2Ph',hh.parents&&hh.parents[1]?hh.parents[1].phone:'')+'</div>';
     h+=ff('Address','fmAddr',hh.address);
     h+='<div class="fsec">Linked Campers</div><p style="font-size:.8rem;color:var(--s400)">Select campers in this family:</p><div id="fmCamperChecks" style="max-height:150px;overflow-y:auto;margin-top:6px">';
+    // ★ Day 5: flag campers already in ANOTHER family so the user doesn't double-assign
+    //   (saving will MOVE them here). Build the lookup once.
+    var _assignedElsewhere={};
+    Object.entries(families).forEach(function(pair){if(pair[0]===id)return;(pair[1].camperIds||[]).forEach(function(cn){_assignedElsewhere[cn]=pair[1].name||pair[0]})});
     Object.keys(roster).sort().forEach(function(n){
         var checked=(f.camperIds||[]).indexOf(n)>=0;
-        h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem;cursor:pointer"><input type="checkbox" class="fmCamperCB" value="'+esc(n)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(n)+'</label>';
+        var elsewhere=_assignedElsewhere[n]?' <span style="color:var(--s400);font-size:.7rem">(in '+esc(_assignedElsewhere[n])+')</span>':'';
+        h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem;cursor:pointer"><input type="checkbox" class="fmCamperCB" value="'+esc(n)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(n)+elsewhere+'</label>';
     });
     h+='</div>';
     document.getElementById('fmBody').innerHTML=h;
@@ -509,11 +534,24 @@ function saveFamily(){
     if(!name){toast('Name required','error');return}
     var id=editingFam||('fam_'+Date.now());
     var camperIds=[];document.querySelectorAll('.fmCamperCB:checked').forEach(function(cb){camperIds.push(cb.value)});
+    // ★ Day 5: enforce single-family membership — assigning a camper to this family
+    //   removes them from any OTHER family (move semantics), so no camper is double-counted.
+    Object.keys(families).forEach(function(fid){if(fid===id)return;var of=families[fid];if(of&&Array.isArray(of.camperIds))of.camperIds=of.camperIds.filter(function(cn){return camperIds.indexOf(cn)<0})});
     var p1={name:(document.getElementById('fmP1').value||'').trim(),phone:(document.getElementById('fmP1Ph').value||'').trim(),email:(document.getElementById('fmP1Em').value||'').trim(),relation:'Mother'};
     var p2={name:(document.getElementById('fmP2').value||'').trim(),phone:(document.getElementById('fmP2Ph').value||'').trim(),relation:'Father'};
     var parents=[p1];if(p2.name)parents.push(p2);
     families[id]={name:name,households:[{label:(document.getElementById('fmHHLabel').value||'Primary').trim(),parents:parents,address:(document.getElementById('fmAddr').value||'').trim(),billingContact:true}],camperIds:camperIds,balance:(families[id]&&families[id].balance)||0,totalPaid:(families[id]&&families[id].totalPaid)||0,notes:(document.getElementById('fmNotes').value||'').trim()};
     save();closeModal('familyModal');render(curPage);toast(editingFam?'Family updated':'Family added');
+}
+// ★ Day 5: families had no delete control (a missing/dead-control gap). Campers do NOT
+//   back-reference a family, so deleting one just removes the household; the campers
+//   remain (simply unassigned) — no cascade needed.
+function deleteFamily(id){
+    if(!id||!families[id])return;
+    var nm=families[id].name||'this family';
+    if(!confirm('Delete "'+nm+'"? Its campers will remain in the roster but be unassigned from this family. This cannot be undone.'))return;
+    delete families[id];
+    save();closeModal('familyModal');render('families');toast('Family deleted');
 }
 
 // ── CAMPERS ──────────────────────────────────────────────────────
@@ -718,10 +756,18 @@ function editCamper(n){
 function addCamper(){editingCamper=null;editCamper('')}
 function saveCamper(){
     var first=(document.getElementById('ceFirst').value||'').trim(),last=(document.getElementById('ceLast').value||'').trim();
-    if(!first){toast('First name required','error');return}
+    if(!first){toast('First name required','error');try{document.getElementById('ceFirst').focus()}catch(_){}return}
     var full=first+(last?' '+last:'');
+    // ★ #4 rename-collision guard: renaming onto a DIFFERENT existing camper would
+    // silently OVERWRITE them at roster[full] below (delete old key, then assign new).
+    // Reject instead of clobbering an existing record.
+    if(editingCamper&&editingCamper!==full&&roster[full]){toast('A camper named "'+full+'" already exists','error');return}
     var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
-    if(editingCamper&&editingCamper!==full)delete roster[editingCamper];
+    // ★ #4 cascade: roster keys are NAMES, and families[].camperIds / bunkAsgn[bunk] /
+    // payments[].camper / Campistry-Go addresses all reference campers BY NAME. On a
+    // rename we must update those refs or the camper is silently detached from their
+    // family, bunk assignment, and billing.
+    if(editingCamper&&editingCamper!==full){cascadeCamperRename(editingCamper,full);delete roster[editingCamper]}
     if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
@@ -776,10 +822,30 @@ function saveCamper(){
     }
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
 }
+// ★ #4 cascade helpers. Camper records are keyed by NAME in `roster`, and several
+// other stores reference campers by that same name string: families[].camperIds,
+// bunkAsgn[bunk], payments[].camper, and the Campistry-Go address book. Rename/delete
+// must keep those in sync or the camper is silently orphaned.
+function cascadeCamperRename(oldName,newName){
+    if(!oldName||!newName||oldName===newName)return;
+    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.map(function(c){return c===oldName?newName:c})});}catch(_){}
+    try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].map(function(c){return c===oldName?newName:c})});}catch(_){}
+    try{(payments||[]).forEach(function(p){if(p&&p.camper===oldName)p.camper=newName});}catch(_){}
+    try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[oldName]){go.addresses[newName]=go.addresses[oldName];delete go.addresses[oldName];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
+}
+function cascadeCamperDelete(name){
+    if(!name)return;
+    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c){return c!==name})});}catch(_){}
+    try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
+    // payments are intentionally KEPT — silently erasing billing history when a camper
+    // is removed is worse than leaving the (now-deleted) name on the financial record.
+    try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[name]){delete go.addresses[name];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
+}
 function deleteCamper(n){
     if(!n||!roster[n])return;
     if(!confirm('Delete camper "'+n+'"? This cannot be undone.'))return;
     delete roster[n];
+    cascadeCamperDelete(n);
     save();closeModal('camperViewModal');render(curPage);toast('Camper deleted');
 }
 function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
@@ -837,6 +903,13 @@ function syncAllAddressesToGo(){
 function _getDivisionOrder(){
     try{
         var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        // ★ Prefer the DEDICATED parent-division order (app1.divisionOrder). It holds
+        //   PARENT names only and is written exclusively by Me division reorders, so it
+        //   can't be clobbered by Flow's schedule-column order (which shares the older
+        //   app1.manualColumnOrder key but stores grade-level keys). Fall back to
+        //   manualColumnOrder for legacy camps that never saved a division order.
+        var div=(gs.app1&&gs.app1.divisionOrder);
+        if(Array.isArray(div)&&div.length)return div;
         var ord=(gs.app1&&gs.app1.manualColumnOrder)||[];
         return Array.isArray(ord)?ord:[];
     }catch(_){return []}
@@ -845,6 +918,9 @@ function _saveDivisionOrder(order){
     try{
         var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
         if(!gs.app1)gs.app1={};
+        // Authoritative parent-division order → its OWN key so Flow column drags can't
+        // wipe it. Keep writing manualColumnOrder too for any legacy reader.
+        gs.app1.divisionOrder=order;
         gs.app1.manualColumnOrder=order;
         if(window.saveGlobalSettings)window.saveGlobalSettings('app1',gs.app1);
     }catch(e){console.warn('[CampistryMe] save order failed',e)}
@@ -944,7 +1020,18 @@ function renderStructure(){
                     +'</div>'
                     +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
                 (gd.bunks||[]).forEach(function(b){
-                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'+esc(b)+'</span>';
+                    var rCt=Object.values(roster).filter(function(c){return c.bunk===b}).length;
+                    var mCt=bunkManualCounts[b];
+                    var isOverride=(mCt!=null);
+                    var dispCt=isOverride?mCt:rCt;
+                    var badgeTip=isOverride?'Manual count (click to edit)':'Roster count (click to set manual count)';
+                    var badgeStyle=isOverride
+                        ?'background:var(--me);color:#fff;'
+                        :(rCt?'background:#e2e8f0;color:#475569;':'background:#f1f5f9;color:#94a3b8;');
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'
+                        +esc(b)
+                        +'<span class="bunk-ct-pill" title="'+esc(badgeTip)+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'+badgeStyle+'min-width:18px;height:16px;border-radius:8px;font-size:.65rem;font-weight:700;padding:0 5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">'+dispCt+'</span>'
+                        +'</span>';
                 });
                 h+='</div></div>';
             });
@@ -1043,19 +1130,39 @@ function _meAttachItemDrag(itemEl){
 function _renderBunkChipsHTML(bunks){
     var inner='';
     (bunks||[]).forEach(function(b){
-        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
+        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name" data-orig="'+esc(b)+'">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
     });
     return '<div class="fg"><label class="fl">Bunks <span style="font-weight:400;color:var(--s400);font-size:.7rem">(drag to reorder)</span></label>'
         +'<div class="me-bunk-list dmGradeBunks">'+inner+'</div>'
         +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" class="fi me-bunk-input" placeholder="Add bunk and press Enter" style="flex:1"><button type="button" class="me-btn me-btn--sec me-btn--sm me-bunk-add">+ Add</button></div>'
         +'</div>';
 }
-function _renderGradeRowHTML(gn,bunks){
+// Days-of-week a grade is present. Per-grade picker in the division editor;
+// unchecked days hide that grade's column in the Master Scheduler, Unified
+// view, Daily grid and Print Center on those weekdays.
+var DM_DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function _styleDayChip(btn){
+    var on=btn.getAttribute('data-on')==='1';
+    btn.style.cssText='width:24px;height:24px;border-radius:50%;padding:0;line-height:1;font-size:.7rem;font-weight:700;cursor:pointer;user-select:none;border:1px solid '
+        +(on?'var(--accent,#00C896)':'var(--s300,#cbd5e1)')+';background:'
+        +(on?'var(--accent,#00C896)':'var(--s100,#f1f5f9)')+';color:'
+        +(on?'#fff':'var(--s400,#94a3b8)');
+}
+function _renderGradeRowHTML(gn,bunks,daysPresent){
+    var present=Array.isArray(daysPresent)?daysPresent:null; // null → present all days
+    var dayChips=DM_DAYS.map(function(d){
+        var on=!present||present.indexOf(d)!==-1;
+        return '<button type="button" class="dm-day-chip" data-day="'+d+'" data-on="'+(on?'1':'0')+'" title="'+d+'">'+d.charAt(0)+'</button>';
+    }).join('');
     return '<div class="fg dm-grade-row" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px;cursor:grab">'
         +'<div class="fr" style="align-items:center;gap:6px">'
             +'<span class="me-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
-            +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
+            +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" data-orig="'+esc(gn||'')+'" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
             +'<button type="button" class="me-btn me-btn--ghost me-btn--sm dm-grade-remove" title="Remove grade" style="color:var(--danger,#dc2626)">×</button>'
+        +'</div>'
+        +'<div class="dm-grade-days" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0 2px">'
+            +'<span style="font-size:.7rem;color:var(--s400);user-select:none" title="Days this grade is around. Unchecked days hide its column in the Master Scheduler, Unified view and Print Center.">Days present:</span>'
+            +dayChips
         +'</div>'
         +_renderBunkChipsHTML(bunks)
         +'</div>';
@@ -1063,6 +1170,14 @@ function _renderGradeRowHTML(gn,bunks){
 function _wireGradeRow(rowEl){
     if(!rowEl)return;
     _meAttachItemDrag(rowEl);
+    // Per-day presence toggles — click flips on/off and restyles.
+    rowEl.querySelectorAll('.dm-day-chip').forEach(function(chip){
+        _styleDayChip(chip);
+        chip.onclick=function(){
+            chip.setAttribute('data-on',chip.getAttribute('data-on')==='1'?'0':'1');
+            _styleDayChip(chip);
+        };
+    });
     var rmBtn=rowEl.querySelector('.dm-grade-remove');
     if(rmBtn)rmBtn.onclick=function(){if(confirm('Remove this grade?'))rowEl.remove()};
     var bunkList=rowEl.querySelector('.me-bunk-list');
@@ -1079,7 +1194,7 @@ function _wireGradeRow(rowEl){
         v.split(',').map(function(s){return s.trim()}).filter(Boolean).forEach(function(name){
             var span=document.createElement('span');
             span.className='me-bunk-chip';span.draggable=true;
-            span.innerHTML='<span class="me-bunk-name">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
+            span.innerHTML='<span class="me-bunk-name" data-orig="'+esc(name)+'">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
             bunkList.appendChild(span);
             _wireBunkChip(span);
         });
@@ -1092,6 +1207,35 @@ function _wireBunkChip(chip){
     _meAttachItemDrag(chip);
     var x=chip.querySelector('.me-bunk-x');
     if(x)x.onclick=function(){chip.remove()};
+    // ★★★ CB-94: in-place rename affordance. Double-click the bunk name → inline
+    // input; on commit the visible text changes but the span's data-orig keeps the
+    // ORIGINAL name, so saveDiv can detect the rename and MIGRATE the bunk's
+    // schedules (instead of purge-old + create-new, which destroyed the old bunk's
+    // cloud schedule rows on a simple typo fix).
+    var nameEl=chip.querySelector('.me-bunk-name');
+    if(nameEl){
+        if(!nameEl.title)nameEl.title='Double-click to rename';
+        nameEl.addEventListener('dblclick',function(ev){
+            ev.stopPropagation();
+            if(chip.querySelector('.me-bunk-rename-inp'))return;
+            var cur=nameEl.textContent.trim();
+            var inp=document.createElement('input');
+            inp.type='text';inp.value=cur;inp.className='me-bunk-rename-inp';
+            inp.style.cssText='width:96px;font:inherit;padding:0 2px;';
+            chip.insertBefore(inp,nameEl);nameEl.style.display='none';inp.focus();inp.select();
+            var done=false;
+            function commit(keep){
+                if(done)return;done=true;
+                if(keep){var nv=(inp.value||'').trim();if(nv)nameEl.textContent=nv;} // data-orig stays = original
+                nameEl.style.display='';if(inp.parentNode)inp.parentNode.removeChild(inp);
+            }
+            inp.addEventListener('blur',function(){commit(true)});
+            inp.addEventListener('keydown',function(e){
+                if(e.key==='Enter'){e.preventDefault();commit(true);}
+                else if(e.key==='Escape'){e.preventDefault();commit(false);}
+            });
+        });
+    }
 }
 
 // Division create/edit
@@ -1106,7 +1250,7 @@ function openDivForm(name){
     // Grades + Bunks
     h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
     _sortedGrades(d).forEach(function([gn,gd]){
-        h+=_renderGradeRowHTML(gn,gd.bunks||[]);
+        h+=_renderGradeRowHTML(gn,gd.bunks||[],gd.daysPresent);
     });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
     document.getElementById('dmBody').innerHTML=h;
@@ -1132,11 +1276,16 @@ function _pickColor(el){
 function saveDiv(){
     var name=(document.getElementById('dmName').value||'').trim();
     if(!name){toast('Name required','error');return}
+    // ★ Day 9 collision guard: creating a division with an existing name, or renaming one
+    //   onto another, would OVERWRITE the existing division at structure[name] below
+    //   (silent data loss — all its grades/bunks gone). Reject instead of clobbering.
+    if(name!==editingDiv&&structure[name]){toast('A division named "'+name+'" already exists','error');return}
     var color=document.getElementById('dmColor').value||COLORS[0];
-    // ★ Snapshot old bunks before applying changes so we can detect removals
-    var oldBunks=[];
+    // ★ Snapshot old bunks AND grades before applying changes so we can detect removals
+    var oldBunks=[];var oldGrades=[];
     var srcDiv=editingDiv||name;
     if(structure[srcDiv]&&structure[srcDiv].grades){
+        oldGrades=Object.keys(structure[srcDiv].grades);
         Object.values(structure[srcDiv].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){oldBunks.push(b)})});
     }
     var grades={};
@@ -1148,6 +1297,14 @@ function saveDiv(){
         if(!gn)return;
         var bunks=Array.prototype.map.call(row.querySelectorAll('.me-bunk-chip .me-bunk-name'),function(s){return s.textContent.trim()}).filter(Boolean);
         grades[gn]={bunks:bunks};
+        // ★ Per-day presence: store the checked weekdays only when it's an actual
+        //   restriction (fewer than all 7). All 7 = present every day → omit (clean +
+        //   backward compatible). [] (none checked) IS stored → grade hidden every day.
+        var _chips=row.querySelectorAll('.dm-day-chip');
+        if(_chips.length){
+            var _days=Array.prototype.map.call(_chips,function(c){return c.getAttribute('data-on')==='1'?c.getAttribute('data-day'):null}).filter(Boolean);
+            if(_days.length<_chips.length)grades[gn].daysPresent=_days;
+        }
     });
     if(editingDiv&&editingDiv!==name){
         // Rename: update roster references AND propagate to schedule records
@@ -1159,6 +1316,22 @@ function saveDiv(){
         //   analytics paths to lose schedule data for the renamed division.
         _propagateDivisionRename(editingDiv, name);
     }
+    // ★ FN-1: detect grade RENAMES (a row's data-orig differs from its new name) and
+    //   PROPAGATE the old grade's setup to the new name — manual skeleton tiles, auto
+    //   layers, schedule/divisionTimes keys (grades ARE the scheduling unit), and roster
+    //   campers — instead of letting the old name fall through to removedGrades below,
+    //   which silently DESTROYED that grade's skeleton/layers/times and stranded campers.
+    var gradeRenameMap={};
+    document.querySelectorAll('#dmGrades .dm-grade-row .dmGradeN').forEach(function(el){
+        var orig=(el.dataset.orig||'').trim(), cur=(el.value||'').trim();
+        if(orig&&cur&&orig!==cur&&oldGrades.indexOf(orig)!==-1&&(cur in grades))gradeRenameMap[orig]=cur;
+    });
+    Object.keys(gradeRenameMap).forEach(function(oldG){
+        var newG=gradeRenameMap[oldG];
+        _propagateDivisionRename(oldG,newG);      // scheduling-unit keys / slot _division / cloud
+        _propagateGradeRenameTiles(oldG,newG);    // manual skeleton tiles + auto-layer config
+        Object.values(roster).forEach(function(c){if(c&&c.grade===oldG)c.grade=newG});
+    });
     var gradeOrder=[];
     rows.forEach(function(row){
         var gn=row.querySelector('.dmGradeN');
@@ -1167,22 +1340,223 @@ function saveDiv(){
     });
     structure[name]={color:color,grades:grades,gradeOrder:gradeOrder};
     save();closeModal('divModal');render(curPage);toast(editingDiv?'Division updated':'Division created');
-    // ★ Purge orphaned bunks from saved schedules
+    // ★ Purge orphaned bunks from saved AUTO schedules
     var newBunks=[];
     Object.values(grades).forEach(function(g){(g.bunks||[]).forEach(function(b){newBunks.push(b)})});
-    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1});
+    // ★★★ CB-94: detect bunk RENAMES (a chip whose data-orig differs from its new
+    //   text) and MIGRATE the bunk's schedules to the new name instead of letting
+    //   the old name fall through to _purgeOrphanedBunks, which DESTROYED the old
+    //   bunk's cloud schedule rows while the new name started empty. Mirrors the
+    //   grade-rename handling above.
+    var bunkRenameMap={};
+    document.querySelectorAll('#dmGrades .dm-grade-row .me-bunk-chip .me-bunk-name').forEach(function(el){
+        var orig=(el.dataset.orig||'').trim(), cur=(el.textContent||'').trim();
+        if(orig&&cur&&orig!==cur&&oldBunks.indexOf(orig)!==-1&&oldBunks.indexOf(cur)===-1&&newBunks.indexOf(cur)!==-1){
+            bunkRenameMap[orig]=cur;
+        }
+    });
+    var _renamedOrigBunks=Object.keys(bunkRenameMap);
+    _renamedOrigBunks.forEach(function(oldB){ _propagateBunkRename(oldB, bunkRenameMap[oldB]); });
+    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1 && _renamedOrigBunks.indexOf(b)===-1;});
     if(removed.length>0)_purgeOrphanedBunks(removed);
+    // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
+    //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
+    var removedGrades=oldGrades.filter(function(g){return !(g in grades)&&!(g in gradeRenameMap)});
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
 }
 function deleteDiv(n){
     if(!confirm('Delete "'+n+'"?'))return;
-    // ★ Collect all bunks from this division before deleting
-    var removedBunks=[];
+    // ★ Collect all bunks AND grades from this division before deleting
+    var removedBunks=[];var removedGrades=[];
     if(structure[n]&&structure[n].grades){
+        removedGrades=Object.keys(structure[n].grades);
         Object.values(structure[n].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){removedBunks.push(b)})});
     }
     delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
-    // ★ Purge orphaned bunks from saved schedules
+    // ★ Purge orphaned bunks from saved AUTO schedules + orphaned grade tiles from MANUAL skeletons
     if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
+}
+// ★ Day 9 (manual-builder parity for the structure-change cascade): the auto schedule
+//   is cleaned by _purgeOrphanedBunks, but the saved MANUAL skeletons (app1.dailySkeletons
+//   in the cloud blob + campManualSkeleton_<date> locally) were never cleaned when a
+//   scheduling-unit (grade) was removed — so orphan tiles (e.g. division "4" from an old
+//   structure) accumulated across dates. Prune tiles referencing EXACTLY the removed grade
+//   names (scoped to explicit removals, so surviving grades' tiles are never touched).
+function _purgeOrphanedSkeletonTiles(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    var rm={};removedGrades.forEach(function(g){rm[g]=1});
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var app1=gs&&gs.app1;
+        if(!app1||!app1.dailySkeletons){return}
+        var changed=false,prunedCount=0;
+        Object.keys(app1.dailySkeletons).forEach(function(date){
+            var tiles=app1.dailySkeletons[date];
+            if(!Array.isArray(tiles))return;
+            var kept=tiles.filter(function(t){return !(t&&rm[t.division])});
+            if(kept.length!==tiles.length){prunedCount+=(tiles.length-kept.length);app1.dailySkeletons[date]=kept;changed=true}
+            // mirror to the local per-date key if present
+            try{var lk='campManualSkeleton_'+date,raw=localStorage.getItem(lk);if(raw){var lt=JSON.parse(raw);if(Array.isArray(lt)){var lkept=lt.filter(function(t){return !(t&&rm[t.division])});if(lkept.length!==lt.length)localStorage.setItem(lk,JSON.stringify(lkept))}}}catch(_){}
+        });
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('app1',app1);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] Pruned',prunedCount,'orphaned manual-skeleton tile(s) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedSkeletonTiles:',e)}
+}
+// ★ Day 14 (auto-builder parity for the structure-change cascade): the AUTO layer config
+//   — app1.dailyAutoLayers (per-date, keyed by grade) + app1.gradeLayerRules (keyed by
+//   grade) — was never cleaned when a scheduling-unit (grade) was removed, so layer configs
+//   for deleted grades accumulated across dates (the auto analog of the manual skeleton
+//   orphans). Drop entries for EXACTLY the removed grade names (scoped, so surviving grades
+//   are untouched). Mirrors _purgeOrphanedSkeletonTiles.
+function _purgeOrphanedAutoLayers(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var app1=gs&&gs.app1; if(!app1)return;
+        var changed=false,prunedCount=0;
+        // dailyAutoLayers: date -> { grade -> layerConfig }
+        if(app1.dailyAutoLayers&&typeof app1.dailyAutoLayers==='object'){
+            Object.keys(app1.dailyAutoLayers).forEach(function(date){
+                var byGrade=app1.dailyAutoLayers[date];
+                if(byGrade&&typeof byGrade==='object'&&!Array.isArray(byGrade)){
+                    removedGrades.forEach(function(g){ if(g in byGrade){delete byGrade[g];changed=true;prunedCount++} });
+                }
+            });
+        }
+        // gradeLayerRules: grade -> rules
+        if(app1.gradeLayerRules&&typeof app1.gradeLayerRules==='object'){
+            removedGrades.forEach(function(g){ if(g in app1.gradeLayerRules){delete app1.gradeLayerRules[g];changed=true;prunedCount++} });
+        }
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('app1',app1);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] Pruned',prunedCount,'orphaned auto-layer entr(ies) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedAutoLayers:',e)}
+}
+// ★ FN-1: Propagate a GRADE rename to the saved manual skeletons + auto-layer config.
+//   Mirrors _purgeOrphanedSkeletonTiles / _purgeOrphanedAutoLayers but RENAMES (oldG→newG)
+//   instead of deleting, so a grade rename keeps its skeleton tiles, dailyAutoLayers entry,
+//   and gradeLayerRules entry. (Schedule/divisionTimes/slot keys are handled by
+//   _propagateDivisionRename since grades are the scheduling unit; campers by the saveDiv loop.)
+function _propagateGradeRenameTiles(oldG, newG){
+    if(!oldG||!newG||oldG===newG)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var app1=gs&&gs.app1; if(!app1)return;
+        var changed=false;
+        // manual skeleton tiles: tile.division === oldG → newG (cloud blob + local per-date mirror)
+        if(app1.dailySkeletons&&typeof app1.dailySkeletons==='object'){
+            Object.keys(app1.dailySkeletons).forEach(function(date){
+                var tiles=app1.dailySkeletons[date]; if(!Array.isArray(tiles))return;
+                tiles.forEach(function(t){if(t&&t.division===oldG){t.division=newG;changed=true}});
+                try{var lk='campManualSkeleton_'+date,raw=localStorage.getItem(lk);if(raw){var lt=JSON.parse(raw);if(Array.isArray(lt)){var lc=false;lt.forEach(function(t){if(t&&t.division===oldG){t.division=newG;lc=true}});if(lc)localStorage.setItem(lk,JSON.stringify(lt))}}}catch(_){}
+            });
+        }
+        // auto layers: dailyAutoLayers[date][oldG] → [newG]
+        if(app1.dailyAutoLayers&&typeof app1.dailyAutoLayers==='object'){
+            Object.keys(app1.dailyAutoLayers).forEach(function(date){
+                var bg=app1.dailyAutoLayers[date];
+                if(bg&&typeof bg==='object'&&!Array.isArray(bg)&&(oldG in bg)&&!(newG in bg)){bg[newG]=bg[oldG];delete bg[oldG];changed=true}
+            });
+        }
+        // gradeLayerRules[oldG] → [newG]
+        if(app1.gradeLayerRules&&typeof app1.gradeLayerRules==='object'&&(oldG in app1.gradeLayerRules)&&!(newG in app1.gradeLayerRules)){
+            app1.gradeLayerRules[newG]=app1.gradeLayerRules[oldG];delete app1.gradeLayerRules[oldG];changed=true;
+        }
+        // ★★★ CB-93: autoLayerTemplates[tmpl][oldG] → [newG]. The auto-layer editor
+        // store (master_schedule_builder dawLayers) persists into
+        // app1.autoLayerTemplates, GRADE-keyed inside each template, and
+        // loadDAWLayers reads EXCLUSIVELY from there — so a grade rename previously
+        // left the renamed grade opening with an EMPTY layer editor and its
+        // configured layers orphaned (a delete lost them forever). Rename the grade
+        // key inside every template.
+        if(app1.autoLayerTemplates&&typeof app1.autoLayerTemplates==='object'){
+            Object.keys(app1.autoLayerTemplates).forEach(function(tmpl){
+                var byGrade=app1.autoLayerTemplates[tmpl];
+                if(byGrade&&typeof byGrade==='object'&&!Array.isArray(byGrade)&&(oldG in byGrade)&&!(newG in byGrade)){
+                    byGrade[newG]=byGrade[oldG];delete byGrade[oldG];changed=true;
+                }
+            });
+        }
+        // ★★★ CB-83/CB-85: migrate the grade rename into special-activity per-grade
+        // config. The special validator filters every per-grade list against the
+        // CURRENT grade set, so a rename (which never touched specials) made it
+        // silently PRUNE the now-orphaned grade from sharing divisions, access
+        // restrictions + priority list, rotation cohort and the per-grade
+        // full-grade map. Rename oldG → newG in each (guarded so absent grades
+        // don't force a needless save).
+        if(Array.isArray(app1.specialActivities)){
+            app1.specialActivities.forEach(function(sp){
+                if(!sp||typeof sp!=='object')return;
+                if(sp.sharableWith&&Array.isArray(sp.sharableWith.divisions)&&sp.sharableWith.divisions.indexOf(oldG)!==-1){
+                    sp.sharableWith.divisions=sp.sharableWith.divisions.map(function(d){return d===oldG?newG:d});changed=true;
+                }
+                var ar=sp.accessRestrictions;
+                if(ar&&typeof ar==='object'){
+                    if(ar.divisions&&typeof ar.divisions==='object'&&(oldG in ar.divisions)&&!(newG in ar.divisions)){
+                        ar.divisions[newG]=ar.divisions[oldG];delete ar.divisions[oldG];changed=true;
+                    }
+                    if(Array.isArray(ar.priorityList)&&ar.priorityList.indexOf(oldG)!==-1){
+                        ar.priorityList=ar.priorityList.map(function(d){return d===oldG?newG:d});changed=true;
+                    }
+                }
+                if(sp.rotationCohort&&Array.isArray(sp.rotationCohort.grades)&&sp.rotationCohort.grades.indexOf(oldG)!==-1){
+                    sp.rotationCohort.grades=sp.rotationCohort.grades.map(function(d){return d===oldG?newG:d});changed=true;
+                }
+                if(sp.fullGradePerGrade&&typeof sp.fullGradePerGrade==='object'&&(oldG in sp.fullGradePerGrade)&&!(newG in sp.fullGradePerGrade)){
+                    sp.fullGradePerGrade[newG]=sp.fullGradePerGrade[oldG];delete sp.fullGradePerGrade[oldG];changed=true;
+                }
+            });
+        }
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('app1',app1);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] Propagated grade rename in skeletons/auto-layers/specials:',oldG,'→',newG);
+        }
+        // ★★★ CB-102/CB-105: migrate the Bell Schedule (campPeriods) on grade rename. campPeriods is
+        // a TOP-LEVEL grade-keyed global setting (gs.campPeriods[grade]) — NOT under app1 — read by the
+        // auto solver, day_packer, master_schedule_builder, daily_adjustments + print_center. This
+        // cascade renamed skeletons/auto-layers/specials but never campPeriods, so a renamed grade lost
+        // its custom periods (fell back to defaults) and the old key orphaned in cloud config. Own save
+        // (separate key from the app1 block above).
+        try{
+            var cp=gs&&gs.campPeriods;
+            if(cp&&typeof cp==='object'&&(oldG in cp)&&!(newG in cp)){
+                cp[newG]=cp[oldG];delete cp[oldG];
+                try{if(window.campPeriods&&typeof window.campPeriods==='object'&&(oldG in window.campPeriods)&&!(newG in window.campPeriods)){window.campPeriods[newG]=window.campPeriods[oldG];delete window.campPeriods[oldG]}}catch(_){}
+                if(typeof window.saveGlobalSettings==='function'){
+                    window.saveGlobalSettings('campPeriods',cp);
+                    if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+                }
+                console.log('[Me] CB-102/105: migrated campPeriods (Bell Schedule) on grade rename:',oldG,'→',newG);
+            }
+        }catch(_cpErr){console.warn('[Me] campPeriods rename:',_cpErr)}
+    }catch(e){console.warn('[Me] _propagateGradeRenameTiles:',e)}
+}
+// ★★★ CB-102/CB-105: purge the Bell Schedule (campPeriods) for removed grades. Sibling of
+//   _purgeOrphanedAutoLayers — campPeriods is a top-level grade-keyed key, so it gets its own
+//   load/save. Without this, deleting a grade left its periods orphaned under the old key in cloud.
+function _purgeOrphanedCampPeriods(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var cp=gs&&gs.campPeriods; if(!cp||typeof cp!=='object')return;
+        var changed=false;
+        removedGrades.forEach(function(g){
+            if(g in cp){delete cp[g];changed=true}
+            try{if(window.campPeriods&&(g in window.campPeriods))delete window.campPeriods[g]}catch(_){}
+        });
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campPeriods',cp);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] CB-102/105: purged orphaned campPeriods (Bell Schedule) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedCampPeriods:',e)}
 }
 // ★ Propagate a division rename to all schedule references.
 //   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
@@ -1211,6 +1585,35 @@ function _propagateDivisionRename(oldName, newName){
             });
         });
     }
+    // 4. ★★★ CB-92: propagate to the RBAC scheduler-scoping stores so a scheduler
+    //    scoped to the renamed unit BY NAME doesn't silently lose access on their
+    //    next login. The rename is owner-initiated (Me page), so the owner may
+    //    write these rows. subdivisions.divisions[] and camp_users.assigned_divisions[]
+    //    both store division/grade NAMES. Best-effort + non-fatal (a failure must
+    //    not block the rename). [LIVE] — needs a 2-account verify.
+    try{
+        var _rbClient=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+        var _rbCamp=(window.CampistryDB&&window.CampistryDB.getCampId)?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(_rbClient&&_rbCamp){
+            _rbClient.from('subdivisions').select('id,divisions').eq('camp_id',_rbCamp).then(function(res){
+                if(res.error||!res.data)return;
+                res.data.forEach(function(row){
+                    if(!Array.isArray(row.divisions)||row.divisions.indexOf(oldName)===-1)return;
+                    var nd=row.divisions.map(function(d){return d===oldName?newName:d});
+                    _rbClient.from('subdivisions').update({divisions:nd}).eq('id',row.id).then(function(r){if(r.error)console.error('[Me] CB-92 subdivision rename failed',row.id,r.error);});
+                });
+            }).catch(function(e){console.warn('[Me] CB-92 subdivisions migrate failed:',e);});
+            _rbClient.from('camp_users').select('user_id,assigned_divisions').eq('camp_id',_rbCamp).then(function(res){
+                if(res.error||!res.data)return;
+                res.data.forEach(function(row){
+                    if(!Array.isArray(row.assigned_divisions)||row.assigned_divisions.indexOf(oldName)===-1)return;
+                    var nd=row.assigned_divisions.map(function(d){return d===oldName?newName:d});
+                    _rbClient.from('camp_users').update({assigned_divisions:nd}).eq('camp_id',_rbCamp).eq('user_id',row.user_id).then(function(r){if(r.error)console.error('[Me] CB-92 camp_users rename failed',row.user_id,r.error);});
+                });
+            }).catch(function(e){console.warn('[Me] CB-92 camp_users migrate failed:',e);});
+        }
+    }catch(_eRb){console.warn('[Me] CB-92 RBAC rename propagate exception:',_eRb);}
+
     // 3. Propagate to cloud daily_schedules
     function _toast(msg, kind){
         try{
@@ -1244,8 +1647,13 @@ function _propagateDivisionRename(oldName, newName){
             records.forEach(function(record){
                 var sd=record.schedule_data||{};
                 var modified=false;
-                // Rename division-keyed sub-structures
-                ['divisionTimes','unifiedTimes'].forEach(function(k){
+                // Rename division-keyed sub-structures.
+                // ★★★ CB-82: include _perBunkSlotsData — cloud schedule_data carries
+                // a top-level division/grade-keyed _perBunkSlotsData (the auto-mode
+                // per-bunk slot geometry, consumed on load by MS-4c). The rename
+                // previously migrated only divisionTimes/unifiedTimes, orphaning the
+                // renamed unit's per-bunk geometry on every saved date.
+                ['divisionTimes','unifiedTimes','_perBunkSlotsData'].forEach(function(k){
                     if(sd[k]&&typeof sd[k]==='object'&&oldName in sd[k]){
                         sd[k]=Object.assign({},sd[k]);
                         sd[k][newName]=sd[k][oldName];
@@ -1397,6 +1805,69 @@ function _purgeOrphanedBunks(removedBunks){
     }
 }
 
+// ★★★ CB-94: rename a bunk's schedule data instead of destroying it. A bunk
+// rename was treated as delete(old)+create(new): _purgeOrphanedBunks hard-deleted
+// the old bunk's cloud schedule rows while the new name started empty. This
+// migrates the bunk key in memory + every cloud daily_schedules row
+// (scheduleAssignments + leagueAssignments) so the schedule survives the rename.
+function _propagateBunkRename(oldB,newB){
+    if(!oldB||!newB||oldB===newB)return;
+    console.log('[Me] Propagating bunk rename in schedules:',oldB,'→',newB);
+    // 1. in-memory maps
+    try{
+        ['scheduleAssignments','scheduleSegments','leagueAssignments'].forEach(function(k){
+            var m=window[k];
+            if(m&&m[oldB]!==undefined&&m[newB]===undefined){m[newB]=m[oldB];delete m[oldB];}
+        });
+    }catch(_){}
+    // 2. cloud daily_schedules (best-effort; non-fatal on error)
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId)return;
+        client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId).then(function(res){
+            if(res.error)throw res.error;
+            (res.data||[]).forEach(function(record){
+                var sd=record.schedule_data||{};
+                var sa=Object.assign({},sd.scheduleAssignments||{});
+                var la=Object.assign({},sd.leagueAssignments||{});
+                var modified=false;
+                if(sa[oldB]!==undefined){if(sa[newB]===undefined)sa[newB]=sa[oldB];delete sa[oldB];modified=true;}
+                if(la[oldB]!==undefined){if(la[newB]===undefined)la[newB]=la[oldB];delete la[oldB];modified=true;}
+                if(modified){
+                    client.from('daily_schedules')
+                        .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
+                        .eq('id',record.id)
+                        .then(function(r){if(r.error)console.error('[Me] bunk-rename update failed',record.id,r.error);});
+                }
+            });
+        }).catch(function(err){console.error('[Me] bunk-rename cloud propagate failed:',err);});
+    }catch(e){console.error('[Me] bunk-rename exception:',e);}
+    // 3. rotation_counts (cloud) — carry the bunk's rotation HISTORY to the new
+    //    name so fairness doesn't treat the renamed bunk as brand-new (which would
+    //    let it re-draw activities it just did). Best-effort; mirrors the activity
+    //    rename migration. Async, non-blocking.
+    try{
+        if(window.RotationCloud&&typeof window.RotationCloud.renameBunk==='function'){
+            window.RotationCloud.renameBunk(oldB,newB);
+        }
+    }catch(_){}
+    // 4. bunkMetaData (size / player-count config in the app1 blob) — rename the key
+    //    so the renamed bunk keeps its configured size instead of resetting.
+    try{
+        var _gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var _app1=_gs&&_gs.app1;
+        if(_app1&&_app1.bunkMetaData&&_app1.bunkMetaData[oldB]!==undefined&&_app1.bunkMetaData[newB]===undefined){
+            _app1.bunkMetaData[newB]=_app1.bunkMetaData[oldB];
+            delete _app1.bunkMetaData[oldB];
+            if(typeof window.saveGlobalSettings==='function'){
+                window.saveGlobalSettings('app1',_app1);
+                if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            }
+        }
+    }catch(_){}
+}
+
 // ── BUNK BUILDER ─────────────────────────────────────────────────
 function renderBB(){
     var c=document.getElementById('page-bunkbuilder');
@@ -1415,8 +1886,10 @@ function renderBB(){
         allB.forEach(function(bk){
             if(bk.div!==lastD){if(lastD)h+='</div>';lastD=bk.div;h+='<div class="bb-div"><span class="bb-dot" style="background:'+bk.color+'"></span>'+esc(bk.div)+'</div><div class="bb-gl">'+esc(bk.gr)+'</div><div class="bb-grid">'}
             var ids=bunkAsgn[bk.name]||[];
+            var mCt=bunkManualCounts[bk.name];
+            var dispCount=(mCt!=null)?mCt:ids.length;
             h+='<div class="bb-bunk" ondragover="event.preventDefault();this.classList.add(\'dragover\')" ondragleave="this.classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\''+je(bk.name)+'\',event);this.classList.remove(\'dragover\')">';
-            h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct">'+ids.length+'</span></div>';
+            h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct"'+(mCt!=null?' style="color:var(--me)" title="Manual count"':' title="Roster count"')+'>'+dispCount+'</span></div>';
             h+='<div class="bb-campers">';
             if(!ids.length)h+='<div class="bb-empty">Drop campers here</div>';
             else ids.forEach(function(n){h+=bbC(n)});
@@ -1431,6 +1904,35 @@ function bbC(n){var d=roster[n]||{};return'<div class="bb-c" draggable="true" on
 function bbDrop(t,e){e.preventDefault();var n=e.dataTransfer.getData('text/plain');if(!n)return;Object.keys(bunkAsgn).forEach(function(b){bunkAsgn[b]=bunkAsgn[b].filter(function(x){return x!==n})});if(t!=='__pool__'){if(!bunkAsgn[t])bunkAsgn[t]=[];bunkAsgn[t].push(n)}save();renderBB()}
 function autoAssign(){var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});var next={};allB.forEach(function(b){next[b.name]=[]});var campers=Object.entries(roster);campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});campers.forEach(function([n,d]){var el=allB.filter(function(b){return b.gr===d.grade});if(!el.length)el=allB.filter(function(b){return b.div===d.division});if(!el.length)el=allB;if(!el.length)return;el.sort(function(a,b){return next[a.name].length-next[b.name].length});next[el[0].name].push(n)});bunkAsgn=next;save();renderBB();toast('Auto-assigned')}
 function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
+function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
+function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
+function openBunkCountModal(bunkName){
+    var rosterCt=Object.values(roster).filter(function(c){return c.bunk===bunkName}).length;
+    var manualCt=bunkManualCounts[bunkName];
+    var isOverride=(manualCt!=null);
+    var inputVal=isOverride?manualCt:(rosterCt||0);
+    var rosterNote=rosterCt
+        ?'<p style="margin:0 0 10px;font-size:.78rem;color:var(--s500)">Imported roster: <strong>'+rosterCt+'</strong> kid'+(rosterCt!==1?'s':'')+'. Setting a number here overrides the roster count for scheduling.</p>'
+        :'<p style="margin:0 0 10px;font-size:.78rem;color:var(--s400)">No campers imported for this bunk yet.</p>';
+    var clearBtn=isOverride
+        ?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._clearBunkCount(\''+je(bunkName)+'\');CampistryMe.closeModal(\'dynModal\');" style="margin-right:auto">Clear override</button>'
+        :'';
+    var body=rosterNote
+        +'<input type="number" id="bunkCtInput" min="0" max="999" value="'+inputVal+'" style="width:100%;font-size:1.4rem;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);text-align:center;box-sizing:border-box">';
+    showModal('Kids in '+bunkName,body,function(){
+        var val=parseInt((document.getElementById('bunkCtInput')||{}).value||'0',10);
+        setBunkCount(bunkName,val);
+        closeModal('dynModal');
+        render(curPage);
+        toast('Set to '+Math.max(0,val)+' kids');
+    });
+    // Inject clear button into footer
+    setTimeout(function(){
+        var ft=document.querySelector('#dynModal [id="dynModalSave"]');
+        if(ft&&clearBtn){var tmp=document.createElement('span');tmp.innerHTML=clearBtn;ft.parentNode.insertBefore(tmp.firstElementChild,ft.parentNode.firstChild);}
+        var inp=document.getElementById('bunkCtInput');if(inp){inp.focus();inp.select();}
+    },60);
+}
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
@@ -1689,7 +2191,13 @@ function viewApplication(id){
 
     var b='';
     function sec(title){return'<div style="font-size:.75rem;font-weight:700;color:var(--me);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid var(--s100)">'+title+'</div>'}
-    function row(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+v+'</span></div>'}
+    // ★★★ STORED-XSS HARDENING (mirrors printApplication): every enrollment
+    // field originates from the UNAUTHENTICATED public registration form
+    // (campistry_register.html). row() now ESCAPES the value by default; use
+    // rowRaw() only for HTML we built ourselves (links / pre-escaped spans).
+    function row(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+esc(v)+'</span></div>'}
+    function rowRaw(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+v+'</span></div>'}
+    function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
 
     b+=sec('Application');
     b+=row('Applied',e.appliedDate||'—');
@@ -1698,7 +2206,7 @@ function viewApplication(id){
     b+=row('Source',e.source);
 
     b+=sec('Camper');
-    b+=row('Name',esc(e.camperName));
+    b+=row('Name',e.camperName);
     b+=row('Date of Birth',e.dob);
     b+=row('Gender',e.gender);
     b+=row('School',e.school);
@@ -1706,10 +2214,10 @@ function viewApplication(id){
     b+=row('Teacher',e.teacher);
 
     b+=sec('Parent / Guardian');
-    b+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+esc(e.parentRelation)+')':''));
-    if(e.parentPhone)b+=row('Phone','<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
-    if(e.parentEmail)b+=row('Email','<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
-    if(e.parent2Name)b+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+esc(e.parent2Phone):''));
+    b+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
+    if(e.parentPhone)b+=rowRaw('Phone','<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
+    if(e.parentEmail)b+=rowRaw('Email','<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
+    if(e.parent2Name)b+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));
 
     b+=sec('Address');
     b+=row('Street',e.street);
@@ -1719,12 +2227,12 @@ function viewApplication(id){
     if(e.street){var fullAddr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-block;font-size:.75rem;font-weight:600;color:var(--me);margin-top:3px;text-decoration:none">Open in Maps →</a>'}
 
     b+=sec('Emergency Contact');
-    b+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+esc(e.emergencyRel)+')':''));
-    if(e.emergencyPhone)b+=row('Phone','<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
+    b+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));
+    if(e.emergencyPhone)b+=rowRaw('Phone','<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
 
     b+=sec('Medical');
-    if(e.allergies)b+=row('Allergies','<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
-    if(e.medications)b+=row('Medications','<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
+    if(e.allergies)b+=rowRaw('Allergies','<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
+    if(e.medications)b+=rowRaw('Medications','<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
     b+=row('Dietary',e.dietary);
     if(e.medicalNotes)b+=row('Notes',e.medicalNotes);
     if(!e.allergies&&!e.medications&&!e.dietary&&!e.medicalNotes)b+='<div style="font-size:.82rem;color:var(--ok);padding:2px 0">✓ No medical flags reported</div>';
@@ -1743,7 +2251,7 @@ function viewApplication(id){
             var idx=parseInt(key.replace('q',''));
             var label=labels[idx]||('Question '+(idx+1));
             var display=Array.isArray(val)?val.join(', '):val;
-            b+=row(label,esc(display));
+            b+=row(label,display);
         });
     }
 
@@ -1752,7 +2260,7 @@ function viewApplication(id){
     b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
     b+=row('Payment Method',e.paymentMethod||'Not selected');
     b+=row('Payment Status',e.paymentStatus||'pending');
-    if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',esc(e.discount.label)+' ('+esc(e.discount.code)+')');
+    if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
 
     // Documents
     if(e.documents&&e.documents.length){
@@ -1760,13 +2268,13 @@ function viewApplication(id){
         e.documents.forEach(function(doc){
             var sz=doc.size<1024?doc.size+'B':doc.size<1048576?Math.round(doc.size/1024)+'KB':Math.round(doc.size/1048576*10)/10+'MB';
             b+='<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.8rem"><span>📄</span><strong style="color:var(--s700)">'+esc(doc.name)+'</strong><span style="color:var(--s400);font-size:.72rem">'+sz+'</span>';
-            if(doc.data)b+=' <a href="'+doc.data+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
+            if(doc.data)b+=' <a href="'+esc(doc.data)+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
             b+='</div>';
         });
     }
 
-    // Signature
-    if(e.signature){
+    // Signature — only render when it's a strict image data-URL (never raw/SVG → XSS).
+    if(e.signature&&isSafeImageDataUrl(e.signature)){
         b+=sec('Signature');
         b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
     }
@@ -1777,7 +2285,7 @@ function viewApplication(id){
         var sibApps=Object.entries(enrollments).filter(function([,x]){return x.siblingGroup===e.siblingGroup||x.siblingGroup===id});
         if(sibApps.length>1){
             sibApps.forEach(function([sid,s]){
-                if(sid!==id)b+=row('Sibling',esc(s.camperName)+' — '+s.status);
+                if(sid!==id)b+=row('Sibling',s.camperName+' — '+s.status);
             });
         }
     }
@@ -2477,8 +2985,9 @@ function renderAnalytics(){
         // Manual payment log (supplementary)
         if(finPayments.length){
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
-            finPayments.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment('+i+')">✕</button></td></tr>';
+            finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
+                if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -2624,7 +3133,13 @@ function finAddPayment(){
     finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
     save();renderAnalytics();toast('Payment recorded');
 }
-function finRemovePayment(i){finPayments.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finRemovePayment(id){
+    // ★ remove by stable id, not by render-index (the list is sorted before display, so an
+    //   index would target the wrong row; identical rows were also indistinguishable).
+    var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
+    if(idx<0){toast('Payment not found','error');return}
+    finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
+}
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
@@ -2764,11 +3279,13 @@ function finImportCSV(){
             var hdr=lines[0].toLowerCase();
             var imported=0;
             for(var i=1;i<lines.length;i++){
-                var cols=lines[i].split(',').map(function(s){return s.trim().replace(/^"|"$/g,'')});
+                // ★ use the robust CSV parser (handles quoted commas + escaped quotes),
+                //   not a naive split that mangles "Smith, Jr." or amounts like "1,000".
+                var cols=parseCsvLine(lines[i]).map(function(s){return s.trim()});
                 if(!cols[0])continue;
-                // Try to auto-detect: if it has "payment" or positive amount with a name
+                // Auto-detect a positive amount in any column (strip $ and thousands commas)
                 var amount=0;
-                for(var c=0;c<cols.length;c++){var n=parseFloat(cols[c]);if(!isNaN(n)&&n>0){amount=n;break}}
+                for(var c=0;c<cols.length;c++){var n=parseFloat((cols[c]||'').replace(/[$,]/g,''));if(!isNaN(n)&&n>0){amount=n;break}}
                 if(amount>0){
                     finPayments.push({id:Date.now()+i,family:cols[0]||'Imported',amount:amount,date:cols[1]||today(),method:'Imported',status:'paid'});
                     imported++;
@@ -2892,6 +3409,15 @@ function renderBilling(){
     var rate=totalCharged>0?Math.round(totalCollected/totalCharged*100):0;
     var famWithBalance=famList.filter(function(l){return l.balance>0}).length;
 
+    // ★ #5: payments not linked to any family are summed into Analytics revenue but
+    //   EXCLUDED from these family-ledger totals (buildFamilyLedgers skips unmatched),
+    //   so the Billing and Analytics tabs silently disagree. Surface the gap so the
+    //   numbers reconcile: Collected (family-matched) + Unmatched = Analytics revenue.
+    var _matchedPayIds={};
+    famList.forEach(function(l){(l.entries||[]).forEach(function(en){if(en.type==='payment'&&en.ref!=null)_matchedPayIds[String(en.ref)]=1})});
+    var _unmatchedPays=finPayments.filter(function(p){return !_matchedPayIds[String(p.id)]});
+    var _unmatchedTotal=_unmatchedPays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
+
     var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
     var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
 
@@ -2902,6 +3428,7 @@ function renderBilling(){
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid '+(overdueCount>0?'var(--err)':'var(--s200)')+'"><div style="font-size:1.25rem;font-weight:800;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
+    if(_unmatchedTotal>0)h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--me)" title="Payments not linked to any family. Included in Analytics revenue but NOT in the family ledgers above. Collected + Unmatched = Analytics revenue."><div style="font-size:1.25rem;font-weight:800;color:var(--me)">'+fm(_unmatchedTotal)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Unmatched ('+_unmatchedPays.length+')</div></div>';
     h+='</div>';
 
     // Filter tabs
@@ -3442,9 +3969,20 @@ function openBroadcastModal(){
         else if(to==='enrolled') count=Object.values(enrollments).filter(function(e){return e.status==='enrolled'}).length;
         else if(to==='staff') count=finStaff.length;
         var label=to==='division'?div:to==='enrolled'?'Enrolled':to==='staff'?'Staff':'All Families';
-        broadcasts.push({subject:subject,body:body,to:label,method:method,recipientCount:count,timestamp:Date.now(),date:new Date().toISOString().split('T')[0]});
+        var rec={subject:subject,body:body,to:label,method:method,recipientCount:count,timestamp:Date.now(),date:new Date().toISOString().split('T')[0]};
+        // ★ Email/SMS/All-Channels actually DELIVER via the edge function. Previously the
+        //   modal only LOGGED the broadcast yet toasted "sent" — so e-mail/SMS reached no one.
+        //   Now: confirm before a real send (safety gate), then deliver; In-App is a portal record.
+        var realSend=/email|sms|all channels/i.test(method);
+        if(realSend&&!confirm('Send this '+method+' broadcast to '+label+' (~'+count+' recipient'+(count!==1?'s':'')+') now? This delivers to real parents/staff immediately.'))return;
+        broadcasts.push(rec);
         save();closeModal();renderBroadcasts();
-        toast('Broadcast sent to '+count+' recipient'+(count!==1?'s':''));
+        if(realSend){
+            toast('Sending broadcast…');
+            sendBroadcastNow(rec).then(function(res){res=res||{};toast('Broadcast sent ('+(res.sent||0)+' delivered'+(res.failed?', '+res.failed+' failed':'')+')')}).catch(function(){toast('Broadcast logged, but delivery failed','error')});
+        }else{
+            toast('Broadcast posted to the parent portal ('+count+' recipient'+(count!==1?'s':'')+')');
+        }
     });
 }
 function viewBroadcast(idx){
@@ -3945,7 +4483,28 @@ function importAllData(){
 function clearAllData(){
     if(!confirm('This will DELETE ALL camp data. This cannot be undone. Are you absolutely sure?'))return;
     if(!confirm('FINAL WARNING: All campers, families, enrollment, financial data will be erased.'))return;
-    localStorage.removeItem('campGlobalSettings_v1');
+    // ★ #6: the old version only removed the LOCAL blob, so the cloud copy survived and
+    //   re-hydrated everything on the next load — the "clear" silently undid itself.
+    //   Mirror the importRows wipe AND fan it to the cloud so the reset actually sticks.
+    //   Scope = the camp data the warning promises (campers + structure + families +
+    //   enrollment + finance); the scheduler's own config (facilities/rules in app1) is
+    //   preserved, matching the label which enumerates only camper/family/financial data.
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        g.campStructure={};
+        if(!g.app1)g.app1={};
+        g.app1.camperRoster={};
+        g.app1.divisions={};
+        g.campistryMe={};   // families, payments, enrollments, finance, sessions, bunkAssignments, formConfig…
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        if(typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campStructure',g.campStructure);
+            window.saveGlobalSettings('app1',g.app1);
+            window.saveGlobalSettings('campistryMe',g.campistryMe);
+        }
+    }catch(e){console.warn('[Me] clearAllData:',e)}
+    try{var go=JSON.parse(localStorage.getItem('campistry_go_data')||'{}');go.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(go))}catch(e){}
+    if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(e){}}
     loadData();render(curPage);toast('All data cleared');
 }
 
@@ -3983,15 +4542,24 @@ async function sendAutoNotification(type,enrollmentId){
 }
 async function sendPaymentReminders(){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
-    var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];var sent=0;
-    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';if(e.parentEmail){callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}}).catch(function(){});sent++}}})});
-    toast(sent+' payment reminder'+(sent!==1?'s':'')+' sent');
+    var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];
+    // ★ pre-collect recipients so we can CONFIRM before emailing real parents (no silent mass-send).
+    var jobs=[];
+    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})});
+    if(!jobs.length){toast('No payment reminders due','error');return}
+    if(!confirm('Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.'))return;
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
+    toast(jobs.length+' payment reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 async function sendFormReminders(){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
-    loadForms();var sent=0;
-    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;callEdgeFunction('auto-notify',{recipients:[{email:c.parent1Email,name:c.parent1Name||''}],type:'form_reminder',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}}).catch(function(){});sent++})});
-    toast(sent+' form reminder'+(sent!==1?'s':'')+' sent');
+    loadForms();
+    var jobs=[];
+    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}})})});
+    if(!jobs.length){toast('No form reminders to send','error');return}
+    if(!confirm('Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.'))return;
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
+    toast(jobs.length+' form reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4223,7 +4791,20 @@ function handleCsv(file){
             var pvEl=document.getElementById('csvPV');
             if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
             var btn=document.getElementById('csvBtn');
-            if(btn){btn.disabled=false;btn.onclick=function(){importRows(rows)}}
+            if(btn){btn.disabled=false;btn.onclick=function(){
+                // ★ #3 + footgun: importRows WIPES all current campers/structure/families/bunks
+                //   (and fans the wipe to cloud) — confirm first. Also, roster is keyed by NAME,
+                //   so duplicate-name rows would silently overwrite each other; de-dupe (last
+                //   wins, matching the overwrite semantics) and warn so the count is honest.
+                var byName={},dupNames=[];
+                rows.forEach(function(r){ if(byName[r.name])dupNames.push(r.name); byName[r.name]=r; });
+                var uniqueRows=Object.keys(byName).map(function(n){return byName[n]});
+                var msg='Import will REPLACE all current campers, divisions, grades, bunks, and families with this file ('+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'). This cannot be undone.';
+                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='\n\n⚠ '+dupNames.length+' duplicate name'+(dupNames.length===1?'':'s')+' ('+ex+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                msg+='\n\nContinue?';
+                if(!confirm(msg))return;
+                importRows(uniqueRows);
+            }}
         }
     };
     reader.readAsText(file);
@@ -4468,11 +5049,11 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
-    addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
+    addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
-    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
+    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,
     saveAppNote:saveAppNote,printApplication:printApplication,

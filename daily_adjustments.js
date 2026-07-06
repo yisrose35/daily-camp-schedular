@@ -1,4 +1,3 @@
-
 // =================================================================
 // daily_adjustments.js  (v5.2 - In-App Modals + Merged: v3.9 Logic + v5.0 UI)
 // =================================================================
@@ -37,12 +36,16 @@ let currentOverrides = {
   dailyDisabledSportsByField: {},
   disabledFields: [],
   disabledSpecials: [],
-  bunkActivityOverrides: []
+  bunkActivityOverrides: [],
+  dailyActivityBunkRestrictions: []
 };
 let displacedTiles = [];
 let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
+// ★ Partial-regen: main-grid period tiles double-clicked for regeneration.
+//   tileId -> { division, startMin, endMin }
+let _daRegenTiles = new Map();
 
 // ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
 let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
@@ -55,6 +58,14 @@ let _generationScope = null;
 //   - Set<bunk>= only these specific bunks (subset of scoped divisions)
 // Only populated when the user partially selects within a division.
 let _generationBunkScope = null;
+
+// ★ Day 22.5 audit: re-entrancy guard for the Generate button. runOptimizer is
+//   async and the button isn't disabled during the multi-second solve, so a
+//   double-click (or a click mid-solve) would start a SECOND generation that
+//   shares window.scheduleAssignments + the pre-gen wipe with the first → a
+//   corrupted/half-written schedule. Also read by refreshFromCloud so a
+//   tab-visibility refresh can't reload stale state over a live generation.
+let _daOptimizerRunning = false;
 
 function _daIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
@@ -82,11 +93,7 @@ let resourceOverridesContainer = null;
 let activeSubTab = 'skeleton';
 let selectedOverrideId = null;
 
-function _escHtml(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+function _escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
 // Event listener tracking for cleanup
 let _keyHandler = null;
@@ -122,6 +129,136 @@ function checkAutoModeForDay(dateKey) {
 // =================================================================
 // IN-APP MODAL SYSTEM (replaces browser prompt/confirm/alert)
 // =================================================================
+
+// ★ Smart Tile "Guarantee swap" control for Daily Adjustments (mirrors the
+//   skeleton builder's _mbSmartSwapPostRender). Injects a checkbox; when ticked
+//   it HIDES the Fallback field (Main 2 is the open side in swap mode) and shows
+//   the switch explanation. Carries the flag out via a hidden [data-field] input
+//   that daShowModal's value collector reads.
+function _daSmartSwapPostRender(overlay, defaultOn) {
+  if (!overlay) return;
+  const fields = overlay.querySelector('.da-modal-fields-container');
+  if (!fields) return;
+  const fbInput = overlay.querySelector('[data-field="fallbackActivity"]');
+  const fbRow = fbInput ? fbInput.closest('.da-modal-field') : null;
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'guaranteeSwap');
+  hidden.value = defaultOn ? 'true' : 'false';
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;';
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#5b21b6;">'
+    + '<input type="checkbox" class="da-gs-cb"' + (defaultOn ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;flex:none;">'
+    + 'Guarantee each bunk gets both (swap)</label>'
+    + '<div class="da-gs-explain" style="' + (defaultOn ? '' : 'display:none;') + 'font-size:11px;color:#6d28d9;margin-top:8px;line-height:1.5;">'
+    + 'The division splits into two groups across the two periods. One group does <b>Main 1</b> first, then switches to <b>Main 2</b>; the other does <b>Main 2</b> first, then <b>Main 1</b>. <b>Every bunk gets one of each.</b> Main 2 covers everyone not on Main 1, so no separate Fallback is needed, and the split adjusts to capacity so neither period runs short.'
+    + '</div>';
+  if (fbRow && fbRow.parentNode === fields) fields.insertBefore(wrap, fbRow);
+  else fields.appendChild(wrap);
+  fields.appendChild(hidden);
+  const cb = wrap.querySelector('.da-gs-cb');
+  const explain = wrap.querySelector('.da-gs-explain');
+  function _gsSync() {
+    const on = !!cb.checked;
+    hidden.value = on ? 'true' : 'false';
+    if (explain) explain.style.display = on ? 'block' : 'none';
+    if (fbRow) fbRow.style.display = on ? 'none' : '';
+  }
+  cb.addEventListener('change', _gsSync);
+  _gsSync();
+}
+
+// ★ Delete button for the Smart Tile EDIT dialog in Daily Adjustments (matches the
+//   skeleton builder). Removes the tile from the daily override skeleton, saves,
+//   re-renders, and closes the dialog.
+function _daInjectDeleteButton(overlay, tileId) {
+  if (!overlay || !tileId) return;
+  const footer = overlay.querySelector('.da-modal-footer');
+  if (!footer || footer.querySelector('.da-modal-delete')) return;
+  const btn = document.createElement('button');
+  btn.className = 'da-btn da-modal-delete';
+  btn.textContent = '🗑 Delete';
+  btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
+  btn.onclick = function () {
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return x.id !== tileId; });
+    selectedTileId = null;
+    saveDailySkeleton();
+    renderGrid();
+    const c = overlay.querySelector('.da-modal-cancel-x');
+    if (c) c.click(); else overlay.remove();
+  };
+  footer.insertBefore(btn, footer.firstChild);
+}
+
+// ★ "Away" (off-campus) control for Sports + League tile edit dialogs in Daily
+//   Adjustments. Mirrors the skeleton builder's _mbAwayPostRender: a checkbox
+//   that, when ticked, restricts the tile at (re)generation to the chosen
+//   off-campus zone's fields and adds the zone's travel time to/from. Carries
+//   the boolean out via a hidden [data-field="isAway"]; the zone <select>
+//   carries data-field="awayZone".
+function _daTileSupportsAway(ev) {
+  if (!ev) return false;
+  if (ev.type === 'league' || ev.type === 'specialty_league') return true;
+  if (ev.type === 'sports') return true;
+  return /\bsport/i.test(String(ev.event || ''));
+}
+
+function _daAwayPostRender(overlay, ev) {
+  if (!overlay) return;
+  const fields = overlay.querySelector('.da-modal-fields-container');
+  if (!fields) return;
+  const esc = (s) => (window.CampUtils?.escapeHtml ? window.CampUtils.escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s));
+  const zones = (typeof window.getAwayZones === 'function') ? window.getAwayZones() : [];
+
+  const curZone = (ev.awayZone && zones.some(z => z.name === ev.awayZone)) ? ev.awayZone : (zones[0] ? zones[0].name : '');
+  const defaultOn = !!ev.isAway && !!curZone;
+  const hasZones = zones.length > 0;
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.setAttribute('data-field', 'isAway');
+  hidden.value = defaultOn ? 'true' : 'false';
+
+  const optsHtml = zones.map(z => {
+    const t = z.travelTimeMin > 0 ? ' — ' + z.travelTimeMin + ' min travel each way' : '';
+    return '<option value="' + esc(z.name) + '"' + (z.name === curZone ? ' selected' : '') + '>' + esc(z.name) + esc(t) + '</option>';
+  }).join('');
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'margin:10px 0;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;';
+  const _mode = (ev.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+  const bodyHtml = hasZones
+    ? ('<div class="da-away-body" style="' + (defaultOn ? '' : 'display:none;') + 'margin-top:10px;">'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin-bottom:4px;">Away zone</label>'
+        + '<select class="da-modal-input da-away-zone" data-field="awayZone" style="width:100%;">' + optsHtml + '</select>'
+        + '<label style="font-size:12px;font-weight:600;color:#7c2d12;display:block;margin:10px 0 4px;">How many go away?</label>'
+        + '<select class="da-modal-input da-away-mode" data-field="awayMode" style="width:100%;">'
+        + '<option value="exclusive"' + (_mode === 'exclusive' ? ' selected' : '') + '>All away — only off-campus fields</option>'
+        + '<option value="mixed"' + (_mode === 'mixed' ? ' selected' : '') + '>Either / or — some away, some stay on campus</option>'
+        + '</select>'
+        + '<div style="font-size:11px;color:#9a3412;margin-top:6px;line-height:1.5;">Adds the zone\'s travel time to and from. <strong>All away</strong> forces every game to the off-campus fields; <strong>Either/or</strong> also allows on-campus fields, so games spill back home once the zone fills.</div>'
+        + '</div>')
+    : ('<div style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.5;">No off-campus zones yet. Add one in <strong>Setup → Location Zones</strong> (mark it “Off-campus” and set a travel time), then re-open this tile.</div>');
+  wrap.innerHTML =
+    '<label style="display:flex;align-items:center;gap:8px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';font-size:13px;font-weight:600;color:#9a3412;">'
+    + '<input type="checkbox" class="da-away-cb"' + (defaultOn ? ' checked' : '') + (hasZones ? '' : ' disabled') + ' style="width:16px;height:16px;cursor:' + (hasZones ? 'pointer' : 'not-allowed') + ';flex:none;">'
+    + 'Away (off-campus)</label>'
+    + bodyHtml;
+  fields.appendChild(wrap);
+  fields.appendChild(hidden);
+
+  const cb = wrap.querySelector('.da-away-cb');
+  const body = wrap.querySelector('.da-away-body');
+  function _awaySync() {
+    const on = !!(cb && cb.checked);
+    hidden.value = on ? 'true' : 'false';
+    if (body) body.style.display = on ? 'block' : 'none';
+  }
+  if (cb) cb.addEventListener('change', _awaySync);
+  _awaySync();
+}
+
 function daShowModal(config) {
   return new Promise((resolve) => {
     const existing = document.getElementById('da-modal-input-overlay');
@@ -131,19 +268,19 @@ function daShowModal(config) {
     overlay.id = 'da-modal-input-overlay';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML = `
-      <div class="da-modal" style="max-width:${config.wide ? '560px' : '460px'};">
+      <div class="da-modal" role="dialog" aria-modal="true" aria-label="${_escHtml(config.title || 'Dialog')}" style="max-width:${config.wide ? '560px' : '460px'};">
         <div class="da-modal-header">
-          <h3>${config.title || 'Input Required'}</h3>
+          <h3>${_escHtml(config.title || 'Input Required')}</h3>
           <button class="da-modal-close da-modal-close-x">&times;</button>
         </div>
         <div class="da-modal-body">
-          ${config.description ? '<p class="da-modal-desc">' + config.description + '</p>' : ''}
+          ${config.description ? '<p class="da-modal-desc">' + _escHtml(config.description) + '</p>' : ''}
           <div class="da-modal-fields-container"></div>
-          ${config.warning ? '<div class="da-modal-warning">' + config.warning + '</div>' : ''}
+          ${config.warning ? '<div class="da-modal-warning">' + _escHtml(config.warning) + '</div>' : ''}
         </div>
         <div class="da-modal-footer">
           <button class="da-btn da-btn-ghost da-modal-cancel-x">Cancel</button>
-          <button class="da-btn da-btn-primary da-modal-confirm-x">${config.confirmText || 'Confirm'}</button>
+          <button class="da-btn da-btn-primary da-modal-confirm-x">${_escHtml(config.confirmText || 'Confirm')}</button>
         </div>
       </div>
     `;
@@ -157,9 +294,9 @@ function daShowModal(config) {
       fieldEl.className = 'da-modal-field';
 
       if (field.type === 'text' || field.type === 'time') {
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
-          '<input type="text" class="da-input da-modal-focusable" data-field="' + field.name + '"' +
-          ' value="' + (field.default || '') + '" placeholder="' + (field.placeholder || '') + '">';
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' +
+          '<input type="text" class="da-input da-modal-focusable" data-field="' + _escHtml(field.name) + '"' +
+          ' value="' + _escHtml(field.default || '') + '" placeholder="' + _escHtml(field.placeholder || '') + '">';
         inputs[field.name] = function() { return fieldEl.querySelector('input').value.trim(); };
       }
       else if (field.type === 'select') {
@@ -167,10 +304,10 @@ function daShowModal(config) {
           var val = typeof o === 'object' ? (o.value !== undefined ? o.value : o) : o;
           var label = typeof o === 'object' ? (o.label !== undefined ? o.label : o) : o;
           var selected = val === field.default ? ' selected' : '';
-          return '<option value="' + val + '"' + selected + '>' + label + '</option>';
+          return '<option value="' + _escHtml(val) + '"' + selected + '>' + _escHtml(label) + '</option>';
         }).join('');
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
-          '<select class="da-select da-modal-focusable" data-field="' + field.name + '">' + options + '</select>';
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' +
+          '<select class="da-select da-modal-focusable" data-field="' + _escHtml(field.name) + '">' + options + '</select>';
         inputs[field.name] = function() { return fieldEl.querySelector('select').value; };
       }
       else if (field.type === 'checkbox-group') {
@@ -179,14 +316,14 @@ function daShowModal(config) {
           var val = typeof o === 'object' ? o.value : o;
           var lbl = typeof o === 'object' ? o.label : o;
           var dis = typeof o === 'object' && o.disabled;
-          var reason = dis && o.disabledReason ? ' title="' + o.disabledReason + '"' : '';
+          var reason = dis && o.disabledReason ? ' title="' + _escHtml(o.disabledReason) + '"' : '';
           var chk = (!dis && _cbDefaults.indexOf(val) !== -1) ? ' checked' : '';
           return '<label class="da-modal-cb-item' + (dis ? ' da-cb-disabled' : '') + '"' + reason +
             (dis ? ' style="opacity:0.45;pointer-events:none;"' : '') + '>' +
-            '<input type="checkbox" value="' + val + '" data-group="' + field.name + '"' + chk + (dis ? ' disabled' : '') + '>' +
-            '<span>' + lbl + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
+            '<input type="checkbox" value="' + _escHtml(val) + '" data-group="' + _escHtml(field.name) + '"' + chk + (dis ? ' disabled' : '') + '>' +
+            '<span>' + _escHtml(lbl) + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' + // ★ CB-55: escape group label (was raw)
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
         inputs[field.name] = function() {
           var checked = fieldEl.querySelectorAll('input[data-group="' + field.name + '"]:checked');
@@ -208,7 +345,9 @@ function daShowModal(config) {
 
     overlay.querySelector('.da-modal-close-x').onclick = function() { close(null); };
     overlay.querySelector('.da-modal-cancel-x').onclick = function() { close(null); };
-    overlay.onclick = function(e) { if (e.target === overlay) close(null); };
+    let _mdOverlayA = false;
+    overlay.addEventListener('mousedown', function(e) { _mdOverlayA = (e.target === overlay); });
+    overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayA) close(null); };
 
     overlay.querySelector('.da-modal-confirm-x').onclick = function() {
       var result = {};
@@ -312,15 +451,19 @@ async function daTryMergeSwimElective(newEvent, divName, skeleton) {
 function daShowConfirm(message, opts) {
   opts = opts || {};
   return new Promise(function(resolve) {
-    var existing = document.getElementById('da-modal-input-overlay');
+    // ★ Day 25b fix (#5): distinct (prefixed) overlay id so a confirm no longer
+    //   removes an open input modal (daShowModal) — they used to share one id.
+    var existing = document.getElementById('da-modal-input-overlay--confirm');
     if (existing) existing.remove();
 
     var overlay = document.createElement('div');
-    overlay.id = 'da-modal-input-overlay';
+    overlay.id = 'da-modal-input-overlay--confirm';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML =
-      '<div class="da-modal" style="max-width:420px;">' +
+      '<div class="da-modal" role="dialog" aria-modal="true" aria-label="Confirmation" style="max-width:420px;">' +
         '<div class="da-modal-body" style="padding:24px;">' +
+          // NOTE: message may contain INTENTIONAL HTML (<strong>/<br>) from callers, so it
+          // is rendered raw; callers MUST escape any user-data they interpolate (see #V2-26).
           '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
         '</div>' +
         '<div class="da-modal-footer">' +
@@ -332,7 +475,9 @@ function daShowConfirm(message, opts) {
     document.body.appendChild(overlay);
     overlay.querySelector('.da-confirm-no').onclick = function() { overlay.remove(); resolve(false); };
     overlay.querySelector('.da-confirm-yes').onclick = function() { overlay.remove(); resolve(true); };
-    overlay.onclick = function(e) { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    let _mdOverlayB = false;
+    overlay.addEventListener('mousedown', function(e) { _mdOverlayB = (e.target === overlay); });
+    overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayB) { overlay.remove(); resolve(false); } };
     overlay.addEventListener('keydown', function(e) {
       if (e.key === 'Enter') { overlay.remove(); resolve(true); }
       if (e.key === 'Escape') { overlay.remove(); resolve(false); }
@@ -343,15 +488,19 @@ function daShowConfirm(message, opts) {
 
 function daShowAlert(message) {
   return new Promise(function(resolve) {
-    var existing = document.getElementById('da-modal-input-overlay');
+    // ★ Day 25b fix (#5): distinct (prefixed) overlay id so an alert no longer
+    //   removes an open input modal (daShowModal) — they used to share one id.
+    var existing = document.getElementById('da-modal-input-overlay--alert');
     if (existing) existing.remove();
 
     var overlay = document.createElement('div');
-    overlay.id = 'da-modal-input-overlay';
+    overlay.id = 'da-modal-input-overlay--alert';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML =
-      '<div class="da-modal" style="max-width:400px;">' +
+      '<div class="da-modal" role="dialog" aria-modal="true" aria-label="Alert" style="max-width:400px;">' +
         '<div class="da-modal-body" style="padding:24px;">' +
+          // NOTE: message may contain INTENTIONAL HTML (<strong>/<br>); rendered raw — callers
+          // MUST escape any interpolated user-data (see #V2-26).
           '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
         '</div>' +
         '<div class="da-modal-footer">' +
@@ -361,7 +510,9 @@ function daShowAlert(message) {
 
     document.body.appendChild(overlay);
     overlay.querySelector('.da-alert-ok').onclick = function() { overlay.remove(); resolve(); };
-    overlay.onclick = function(e) { if (e.target === overlay) { overlay.remove(); resolve(); } };
+    let _mdOverlayC = false;
+    overlay.addEventListener('mousedown', function(e) { _mdOverlayC = (e.target === overlay); });
+    overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayC) { overlay.remove(); resolve(); } };
     overlay.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' || e.key === 'Escape') { overlay.remove(); resolve(); }
     });
@@ -373,7 +524,8 @@ function daShowAlert(message) {
 // COPY GRADE MODAL — Copy skeleton from one division to others
 // =================================================================
 function daShowCopyGradeModal(skeleton, onApply) {
-  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  var _rawDivs = window.availableDivisions || Object.keys(window.divisions || {});
+  var divisions = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivs.slice()) : _rawDivs;
   if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
 
   var divsWithEvents = {};
@@ -480,7 +632,9 @@ function daShowCopyGradeModal(skeleton, onApply) {
   renderTargets();
 
   modal.querySelector('#da-cg-cancel').onclick = function() { overlay.remove(); };
-  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  let _mdOverlayD = false;
+  overlay.addEventListener('mousedown', function(e) { _mdOverlayD = (e.target === overlay); });
+  overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayD) overlay.remove(); };
 
   applyBtn.onclick = function() {
     var sourceDiv = fromSelect.value;
@@ -522,7 +676,8 @@ function daShowCopyGradeModal(skeleton, onApply) {
 // Without this Copy Grade was a no-op in auto mode because the manual
 // path read from an unused dailyOverrideSkeleton.
 function daShowCopyAutoGradeModal(autoLayers, onApply) {
-  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  var _rawDivs = window.availableDivisions || Object.keys(window.divisions || {});
+  var divisions = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivs.slice()) : _rawDivs;
   if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
 
   var divsWithLayers = {};
@@ -625,7 +780,9 @@ function daShowCopyAutoGradeModal(autoLayers, onApply) {
   renderTargets();
 
   modal.querySelector('#da-cga-cancel').onclick = function() { overlay.remove(); };
-  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  let _mdOverlayE = false;
+  overlay.addEventListener('mousedown', function(e) { _mdOverlayE = (e.target === overlay); });
+  overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayE) overlay.remove(); };
 
   applyBtn.onclick = function() {
     var sourceDiv = fromSelect.value;
@@ -933,7 +1090,7 @@ function renderRainyDayPanel() {
      
   // Skeleton options
   const skeletonOptions = availableSkeletons.map(name => 
-    `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
+    `<option value="${_escHtml(name)}" ${name === rainySkeletonName ? 'selected' : ''}>${_escHtml(name)}</option>`
   ).join('');
   
   // Get mid-day analysis if available
@@ -1578,8 +1735,10 @@ function showMidDayRainModal() {
   };
   
   // Close on overlay click
+  let _mdOverlayF = false;
+  modal.addEventListener('mousedown', (e) => { _mdOverlayF = (e.target === modal); });
   modal.onclick = (e) => {
-    if (e.target === modal) modal.remove();
+    if (e.target === modal && _mdOverlayF) modal.remove();
   };
   
   // Initial preview
@@ -1835,7 +1994,7 @@ function renderDisplacedTilesPanel() {
       <div class="da-displaced-list">
         ${displacedTiles.map(d => `
           <div class="da-displaced-item">
-            <strong>${d.event}</strong> (${d.division}) - ${d.originalStart} - ${d.originalEnd}
+            <strong>${_escHtml(d.event)}</strong> (${_escHtml(d.division)}) - ${_escHtml(d.originalStart)} - ${_escHtml(d.originalEnd)}
           </div>
         `).join('')}
       </div>
@@ -1921,7 +2080,7 @@ const TILE_DESCRIPTIONS = {
 
 function showTileInfo(tile) {
   const desc = TILE_DESCRIPTIONS[tile.type] || tile.description || 'No description available.';
-  daShowAlert('<strong>' + tile.name.toUpperCase() + '</strong><br><br>' + desc);
+  daShowAlert('<strong>' + _escHtml(tile.name.toUpperCase()) + '</strong><br><br>' + _escHtml(desc));
 }
 
 function mapEventNameForOptimizer(name) {
@@ -1949,9 +2108,9 @@ function renderPalette() {
       { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
       { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
       { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
-      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
-      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
-      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true, hidden:true },
+      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true, hidden:true },
+      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true, hidden:true },
       { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
       { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
       { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
@@ -1965,23 +2124,39 @@ function renderPalette() {
     };
     let html = '';
     html += '<div class="da-tile-label">Floaters</div>';
-    DAW_TYPES.filter(t => !t.anchor).forEach(t => {
+    DAW_TYPES.filter(t => !t.anchor && !t.hidden).forEach(t => {
       const dotColor = getDotColor(t.style);
-      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${t.name}</span></div>`;
+      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
     html += '<div class="da-tile-divider"></div>';
     html += '<div class="da-tile-label">Anchors</div>';
-    DAW_TYPES.filter(t => t.anchor).forEach(t => {
+    DAW_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
       const dotColor = getDotColor(t.style);
-      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${t.name}</span></div>`;
+      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
-    
+
+    // ★ FN-40: custom general activities as pinned tiles, pre-bound to their
+    //   facility (mirrors the Master Scheduler palette).
+    const _gaItems = (window.getGeneralActivityPaletteItems?.() || []);
+    if (_gaItems.length) {
+      html += '<div class="da-tile-divider"></div>';
+      html += '<div class="da-tile-label">General Activities</div>';
+      _gaItems.forEach(ga => {
+        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" data-ga-quicktype="${_escHtml(ga.quickType || 'custom')}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:#d97706;"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
+      });
+    }
+
     paletteEl.innerHTML = html;
-    
+
     // Wire up drag from palette — uses same data format the DAW grid expects
     paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
       tile.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+        // ★ FN-40: carry the general-activity binding (read by the shared DAW drop),
+        //   incl. quickType so swim/lunch/snacks/dinner apply their behavior.
+        if (tile.dataset.gaName) {
+          e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '', quickType: tile.dataset.gaQuicktype || 'custom' }));
+        }
         e.dataTransfer.effectAllowed = 'copy';
       });
     });
@@ -1998,15 +2173,33 @@ function renderPalette() {
     { label: 'Leagues', types: ['league', 'specialty_league'] },
     { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
   ];
-  
+
+  // ★ FN-48: custom general activities (facilities registry) as pinned tiles
+  //   in the MANUAL palette too — the tile carries gaName/gaFacility so the
+  //   drop pre-binds the event + facility and only asks for times.
+  const _gaItemsM = (window.getGeneralActivityPaletteItems?.() || []);
+  if (_gaItemsM.length) {
+    categories.push({
+      label: 'General Activities',
+      tiles: _gaItemsM.map(ga => ({
+        type: 'custom',
+        name: ga.name,
+        style: 'background:#fef3c7;color:#92400e;',
+        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+        gaName: ga.name,
+        gaFacility: ga.facility
+      }))
+    });
+  }
+
   categories.forEach((cat, catIndex) => {
     const label = document.createElement('div');
     label.className = 'da-tile-label';
     label.textContent = cat.label;
     paletteEl.appendChild(label);
-    
-    cat.types.forEach(type => {
-      const tile = TILES.find(t => t.type === type);
+
+    const catTiles = cat.tiles || cat.types.map(type => TILES.find(t => t.type === type));
+    catTiles.forEach(tile => {
       if (!tile) return;
       
       const el = document.createElement('div');
@@ -2069,19 +2262,23 @@ function renderPalette() {
 
 // =================================================================
 // --- Column Order Persistence ---
+// ★ Column order = the DISPLAY order (getUserDivisionOrder = Me order + the UI-only
+//   app1.viewColumnOrder reorder on top). Dragging a column here changes only how the
+//   schedule LOOKS — it writes app1.viewColumnOrder, which the solver/field-quality
+//   priority deliberately ignores (those use the Me order). So the look can be 3-2-1
+//   while priority stays 1-2-3.
 function getColumnOrder() {
   const all = window.availableDivisions || [];
-  const g = window.loadGlobalSettings?.() || {};
-  const saved = g.app1?.manualColumnOrder;
-  if (!Array.isArray(saved) || saved.length === 0) return [...all];
-  const valid = saved.filter(d => all.includes(d));
-  return [...valid, ...all.filter(d => !valid.includes(d))];
+  return (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder([...all])
+    : [...all];
 }
 
 function saveColumnOrder(order) {
   const g = window.loadGlobalSettings?.() || {};
   if (!g.app1) g.app1 = {};
-  g.app1.manualColumnOrder = [...order];
+  // DISPLAY-ONLY key — never manualColumnOrder/divisionOrder (those drive Me priority).
+  g.app1.viewColumnOrder = [...order];
   window.saveGlobalSettings?.('app1', g.app1);
   window.forceSyncToCloud?.();
 }
@@ -2115,7 +2312,39 @@ function daCleanupOrphanChangeTiles() {
   });
   if (dailyOverrideSkeleton.length !== before) {
     console.log(`[DA-CLEANUP] Removed ${before - dailyOverrideSkeleton.length} orphan Change tile(s)`);
-    if (typeof saveDailySkeleton === 'function') saveDailySkeleton();
+    // Persist only if the user can edit — this is an automatic cleanup, so a
+    // read-only session shouldn't trip the #5a "not saved" warning.
+    if (window.AccessControl?.canEdit?.() && typeof saveDailySkeleton === 'function') saveDailySkeleton();
+  }
+}
+
+// ★ Day 27: remove skeleton tiles whose division no longer exists in the camp
+//   (left over from a previous camp structure — invisible since no column renders
+//   them, but they persist + save to cloud and bloat the skeleton). GUARDED: it
+//   never prunes when the camp structure isn't loaded, so a transient empty
+//   window.divisions can't wipe valid tiles. Mirrors daCleanupOrphanChangeTiles.
+function daPruneOrphanDivisionTiles() {
+  if (!Array.isArray(dailyOverrideSkeleton) || dailyOverrideSkeleton.length === 0) return;
+  const campDivs = Object.keys(window.divisions || {});
+  if (campDivs.length === 0) return;   // camp structure not loaded — do nothing
+  const campSet = new Set(campDivs.map(String));
+  const before = dailyOverrideSkeleton.length;
+  const removed = [];
+  dailyOverrideSkeleton = dailyOverrideSkeleton.filter(t => {
+    if (!t || !t.division) return true;              // keep malformed / division-less tiles
+    if (campSet.has(String(t.division))) return true;
+    removed.push(t.division);
+    return false;
+  });
+  if (dailyOverrideSkeleton.length !== before) {
+    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+    console.log('[DA-CLEANUP] Pruned ' + (before - dailyOverrideSkeleton.length) + ' orphan-division tile(s): ' + [...new Set(removed)].join(', '));
+    // ★ #8 (re-audit): do NOT auto-save the prune. window.divisions and the skeleton
+    //   are hydrated by SEPARATE listeners; during a structure-change sync
+    //   window.divisions can be transiently stale, and auto-saving a prune then would
+    //   PERSIST a wrong deletion. Pruning in-memory keeps the editor + generation
+    //   clean; localStorage/cloud retain the tiles as a backstop, and the cleanup
+    //   persists naturally on the next genuine user save (when the structure is stable).
   }
 }
 
@@ -2123,8 +2352,14 @@ function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
 
+  // ★ Partial-regen: drop any stale period selection + its bar on a full re-render.
+  if (_daRegenTiles && _daRegenTiles.size) _daRegenTiles.clear();
+  { const _rb = document.getElementById('da-regen-bar'); if (_rb) _rb.remove(); }
+
   // Drop stale Change tiles before painting
   daCleanupOrphanChangeTiles();
+  // ★ Day 27: drop tiles whose division no longer exists in the camp structure
+  daPruneOrphanDivisionTiles();
 
   // AUTO MODE: render DAW layer timeline instead of stacking grid
   if (window._daBuilderMode === 'auto') {
@@ -2133,9 +2368,15 @@ function renderGrid() {
   }
 
   const divisions = window.divisions || {};
-  const availableDivisions = getColumnOrder();
+  let availableDivisions = getColumnOrder();
+  const _allColCount = availableDivisions.length;
+  // ★ Per-day presence: hide grades not around on the viewed date's weekday.
+  //   getColumnOrder() stays unfiltered (it also feeds order persistence).
+  if (typeof window.filterDivisionsByDate === 'function') availableDivisions = window.filterDivisionsByDate(availableDivisions);
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
+    gridEl.innerHTML = _allColCount > 0
+      ? `<div class="da-empty-state">No grades are scheduled to be here on this day.</div>`
+      : `<div class="da-empty-state">No divisions found.</div>`;
     return;
   }
   
@@ -2473,6 +2714,17 @@ function renderEventTile(ev, top, height) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
+  //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
+    style = 'background:#5eead4;color:#115e59;border:2px solid #14b8a6;';
+  }
+  // ★ Connected smart tiles (same pairGroup) get a matching colored glow so you can
+  //   see at a glance which two tiles swap together.
+  if (ev.type === 'smart' && ev.smartData && ev.smartData.pairGroup) {
+    const _gc = { '1': '#f59e0b', '2': '#3b82f6', '3': '#10b981', '4': '#a855f7' }[String(ev.smartData.pairGroup)] || '#f59e0b';
+    style += ';box-shadow:0 0 0 3px ' + _gc + ', 0 0 9px ' + _gc + ';';
+  }
   const adjustedHeight = Math.max(height - 2, 24); // ★ v14.0: raised minimum from 18→24
   
   // Night activity styling
@@ -2504,17 +2756,17 @@ function renderEventTile(ev, top, height) {
   if (adjustedHeight < 24) {
     // Ultra compact - just name abbreviated
     const shortName = eventName.length > 12 ? eventName.substring(0, 10) + '..' : eventName;
-    content = `<span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${shortName}${isNight ? ' 🌙' : ''}</span>`;
+    content = `<span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_escHtml(shortName)}${isNight ? ' 🌙' : ''}</span>`;
   } else if (adjustedHeight < 35) {
     // Compact - name + time on one line
-    content = `<span style="font-weight:600;">${eventName}</span>${isNight ? ' 🌙' : ''} <span style="font-size:9px;opacity:0.8;">${timeStr}</span>`;
+    content = `<span style="font-weight:600;">${_escHtml(eventName)}</span>${isNight ? ' 🌙' : ''} <span style="font-size:9px;opacity:0.8;">${_escHtml(timeStr)}</span>`;
   } else {
     // Normal layout
-    content = `<strong>${eventName}</strong>`;
+    content = `<strong>${_escHtml(eventName)}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
     if (ev.leagueName) {
-      content += `<div style="font-size:9px;opacity:0.8;">${ev.leagueName}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">${_escHtml(ev.leagueName)}</div>`;
     }
     if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
       const _gs = window.loadGlobalSettings?.() || {};
@@ -2525,12 +2777,12 @@ function renderEventTile(ev, top, height) {
     }
     const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
     if (locationDisplay && ev.type !== 'elective') {
-      content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locationDisplay)}</div>`;
     }
     if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
       const actList = ev.electiveActivities.slice(0, 3).join(', ');
       const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${_escHtml(actList)}${more}</div>`;
     }
     // ★ Swim + Elective hybrid badges
     if (ev.type === 'swim_elective') {
@@ -2538,9 +2790,9 @@ function renderEventTile(ev, top, height) {
       if (_seActs.length > 0) {
         const _seList = _seActs.slice(0, 3).join(', ');
         const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
-        content += `<div style="font-size:9px;opacity:0.85;">${ev.swimLocation || 'Pool'} + ${_seList}${_seMore}</div>`;
+        content += `<div style="font-size:9px;opacity:0.85;">${_escHtml(ev.swimLocation || 'Pool')} + ${_escHtml(_seList)}${_seMore}</div>`;
       } else {
-        content += `<div style="font-size:9px;opacity:0.85;">${ev.swimLocation || 'Pool'} + Elective</div>`;
+        content += `<div style="font-size:9px;opacity:0.85;">${_escHtml(ev.swimLocation || 'Pool')} + Elective</div>`;
       }
       if (ev._preChangeMin || ev._postChangeMin) {
         const _sePre = ev._preChangeMin || 0;
@@ -2550,7 +2802,11 @@ function renderEventTile(ev, top, height) {
       }
     }
     if (ev.type === 'smart' && ev.smartData) {
-      content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
+      if (ev.smartData.guaranteeSwap) {
+        content += `<div style="font-size:9px;font-weight:700;margin-top:2px;">⇄ ${_escHtml(ev.smartData.main1)} ↔ ${_escHtml(ev.smartData.main2)} · all get both</div>`;
+      } else {
+        content += `<div style="font-size:9px;opacity:0.8;">F: ${_escHtml(ev.smartData.fallbackActivity)}</div>`;
+      }
     }
     // Split tile with swim → show change badge
     if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
@@ -2558,6 +2814,9 @@ function renderEventTile(ev, top, height) {
       const _post = ev._postChangeMin || 0;
       const _lbl = _pre === _post ? _pre + 'm' : _pre + 'm / ' + _post + 'm';
       content += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_lbl}</div>`;
+    }
+    if (ev.type === 'split' && ev.group1Bunks?.length) {
+      content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">custom groups</div>`;
     }
   }
 
@@ -2574,16 +2833,16 @@ function renderEventTile(ev, top, height) {
     let html = '';
     const stripH = adjustedHeight >= 28 ? 8 : 6;
     if (pre > 0) {
-      html += `<div title="Travel to ${zone}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+      html += `<div title="Travel to ${_escHtml(zone)}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
     }
     if (post > 0) {
-      html += `<div title="Travel from ${zone}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+      html += `<div title="Travel from ${_escHtml(zone)}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
     }
     return html;
   })();
 
   return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
-          title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
+          title="${_escHtml(eventName)} (${_escHtml(timeStr)})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
           style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
@@ -2722,7 +2981,12 @@ function addResizeListeners(gridEl) {
           event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
           event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
         }
-        
+
+        // ★ Day 25 fix (#1): reconcile overlaps after a resize, mirroring the
+        //   move path. Resize previously wrote the new times without bumping
+        //   neighbors, leaving a SILENT visual overlap that generation would
+        //   see as two pinned blocks fighting for the same slot.
+        bumpOverlappingTiles(event, event.division);
         saveDailySkeleton();
         renderGrid();
       }
@@ -2759,7 +3023,7 @@ function addDragToRepositionListeners(gridEl) {
       e.dataTransfer.setData('text/event-move', eventId);
       e.dataTransfer.effectAllowed = 'move';
       
-      ghost.innerHTML = `<strong>${event.event}</strong><br><span>${event.startTime} - ${event.endTime}</span>`;
+      ghost.innerHTML = `<strong>${_escHtml(event.event)}</strong><br><span>${_escHtml(event.startTime)} - ${_escHtml(event.endTime)}</span>`;
       ghost.style.display = 'block';
       
       const img = new Image();
@@ -2818,30 +3082,45 @@ function addDragToRepositionListeners(gridEl) {
       }
     });
     
-    cell.addEventListener('drop', (e) => {
+    cell.addEventListener('drop', async (e) => {
       cell.style.background = '';
       if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
-      
+
       if (e.dataTransfer.types.includes('text/event-move')) {
         e.preventDefault();
         const eventId = e.dataTransfer.getData('text/event-move');
         const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
+
         const divName = cell.dataset.div;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
         const y = e.clientY - rect.top;
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
-        
+
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        const newStart = minutesToTime(cellStartMin + snapMin);
-        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+        const newStartMin = cellStartMin + snapMin;
+        const newStart = minutesToTime(newStartMin);
+        const newEnd = minutesToTime(newStartMin + duration);
+
+        // ★ NIGHT ACTIVITY on MOVE: the new-tile drop path asks "is this a Night
+        //   Activity?" when a tile lands past the division's end time, but MOVING an
+        //   existing tile bypassed that prompt — so a tile dragged into the after-hours
+        //   (night) zone never got tagged isNightActivity and was then dropped by the
+        //   generator's division-boundary clip (never scheduled). Mirror the create-flow
+        //   prompt here for any moved tile starting at/after the target division's end.
+        const targetDiv = window.divisions[divName] || {};
+        const targetDivEndMin = parseTimeToMinutes(targetDiv.endTime);
+        let isNight = false;
+        if (targetDivEndMin !== null && newStartMin >= targetDivEndMin) {
+          isNight = await daShowConfirm('⏰ "' + _escHtml(newStart) + '" is after this division\'s end time (' + _escHtml(targetDiv.endTime) + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Cancel Move' });
+          if (!isNight) return; // declined → abort the move, leave the tile where it was
+        }
 
         if (divName !== event.division) {
           // Cross-grade drop. Remap league reference so the copy points
           // at a league assigned to the new grade (not the source's).
-          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd, isNightActivity: isNight };
           if (typeof window._mbRemapLeagueForGrade === 'function') {
             window._mbRemapLeagueForGrade(copy, divName);
           }
@@ -2850,6 +3129,9 @@ function addDragToRepositionListeners(gridEl) {
         } else {
           event.startTime = newStart;
           event.endTime = newEnd;
+          // Re-tag based on the new position: set when moved into the night zone,
+          // clear when moved back into normal hours (so a stale flag can't linger).
+          event.isNightActivity = isNight;
           bumpOverlappingTiles(event, divName);
         }
 
@@ -2880,7 +3162,12 @@ function addDropListeners(gridEl) {
       
       let tileData;
       try { tileData = JSON.parse(e.dataTransfer.getData('application/json')); } catch { return; }
-      
+      // ★ Day 25b fix (#4): capture the date at drop-start. This handler awaits
+      //   modals; during that await a date change (or cloud refresh) can reassign
+      //   the skeleton, and without this guard the tile would be pushed onto the
+      //   WRONG date's skeleton. Re-checked just before the push below.
+      const _dropDate = window.currentScheduleDate;
+
       const divName = cell.dataset.div;
       const earliestMin = parseInt(cell.dataset.startMin);
       const div = window.divisions[divName] || {};
@@ -2908,16 +3195,16 @@ function addDropListeners(gridEl) {
         const outsideDefaultHours = (timeMin < GUARD_START || timeMin > GUARD_END);
         const coveredByDivision = (divStartMin !== null && divEndMin !== null && timeMin >= divStartMin && timeMin <= divEndMin);
         if (outsideDefaultHours && !coveredByDivision) {
-          const ok = await daShowConfirm('⚠️ <strong>Unusual Time Warning</strong><br><br>"' + timeStr + '" is outside normal camp hours (8:00 AM – 8:00 PM).<br><br>Is this tile correct?');
+          const ok = await daShowConfirm('⚠️ <strong>Unusual Time Warning</strong><br><br>"' + _escHtml(timeStr) + '" is outside normal camp hours (8:00 AM – 8:00 PM).<br><br>Is this tile correct?');
           if (!ok) return { valid: false, minutes: null, isNight: false };
         }
         if (divStartMin !== null && timeMin < divStartMin) {
-          await daShowAlert(timeStr + " is before this division's start time of " + div.startTime + ".");
+          await daShowAlert(_escHtml(timeStr) + " is before this division's start time of " + _escHtml(div.startTime) + ".");
           return { valid: false, minutes: null, isNight: false };
         }
         if (divEndMin !== null && (isStartTime ? timeMin >= divEndMin : timeMin > divEndMin)) {
           if (allowNightActivity) return { valid: true, minutes: timeMin, isNight: true };
-          const isNight = await daShowConfirm('⏰ "' + timeStr + '" is after this division\'s end time (' + div.endTime + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Re-enter' });
+          const isNight = await daShowConfirm('⏰ "' + _escHtml(timeStr) + '" is after this division\'s end time (' + _escHtml(div.endTime) + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Re-enter' });
           if (isNight) return { valid: true, minutes: timeMin, isNight: true };
           else return { valid: false, minutes: null, isNight: false };
         }
@@ -2944,20 +3231,23 @@ function addDropListeners(gridEl) {
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
-            { name: 'main1', label: 'Main Activity 1 (limited capacity)', type: 'text', placeholder: 'e.g., Swim, Special' },
-            { name: 'main2', label: 'Main Activity 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
-            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
-          ]
+            { name: 'main1', label: 'Main Activity 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
+            { name: 'main2', label: 'Main Activity 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+            { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
+          ],
+          postRender: (overlay) => _daSmartSwapPostRender(overlay, false)
         });
         if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
+        const _gsOn = result.guaranteeSwap === 'true';
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: "smart", event: result.main1 + " / " + result.main2, division: divName,
           startTime: result.startTime, endTime: result.endTime,
-          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' },
+          smartData: { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null },
           isNightActivity: isNightActivity
         };
       }
@@ -2998,6 +3288,7 @@ function addDropListeners(gridEl) {
             if (main1Input) main1Input.addEventListener('input', checkSwim);
             if (main2Input) main2Input.addEventListener('input', checkSwim);
             checkSwim();
+            _daBuildSplitBunkPicker(overlay, divName, null);
           }
         });
         if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
@@ -3022,7 +3313,8 @@ function addDropListeners(gridEl) {
           ],
           isNightActivity: isNightActivity,
           _preChangeMin: splitPreChange || undefined,
-          _postChangeMin: splitPostChange || undefined
+          _postChangeMin: splitPostChange || undefined,
+          group1Bunks: result.group1Bunks ? JSON.parse(result.group1Bunks) : null
         };
 
         console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents, (splitPreChange || splitPostChange) ? '(change: ' + splitPreChange + 'pre/' + splitPostChange + 'post)' : '');
@@ -3135,6 +3427,30 @@ function addDropListeners(gridEl) {
           electiveActivities, isNightActivity
         };
       }
+      // ★ FN-48: GENERAL-ACTIVITY tile — name + facility pre-bound from the
+      //   facilities registry; only the time window is asked.
+      else if (tileData.type === 'custom' && tileData.gaName) {
+        const result = await daShowModal({
+          title: tileData.gaName + ' for ' + divName,
+          description: 'Pinned at ' + (tileData.gaFacility || 'its facility') + '. Set the time window.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        const _gaFlds = tileData.gaFacility ? [tileData.gaFacility] : [];
+        newEvent = {
+          id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: tileData.gaName,
+          division: divName, startTime: result.startTime, endTime: result.endTime,
+          reservedFields: _gaFlds,
+          location: tileData.gaFacility || null,
+          isNightActivity
+        };
+      }
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
         const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
@@ -3159,7 +3475,7 @@ function addDropListeners(gridEl) {
         isNightActivity = times.isNight;
         const reservedFields = result.reservedFields || [];
         newEvent = {
-          id: Date.now().toString(), type: 'pinned', event: result.eventName.trim(),
+          id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: result.eventName.trim(),
           division: divName, startTime: result.startTime, endTime: result.endTime,
           reservedFields: reservedFields,
           location: reservedFields.length === 1 ? reservedFields[0] : null,
@@ -3229,10 +3545,14 @@ function addDropListeners(gridEl) {
           }
         }
 
+        // ★ Day 25 fix (#3): one unique base id shared by the swim tile and its
+        //   pre/post Change strips (was Date.now() three times → collided across
+        //   rapid drops, making find()-by-id target the wrong tile).
+        const _swimBase = 'evt_' + Math.random().toString(36).slice(2, 9);
         // Pre-Change BEFORE swim
         if (daPreChange > 0) {
           dailyOverrideSkeleton.push({
-            id: Date.now().toString() + '_prechange',
+            id: _swimBase + '_prechange',
             type: 'pinned',
             event: 'Change',
             division: divName,
@@ -3246,7 +3566,7 @@ function addDropListeners(gridEl) {
 
         // Swim tile — keeps the user-entered window
         newEvent = {
-          id: Date.now().toString(), type: 'pinned', event: name, division: divName,
+          id: _swimBase, type: 'pinned', event: name, division: divName,
           startTime: minutesToTime(daSwimStart), endTime: minutesToTime(daSwimEnd),
           reservedFields,
           location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null),
@@ -3258,7 +3578,7 @@ function addDropListeners(gridEl) {
         // Post-Change AFTER swim (anchored to next period start if there's a gap)
         if (daPostChange > 0) {
           dailyOverrideSkeleton.push({
-            id: Date.now().toString() + '_postchange',
+            id: _swimBase + '_postchange',
             type: 'pinned',
             event: 'Change',
             division: divName,
@@ -3282,7 +3602,7 @@ function addDropListeners(gridEl) {
           return l && l.enabled !== false && Array.isArray(l.divisions) && l.divisions.includes(String(divName));
         });
         if (gradeLeagues.length === 0) {
-          await daShowAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+          await daShowAlert('No leagues are assigned to ' + _escHtml(divName) + '. Add this grade to a league in League Setup before dropping a league tile here.');
           return;
         }
         let _autoLeagueName = null;
@@ -3408,7 +3728,7 @@ function addDropListeners(gridEl) {
         if (!times) return;
         isNightActivity = times.isNight;
         newEvent = {
-          id: Date.now().toString(), type: finalType, event: name, division: divName,
+          id: 'evt_' + Math.random().toString(36).slice(2, 9), type: finalType, event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
         if (tileData.type === 'special' && result.subcategory && result.subcategory !== '__add_new__') {
@@ -3417,6 +3737,15 @@ function addDropListeners(gridEl) {
       }
       
       if (newEvent) {
+        // ★ #4 (re-audit, hoisted): the date-change guard was originally only just
+        //   before the push — but the merge + overlap-erase below already mutate the
+        //   skeleton, so a date change DURING the modal would corrupt the NEW date's
+        //   tiles before the late guard fired. Check here, before ANY mutation, so a
+        //   mid-modal date change aborts cleanly with nothing erased/merged.
+        if (window.currentScheduleDate !== _dropDate) {
+          try { await daShowAlert('The date changed while placing this tile, so it was not added. Please drop it again.'); } catch (_) {}
+          return;
+        }
         // ★ SWIM + ELECTIVE MERGE
         const _daMergeRes = await daTryMergeSwimElective(newEvent, divName, dailyOverrideSkeleton);
         if (_daMergeRes) {
@@ -3444,6 +3773,11 @@ function addDropListeners(gridEl) {
           const exEnd = parseTimeToMinutes(existing.endTime);
           if (exStart === null || exEnd === null) return true;
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
+          // ★ Day 25b fix (#2): record what this drop removes so it isn't lost
+          //   SILENTLY (e.g. a Swim dropped across two Electives previously erased
+          //   the second one with no trace). Displaced tiles surface in the
+          //   displaced-tiles panel so the user can SEE what was replaced.
+          if (overlaps) { try { addDisplacedTile(existing, 'Replaced by "' + (newEvent.event || 'new tile') + '"'); } catch (_) {} }
           return !overlaps;
         });
 
@@ -3479,7 +3813,7 @@ function addDropListeners(gridEl) {
           const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
           if (!_cdResult.allowed) {
             const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
-            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _cdMsg.replace(/\n/g, '<br>') + '<br><br>Place anyway?');
+            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _escHtml(_cdMsg).replace(/\n/g, '<br>') + '<br><br>Place anyway?');
             if (!_cdOk) return;
           }
         }
@@ -3506,12 +3840,18 @@ function addDropListeners(gridEl) {
             if (!_pcResult.valid && _pcResult.reason) {
               const _pcNote = _pcConcurrent > 0
                 ? '<br>(Includes ' + _pcConcurrent + ' players from other divisions at the same time)' : '';
-              const _pcOk = await daShowConfirm('Player count warning for "' + newEvent.event + '":<br>' + _pcResult.reason + _pcNote + '<br><br>Place anyway?');
+              const _pcOk = await daShowConfirm('Player count warning for "' + _escHtml(newEvent.event) + '":<br>' + _escHtml(_pcResult.reason) + _escHtml(_pcNote) + '<br><br>Place anyway?');
               if (!_pcOk) return;
             }
           }
         }
 
+        // ★ Day 25b fix (#4): bail if the date changed during the modal flow so
+        //   this tile is never pushed onto a different date's skeleton.
+        if (window.currentScheduleDate !== _dropDate) {
+          try { await daShowAlert('The date changed while placing this tile, so it was not added. Please drop it again.'); } catch (_) {}
+          return;
+        }
         dailyOverrideSkeleton.push(newEvent);
         saveDailySkeleton();
         renderGrid();
@@ -3572,15 +3912,22 @@ function addRemoveListeners(gridEl) {
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
-      clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => { _showTileActionBar(tile); }, 280);
+      // A double-click is unfolding — let ondblclick handle it (don't pop Edit/Delete).
+      if (_clickTimer) return;
+      // Longer pause so the 2nd click of a double-click lands before Edit/Delete shows.
+      _clickTimer = setTimeout(() => { _clickTimer = null; _showTileActionBar(tile); }, 350);
     };
 
     tile.ondblclick = (e) => {
       e.stopPropagation();
-      clearTimeout(_clickTimer);
+      if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
       if (e.target.classList.contains('da-resize-handle')) return;
-      _showTileActionBar(tile);
+      e.preventDefault();
+      // Auto mode keeps the old behavior (Edit/Delete). Manual mode: double-click
+      // SELECTS this whole period for partial regeneration.
+      if (window._daBuilderMode === 'auto') { _showTileActionBar(tile); return; }
+      deselectAllTiles(); // clear any Edit/Delete bar the single-click timer may have popped
+      _daToggleTileRegenSelect(tile);
     };
   });
 }
@@ -3654,9 +4001,78 @@ function _showTileActionBar(tileEl) {
 }
 
 
+function _daBuildSplitBunkPicker(overlay, divName, existingGroup1) {
+  const sortNum = (arr) => [...arr].sort((a, b) => {
+    const nA = parseInt(a.match(/\d+/)?.[0] || 0);
+    const nB = parseInt(b.match(/\d+/)?.[0] || 0);
+    return nA - nB || a.localeCompare(b);
+  });
+  const allBunks = sortNum(((window.divisions || {})[divName]?.bunks || []).map(String));
+  if (allBunks.length === 0) return;
+
+  const half = Math.ceil(allBunks.length / 2);
+  const g1Set = new Set(
+    existingGroup1?.length
+      ? sortNum(existingGroup1.map(String).filter(b => allBunks.includes(b)))
+      : allBunks.slice(0, half)
+  );
+  const g2Set = new Set(allBunks.filter(b => !g1Set.has(b)));
+
+  const pickerWrap = document.createElement('div');
+  pickerWrap.style.cssText = 'margin-top:12px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;';
+  pickerWrap.innerHTML =
+    '<div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px;">Bunk Groups'
+    + '<span style="font-size:10px;font-weight:400;color:#64748b;"> — click a bunk to move it</span></div>'
+    + '<div style="display:flex;gap:12px;">'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#1e40af;margin-bottom:4px;">● Group 1 → starts at Main 1</div>'
+    + '<div id="split-g1-panel" style="min-height:32px;background:#eff6ff;border:1px dashed #93c5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:4px;">● Group 2 → starts at Main 2</div>'
+    + '<div id="split-g2-panel" style="min-height:32px;background:#f5f3ff;border:1px dashed #c4b5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '</div>';
+
+  const hiddenInput = document.createElement('input');
+  hiddenInput.type = 'hidden';
+  hiddenInput.setAttribute('data-field', 'group1Bunks');
+  pickerWrap.appendChild(hiddenInput);
+
+  const updateHidden = () => { hiddenInput.value = JSON.stringify(sortNum([...g1Set])); };
+
+  const renderChips = () => {
+    const p1 = pickerWrap.querySelector('#split-g1-panel');
+    const p2 = pickerWrap.querySelector('#split-g2-panel');
+    p1.innerHTML = ''; p2.innerHTML = '';
+    const makeChip = (bunk, inG1) => {
+      const c = document.createElement('span');
+      c.textContent = bunk;
+      c.title = 'Click to move to Group ' + (inG1 ? '2' : '1');
+      c.style.cssText = 'cursor:pointer;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:500;user-select:none;'
+        + (inG1 ? 'background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;' : 'background:#ede9fe;border:1px solid #c4b5fd;color:#7c3aed;');
+      c.addEventListener('click', () => {
+        if (inG1) { g1Set.delete(bunk); g2Set.add(bunk); }
+        else { g2Set.delete(bunk); g1Set.add(bunk); }
+        updateHidden(); renderChips();
+      });
+      return c;
+    };
+    sortNum([...g1Set]).forEach(b => p1.appendChild(makeChip(b, true)));
+    sortNum([...g2Set]).forEach(b => p2.appendChild(makeChip(b, false)));
+  };
+
+  const fieldsContainer = overlay.querySelector('.da-modal-fields-container') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
+  if (fieldsContainer) fieldsContainer.appendChild(pickerWrap);
+  updateHidden(); renderChips();
+}
+
 async function editTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
+  // ★★★ CB-51: capture the date at open. editTile awaits a blocking modal and
+  // then mutates `ev` + saves; if the loaded date changed during the modal (calendar
+  // nav / realtime settle), dailyOverrideSkeleton was reassigned so `ev` is a stale
+  // detached object — the save would be a silent no-op (or worse, write under the
+  // wrong date). The drop handler was already hardened for this race; guard editTile
+  // the same way. (Checked at the tail save below.)
+  const _editStartDate = window.currentScheduleDate;
 
   if (ev.type === 'smart') {
     const result = await daShowModal({
@@ -3664,18 +4080,23 @@ async function editTile(id) {
       fields: [
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
-        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
-        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
-        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
-      ]
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' },
+        { name: 'pairGroup', label: 'Connect with (pair group)', type: 'select', default: ev.smartData?.pairGroup || '', options: [{ value: '', label: 'Auto — pair by time order' }, { value: '1', label: '🔶 Group 1' }, { value: '2', label: '🔷 Group 2' }, { value: '3', label: '🟩 Group 3' }, { value: '4', label: '🟪 Group 4' }] }
+      ],
+      postRender: (overlay) => { _daSmartSwapPostRender(overlay, !!(ev.smartData && ev.smartData.guaranteeSwap)); _daInjectDeleteButton(overlay, id); }
     });
     if (!result || !result.main1 || !result.main2) return;
+    const _gsOn = result.guaranteeSwap === 'true';
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
-    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: _gsOn ? result.main2 : (result.fallbackActivity || 'Activity'), guaranteeSwap: _gsOn, pairGroup: result.pairGroup || null };
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const _editDivName = ev.division;
+    const _editExistingG1 = ev.group1Bunks || null;
     const result = await daShowModal({
       title: 'Edit Split Tile',
       fields: [
@@ -3707,6 +4128,7 @@ async function editTile(id) {
         if (main1Input) main1Input.addEventListener('input', checkSwim);
         if (main2Input) main2Input.addEventListener('input', checkSwim);
         checkSwim();
+        _daBuildSplitBunkPicker(overlay, _editDivName, _editExistingG1);
       }
     });
     if (!result || !result.main1 || !result.main2) return;
@@ -3715,6 +4137,7 @@ async function editTile(id) {
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
     ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+    ev.group1Bunks = result.group1Bunks ? JSON.parse(result.group1Bunks) : null;
 
     // Update swim change for split tiles
     const editSplitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
@@ -3824,12 +4247,15 @@ async function editTile(id) {
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
       const _lbn = _gs.leaguesByName || {};
-      // Filter to leagues assigned to this event's grade.
-      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
-        _lbn[ln] && _lbn[ln].enabled !== false &&
-        Array.isArray(_lbn[ln].divisions) &&
-        _lbn[ln].divisions.includes(String(ev.division))
-      );
+      // Leagues assigned to this event's grade — specialty tiles list specialty
+      // leagues (gs.specialtyLeagues), regular tiles list regular leagues.
+      const _gradeLeagues = (typeof window._mbLeaguesForGradeByType === 'function')
+        ? window._mbLeaguesForGradeByType(ev.division, ev.type)
+        : Object.keys(_lbn).filter(ln =>
+            _lbn[ln] && _lbn[ln].enabled !== false &&
+            Array.isArray(_lbn[ln].divisions) &&
+            _lbn[ln].divisions.includes(String(ev.division))
+          );
       if (_gradeLeagues.length === 1) {
         // Single league for this grade → assign silently, no picker.
         if (ev.leagueName !== _gradeLeagues[0]) {
@@ -3844,7 +4270,8 @@ async function editTile(id) {
         });
       }
     }
-    const result = await daShowModal({ title: 'Edit Event', fields: modalFields });
+    const _supportsAway = _daTileSupportsAway(ev);
+    const result = await daShowModal({ title: 'Edit Event', fields: modalFields, postRender: _supportsAway ? (ov) => _daAwayPostRender(ov, ev) : undefined });
     if (!result || !result.eventName?.trim()) return;
     ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
     if (result.reservedFields !== undefined) {
@@ -3852,24 +4279,53 @@ async function editTile(id) {
       ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
     }
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+    // ★ Away (off-campus) flag — restricts (re)generation to the chosen zone's fields + travel.
+    if (_supportsAway) {
+      const _awayOn = (result.isAway === 'true' || result.isAway === true);
+      if (_awayOn && result.awayZone) {
+        ev.isAway = true; ev.awayZone = result.awayZone;
+        ev.awayMode = (result.awayMode === 'mixed') ? 'mixed' : 'exclusive';
+      } else { delete ev.isAway; delete ev.awayZone; delete ev.awayMode; }
+    }
   }
 
-  // Re-stamp travel info since location may have changed
-  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
-  if (_editTravelLoc) {
-    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
-    if (_eti) {
-      ev._travelPre = _eti.preMin;
-      ev._travelPost = _eti.postMin;
-      ev._travelZone = _eti.zoneName;
-      ev._travelMode = _eti.mode;
+  // Re-stamp travel info. An Away tile draws travel straight from its chosen
+  // off-campus zone (the actual field is decided at generation time); otherwise
+  // travel is inferred from the tile's reserved location/field.
+  if (ev.isAway && ev.awayZone) {
+    const _az = (window.getAwayZones?.() || []).find(z => z.name === ev.awayZone);
+    if (_az && _az.travelTimeMin > 0) {
+      ev._travelPre = _az.travelTimeMin;
+      ev._travelPost = _az.travelTimeMin;
+      ev._travelZone = _az.name;
+      ev._travelMode = 'deduct';
     } else {
       delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
     }
   } else {
-    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+    if (_editTravelLoc) {
+      const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+      if (_eti) {
+        ev._travelPre = _eti.preMin;
+        ev._travelPost = _eti.postMin;
+        ev._travelZone = _eti.zoneName;
+        ev._travelMode = _eti.mode;
+      } else {
+        delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+      }
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
   }
 
+  // ★★★ CB-51: bail if the date changed during the edit modal — `ev` is now a
+  // stale detached object and saving would be a silent no-op (or cross-date write).
+  if (window.currentScheduleDate !== _editStartDate) {
+    console.warn('[DailyAdj] CB-51: date changed during edit — discarding stale edit (not saved)');
+    try { (window.daShowAlert || window.alert)('The date changed while editing — your change was not saved. Re-open the tile on the correct date.'); } catch (_) {}
+    return;
+  }
   saveDailySkeleton();
   renderGrid();
 }
@@ -3877,6 +4333,7 @@ async function editTile(id) {
 async function copyTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
+  const _copyStartDate = window.currentScheduleDate; // ★ CB-51: capture date for the post-modal guard
   const others = getColumnOrder().filter(d => d !== ev.division);
   if (others.length === 0) { await daShowAlert('No other grades to copy to.'); return; }
   const result = await daShowModal({
@@ -3885,6 +4342,13 @@ async function copyTile(id) {
     fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
   });
   if (!result || !result.targets?.length) return;
+  // ★★★ CB-51: date changed during the modal → the copies would land on the wrong
+  // date's skeleton; abort instead.
+  if (window.currentScheduleDate !== _copyStartDate) {
+    console.warn('[DailyAdj] CB-51: date changed during copy — aborting (not saved)');
+    try { (window.daShowAlert || window.alert)('The date changed — the copy was not saved.'); } catch (_) {}
+    return;
+  }
   result.targets.forEach(div => {
     dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
   });
@@ -3918,27 +4382,45 @@ let tmpl = assignments[today] || assignments['Default'];
   const dateKey = window.currentScheduleDate || '';
   const dayLayerKey = `campAutoLayers_${dateKey}`;
   let loaded = false;
+  // ★ #10 audit fix: newest-wins between local + cloud (multi-device staleness).
+  //   localStorage normally wins (protects fresh same-session edits), but if the
+  //   CLOUD copy is STRICTLY newer (another device/scheduler saved it) prefer it,
+  //   so a stale local copy can't shadow a teammate's update. Backward-compatible:
+  //   with no timestamps (old data) _cloudIsNewer is false → unchanged local-first.
+  let _cloudIsNewer = false;
   try {
-    const stored = localStorage.getItem(dayLayerKey);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed && Object.keys(parsed).length > 0) {
-        daAutoLayers = parsed;
-        loaded = true;
-        console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+    const _lTs = localStorage.getItem(`campAutoLayers_ts_${dateKey}`) || null;
+    const _cTs = (g.app1?.dailyAutoLayersTs || {})[dateKey] || null;
+    const _cData = g.app1?.dailyAutoLayers?.[dateKey];
+    // ★ #7 (re-audit): only prefer cloud when it actually has layers — a cleared
+    //   cloud with a newer ts shouldn't shadow good local layers into a template.
+    _cloudIsNewer = !!_cTs && _cData && Object.keys(_cData).length > 0 && (!_lTs || _cTs > _lTs);
+  } catch (e) {}
+  if (!_cloudIsNewer) {
+    try {
+      const stored = localStorage.getItem(dayLayerKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && Object.keys(parsed).length > 0) {
+          daAutoLayers = parsed;
+          loaded = true;
+          console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+        }
       }
-    }
-  } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
-  
-  // Priority 2: Day-specific saved layers (cloud)
+    } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
+  }
+
+  // Priority 2: Day-specific saved layers (cloud) — also the winner when cloud is newer (#10)
   if (!loaded) {
     try {
       const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
       if (cloudLayers && Object.keys(cloudLayers).length > 0) {
         daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
         localStorage.setItem(dayLayerKey, JSON.stringify(daAutoLayers));
+        // Sync local recency stamp to the cloud's so we don't re-prefer cloud forever.
+        try { const _cTs2 = (g.app1?.dailyAutoLayersTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campAutoLayers_ts_${dateKey}`, _cTs2); } catch (e) {}
         loaded = true;
-        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey);
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey + (_cloudIsNewer ? ' (cloud newer — #10)' : ''));
       }
     } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from cloud:', e); }
   }
@@ -3968,6 +4450,38 @@ let tmpl = assignments[today] || assignments['Default'];
  console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
 }
 
+// ★ Bound the per-date app1 maps so they can't grow without limit. These maps
+//   (dailySkeletons / dailyAutoLayers / dailyResourcesByDate / dailyColumnOrders
+//   + their Ts twins) had NO cap, so every date ever touched piled up here — and
+//   because app1 is cloud-synced AND rides along in every config save, that bloat
+//   exhausted the ~5 MB localStorage quota (which then silently dropped OTHER
+//   saves, e.g. the league history cloud write → "counter resets next day").
+//   Keep a generous window around today: ~3 months back (older generated schedules
+//   still live authoritatively in daily_schedules) and ~18 months forward (covers
+//   pre-camp / next-season setup) — and NEVER prune the date currently being saved.
+function _pruneOldDailyDateMaps(app1, keepKey) {
+  try {
+    if (!app1 || typeof app1 !== 'object') return;
+    var KEEP_PAST_DAYS = 90, KEEP_FUTURE_DAYS = 540;
+    var now = new Date();
+    var lo = new Date(now.getTime() - KEEP_PAST_DAYS * 86400000).toISOString().slice(0, 10);
+    var hi = new Date(now.getTime() + KEEP_FUTURE_DAYS * 86400000).toISOString().slice(0, 10);
+    var DATE = /^\d{4}-\d{2}-\d{2}$/;
+    var maps = ['dailySkeletons', 'dailySkeletonsTs', 'dailyAutoLayers', 'dailyAutoLayersTs',
+                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate'];
+    var pruned = 0;
+    maps.forEach(function (m) {
+      var map = app1[m];
+      if (!map || typeof map !== 'object' || Array.isArray(map)) return;
+      Object.keys(map).forEach(function (k) {
+        if (k === keepKey) return;                 // never drop the date being saved
+        if (DATE.test(k) && (k < lo || k > hi)) { delete map[k]; pruned++; }
+      });
+    });
+    if (pruned > 0) console.log('[DailyAdj] 🧹 Pruned ' + pruned + ' stale per-date app1 entr(ies) (kept ' + lo + '..' + hi + ')');
+  } catch (e) { console.warn('[DailyAdj] daily-map prune skipped:', e); }
+}
+
 function saveDAAutoLayers() {
   if (!window.AccessControl?.canEdit?.()) {
     console.warn('[DailyAdj] Save blocked - insufficient permissions');
@@ -3975,13 +4489,18 @@ function saveDAAutoLayers() {
   }
   if (!daAutoLayers || typeof daAutoLayers !== 'object') return;
   const dateKey = window.currentScheduleDate;
+  const _savedAtTs = new Date().toISOString();   // ★ #10: newest-wins recency stamp (local + cloud)
   try {
     localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
+    localStorage.setItem(`campAutoLayers_ts_${dateKey}`, _savedAtTs);
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
   try {
     if (!masterSettings.app1) masterSettings.app1 = {};
     if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
+    if (!masterSettings.app1.dailyAutoLayersTs) masterSettings.app1.dailyAutoLayersTs = {};
     masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
+    masterSettings.app1.dailyAutoLayersTs[dateKey] = _savedAtTs;   // ★ #10
+    _pruneOldDailyDateMaps(masterSettings.app1, dateKey);
     window.saveGlobalSettings?.('app1', masterSettings.app1);
     window.forceSyncToCloud?.();
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
@@ -3991,34 +4510,62 @@ function saveDAAutoLayers() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
-  // Priority 1: localStorage
+  // ★ #10 (manual twin): newest-wins between local + cloud. Local normally wins
+  //   (protects fresh same-session edits), but if the CLOUD skeleton is STRICTLY
+  //   newer (another device/scheduler saved it) prefer cloud so a stale local copy
+  //   can't shadow a teammate's update. Backward-compatible: no timestamps →
+  //   _cloudIsNewer is false → unchanged local-first.
+  // ★★★ CB-31: read a FRESH copy of global settings for the cloud branch, the
+  // same way the auto twin loadDAAutoLayers() does (loadGlobalSettings()). The
+  // module-level `masterSettings` is an init-time snapshot — on device B (or
+  // after a sync that never refreshed the snapshot) it can be stale, so a
+  // skeleton created/edited on device A would be missed and the loader would
+  // fall through to a template. Fall back to the snapshot only if the fresh load
+  // is unavailable.
+  const _freshApp1_31 = ((window.loadGlobalSettings ? window.loadGlobalSettings() : null) || {}).app1 || masterSettings?.app1 || {};
+  let _cloudIsNewer = false;
   try {
-    const storageKey = `campManualSkeleton_${dateKey}`;
-    const stored = localStorage.getItem(storageKey);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed && parsed.length > 0) {
-        dailyOverrideSkeleton = parsed;
-        window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-        const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
-        if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
-        console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
-        return;
+    const _lTs = localStorage.getItem(`campManualSkeleton_ts_${dateKey}`) || null;
+    const _cTs = (_freshApp1_31?.dailySkeletonsTs || {})[dateKey] || null;
+    const _cData = _freshApp1_31?.dailySkeletons?.[dateKey];
+    // ★ #7 (re-audit): only prefer cloud when it ACTUALLY has data. A cleared-but-
+    //   timestamped cloud (another device hit "Clear All") would otherwise skip local
+    //   then fall through to a template, silently discarding good local data.
+    _cloudIsNewer = !!_cTs && Array.isArray(_cData) && _cData.length > 0 && (!_lTs || _cTs > _lTs);
+  } catch (e) {}
+
+  // Priority 1: localStorage (unless cloud is newer — #10)
+  if (!_cloudIsNewer) {
+    try {
+      const storageKey = `campManualSkeleton_${dateKey}`;
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.length > 0) {
+          dailyOverrideSkeleton = parsed;
+          window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+          const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
+          if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
+          console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
+          return;
+        }
       }
+    } catch (e) {
+      console.warn('[DailyAdj] Failed to load from localStorage:', e);
     }
-  } catch (e) {
-    console.warn('[DailyAdj] Failed to load from localStorage:', e);
   }
 
   // Priority 2: Cloud
   try {
-    const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    const cloudSkeleton = _freshApp1_31?.dailySkeletons?.[dateKey];
     if (cloudSkeleton && cloudSkeleton.length > 0) {
       dailyOverrideSkeleton = JSON.parse(JSON.stringify(cloudSkeleton));
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
-      const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
+      // ★ #10: sync local recency stamp to the cloud's so we don't re-prefer cloud forever
+      try { const _cTs2 = (_freshApp1_31?.dailySkeletonsTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _cTs2); } catch (e) {}
+      const cloudOrder = _freshApp1_31?.dailyColumnOrders?.[dateKey];
       if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
         saveColumnOrder(cloudOrder);
         localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(cloudOrder));
@@ -4057,16 +4604,38 @@ function saveDAAutoLayers() {
 function saveDailySkeleton() {
   if (!window.AccessControl?.canEdit?.()) {
     console.warn('[DailyAdj] Save blocked - insufficient permissions');
+    // ★ Day 25b fix (#5): surface the blocked save ONCE so a read-only user
+    //   isn't silently building a skeleton that vanishes on reload.
+    if (!window._daSavePermWarned) {
+      window._daSavePermWarned = true;
+      try { daShowAlert('⚠️ You don\'t have permission to edit this schedule — your changes are NOT being saved.'); } catch (_) {}
+    }
     return;
   }
   
+  // ★ Pre-guard: clean the skeleton before it is persisted — drop malformed /
+  //   duplicate tiles and normalize bare times so corrupt data never reaches
+  //   storage or the generator. In place so the module closure + window global
+  //   both observe the cleaned array. Non-fatal: a failure leaves data untouched.
+  try {
+    if (window.CampUtils && window.CampUtils.sanitizeSkeletonTiles && Array.isArray(dailyOverrideSkeleton)) {
+      const _san = window.CampUtils.sanitizeSkeletonTiles(dailyOverrideSkeleton);
+      if (_san && Array.isArray(_san.tiles) && (_san.dropped.length || _san.normalized)) {
+        dailyOverrideSkeleton.length = 0;
+        Array.prototype.push.apply(dailyOverrideSkeleton, _san.tiles);
+      }
+    }
+  } catch (e) { console.error('[DailyAdj] skeleton sanitize on save failed (non-fatal):', e); }
+
   const dateKey = window.currentScheduleDate;
+  const _skelTs = new Date().toISOString();   // ★ #10 (manual twin): newest-wins recency stamp (local + cloud)
   console.log(`[DailyAdj] saveDailySkeleton called with ${dailyOverrideSkeleton.length} events for ${dateKey}`);
-  
+
   // Save to localStorage
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
     localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+    localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _skelTs);
     localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(getColumnOrder()));
   } catch (e) {
     console.error('[DailyAdj] Failed to save to localStorage:', e);
@@ -4074,12 +4643,20 @@ function saveDailySkeleton() {
 
   // Save to cloud
   try {
+    // ★ #15 audit fix: cold-start guard. If globalSettings hasn't hydrated yet,
+    //   masterSettings.app1 is undefined and the line below would throw — which
+    //   was caught + logged but SKIPPED the cloud save (skeleton stayed local
+    //   only, lost on logout/other devices). Ensure the container exists first.
+    if (!masterSettings.app1) masterSettings.app1 = {};
     if (!masterSettings.app1.dailySkeletons) {
       masterSettings.app1.dailySkeletons = {};
     }
     masterSettings.app1.dailySkeletons[dateKey] = dailyOverrideSkeleton;
+    if (!masterSettings.app1.dailySkeletonsTs) masterSettings.app1.dailySkeletonsTs = {};
+    masterSettings.app1.dailySkeletonsTs[dateKey] = _skelTs;   // ★ #10 (manual twin)
     if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
     masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
+    _pruneOldDailyDateMaps(masterSettings.app1, dateKey);
     if (typeof window.saveGlobalSettings === 'function') {
       window.saveGlobalSettings('app1', masterSettings.app1);
     }
@@ -4139,11 +4716,7 @@ function parseTimeToMinutes(str) {
   return hh * 60 + mm;
 }
 
-function minutesToTime(min) {
-  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 function uid() {
   return 'id_' + Math.random().toString(36).slice(2, 9);
@@ -4174,7 +4747,8 @@ function _showGenScopePopover(anchorBtn) {
   if (existing) { existing.remove(); return; }
 
   const divisions = window.divisions || {};
-  const divNames = Object.keys(divisions);
+  const _rawDivNames = Object.keys(divisions);
+  const divNames = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivNames.slice()) : _rawDivNames;
   if (divNames.length === 0) return;
 
   const popover = document.createElement('div');
@@ -4416,7 +4990,7 @@ function renderToolbar() {
     if (isAutoMode) {
       // ★ Auto mode: load auto layer template
       if (autoTemplates[name]) {
-        const ok = await daShowConfirm('Load auto template "' + name + '"?');
+        const ok = await daShowConfirm('Load auto template "' + _escHtml(name) + '"?');
         if (ok) {
           daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
           saveDAAutoLayers();
@@ -4427,7 +5001,7 @@ function renderToolbar() {
     } else {
       // Manual mode: load skeleton template
       if (savedSkeletons[name]) {
-        const ok = await daShowConfirm('Load template "' + name + '"?');
+        const ok = await daShowConfirm('Load template "' + _escHtml(name) + '"?');
         if (ok) {
           dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
           window._autoGeneratedSchedule = false;
@@ -4547,18 +5121,133 @@ function _boToggleView() {
   const msGridWrapper = document.querySelector('.ms-grid-wrapper');
   const autoView = document.getElementById('da-view-auto-layers');
 
+  // ★ BO-v2 SCROLL ROOT CAUSE: the hosting DA pane (.da-pane) has
+  //   overflow hidden — its content is TALLER than the pane and the user
+  //   simply cannot scroll it (this clipped every earlier in-grid scroll
+  //   fix). While the bunk-override view is active, let the pane scroll;
+  //   restore the original overflow when leaving the view.
+  const _boPane = boContainer ? boContainer.closest('.da-pane') : null;
+
   if (_boBunkViewActive) {
     if (msGridWrapper) msGridWrapper.style.display = 'none';
     if (gridWrapper) gridWrapper.style.display = 'none';
     if (autoView) autoView.style.display = 'none';
+    if (_boPane) {
+      if (_boPane.dataset.boPrevOverflowY == null) _boPane.dataset.boPrevOverflowY = _boPane.style.overflowY || '';
+      _boPane.style.overflowY = 'auto';
+    }
     if (boContainer) { boContainer.style.display = ''; renderBunkOverridesUI(); }
   } else {
     if (msGridWrapper) msGridWrapper.style.display = '';
     if (gridWrapper) gridWrapper.style.display = '';
     if (autoView) autoView.style.display = '';
+    if (_boPane && _boPane.dataset.boPrevOverflowY != null) {
+      _boPane.style.overflowY = _boPane.dataset.boPrevOverflowY;
+      delete _boPane.dataset.boPrevOverflowY;
+    }
     if (boContainer) boContainer.style.display = 'none';
     renderGrid();
   }
+}
+
+// =================================================================
+// DA TIME-RULE IRON GATE (shared auto + manual)
+// =================================================================
+// Post-generation scrub: clear any placement that overlaps a facility's
+// Daily-Adjustments "Unavailable" window, or (when the field has any
+// "Available" window) that falls outside it — per-grade scoped. This is the
+// catch-all for direct-fill paths that never reach canBlockFit (smart tiles,
+// split tiles, swim+elective, full-grade, fallback via fillBlock). AUTO ran
+// this inline; MANUAL had NO equivalent, so a smart/split tile could sit in
+// an Unavailable window. Extracted here so BOTH builder modes run it.
+//
+// _includeSetup: when true, ALSO enforce the setup-level Facilities time
+//   windows (field.timeRules, e.g. "Available 10-12") — a DIFFERENT source
+//   from the per-date DA windows and NOT in the DA blob. Auto enforces those
+//   via its own pass (_fn24bFinalTimeRuleScrub) inside runAutoScheduler, so
+//   the auto call leaves this false (behavior unchanged). Manual has no such
+//   pass and its direct fills skip canBlockFit, so the manual call passes true
+//   to close the gap. DA windows OVERRIDE setup windows for the same field
+//   (parity with canBlockFit / the activityProperties merge).
+function _applyDailyTimeRuleIronGate(_includeSetup) {
+    try {
+        const _dk = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        let _rules = null;
+        try {
+            const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
+            if (_enf) { const p = JSON.parse(_enf); if (p && Object.keys(p).length > 0) _rules = p; }
+        } catch (_e) {}
+        if (!_rules) {
+            const _dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+            if (_dd && Object.keys(_dd).length > 0) _rules = _dd;
+        }
+        if (!_rules) {
+            try {
+                const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
+            } catch (_e) {}
+        }
+        const _da = _rules || {};
+        // Durable setup-level Facilities windows (manual parity with auto's
+        // _fn24bFinalTimeRuleScrub). Read from config, not fragile activityProperties.
+        const _setup = {};
+        if (_includeSetup) {
+            try {
+                const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const _gsApp = ((window.loadGlobalSettings && window.loadGlobalSettings()) || {}).app1 || {};
+                (_gsApp.fields || []).forEach(f => {
+                    if (!f || !f.name || !Array.isArray(f.timeRules) || f.timeRules.length === 0) return;
+                    _setup[f.name] = f.timeRules.map(r => ({
+                        type: r.type, available: r.available,
+                        startMin: (r.startMin != null) ? r.startMin : (_parseTM ? _parseTM(r.start || r.startTime) : null),
+                        endMin: (r.endMin != null) ? r.endMin : (_parseTM ? _parseTM(r.end || r.endTime) : null),
+                        divisions: Array.isArray(r.divisions) ? r.divisions : []
+                    }));
+                });
+            } catch (_eS) {}
+        }
+        {
+            const _sa = window.scheduleAssignments || {};
+            const _divs = window.divisions || {};
+            let _cleared = 0;
+            for (const [_bunk, _slots] of Object.entries(_sa)) {
+                if (!Array.isArray(_slots)) continue;
+                let _grade = null;
+                for (const [_d, _info] of Object.entries(_divs)) {
+                    if ((_info.bunks || []).includes(_bunk)) { _grade = _d; break; }
+                }
+                for (let _i = 0; _i < _slots.length; _i++) {
+                    const _s = _slots[_i];
+                    if (!_s || _s.continuation) continue;
+                    const _field = (typeof _s.field === 'object') ? _s.field?.name : _s.field;
+                    if (!_field || _field === 'Free') continue;
+                    const _sM = _s._startMin, _eM = _s._endMin;
+                    if (_sM == null || _eM == null) continue;
+                    // DA windows override setup windows for the same field.
+                    const _rs = (Array.isArray(_da[_field]) && _da[_field].length) ? _da[_field] : _setup[_field];
+                    if (!Array.isArray(_rs) || _rs.length === 0) continue;
+                    let _bad = false, _hasAvail = false, _inside = false;
+                    for (const _r of _rs) {
+                        const _t = String(_r.type || '').toLowerCase();
+                        const _iU = _t === 'unavailable' || _r.available === false;
+                        const _iA = _t === 'available' || _r.available === true;
+                        const _rsM = _r.startMin ?? null, _reM = _r.endMin ?? null;
+                        if (_rsM == null || _reM == null) continue;
+                        if (Array.isArray(_r.divisions) && _r.divisions.length > 0
+                            && _grade != null && !_r.divisions.map(String).includes(String(_grade))) continue;
+                        if (_iU && _rsM < _eM && _reM > _sM) { _bad = true; break; }
+                        if (_iA) { _hasAvail = true; if (_sM >= _rsM && _eM <= _reM) _inside = true; }
+                    }
+                    if (!_bad && _hasAvail && !_inside) _bad = true;
+                    if (_bad) {
+                        _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'time rule on ' + _field, continuation: false };
+                        _cleared++;
+                    }
+                }
+            }
+            if (_cleared > 0) console.warn('[IRON GATE INLINE] cleared ' + _cleared + ' time-rule violation(s)');
+        }
+    } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
 }
 
 // =================================================================
@@ -4567,14 +5256,133 @@ function _boToggleView() {
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
+    // ★ Day 22.5 audit fix: re-entrancy guard — refuse a second concurrent run.
+    if (_daOptimizerRunning) { await daShowAlert("A schedule is already being generated — please wait for it to finish."); return; }
+    // ★ FN-14: wait for any in-flight date transition (date-picker change → async
+    //   load, serialized via window.__dateTxnInProgress) to FULLY settle before we read
+    //   the date. Otherwise the gen can capture a date that is still mid-revert — observed:
+    //   selected 07-11 but the gen ran for (and saved to) 07-10 because
+    //   window.currentScheduleDate had not yet settled to 07-11 at gen start, leaving the
+    //   selected date empty. Bounded so a stuck transition can never deadlock generation.
+    try {
+        var _fn14TxnWait = 0;
+        while (window.__dateTxnInProgress && _fn14TxnWait < 8000) {
+            await new Promise(function (r) { setTimeout(r, 50); });
+            _fn14TxnWait += 50;
+        }
+    } catch (_eFn14Txn) { /* non-fatal — fall through to the equality guard below */ }
+    // ★ FN-17 date-settle guard — refuse to generate when the date picker shows a
+    //   different date than the one currently loaded (window.currentScheduleDate).
+    //   That mismatch means a date change is still in-flight (its async load hasn't
+    //   finished); generating now would run against — and SAVE onto — the stale loaded
+    //   date (the cross-date stamp desync). Re-trigger the picker's load and ask the
+    //   user to retry once it settles. Applies to both auto and manual (pre-branch).
+    try {
+        const _fn17Picker = document.getElementById('calendar-date-picker');
+        const _fn17Pv = _fn17Picker && _fn17Picker.value;
+        if (_fn17Pv && window.currentScheduleDate && _fn17Pv !== window.currentScheduleDate) {
+            console.warn('[Optimizer] FN-17 date-settle guard: picker=' + _fn17Pv + ' but loaded=' + window.currentScheduleDate + ' — aborting to avoid a cross-date write.');
+            try { if (_fn17Picker) _fn17Picker.dispatchEvent(new Event('change', { bubbles: true })); } catch (_e) {}
+            await daShowAlert('The schedule for ' + _fn17Pv + ' is still loading. Please wait a moment, then click Generate again.');
+            return;
+        }
+    } catch (_eFn17) { /* non-fatal — proceed */ }
+    _daOptimizerRunning = true;
+    try {
+
+    // ★ Pull the authoritative LEAGUE HISTORY from the cloud right before generating,
+    //   so today's matchups + sports are chosen from the true cross-session record
+    //   (not a stale in-memory copy). Best-effort + time-boxed — never blocks the gen.
+    try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+
+    // ★ FN-14 (final): snapshot the gen date NOW. The txn-wait + FN-17 guard above just
+    //   confirmed the date transition has settled and picker === window.currentScheduleDate,
+    //   so this is the AUTHORITATIVE date the user selected. runAutoScheduler (L873) reads
+    //   window._activeGenDate FIRST, so the gen targets THIS date even if
+    //   window.currentScheduleDate transiently reverts to the previous date mid-gen (the
+    //   accumulated-async-state race that left a freshly-selected date empty). Cleared in
+    //   the finally below.
+    try { window._activeGenDate = window.currentScheduleDate || (document.getElementById('calendar-date-picker') || {}).value || ''; } catch (_eSnap) {}
+
+    // ★ Shut-off sync: refresh the in-memory currentOverrides from storage for the
+    //   gen-date NOW (loadCurrentOverrides prefers window._activeGenDate, just set
+    //   above). currentOverrides otherwise only refreshes when the Resources panel
+    //   is opened, so a shut-off toggled and then navigated away from could leave
+    //   the panel state — and the campTimeRulesEnforce_ key it re-seeds — diverged
+    //   from what the solver reads. The solver reads storage directly, so this
+    //   never LOOSENED enforcement, but it keeps the UI/iron-gate state honest.
+    try { if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides(); } catch (_eLCO) {}
 
     // ★★★ v3.13: Apply generation scope from settings picker ★★★
-    if (_generationScope && _generationScope.size > 0) {
-        window.selectedDivisionsForGeneration = [..._generationScope];
-        console.log('[Optimizer] Generation scope applied:', [..._generationScope]);
+    // ★ MS-1 (multi-scheduler): clamp the scope to the ROLE's generatable
+    // divisions. The scheduler-mode banner promises "Generate scoped to:
+    // <assigned>", but generation trusted the picker alone — a scheduler
+    // with no picker selection generated and SAVED all divisions into
+    // their daily_schedules row, stomping the owner's work in the merge.
+    // Owners/admins are unaffected (their generatable set is every
+    // division, so _roleScope stays null and behavior is unchanged).
+    let _roleScope = null;
+    try {
+        const _gd = window.AccessControl?.getGeneratableDivisions?.();
+        const _allDivCount = Object.keys(window.divisions || {}).length;
+        if (Array.isArray(_gd) && _gd.length > 0 && _allDivCount > 0 && _gd.length < _allDivCount) {
+            _roleScope = _gd.map(String);
+        }
+    } catch (_eRS) { /* non-fatal — fall through unclamped */ }
+    // ★★★ CB-26: a SCHEDULER whose generatable set is EMPTY (subdivision not yet
+    // resolved — AccessControl init race) must NOT generate unscoped. The clamp
+    // above only sets _roleScope for a NON-empty partial set; an empty set left
+    // it null → generation ran over ALL divisions and stomped the owner's work.
+    // Block and ask the user to retry once scope resolves. Owner/admin unaffected
+    // (their generatable set is every division, never empty).
+    try {
+        const _roleNow = window.CampistryDB?.getRole?.() || window.AccessControl?.getCurrentRole?.();
+        if (_roleNow === 'scheduler') {
+            const _gdNow = window.AccessControl?.getGeneratableDivisions?.() || [];
+            if (!Array.isArray(_gdNow) || _gdNow.length === 0) {
+                await daShowAlert('Your assigned divisions are still loading — please try generating again in a moment.');
+                return;
+            }
+        }
+    } catch (_eRoleGuard) { /* non-fatal */ }
+    let _effScope = (_generationScope && _generationScope.size > 0) ? [..._generationScope] : null;
+    if (_roleScope) {
+        _effScope = _effScope ? _effScope.filter(d => _roleScope.includes(String(d))) : [..._roleScope];
+        if (_effScope.length === 0) {
+            await daShowAlert('None of the selected divisions are in your assigned scope (' + _roleScope.join(', ') + ').');
+            return;
+        }
+    }
+    if (_effScope) {
+        window.selectedDivisionsForGeneration = [..._effScope];
+        console.log('[Optimizer] Generation scope applied:', [..._effScope], _roleScope ? '(role-clamped)' : '');
     } else {
         delete window.selectedDivisionsForGeneration;
     }
+    // ★ MS-3: record this generation's scope durably for the save layer —
+    // selectedDivisionsForGeneration is deleted before the post-gen verified
+    // save runs, but saveSchedule needs the scope to stamp per-division
+    // recency (_divStamps). TTL-checked (180s) on the consumer side.
+    try {
+        // The scope picker may express the scope as BUNKS only
+        // (_generationBunkScope) — derive the division list from it when no
+        // division-level scope is set, so the save layer still knows which
+        // divisions this generation touches.
+        let _gsDivs = _effScope ? [..._effScope] : null;
+        if (!_gsDivs && _generationBunkScope && _generationBunkScope.size > 0) {
+            const _b2d = {};
+            Object.entries(window.divisions || {}).forEach(([dn, di]) =>
+                ((di && di.bunks) || []).forEach(b => { _b2d[String(b)] = dn; }));
+            const _ds = new Set();
+            [..._generationBunkScope].forEach(b => { const dn = _b2d[String(b)]; if (dn) _ds.add(dn); });
+            if (_ds.size > 0) _gsDivs = [..._ds];
+        }
+        window.__lastGenScope = {
+            date: window._activeGenDate || window.currentScheduleDate || '',
+            divisions: _gsDivs,
+            at: Date.now()
+        };
+    } catch (_eGS) {}
 
    // ★★★ AUTO MODE: Full pipeline via scheduler_core_auto.js ★★★
     const isAutoMode = window._daBuilderMode === 'auto';
@@ -4636,7 +5444,8 @@ async function runOptimizer() {
 
         try {
             window.invalidateSmartLogicSpecialsCache?.();
-            const scopeDivisions = _generationScope ? [..._generationScope] : null;
+            // ★ MS-1: use the role-clamped scope computed above (NOT the raw picker)
+            const scopeDivisions = _effScope ? [..._effScope] : null;
             const scopeBunks = _generationBunkScope ? [..._generationBunkScope] : null;
             // ★ Day 22.5: install per-bunk gate read by getBunksForGrade inside solver
             if (scopeBunks) window.__allowedBunkSet = new Set(scopeBunks.map(String));
@@ -4646,70 +5455,33 @@ async function runOptimizer() {
             } finally {
                 delete window.__allowedBunkSet;
             }
-            // ★ Day 22.5 IRON GATE: inline post-gen time-rule scrub.
+            // ★ Day 22.5 IRON GATE: post-gen time-rule scrub (shared helper).
             //   Runs SYNCHRONOUSLY after runAutoScheduler returns, BEFORE the
             //   schedule-generated event dispatches / save / UI re-render.
-            //   Reads from dedicated key (primary) + dailyData + LS fallback.
-            try {
-                const _dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                let _rules = null;
-                try {
-                    const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
-                    if (_enf) { const p = JSON.parse(_enf); if (p && Object.keys(p).length > 0) _rules = p; }
-                } catch (_e) {}
-                if (!_rules) {
-                    const _dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
-                    if (_dd && Object.keys(_dd).length > 0) _rules = _dd;
-                }
-                if (!_rules) {
-                    try {
-                        const _s = localStorage.getItem('campResourceOverrides_' + _dk);
-                        if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
-                    } catch (_e) {}
-                }
-                if (_rules) {
-                    const _sa = window.scheduleAssignments || {};
-                    const _divs = window.divisions || {};
-                    let _cleared = 0;
-                    for (const [_bunk, _slots] of Object.entries(_sa)) {
-                        if (!Array.isArray(_slots)) continue;
-                        let _grade = null;
-                        for (const [_d, _info] of Object.entries(_divs)) {
-                            if ((_info.bunks || []).includes(_bunk)) { _grade = _d; break; }
-                        }
-                        for (let _i = 0; _i < _slots.length; _i++) {
-                            const _s = _slots[_i];
-                            if (!_s || _s.continuation) continue;
-                            const _field = (typeof _s.field === 'object') ? _s.field?.name : _s.field;
-                            if (!_field || _field === 'Free') continue;
-                            const _sM = _s._startMin, _eM = _s._endMin;
-                            if (_sM == null || _eM == null) continue;
-                            const _rs = _rules[_field];
-                            if (!Array.isArray(_rs) || _rs.length === 0) continue;
-                            let _bad = false, _hasAvail = false, _inside = false;
-                            for (const _r of _rs) {
-                                const _t = String(_r.type || '').toLowerCase();
-                                const _iU = _t === 'unavailable' || _r.available === false;
-                                const _iA = _t === 'available' || _r.available === true;
-                                const _rsM = _r.startMin ?? null, _reM = _r.endMin ?? null;
-                                if (_rsM == null || _reM == null) continue;
-                                if (Array.isArray(_r.divisions) && _r.divisions.length > 0
-                                    && _grade != null && !_r.divisions.map(String).includes(String(_grade))) continue;
-                                if (_iU && _rsM < _eM && _reM > _sM) { _bad = true; break; }
-                                if (_iA) { _hasAvail = true; if (_sM >= _rsM && _eM <= _reM) _inside = true; }
-                            }
-                            if (!_bad && _hasAvail && !_inside) _bad = true;
-                            if (_bad) {
-                                _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'DA time rule on ' + _field, continuation: false };
-                                _cleared++;
-                            }
-                        }
-                    }
-                    if (_cleared > 0) console.warn('[IRON GATE INLINE] cleared ' + _cleared + ' time-rule violation(s)');
-                }
-            } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
+            _applyDailyTimeRuleIronGate();
             delete window.selectedDivisionsForGeneration;
             if (success) {
+                // ★ FN-14 SAVE-SERIALIZATION: persist THIS date's schedule (awaited +
+                //   verified) BEFORE the gen is considered complete — before the
+                //   "✅ Generated" alert and before _daOptimizerRunning clears (L~5177
+                //   finally). Previously the cloud save fired asynchronously via the
+                //   generation-complete event, so a rapid next-gen or date-switch could
+                //   run — and the freshly-generated schedule could be lost — before its
+                //   save landed (the 07-10-empty data loss seen in testing).
+                //   verifiedScheduleSave has its own cross-date guard (refuses if memory
+                //   no longer belongs to this date), so this can never write the wrong
+                //   day's data; worst case it's a no-op deduped save.
+                try {
+                    // ★ FN-14: prefer the gen-start date (window._activeGenDate, set by
+                    //   runAutoScheduler) over window.currentScheduleDate, which can have
+                    //   reverted to the previous date mid-gen — so the awaited save targets
+                    //   the date this gen actually produced.
+                    const _genDate = window._activeGenDate || window.currentScheduleDate;
+                    if (_genDate && window.verifiedScheduleSave) {
+                        await window.verifiedScheduleSave(_genDate);
+                        console.log('[Optimizer] ✅ post-gen verified save confirmed for ' + _genDate);
+                    }
+                } catch (_eSerSave) { console.warn('[Optimizer] post-gen verified save failed: ' + (_eSerSave && _eSerSave.message)); }
                 // Match the manual builder's completion flow: confirm popup,
                 // then jump to the schedule view with a clean re-render.
                 try {
@@ -4717,6 +5489,14 @@ async function runOptimizer() {
                         detail: { date: window.currentScheduleDate || new Date().toISOString().split('T')[0], mode: 'auto' }
                     }));
                 } catch (_) { /* non-fatal */ }
+                // ★ FN-26: the gen + awaited verified save are DONE here. Release the
+                //   re-entrancy guard BEFORE the cosmetic success modal — otherwise
+                //   `await daShowAlert` blocks until the user dismisses it, holding
+                //   _daOptimizerRunning=true and locking out the next Generate (the
+                //   "guard sticks until reload" symptom under back-to-back gens). The
+                //   modal is blocking for a real user, so no overlap can occur; the
+                //   finally below still clears it as an idempotent backstop.
+                _daOptimizerRunning = false;
                 await daShowAlert("✅ Schedule Generated!");
                 window.showTab?.('schedule');
                 const schedEl = document.getElementById('scheduleTable');
@@ -4727,14 +5507,47 @@ async function runOptimizer() {
             }
         } catch (e) {
             console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
-            await daShowAlert("Auto scheduler error: " + e.message);
+            await daShowAlert("Auto scheduler error: " + _escHtml(e.message));
         }
         return; // ← hard return — never reaches runSkeletonOptimizer
     } else {
         // Manual mode: original check
         if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
+
+        // ★ Day 32 (warn-then-discard, user decision 2026-06-01): a manual
+        //   re-generation rebuilds from the skeleton and therefore DISCARDS
+        //   cell-level daily adjustments (post-edits, `_postEdit:true`). Bunk
+        //   overrides, trips, and resource settings are preserved across the
+        //   wipe (see savedBunkOverrides/savedResourceOverrides below), so only
+        //   post-edits are lost — warn about exactly those, scoped to the bunks
+        //   this run will actually wipe, and let the user cancel.
+        try {
+            const _sa = window.scheduleAssignments || {};
+            const _divsW = window.divisions || {};
+            const _scopeDivsW = _generationScope ? [..._generationScope] : null;
+            const _scopeBunksW = _generationBunkScope ? [..._generationBunkScope] : null;
+            let _wipeBunks = null; // null = all bunks (full re-gen)
+            if (_scopeBunksW && _scopeBunksW.length > 0) {
+                _wipeBunks = new Set(_scopeBunksW.map(String));
+            } else if (_scopeDivsW && _scopeDivsW.length > 0 && _scopeDivsW.length < Object.keys(_divsW).length) {
+                _wipeBunks = new Set();
+                _scopeDivsW.forEach(d => ((_divsW[d] || _divsW[String(d)] || {}).bunks || []).forEach(b => _wipeBunks.add(String(b))));
+            }
+            let _adjCount = 0; const _adjBunks = new Set();
+            Object.keys(_sa).forEach(b => {
+                if (_wipeBunks && !_wipeBunks.has(String(b))) return; // out of scope → not wiped
+                (_sa[b] || []).forEach(e => { if (e && e._postEdit === true && !e.continuation) { _adjCount++; _adjBunks.add(b); } });
+            });
+            if (_adjCount > 0) {
+                const _msg = '⚠️ This day has ' + _adjCount + ' daily adjustment' + (_adjCount === 1 ? '' : 's')
+                    + ' (manual edit' + (_adjCount === 1 ? '' : 's') + ' on ' + _adjBunks.size + ' bunk' + (_adjBunks.size === 1 ? '' : 's')
+                    + ') that will be CLEARED by re-generating.\n\nBunk overrides, trips, and resource settings are kept. Continue?';
+                const _ok = await daShowConfirm(_msg, { danger: true, confirmText: 'Re-generate' });
+                if (!_ok) { console.log('[Optimizer] Re-gen cancelled by user (' + _adjCount + ' daily adjustment(s) would be cleared)'); return; }
+            }
+        } catch (_eWarn) { console.warn('[Optimizer] post-edit warn check error: ' + (_eWarn && _eWarn.message)); }
     }
-    
+
    // Only persist to manual skeleton storage paths in manual mode.
     // In auto mode the skeleton was already saved via saveCurrentDailyData above.
     if (window._daBuilderMode !== 'auto') {
@@ -4747,9 +5560,36 @@ async function runOptimizer() {
    
     
 
+  // ★★★ LEAGUE TILE TIME MISMATCH — warn BEFORE the wipe (manual path) ★★★
+  // Grades in the same league are meant to play their league game together, so
+  // their league tiles must share the same start/end time; otherwise the solver
+  // (which groups league blocks by start time) won't combine them into one game.
+  // We can't safely auto-snap times, so we ask: "Generate anyway" continues,
+  // "Dismiss" cancels the whole run — and because this is BEFORE the wipe below,
+  // dismissing leaves the current schedule untouched.
+  try {
+    const _ltm = window._detectLeagueTileTimeMismatch?.(dailyOverrideSkeleton) || [];
+    if (_ltm.length > 0) {
+      console.warn('[Optimizer] ⚠️ league time mismatch(es):', _ltm);
+      const _msg =
+        '⚠️ <strong>League game times don\'t match</strong><br><br>' +
+        'These grades play in the same league but their league tiles are set to ' +
+        'different times, so they won\'t play together:<br><br>' +
+        _ltm.map(function (w) { return '&nbsp;&nbsp;• ' + _escHtml(w); }).join('<br>') +
+        '<br><br>Give them the same start and end time so they share one game.';
+      const _go = await daShowConfirm(_msg, { confirmText: 'Generate anyway', cancelText: 'Dismiss', danger: true });
+      if (!_go) {
+        console.log('[Optimizer] League time mismatch — user chose Dismiss, generation cancelled.');
+        return; // finally{} releases _daOptimizerRunning; nothing has been wiped yet
+      }
+    }
+  } catch (_eLtm) { console.warn('[Optimizer] league time mismatch check failed (continuing):', _eLtm); }
+
     // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  // ★★★ CB-46: use the ROLE-CLAMPED _effScope (matches the auto branch), not the
+  // raw picker — a scheduler who makes no pick must not take the full-camp wipe.
+  const scopeDivsForWipe = _effScope ? [..._effScope] : (_generationScope ? [..._generationScope] : null);
   // ★ Day 22.5: If user picked bunks (not whole divisions), the wipe is partial.
   const scopeBunksForWipe = _generationBunkScope ? [..._generationBunkScope] : null;
   const allDivKeys = Object.keys(window.divisions || {});
@@ -4768,7 +5608,8 @@ async function runOptimizer() {
     },
     dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
     dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || [],
+    dailyActivityBunkRestrictions: currentOverrides.dailyActivityBunkRestrictions || []
   };
 
   if (isPartialWipe) {
@@ -4833,13 +5674,34 @@ async function runOptimizer() {
       const client = window.CampistryDB?.getClient?.() || window.supabase;
       const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
       if (client && campId) {
-          const { error } = await client
-              .from('daily_schedules')
-              .delete()
-              .eq('camp_id', campId)
-              .eq('date_key', dateKey);
-          if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
-          else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
+          // ★ SCOPE THE WIPE BY ROLE: the per-row model keys daily_schedules by
+          //   (camp_id,date_key,scheduler_id). An UNSCOPED delete lets a SCHEDULER's
+          //   full-regen wipe every OTHER scheduler's (and the owner's) row for the
+          //   date. Owner/admin legitimately wipe the whole camp; a scheduler must
+          //   only delete their OWN row (the post-gen save re-writes just their
+          //   filtered bunks anyway). Defaults to owner when role is unresolved
+          //   (preserves prior single-owner behavior).
+          const _role = window.AccessControl?.getCurrentRole?.() || window.CampistryDB?.getRole?.() || 'owner';
+          if (_role === 'scheduler' || _role === 'viewer') {
+              if (window.ScheduleDB?.deleteMyScheduleOnly) {
+                  await window.ScheduleDB.deleteMyScheduleOnly(dateKey);
+                  console.log('[Optimizer] ☁️ Scheduler-scoped cloud delete for', dateKey);
+              } else {
+                  const _uid = window.CampistryDB?.getUserId?.();
+                  let _q = client.from('daily_schedules').delete().eq('camp_id', campId).eq('date_key', dateKey);
+                  if (_uid) _q = _q.eq('scheduler_id', _uid);
+                  const { error } = await _q;
+                  if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
+              }
+          } else {
+              const { error } = await client
+                  .from('daily_schedules')
+                  .delete()
+                  .eq('camp_id', campId)
+                  .eq('date_key', dateKey);
+              if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
+              else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
+          }
       }
     } catch (e) {
       console.warn('[Optimizer] Cloud delete failed:', e);
@@ -4869,12 +5731,13 @@ async function runOptimizer() {
   window.saveCurrentDailyData("dailyDisabledSportsByField", savedResourceOverrides.dailyDisabledSportsByField);
   window.saveCurrentDailyData("dailyFieldAvailability", savedResourceOverrides.dailyFieldAvailability);
   window.saveCurrentDailyData("disabledSpecialtyLeagues", savedResourceOverrides.disabledSpecialtyLeagues);
+  window.saveCurrentDailyData("dailyActivityBunkRestrictions", savedResourceOverrides.dailyActivityBunkRestrictions);
   console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
 
   window.invalidateSmartLogicSpecialsCache?.();
   let success = false;
   try {
-    const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    const scopeDivsManual = _effScope ? [..._effScope] : (_generationScope ? [..._generationScope] : null); // ★ CB-46: role-clamped scope (matches auto)
     const scopeBunksManual = _generationBunkScope ? [..._generationBunkScope] : null;
     // ★ Day 22.5: install per-bunk gate for manual solver (same hook as auto)
     if (scopeBunksManual) window.__allowedBunkSet = new Set(scopeBunksManual.map(String));
@@ -4888,6 +5751,15 @@ async function runOptimizer() {
   }
 
 if (success) {
+      // ★ IRON GATE (manual parity): scrub any DA time-rule violation before the
+      //   manual schedule is saved. The manual solver's direct-fill paths
+      //   (smart/split/swim+elective via fillBlock) don't reach canBlockFit, and
+      //   unlike auto there was no post-gen scrub here — so a tile could sit in a
+      //   facility's Unavailable window. Same helper the auto branch runs, plus
+      //   _includeSetup=true so the setup-level Facilities windows (field.timeRules,
+      //   e.g. "Available 10-12") are enforced here too — auto has its own pass
+      //   for those (_fn24bFinalTimeRuleScrub); manual did not.
+      _applyDailyTimeRuleIronGate(true);
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
@@ -4900,24 +5772,44 @@ if (success) {
           };
           // Save to localStorage (best-effort — may be full)
           try {
+              // ★★★ DAY 17 FIX: bump localStorage cap from 5 → 30 dates ★★★
+              // Post-gen save path was independently capping localStorage to 5
+              // dates, defeating the orchestrator's bumped-to-30 cap. With cap=5
+              // the week-based count function (getPeriodActivityCount) could
+              // not see the full 7-day window — silently broke exactFrequency,
+              // minFrequency, and rotationCohort enforcement.
               const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
               const DAILY_KEY = 'campDailyData_v1';
               const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
               allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
               const dKeys = Object.keys(allData).filter(k => DATE_RE.test(k));
-              if (dKeys.length > 5) { dKeys.sort(); dKeys.slice(0, dKeys.length - 5).forEach(k => delete allData[k]); }
+              if (dKeys.length > 30) { dKeys.sort(); dKeys.slice(0, dKeys.length - 30).forEach(k => delete allData[k]); }
               localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
               const ORCH_KEY = 'campistry_schedule_data';
               const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
               orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
               const oKeys = Object.keys(orchData).filter(k => DATE_RE.test(k));
-              if (oKeys.length > 5) { oKeys.sort(); oKeys.slice(0, oKeys.length - 5).forEach(k => delete orchData[k]); }
+              if (oKeys.length > 30) { oKeys.sort(); oKeys.slice(0, oKeys.length - 30).forEach(k => delete orchData[k]); }
               localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
           } catch (e) {
               if (e.name !== 'QuotaExceededError') console.warn('[Optimizer] localStorage save failed:', e);
           }
-          // Save to cloud
-          window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
+          // Save to cloud — ★ #16 audit fix: surface async failures. This was
+          //   fire-and-forget, so a rejected cloud write left local + cloud
+          //   divergent with the user told "saved". Catch the rejection + warn.
+          (function () {
+              try {
+                  const _csp = window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
+                  if (_csp && typeof _csp.then === 'function') {
+                      _csp.catch(function (_e) {
+                          try {
+                              console.error('[Optimizer] CLOUD save rejected:', _e);
+                              if (typeof daShowAlert === 'function') daShowAlert('⚠️ Schedule saved on this device, but cloud sync failed — it may not appear on other devices or after logout.\n\n' + ((_e && _e.message) || _e));
+                          } catch (_) {}
+                      });
+                  }
+              } catch (_e2) { console.error('[Optimizer] cloud save threw:', _e2); }
+          })();
           console.log('[Optimizer] ★ Post-generation save complete:',
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
@@ -4932,6 +5824,7 @@ if (success) {
           }));
       } catch (e) { /* non-fatal */ }
 
+      _daOptimizerRunning = false; // ★ FN-26: release guard before cosmetic modal (see auto path) so an undismissed "Generated!" modal never locks out the next gen
       await daShowAlert("✅ Schedule Generated!");
       window.showTab?.('schedule');
       // Force full re-render with clean state
@@ -4940,6 +5833,14 @@ if (success) {
       window.renderStaggeredView?.();
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
+  }
+  } finally {
+      // ★ Day 22.5 audit fix: always release the re-entrancy guard, even if the
+      //   solver threw, so the Generate button is never permanently locked out.
+      _daOptimizerRunning = false;
+      // ★ FN-14: clear the gen-date marker now that this generation (and its awaited
+      //   verified save) is fully done, so it can never go stale between gens.
+      try { window._activeGenDate = null; } catch (_e) {}
   }
 }
   // =================================================================
@@ -4967,10 +5868,33 @@ function loadDailyTrips(dateKey) {
     }
   } catch (e) { /* ignore */ }
 
-  // Merge: use whichever has more trips (handles partial sync)
+  // ★ Source 3 (FUTURE-DATE FIX): app1.dailyTripsByDate — the reliable global-settings
+  // path (mirrors the per-date skeleton). The daily_schedules sync SKIPS dates with no
+  // generated schedule, so future-date trips never reached the cloud via Source 2. This
+  // path round-trips through camp_state_kv and survives a fresh session. AUTHORITATIVE
+  // when the date key is present: an explicit empty array (trip removed) returns [] so a
+  // stale local/cloud copy can't resurrect a deleted trip.
+  try {
+    const _gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+    const _tbd = _gs.app1 && _gs.app1.dailyTripsByDate;
+    if (_tbd && Object.prototype.hasOwnProperty.call(_tbd, dateKey)) {
+      const _a1 = Array.isArray(_tbd[dateKey]) ? _tbd[dateKey] : [];
+      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(_a1)); } catch (e) { /* ignore */ }
+      return _a1;
+    }
+  } catch (e) { /* ignore */ }
+
+  // ★ CB-53: merge precedence. This branch is only reached for LEGACY data (Source 3,
+  // app1.dailyTripsByDate, is absent) AND when both sources hold ≥1 trip. Any trip edit since
+  // the dailyTripsByDate mechanism shipped writes Source 3, so "Source 3 absent" ⟹ no fresh
+  // local edit exists — fromLS is then device-local-stale while fromCloud (daily_schedules) is
+  // the only cross-device-synced copy. The old "more trips wins" rule resurrected a deletion
+  // made on another device (stale fromLS had more). Prefer fromCloud here. The cloud-WIPE
+  // recovery case (fromCloud empty/null) never enters this branch — it falls to the else, where
+  // fromLS correctly wins — so this change can't undo local recovery.
   let result = [];
   if (fromLS && fromCloud) {
-    result = fromLS.length >= fromCloud.length ? fromLS : fromCloud;
+    result = fromCloud; // cross-device truth wins over stale device-local for legacy trips
   } else {
     result = fromLS || fromCloud || [];
   }
@@ -4998,6 +5922,17 @@ function loadDailyTrips(dateKey) {
 }
 
 function saveDailyTrips(dateKey, trips) {
+  // ★★★ CB-32: role gate. Every sibling write in this file (saveDailySkeleton,
+  // rainy-mode, optimizer) opens with a canEdit/checkEditAccess guard, but the
+  // Trips path had none — a viewer or out-of-scope scheduler could push
+  // camp-GLOBAL trip data (app1.dailyTripsByDate + daily_schedules) that both
+  // builders honor. This is the single write chokepoint (add/remove handlers +
+  // the render-time self-heal all route through here), so guarding it blocks
+  // every unauthorized trip write. Owners/admins/in-scope editors pass.
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[saveDailyTrips] blocked: user lacks edit permission');
+    return;
+  }
   if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
   // 1. Save to dedicated localStorage key (fast, survives cloud overwrites)
@@ -5020,6 +5955,29 @@ function saveDailyTrips(dateKey, trips) {
   } catch (e) {
     console.error('[saveDailyTrips] Cloud sync error:', e);
   }
+
+  // 3. ★ FUTURE-DATE PERSISTENCE FIX: also mirror the trip into
+  //    app1.dailyTripsByDate and sync via the global-settings ('app1') path — the
+  //    SAME reliable route the per-date skeleton (saveDailySkeleton) uses. The
+  //    daily_schedules sync above SKIPS dates with no generated schedule (STEP 5
+  //    filter), and ScheduleDB.saveSchedule blocks empty-schedule rows — so a trip
+  //    set TODAY for a FUTURE date never reached the cloud and vanished on a fresh
+  //    session. This path round-trips through camp_state_kv (like leagues/skeletons)
+  //    so a pre-camp trip is on the system when the day comes, from any device.
+  try {
+    if (typeof masterSettings !== 'undefined' && masterSettings) {
+      if (!masterSettings.app1) masterSettings.app1 = {};
+      if (!masterSettings.app1.dailyTripsByDate) masterSettings.app1.dailyTripsByDate = {};
+      if (Array.isArray(trips) && trips.length > 0) {
+        masterSettings.app1.dailyTripsByDate[dateKey] = trips;
+      } else {
+        delete masterSettings.app1.dailyTripsByDate[dateKey];
+      }
+      if (typeof window.saveGlobalSettings === 'function') {
+        window.saveGlobalSettings('app1', masterSettings.app1);
+      }
+    }
+  } catch (e) { /* ignore — daily_schedules path above is the fallback */ }
 }
 
 // Expose globally for other modules
@@ -5169,10 +6127,19 @@ function _renderTripsPopoverContent(pop) {
       }
       _tripEditId = null;
     } else {
-      // Add new trip(s) — one per division, always save to trips store
+      // Add new trip(s) — one per division, always save to trips store.
+      // ★★★ CB-30: compute each division's trip id ONCE and reuse it for BOTH
+      // the trips-store record AND the skeleton pinned tile. Previously two
+      // independent Date.now() calls (store vs tile), separated by the
+      // synchronous saveDailyTrips() write, produced DIFFERENT ids. Remove
+      // matches by exact id equality (store id == btn.dataset.tripId), so the
+      // skeleton tile's mismatched id was never cleared → an orphaned,
+      // un-removable ghost trip plus a duplicate in the list.
       const trips = loadDailyTrips(dateKey);
+      const _tripIdByDiv = {};
       selDivs.forEach(div => {
         const tripId = 'trip_' + Date.now() + '_' + div;
+        _tripIdByDiv[div] = tripId;
         trips.push({ id: tripId, event: tripName, division: div, startTime, endTime, startMin, endMin });
       });
       saveDailyTrips(dateKey, trips);
@@ -5180,7 +6147,7 @@ function _renderTripsPopoverContent(pop) {
       if (window._daBuilderMode !== 'auto') {
         loadDailySkeleton();
         selDivs.forEach(div => {
-          const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
+          const newEvent = { id: _tripIdByDiv[div], type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
           eraseOverlappingTiles(newEvent, div);
           dailyOverrideSkeleton.push(newEvent);
         });
@@ -5225,6 +6192,11 @@ function _renderTripsPopoverContent(pop) {
 // =================================================================
 let _boSelectedDiv = null;
 let _boBunkViewActive = false;
+// ★ Bulk bunk-override selection: double-click a slot to add/remove it here, then
+//   a single click (or the "Assign…" bar button) opens ONE picker that writes the
+//   chosen activity (or either/or pool) to every selected (bunk, time-window) cell.
+//   Keyed "bunkstartendlayerType" → {bunk, startMin, endMin, layerType}.
+let _boSelectedCells = new Map();
 
 function _boGetActivityGroups() {
   const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
@@ -5274,6 +6246,27 @@ function _boSaveOverrides(overrides) {
   try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(overrides)); } catch(e) {}
   currentOverrides.bunkActivityOverrides = overrides;
 }
+
+// ★ FN-33: does override `o` belong to the layer band (sm-em, ltKey)?
+//   Direct match on the band's window — OR, for resize overrides (which store
+//   their NEW window in startMin/endMin), match on the ORIGINAL layer window
+//   they were created from. Without the second clause a resized band's override
+//   would detach from its layer and render as a duplicate orphan band.
+function _boOvMatchesLayer(o, sm, em, ltKey) {
+  if (!o || o.layerType !== ltKey) return false;
+  if (o.startMin === sm && o.endMin === em) return true;
+  return o.overrideMode === 'resize' && o.originalStartMin === sm && o.originalEndMin === em;
+}
+
+// ★ FN-33: grade-layer (skeleton) bands whose per-bunk blocks may be drag-resized.
+//   EMPTY for now: the solver re-derives grade walls from layers in multiple
+//   passes, so a per-bunk resize of a grade layer doesn't survive generation yet
+//   (three attempted enforcement points were each rebuilt downstream — see the
+//   solver's inert 'resize' branch). Drag handles therefore only appear on
+//   OVERRIDE bands (added/force/sportPool), whose windows ride the proven
+//   force-pin lane. Re-populate (lunch/snacks/dismissal/custom) once the solver
+//   honors per-bunk layer windows end-to-end.
+const _BO_RESIZABLE_TYPES = {};
 
 function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
@@ -5367,24 +6360,48 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
-  const bunks = (div.bunks || []).slice().sort((a, b) => {
-    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
-    return na - nb || a.localeCompare(b);
-  });
+  // ★ FN-49: keep the user's Camp Structure order (no alphanumeric re-sort)
+  const bunks = (div.bunks || []).slice();
   if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
 
-  // Pull the active auto layers for this grade for the current date.
-  // Storage: globalSettings.app1.dailyAutoLayers[YYYY-MM-DD][gradeName] = layers[]
-  const _gs = window.loadGlobalSettings?.() || {};
-  const _dal = _gs.app1?.dailyAutoLayers || {};
+  // Pull the active auto layers for this grade for the current date — using the
+  // SAME 3-step resolution the GENERATION path uses (see the optimizer's
+  // daAutoLayers load): a date with no per-date entry still generates from its
+  // weekday template, so the override grid must show those template layers too
+  // (previously it read only dailyAutoLayers[date] → "No layers configured" on
+  // any template-driven day).
   const _date = (window.currentScheduleDate || window.currentDate
     || document.querySelector('input[type=date]')?.value || '').trim();
-  const _byGrade = (_dal[_date] || {});
+  const _byGrade = (function _boResolveAutoLayers(dateKey) {
+    // 1) per-date local cache (what the DA layer editor saves)
+    try {
+      const stored = localStorage.getItem('campAutoLayers_' + dateKey);
+      if (stored) { const p = JSON.parse(stored); if (p && Object.keys(p).length) return p; }
+    } catch (e) {}
+    const g = window.loadGlobalSettings?.() || {};
+    // 2) per-date cloud config
+    const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+    if (cloudLayers && Object.keys(cloudLayers).length) return cloudLayers;
+    // 3) weekday template (skeletonAssignments → autoLayerTemplates, then _current)
+    try {
+      const autoTemplates = g.app1?.autoLayerTemplates || {};
+      const assignments = g.app1?.skeletonAssignments || {};
+      const [Y, M, D] = String(dateKey).split('-').map(Number);
+      const dow = (Y && M && D) ? new Date(Y, M - 1, D).getDay() : 0;
+      const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const tmpl = assignments[dayNames[dow]] || assignments['Default'];
+      if (tmpl && autoTemplates[tmpl]) return autoTemplates[tmpl];
+      if (autoTemplates['_current']) return autoTemplates['_current'];
+    } catch (e) {}
+    return {};
+  })(_date);
   const layers = ((_byGrade[divName] || []).slice()).sort((a, b) => a.startMin - b.startMin);
   if (layers.length === 0) {
-    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers configured for this grade. Use the Master Scheduler to add layers first.</p>';
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers found for this grade on ' + _escHtml(_date) + ' — neither a per-date layer set nor a weekday template covers it. Use the Master Scheduler to add layers.</p>';
     return;
   }
+
+  const overrides = currentOverrides.bunkActivityOverrides || [];
 
   // Compute time range from layers + grade window
   const divStart = parseTimeToMinutes(div.startTime) || Math.min(...layers.map(l => l.startMin));
@@ -5394,13 +6411,58 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     if (l.startMin < earliestMin) earliestMin = l.startMin;
     if (l.endMin > latestMin) latestMin = l.endMin;
   });
+  // ★ BO-fix: the range above only spanned the LAYERS, so (a) the grid often
+  //   ended before the grade's real end-of-day (couldn't scroll further down),
+  //   and (b) an added/resized override band outside the layer span rendered
+  //   below the track bottom and was clipped. Fold in the grade's true period
+  //   window (divisionTimes) and every override band for this grade's bunks.
+  try {
+    const _dtg = (window.divisionTimes || {})[divName];
+    if (Array.isArray(_dtg)) _dtg.forEach(p => {
+      if (p && p.startMin != null && p.startMin < earliestMin) earliestMin = p.startMin;
+      if (p && p.endMin != null && p.endMin > latestMin) latestMin = p.endMin;
+    });
+  } catch (_e) {}
+  const _bunkSet = new Set(bunks.map(String));
+  overrides.forEach(o => {
+    if (!_bunkSet.has(String(o.bunk))) return;
+    if (o.startMin != null && o.startMin < earliestMin) earliestMin = o.startMin;
+    if (o.endMin != null && o.endMin > latestMin) latestMin = o.endMin;
+  });
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
 
   const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
   const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
   const totalHeight = (latestMin - earliestMin) * PX;
-  const overrides = currentOverrides.bunkActivityOverrides || [];
   const color = div.color || '#64748b';
+
+  // ★ Bell Schedule parity (auto mode): the grade-level DAW grid draws the
+  //   grade's bell-schedule period boundaries as dashed .ms-daw-period-line
+  //   rows — mirror them on every bunk track here, with the SAME merge rule
+  //   (boundaries within 10 min collapse to the latest one).
+  const _boPeriodsSrc = (window.campPeriods && Object.keys(window.campPeriods).length)
+    ? window.campPeriods
+    : ((window.loadGlobalSettings?.() || {}).campPeriods || {});
+  const _boPeriods = (_boPeriodsSrc[divName] || []).slice().sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+  const _boPeriodBoundaries = (() => {
+    const px = [];
+    _boPeriods.forEach(p => {
+      if (!p || p.startMin == null || p.endMin == null) return;
+      const sPx = (p.startMin - earliestMin) * PX;
+      const ePx = (p.endMin - earliestMin) * PX;
+      if (sPx > 0 && sPx < totalHeight) px.push(sPx);
+      if (ePx > 0 && ePx < totalHeight) px.push(ePx);
+    });
+    const raw = [...new Set(px)].sort((a, b) => a - b);
+    const MERGE = 10 * PX;
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      let latest = raw[i];
+      while (i + 1 < raw.length && raw[i + 1] - raw[i] <= MERGE) latest = raw[++i];
+      out.push(latest);
+    }
+    return out;
+  })();
 
   // Layer-type → tile background colour (matches the auto builder palette)
   const TYPE_BG = {
@@ -5415,6 +6477,11 @@ function _boRenderAutoBunkGrid(wrap, divName) {
                   swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
                   custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
                   elective: 'Elective' };
+    // ★ FN-37: custom pinned layers carry their real activity name
+    //   (customActivity — same field the generator pins, see
+    //   scheduler_core_auto eventName resolution). The generic "Custom
+    //   Pinned" label made every custom band look identical.
+    if (t === 'custom' && (l.customActivity || l.name)) return l.customActivity || l.name;
     return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
   };
 
@@ -5425,10 +6492,24 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   const BAND_PAD   = 4;
   const GRADE_COL_MIN = 120;
   const layerCount = Math.max(1, layers.length);
-  const colWidth   = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
+  // ★ BO-fix: extra bands (added layers / orphaned overrides) render to the
+  //   RIGHT of the grade-layer bands, but the column width only accounted for
+  //   the grade layers — so a freshly added band landed past the column's
+  //   right edge, clipped under the next bunk's column ("blocked"-looking).
+  //   Width every column for the widest bunk (layers + its extra bands).
+  const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, String(l.type || 'custom')));
+  let _maxExtraBands = 0;
+  bunks.forEach(b => {
+    const n = overrides.filter(o => String(o.bunk) === String(b) && !_ovOnAnyLayer(o)).length;
+    if (n > _maxExtraBands) _maxExtraBands = n;
+  });
+  const colWidth   = Math.max(GRADE_COL_MIN, (layerCount + _maxExtraBands) * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
-  // Outer wrap with horizontal scroll
-  let html = `<div class="bo-auto-scroll" style="overflow:auto;max-width:100%;max-height:70vh;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  // Outer wrap — horizontal scroll only. ★ BO-fix: the old max-height:70vh made
+  // this a NESTED vertical scrollbox whose bottom sat below the page fold —
+  // wheel-scrolling the page never reached the grid's lower half ("can't scroll
+  // all the way down"). Let the grid take its full height; the page scrolls it.
+  let html = `<div class="bo-auto-scroll" style="overflow-x:auto;overflow-y:visible;max-width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
   html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
 
   // Time ruler column (sticky left)
@@ -5464,6 +6545,11 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
     }
 
+    // Bell-schedule period boundary lines (same look as the grade-level grid)
+    _boPeriodBoundaries.forEach(py => {
+      html += `<div class="ms-daw-period-line" style="top:${py}px;"></div>`;
+    });
+
     // Narrow vertical bands — one per layer (uses ms-daw-band CSS)
     layers.forEach((layer, idx) => {
       const sm = layer.startMin, em = layer.endMin;
@@ -5473,10 +6559,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
 
       const _ltKey = (layer.type || 'custom');
-      const override = overrides.find(o =>
-        o.bunk === bunk && o.startMin === sm && o.endMin === em
-        && o.layerType === _ltKey
-      );
+      const override = overrides.find(o => o.bunk === bunk && _boOvMatchesLayer(o, sm, em, _ltKey));
 
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
       const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
@@ -5511,9 +6594,15 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           mainLabel = override.activity;
           subLabel  = 'override';
         }
-        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
-          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click body to edit, drag edges to resize"
-          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+        // ★ FN-33: a resize override renders at its NEW window so the band
+        //   visually sits where the bunk's block will actually be placed.
+        const _vS = (mode === 'resize' && override.startMin != null) ? override.startMin : sm;
+        const _vE = (mode === 'resize' && override.endMin != null) ? override.endMin : em;
+        const vTop = (_vS - earliestMin) * PX;
+        const vHeight = (_vE - _vS) * PX;
+        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-layer-name="${_escHtml(String(layer.customActivity || layer.name || ''))}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(_vS)}-${minutesToTime(_vE)}) — Click body to edit, drag edges to resize"
+          style="top:${vTop}px;height:${vHeight}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
           <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
           <span class="band-label">${_escHtml(mainLabel)}</span>
           <span class="band-qty">${_escHtml(subLabel)}</span>
@@ -5521,34 +6610,77 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
         </div>`;
       } else {
-        html += `<div class="ms-daw-band bo-block bo-skeleton bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
-          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
+        // ★ FN-33: drag-to-resize only for layer types the solver can honor
+        //   per-bunk (lunch/snacks/dismissal/custom). Floaters/swim/leagues
+        //   keep click-to-override but no resize handles.
+        const _canResize = !!_BO_RESIZABLE_TYPES[String(_ltKey).toLowerCase()];
+        const _handles = _canResize
+          ? `<div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
+          : '';
+        const _handlesBottom = _canResize
+          ? `<div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
+          : '';
+        html += `<div class="ms-daw-band bo-block bo-skeleton${_canResize ? ' bo-resizable' : ''}" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-layer-name="${_escHtml(String(layer.customActivity || layer.name || ''))}" data-type="${_escHtml(_ltKey)}"
+          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}${_canResize ? ', drag edges to resize for this bunk' : ''}"
           style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
-          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          ${_handles}
           <span class="band-label">${_escHtml(evName)}</span>
           <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
-          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          ${_handlesBottom}
         </div>`;
       }
     });
 
-    // ★ Day 24: render added-layer overrides as extra bands after the grade
-    //   layers (positioned to the right of the last grade band).
-    const addedForBunk = overrides.filter(o => o.bunk === bunk && o.overrideMode === 'addLayer');
-    addedForBunk.forEach((ov, addIdx) => {
+    // ★ Day 24 / BO-fix: render EVERY override that doesn't sit on a grade-layer
+    //   band as an extra band after the grade layers. Previously only
+    //   overrideMode:'addLayer' rendered here — so once an added band was
+    //   configured (becoming 'force'/'sportPool' at its own window) it matched
+    //   no grade band and silently VANISHED from the UI while still affecting
+    //   generation. Now force/sportPool/resize/delete orphans all stay visible.
+    const extrasForBunk = overrides.filter(o => o.bunk === bunk && !_ovOnAnyLayer(o));
+    extrasForBunk.forEach((ov, addIdx) => {
       const sm = ov.startMin, em = ov.endMin;
       if (sm == null || em == null || em <= sm) return;
       const top = (sm - earliestMin) * PX;
       const height = (em - sm) * PX;
       const left = BAND_PAD + (layers.length + addIdx) * (BAND_WIDTH + BAND_GAP);
-      const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
-      const evName = _typeLabel({ type: ov.layerType });
-      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="addLayer"
-        title="Added layer: ${_escHtml(evName)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, drag edges to resize"
-        style="background:${bg};color:#1e293b;box-shadow:0 0 0 2px #6366f1;top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+      const mode = ov.overrideMode || 'force';
+      let bandStyle, mainLabel, subLabel, titleTxt;
+      if (mode === 'addLayer') {
+        // Unconfigured added band — make "needs configuring" unmistakable.
+        const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
+        bandStyle = `background:${bg};color:#3730a3;box-shadow:0 0 0 2px #6366f1;`;
+        mainLabel = '+ Pick activity';
+        subLabel  = 'click to set';
+        titleTxt  = 'Added slot (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — click to pick the activity. Unconfigured slots are IGNORED at generation.';
+      } else if (mode === 'sportPool') {
+        const poolCount = (ov.sportPool || []).length;
+        bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+        mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+        subLabel  = (ov.sportPool || []).join(' / ').slice(0, 28);
+        titleTxt  = 'OVERRIDE (sportPool): ' + (ov.sportPool || []).join(', ') + ' (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — Click to edit';
+      } else if (mode === 'delete') {
+        bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+        mainLabel = '— deleted —';
+        subLabel  = 'skipped for this bunk';
+        titleTxt  = 'OVERRIDE (delete) ' + minutesToTime(sm) + '-' + minutesToTime(em) + ' — Click to edit';
+      } else if (mode === 'resize') {
+        bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+        mainLabel = '⇕ resized';
+        subLabel  = minutesToTime(sm) + '–' + minutesToTime(em);
+        titleTxt  = 'OVERRIDE (resize) ' + minutesToTime(sm) + '-' + minutesToTime(em) + ' — Click to edit';
+      } else {
+        bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+        mainLabel = ov.activity || 'override';
+        subLabel  = 'added · pinned';
+        titleTxt  = 'OVERRIDE (force): ' + (ov.activity || '') + ' (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — Click to edit, drag edges to resize';
+      }
+      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="${_escHtml(mode)}" data-added="1"
+        title="${_escHtml(titleTxt)}"
+        style="${bandStyle}top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
         <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
-        <span class="band-label">+ ${_escHtml(evName)}</span>
-        <span class="band-qty">added</span>
+        <span class="band-label">${_escHtml(mainLabel)}</span>
+        <span class="band-qty">${_escHtml(subLabel)}</span>
         <div class="bo-revert-btn" title="Remove" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
         <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
       </div>`;
@@ -5646,9 +6778,10 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           } : o);
         } else {
           // Skeleton band — create a new resize-only override with no activity.
-          // Storing the resize as overrideMode:'resize' so the solver knows
-          // this layer runs on a custom window for this bunk.
-          list = list.filter(o => !(o.bunk === bunk && o.startMin === originalStart && o.endMin === originalEnd && o.layerType === layerType));
+          // overrideMode:'resize' → the solver places THIS bunk's block for the
+          // layer on the custom window (FN-33, fixed types only).
+          if (!_BO_RESIZABLE_TYPES[String(layerType || 'custom').toLowerCase()]) return;
+          list = list.filter(o => !(o.bunk === bunk && _boOvMatchesLayer(o, originalStart, originalEnd, layerType)));
           list.push({
             id: uid(), bunk,
             startMin: newStart, endMin: newEnd,
@@ -5735,15 +6868,25 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
   const groups = _boGetActivityGroups();
   const _lt = String(layerType || 'custom').toLowerCase();
+  // ★ BO-fix: bands the user ADDED (palette drop) carry data-added="1". They
+  //   have no underlying grade layer, so pool-restriction semantics make no
+  //   sense for them (a sportPool override in a window with no layer silently
+  //   restricts the floaters AND vanishes from the UI). Added bands are always
+  //   single-pick → saved as a 'force' pin of one concrete activity.
+  const isAdded = anchorEl?.dataset?.added === '1' || anchorEl?.dataset?.mode === 'addLayer';
+  // Placeholder activity strings written by the drop / resize handlers — never
+  // treat them as a real picked activity (previously "+ added layer" could be
+  // force-pinned verbatim if the user hit Save without picking).
+  const PLACEHOLDER_ACTS = { '+ added layer': 1, '⇕ resized': 1, '— deleted —': 1 };
   // Layer types that use a multi-select POOL pattern (pick which items from
   // the pool the bunk can rotate through). Single-pick types use a different UI.
   const POOL_TYPES = { sport: 'sports', special: 'specials', activity: 'fields' };
-  const isPoolType = !!POOL_TYPES[_lt];
+  const isPoolType = !isAdded && !!POOL_TYPES[_lt];
 
-  // Find existing override for this band (if any)
+  // Find existing override for this band (if any) — resize overrides match by
+  // their ORIGINAL layer window (they store the new window in startMin/endMin).
   const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
-    o.bunk === bunk && o.startMin === startMin && o.endMin === endMin
-    && o.layerType === (layerType || 'custom')
+    o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom')
   );
 
   const initPool = (existing?.sportPool && Array.isArray(existing.sportPool))
@@ -5751,7 +6894,8 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   let selectedSports = new Set(initPool); // reused for any pool-type override
   let curStart = existing?.startMin ?? startMin;
   let curEnd   = existing?.endMin   ?? endMin;
-  let pickedActivity = existing && !isPoolType ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+  let pickedActivity = (existing && !isPoolType && existing.activity && !PLACEHOLDER_ACTS[existing.activity])
+    ? { name: existing.activity, location: existing.location, type: existing.type } : null;
 
   const pop = document.createElement('div');
   pop.id = 'bo-auto-popover';
@@ -5763,11 +6907,15 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
   const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
   const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
+  // ★ FN-37: the band stamps the layer's real activity name (custom layers) so
+  //   the popover can show it instead of the generic type label.
+  const layerName = (anchorEl?.dataset?.layerName || '').trim();
+  const headerLabel = layerName ? (layerName + ' · ' + layerLabel) : (layerLabel + ' Layer');
 
   function render() {
     pop.innerHTML = `
       <div style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:linear-gradient(180deg,#f8fafc,#fff);">
-        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(layerLabel)} Layer</div>
+        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(headerLabel)}</div>
         <div style="font-size:12px;color:#475569;margin-top:2px;">${minutesToTime(curStart)} – ${minutesToTime(curEnd)}</div>
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:8px;align-items:center;">
@@ -5778,8 +6926,8 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       </div>
       <div id="bo-pop-body" style="flex:1;overflow:auto;padding:8px 14px;"></div>
       <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="Skip this layer for ${_escHtml(bunk)} only — other bunks keep it">🗑 For ${_escHtml(bunk)}</button>
-        <button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>
+        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="${isAdded ? 'Remove this added slot' : 'Skip this layer for ' + _escHtml(bunk) + ' only — other bunks keep it'}">${isAdded ? '🗑 Remove' : '🗑 For ' + _escHtml(bunk)}</button>
+        ${isAdded ? '' : '<button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>'}
         <div style="flex:1;"></div>
         <button id="bo-pop-cancel" type="button" style="padding:6px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Cancel</button>
         <button id="bo-pop-save" type="button" style="padding:6px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>
@@ -5831,11 +6979,29 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       const cats = opts.cats || [];
       const desc = opts.desc || ('Replace ' + layerLabel + ' for ' + bunk + ' with');
       const icon = opts.icon || '🎯';
-      body.innerHTML = `
+      // ★ FN-37: custom layers (and added bands) accept a typed activity name —
+      //   same as typing a custom pinned layer's name in the Master Scheduler.
+      const freeHtml = opts.freeText ? `
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:4px;">✏️ Type any activity name:</div>
+          <input id="bo-pop-freename" type="text" value="${_escHtml(pickedActivity?.name || '')}"
+            placeholder="${_escHtml(opts.freePlaceholder || 'e.g. Learning, Rest Hour, Carnival')}"
+            style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;" />
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">…or pick from the lists below:</div>
+        </div>` : '';
+      body.innerHTML = `${freeHtml}
         <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
           ${icon} ${_escHtml(desc)}:
         </div>
         <div id="bo-pop-options"></div>`;
+      const freeInput = body.querySelector('#bo-pop-freename');
+      if (freeInput) {
+        // No re-render on input — rebuilding the body would steal focus per keystroke.
+        freeInput.oninput = () => {
+          const v = freeInput.value.trim();
+          pickedActivity = v ? { name: v, location: null, type: 'custom' } : null;
+        };
+      }
       const root = body.querySelector('#bo-pop-options');
       cats.forEach(cat => {
         if (!cat.items?.length) return;
@@ -5857,7 +7023,21 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     }
 
     // Per-layer-type body
-    switch (_lt) {
+    if (isAdded) {
+      // Added band → pick ONE concrete activity to pin for this bunk at this time.
+      renderSinglePick({
+        icon: '➕',
+        desc: 'Pick the activity to ADD for ' + bunk + ' at this time',
+        freeText: true,
+        cats: [
+          { label: '📌 Pinned Activities', items: groups.pinned },
+          { label: '🏢 Facilities', items: groups.facilities },
+          { label: '🏟️ Fields', items: groups.fields },
+          { label: '🎨 Special Activities', items: groups.specials },
+          { label: '⚽ Sports', items: groups.sports }
+        ]
+      });
+    } else switch (_lt) {
       case 'sport':
         renderPool({ items: groups.sports, icon: '🏈', label: 'Sports', desc: 'Allowed sports for this bunk (program rotates only through these)' });
         break;
@@ -5917,7 +7097,11 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       default:
         renderSinglePick({
           icon: '📌',
-          desc: 'Replace this ' + layerLabel + ' for ' + bunk + ' with',
+          desc: 'Replace ' + (layerName || ('this ' + layerLabel)) + ' for ' + bunk + ' with',
+          freeText: true,
+          freePlaceholder: layerName
+            ? 'e.g. a replacement for ' + layerName
+            : 'e.g. Learning, Rest Hour, Carnival',
           cats: [
             { label: '📌 Pinned Activities', items: groups.pinned },
             { label: '🏢 Facilities', items: groups.facilities },
@@ -5935,17 +7119,21 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
     pop.querySelector('#bo-pop-cancel').onclick = () => pop.remove();
     pop.querySelector('#bo-pop-delete').onclick = () => {
-      // Delete-layer override for this bunk
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
-        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        !(o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom'))
       );
-      list.push({
-        id: uid(), bunk, startMin, endMin,
-        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
-        layerType: layerType || 'custom',
-        overrideMode: 'delete',
-        activity: '— deleted —', location: null, type: 'delete'
-      });
+      // ★ BO-fix: deleting an ADDED band just removes the override — pushing a
+      //   'delete' override here would leave a confusing orphan "deleted" badge
+      //   for a slot that never existed in the grade skeleton.
+      if (!isAdded) {
+        list.push({
+          id: uid(), bunk, startMin, endMin,
+          startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+          layerType: layerType || 'custom',
+          overrideMode: 'delete',
+          activity: '— deleted —', location: null, type: 'delete'
+        });
+      }
       _boSaveOverrides(list);
       pop.remove();
       renderBunkOverridesUI();
@@ -5955,7 +7143,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     //   Modifies globalSettings.app1.dailyAutoLayers[date][grade] in place,
     //   strips out the layer whose type+window matches, then persists via
     //   saveGlobalSettings + cloud sync.
-    pop.querySelector('#bo-pop-delete-layer').onclick = () => {
+    // ★ BO-fix: button absent for added bands — guard before attaching.
+    const _dlBtn = pop.querySelector('#bo-pop-delete-layer');
+    if (_dlBtn) _dlBtn.onclick = () => {
       if (!confirm('Delete the ' + layerLabel + ' layer entirely from ' + _boSelectedDiv + '? This affects every bunk in this grade.')) return;
       try {
         const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
@@ -5983,7 +7173,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
       // Remove any existing override matching original time + layer
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
-        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        !(o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom'))
       );
 
       if (isPoolType) {
@@ -6005,7 +7195,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           location: null, type: 'sportPool'
         });
       } else {
-        if (!pickedActivity) { alert('Pick an option or click Cancel.'); return; }
+        if (!pickedActivity || !String(pickedActivity.name || '').trim()) { alert('Type or pick an activity, or click Cancel.'); return; }
+        // Reserved UI placeholder strings must never become a real pin.
+        if (PLACEHOLDER_ACTS[pickedActivity.name]) { alert('That name is reserved — type the real activity name.'); return; }
         list.push({
           id: uid(), bunk,
           startMin: curStart, endMin: curEnd,
@@ -6054,10 +7246,8 @@ function _boRenderBunkGrid(wrap, divName) {
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
-  const bunks = (div.bunks || []).slice().sort((a, b) => {
-    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
-    return na - nb || a.localeCompare(b);
-  });
+  // ★ FN-49: keep the user's Camp Structure order (no alphanumeric re-sort)
+  const bunks = (div.bunks || []).slice();
   if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
 
   // Get skeleton events for this division
@@ -6083,7 +7273,20 @@ function _boRenderBunkGrid(wrap, divName) {
   const overrides = currentOverrides.bunkActivityOverrides || [];
   const color = div.color || '#64748b';
 
-  let html = `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:12px;">`;
+  // Fresh render ⇒ drop any stale multi-selection (e.g. after a division switch).
+  _boSelectedCells.clear();
+
+  // Bulk-selection action bar (hidden until the user double-clicks ≥1 slot).
+  let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:20;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+    <span style="font-size:16px;">🎯</span>
+    <strong id="bo-sel-count" style="font-size:13px;color:#1e40af;">0 slots selected</strong>
+    <span style="font-size:11px;color:#3b82f6;">— double-click slots to (de)select, then Assign or Regenerate</span>
+    <div style="flex:1;"></div>
+    <button id="bo-sel-regen" type="button" style="padding:5px 12px;font-size:12px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">🔄 Regenerate selected</button>
+    <button id="bo-sel-assign" type="button" style="padding:5px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Assign…</button>
+    <button id="bo-sel-clear" type="button" style="padding:5px 10px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Clear</button>
+  </div>`;
+  html += `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:4px;">`;
 
   // Header row
   html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
@@ -6119,9 +7322,13 @@ function _boRenderBunkGrid(wrap, divName) {
       const height = Math.max((evEnd - evStart) * PX - 2, 24);
 
       if (override) {
-        // Render the override block (highlighted)
-        const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
-        const typeIcon = override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '));
+        // Render the override block (highlighted). A pool ("either/or") override
+        // gets a distinct green treatment so it reads as "solver picks one of N".
+        const isPool = override.overrideMode === 'sportPool' || override.type === 'sportPool';
+        const oStyle = isPool
+          ? 'background:#dcfce7;color:#065f46;border:2px solid #10b981;'
+          : 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = isPool ? '🔀 ' : (override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 ')));
         let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
         let content;
         if (height < 35) {
@@ -6163,16 +7370,42 @@ function _boRenderBunkGrid(wrap, divName) {
   html += '</div>';
   wrap.innerHTML = html;
 
-  // Attach click handlers on blocks
+  // Attach handlers on blocks. Single-click opens the picker (for the active
+  // multi-selection if any, else just this slot); DOUBLE-click toggles this slot
+  // in/out of the multi-selection. A short timer disambiguates the two so a
+  // double-click never also fires the single-click picker.
+  let _boClickTimer = null;
   wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.style.userSelect = 'none';
     block.onclick = (e) => {
       if (e.target.classList.contains('bo-revert-btn')) return;
-      const bunk = block.dataset.bunk;
-      const startMin = parseInt(block.dataset.start);
-      const endMin = parseInt(block.dataset.end);
-      _boShowPicker(block, bunk, startMin, endMin);
+      if (_boClickTimer) return; // a double-click is unfolding — let ondblclick handle it
+      _boClickTimer = setTimeout(() => {
+        _boClickTimer = null;
+        const bunk = block.dataset.bunk;
+        const startMin = parseInt(block.dataset.start);
+        const endMin = parseInt(block.dataset.end);
+        _boShowPicker(block, bunk, startMin, endMin);
+      }, 350);
+    };
+    block.ondblclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
+      e.preventDefault();
+      _boToggleCellSelection(block);
     };
   });
+
+  // Selection action bar buttons.
+  const _assignBtn = wrap.querySelector('#bo-sel-assign');
+  if (_assignBtn) _assignBtn.onclick = () => {
+    if (_boSelectedCells.size === 0) return;
+    _boShowPicker(_assignBtn, null, null, null);
+  };
+  const _clearBtn = wrap.querySelector('#bo-sel-clear');
+  if (_clearBtn) _clearBtn.onclick = () => { _boSelectedCells.clear(); renderBunkOverridesUI(); };
+  const _regenBtn = wrap.querySelector('#bo-sel-regen');
+  if (_regenBtn) _regenBtn.onclick = () => { _boRegenerateSelectedCells(); };
 
   // Revert buttons on overrides
   wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
@@ -6189,33 +7422,343 @@ function _boRenderBunkGrid(wrap, divName) {
   });
 }
 
+// Toggle one slot in/out of the bulk multi-selection (driven by double-click).
+// Re-styles the block in place (no grid re-render → keeps scroll position) and
+// refreshes the selection bar.
+function _boToggleCellSelection(block) {
+  const bunk = block.dataset.bunk;
+  const startMin = parseInt(block.dataset.start);
+  const endMin = parseInt(block.dataset.end);
+  const lt = block.dataset.layerType || null;
+  if (isNaN(startMin) || isNaN(endMin)) return;
+  const key = bunk + '' + startMin + '' + endMin + '' + (lt || '');
+  if (_boSelectedCells.has(key)) {
+    _boSelectedCells.delete(key);
+    block.style.outline = '';
+    block.style.outlineOffset = '';
+    block.classList.remove('bo-cell-selected');
+  } else {
+    _boSelectedCells.set(key, { bunk, startMin, endMin, layerType: lt });
+    block.style.outline = '3px solid #2563eb';
+    block.style.outlineOffset = '-3px';
+    block.classList.add('bo-cell-selected');
+  }
+  _boUpdateSelBar();
+}
+
+function _boUpdateSelBar() {
+  const bar = document.getElementById('bo-sel-bar');
+  if (!bar) return;
+  const n = _boSelectedCells.size;
+  if (n === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  const cnt = bar.querySelector('#bo-sel-count');
+  if (cnt) cnt.textContent = n + (n === 1 ? ' slot selected' : ' slots selected');
+}
+
+// ★ Partial (per-tile) regeneration — Manual builder only.
+// Re-roll ONLY the double-clicked tiles, preserving every other already-generated
+// cell. Reuses the existing per-bunk scope plumbing (runOptimizer → __allowedBunkSet
+// → runSkeletonOptimizer) plus a new per-slot signal `window.__regenSlotScope`:
+//   { [bunk]: { regen: Set<slotIdx>, keep: { [slotIdx]: entry } } }
+// STEP 1 of scheduler_core_main.js rebuilds each in-scope bunk from this snapshot —
+// `keep` slots are pinned (solver never moves them), `regen` slots are left empty for
+// the solver to fill. The snapshot covers EVERY bunk of the affected divisions so
+// sibling bunks (no selected tiles → empty `regen`) are fully preserved, immune to
+// STEP 0's division-level wipe.
+async function _boRegenerateSelectedCells() {
+  if (!_boSelectedCells || _boSelectedCells.size === 0) {
+    await daShowAlert('Double-click one or more tiles to select them, then click Regenerate.');
+    return;
+  }
+  const selections = Array.from(_boSelectedCells.values()).map(s => ({
+    bunk: String(s.bunk), startMin: s.startMin, endMin: s.endMin
+  }));
+  const ran = await _daPartialRegenerate(selections);
+  if (ran) _boSelectedCells.clear();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shared partial-regen CORE — used by BOTH surfaces:
+//   • Bunk-Level Overrides grid (per-bunk cells)   → _boRegenerateSelectedCells
+//   • Main schedule grid (whole division period)   → _daRegenerateSelectedTiles
+// `selections` = [{ bunk, startMin, endMin }]. Returns true if a regen actually ran.
+//
+// Re-rolls ONLY the selected (bunk, slot) tiles, preserving every other already-
+// generated cell. Builds window.__regenSlotScope (consumed by scheduler_core_main
+// STEP 1) covering EVERY bunk of the affected divisions, so sibling bunks (no
+// selected tiles) are fully preserved and pinned — immune to STEP 0's wipe.
+// ─────────────────────────────────────────────────────────────────────────
+async function _daPartialRegenerate(selections) {
+  if (window._daBuilderMode === 'auto') {
+    await daShowAlert('Partial tile regeneration is available in Manual builder mode only.');
+    return false;
+  }
+  if (!Array.isArray(selections) || selections.length === 0) {
+    await daShowAlert('Select one or more tiles first.');
+    return false;
+  }
+  if (typeof runOptimizer !== 'function') {
+    await daShowAlert('Error: the generator is not available.');
+    return false;
+  }
+
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const bunkToDiv = {};
+  Object.entries(divisions).forEach(([dn, di]) =>
+    ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+
+  // Map a tile's time window to its division slot index (small tolerance).
+  function _mapTileToSlot(divName, startMin, endMin) {
+    const slots = window.divisionTimes?.[divName] || [];
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i] || {};
+      const ss = (s.startMin != null) ? s.startMin : s.start;
+      const se = (s.endMin != null) ? s.endMin : s.end;
+      if (ss != null && Math.abs(ss - startMin) <= 2 &&
+          (se == null || endMin == null || Math.abs(se - endMin) <= 2)) return i;
+    }
+    let best = Infinity, bestIdx = -1;
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i] || {};
+      const ss = (s.startMin != null) ? s.startMin : s.start;
+      if (ss == null) continue;
+      const d = Math.abs(ss - startMin);
+      if (d < best) { best = d; bestIdx = i; }
+    }
+    return best <= 30 ? bestIdx : -1;
+  }
+
+  // 1. Resolve selections → per-bunk regen index sets.
+  const regenByBunk = {};
+  const affectedDivs = new Set();
+  let unmapped = 0;
+  selections.forEach(sel => {
+    const bunk = String(sel.bunk);
+    const divName = bunkToDiv[bunk];
+    if (!divName) { unmapped++; return; }
+    const idx = _mapTileToSlot(divName, sel.startMin, sel.endMin);
+    if (idx < 0) { unmapped++; return; }
+    if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
+    regenByBunk[bunk].add(idx);
+    affectedDivs.add(divName);
+
+    // Multi-period guard: spanned activity → regenerate the whole block.
+    const arr = window.scheduleAssignments?.[bunk] || [];
+    const entry = arr[idx];
+    const bs = entry && (entry._blockStart != null ? entry._blockStart
+                         : (entry._startMin != null ? entry._startMin : null));
+    if (entry && bs != null) {
+      for (let j = 0; j < arr.length; j++) {
+        const e = arr[j];
+        if (!e) continue;
+        const ebs = (e._blockStart != null ? e._blockStart
+                     : (e._startMin != null ? e._startMin : null));
+        if (ebs === bs) regenByBunk[bunk].add(j);
+      }
+    }
+  });
+
+  const selectedSlotCount = Object.values(regenByBunk).reduce((n, s) => n + s.size, 0);
+  if (affectedDivs.size === 0 || selectedSlotCount === 0) {
+    await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
+    return false;
+  }
+
+  // 2. Snapshot covering EVERY bunk of the affected divisions.
+  const regenScope = {};
+  const scopeBunks = new Set();
+  affectedDivs.forEach(dn => {
+    (divisions[dn]?.bunks || []).forEach(b => {
+      const bunk = String(b);
+      scopeBunks.add(bunk);
+      const regen = regenByBunk[bunk] || new Set();
+      const arr = window.scheduleAssignments?.[bunk] || [];
+      const keep = {};
+      const orig = {};   // pre-regen activity of each SELECTED slot — no-blank fallback
+      for (let i = 0; i < arr.length; i++) {
+        if (regen.has(i)) { if (arr[i]) orig[i] = JSON.parse(JSON.stringify(arr[i])); continue; }
+        if (arr[i]) keep[i] = JSON.parse(JSON.stringify(arr[i]));
+      }
+      regenScope[bunk] = { regen, keep, orig };
+    });
+  });
+
+  // 3. Confirm.
+  const affectedBunkCount = Object.values(regenByBunk).filter(s => s.size > 0).length;
+  let msg = 'Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
+            ' across ' + affectedBunkCount + (affectedBunkCount === 1 ? ' bunk' : ' bunks') +
+            '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.';
+  if (unmapped > 0) msg += '<br><br><span style="color:#b45309;">(' + unmapped + ' selected tile(s) could not be mapped and will be skipped.)</span>';
+  const ok = await daShowConfirm(msg, { confirmText: 'Regenerate', cancelText: 'Cancel' });
+  if (!ok) return false;
+
+  // 4. Drive generation through the existing scope plumbing; always restore the
+  //    user's prior generation scope afterward.
+  const _savedScope = _generationScope;
+  const _savedBunkScope = _generationBunkScope;
+  try {
+    _generationScope = new Set(affectedDivs);
+    _generationBunkScope = scopeBunks;
+    window.__regenSlotScope = regenScope;   // consumed by scheduler_core_main STEP 1
+    delete window.__regenLeaguePreservedDivs; // fresh per run (populated by STEP 3)
+    await runOptimizer();                    // reuses date guards, save, and grid re-render
+
+    // ★ POST-REGEN SELF-HEAL — the pre-generation wipe queues cloud saves of the
+    //   schedule WITHOUT the scoped bunks; those writes complete AFTER the regen and
+    //   their realtime echo re-applies the wiped snapshot over the fresh fill
+    //   (observed live: post-gen save had 53 bunks, RENDER STATE 51 — exactly the
+    //   regenerated bunks — grid showed empty cells + "⚡ Auto Fill"). Snapshot the
+    //   scoped bunks' FINAL data now and re-assert it if a late echo blanks them.
+    try {
+      const _healSnap = {};
+      scopeBunks.forEach(b => {
+        const a = window.scheduleAssignments?.[b];
+        if (Array.isArray(a) && a.some(e => e && (e._activity || e.field))) {
+          _healSnap[b] = JSON.parse(JSON.stringify(a));
+        }
+      });
+      const _healDate = window.currentScheduleDate;
+      [1500, 4500].forEach(_d => setTimeout(() => {
+        try {
+          if (window.currentScheduleDate !== _healDate) return; // date changed — stale
+          let _healed = 0;
+          Object.keys(_healSnap).forEach(b => {
+            const cur = window.scheduleAssignments?.[b];
+            const hasData = Array.isArray(cur) && cur.some(e => e && (e._activity || e.field));
+            if (!hasData) {
+              window.scheduleAssignments[b] = JSON.parse(JSON.stringify(_healSnap[b]));
+              _healed++;
+            }
+          });
+          if (_healed) {
+            console.warn('[PartialRegen] ★ self-heal: restored ' + _healed + ' regenerated bunk(s) clobbered by a late cloud/realtime echo — re-saving');
+            try { window.updateTable?.(); } catch (_e) {}
+            try {
+              if (window.verifiedScheduleSave) window.verifiedScheduleSave(_healDate);
+              else window.saveSchedule?.();
+            } catch (_e) {}
+          }
+        } catch (_e) { /* non-fatal */ }
+      }, _d));
+    } catch (_eHeal) { /* non-fatal */ }
+  } finally {
+    delete window.__regenSlotScope;
+    delete window.__regenLeaguePreservedDivs;
+    _generationScope = _savedScope;
+    _generationBunkScope = _savedBunkScope;
+  }
+  return true;
+}
+
+// ── Main schedule grid: double-click to (de)select a whole division-period ──
+function _daToggleTileRegenSelect(tile) {
+  if (window._daBuilderMode === 'auto') return;
+  const id = tile && tile.dataset && tile.dataset.id;
+  if (!id) return;
+  const ev = (dailyOverrideSkeleton || []).find(x => x.id === id);
+  if (!ev) return;
+  const startMin = parseTimeToMinutes(ev.startTime);
+  const endMin = parseTimeToMinutes(ev.endTime);
+  if (startMin == null) return;
+  if (_daRegenTiles.has(id)) {
+    _daRegenTiles.delete(id);
+    tile.style.outline = ''; tile.style.outlineOffset = '';
+    tile.classList.remove('da-regen-selected');
+  } else {
+    _daRegenTiles.set(id, { division: ev.division, startMin, endMin });
+    tile.style.outline = '3px solid #16a34a'; tile.style.outlineOffset = '-2px';
+    tile.classList.add('da-regen-selected');
+  }
+  _daUpdateRegenBar();
+}
+
+function _daClearRegenTiles() {
+  _daRegenTiles.clear();
+  document.querySelectorAll('.da-event.da-regen-selected').forEach(el => {
+    el.style.outline = ''; el.style.outlineOffset = ''; el.classList.remove('da-regen-selected');
+  });
+  _daUpdateRegenBar();
+}
+
+function _daUpdateRegenBar() {
+  let bar = document.getElementById('da-regen-bar');
+  const n = _daRegenTiles.size;
+  if (n === 0) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'da-regen-bar';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:20px;z-index:10001;display:flex;align-items:center;gap:10px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.18);padding:9px 14px;font-family:inherit;';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = '';
+  const label = document.createElement('strong');
+  label.style.cssText = 'font-size:13px;color:#065f46;';
+  label.textContent = '🔄 ' + n + (n === 1 ? ' period selected' : ' periods selected');
+  const regenBtn = document.createElement('button');
+  regenBtn.type = 'button';
+  regenBtn.textContent = 'Regenerate selected';
+  regenBtn.style.cssText = 'padding:6px 14px;font-size:12px;font-weight:700;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;';
+  regenBtn.onclick = () => { _daRegenerateSelectedTiles(); };
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.textContent = 'Clear';
+  clearBtn.style.cssText = 'padding:6px 10px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;';
+  clearBtn.onclick = () => { _daClearRegenTiles(); };
+  bar.appendChild(label); bar.appendChild(regenBtn); bar.appendChild(clearBtn);
+}
+
+async function _daRegenerateSelectedTiles() {
+  if (_daRegenTiles.size === 0) return;
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const selections = [];
+  _daRegenTiles.forEach(t => {
+    (divisions[t.division]?.bunks || []).forEach(b => {
+      selections.push({ bunk: String(b), startMin: t.startMin, endMin: t.endMin });
+    });
+  });
+  const ran = await _daPartialRegenerate(selections);
+  if (ran) _daClearRegenTiles();
+}
+
+// Searchable, multi-select activity picker. Pick ONE = a concrete override; pick
+// TWO+ = an "either/or" pool the solver resolves (fairness + availability). Writes
+// to every slot in the active multi-selection, or just the clicked slot if none.
 function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
-  // Remove any existing picker
   const existing = document.getElementById('bo-activity-picker');
   if (existing) existing.remove();
-  // layerType is optional — set only in auto-mode where multiple layers share
-  // the same time window and we need to disambiguate which one is overridden.
   layerType = layerType || anchorEl?.dataset?.layerType || null;
 
+  // Resolve target cells: the multi-selection if any, else the single clicked slot.
+  const targets = (_boSelectedCells.size > 0)
+    ? Array.from(_boSelectedCells.values())
+    : (bunk != null && startMin != null && endMin != null)
+      ? [{ bunk, startMin, endMin, layerType }]
+      : [];
+  if (targets.length === 0) return;
+  const bulk = _boSelectedCells.size > 0;
+
   const groups = _boGetActivityGroups();
+  const chosen = new Map(); // name -> item
 
   const picker = document.createElement('div');
   picker.id = 'bo-activity-picker';
-  picker.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-height:400px;width:280px;overflow:auto;padding:8px 0;';
+  picker.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-height:470px;width:300px;display:flex;flex-direction:column;overflow:hidden;';
 
-  // Position near the clicked block
   const rect = anchorEl.getBoundingClientRect();
-  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - 410) + 'px';
-  picker.style.left = Math.min(rect.left, window.innerWidth - 290) + 'px';
+  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - 480) + 'px';
+  picker.style.left = Math.min(rect.left, window.innerWidth - 310) + 'px';
 
   // Header
   const header = document.createElement('div');
-  header.style.cssText = 'padding:6px 12px;font-size:12px;color:#64748b;border-bottom:1px solid #e5e7eb;';
-  header.textContent = bunk + ' · ' + minutesToTime(startMin) + '-' + minutesToTime(endMin);
+  header.style.cssText = 'padding:8px 12px;font-size:12px;color:#475569;border-bottom:1px solid #e5e7eb;background:#f8fafc;font-weight:600;';
+  header.textContent = bulk
+    ? ('🎯 ' + targets.length + ' slot' + (targets.length === 1 ? '' : 's') + ' selected')
+    : (targets[0].bunk + ' · ' + minutesToTime(targets[0].startMin) + '-' + minutesToTime(targets[0].endMin));
   picker.appendChild(header);
 
-  // Revert option (if this is an override)
-  if (anchorEl.classList.contains('bo-override')) {
+  // Revert (single override cell only)
+  if (!bulk && anchorEl.classList && anchorEl.classList.contains('bo-override')) {
     const revertRow = document.createElement('div');
     revertRow.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:12px;color:#dc2626;font-weight:600;border-bottom:1px solid #e5e7eb;';
     revertRow.textContent = '↩ Revert to grade skeleton';
@@ -6232,6 +7775,21 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
     picker.appendChild(revertRow);
   }
 
+  // Type-ahead search
+  const searchWrap = document.createElement('div');
+  searchWrap.style.cssText = 'padding:8px 10px;border-bottom:1px solid #f1f5f9;';
+  const search = document.createElement('input');
+  search.type = 'text';
+  search.placeholder = '🔍 Type to filter… (e.g. "foo" → Football)';
+  search.style.cssText = 'width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;';
+  searchWrap.appendChild(search);
+  picker.appendChild(searchWrap);
+
+  // Scrollable body
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;overflow:auto;padding:6px 0;';
+  picker.appendChild(body);
+
   const categoryDefs = [
     { key: 'pinned', label: '📌 Pinned Activities', items: groups.pinned },
     { key: 'facilities', label: '🏢 Facilities', items: groups.facilities },
@@ -6240,30 +7798,103 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
     { key: 'sports', label: '⚽ Sports', items: groups.sports }
   ];
 
+  const rowEls = [];
+  let applyBtn;
+  const updateApply = () => {
+    const n = chosen.size;
+    applyBtn.disabled = (n === 0);
+    if (n === 0) {
+      applyBtn.style.background = '#cbd5e1'; applyBtn.style.cursor = 'not-allowed';
+      applyBtn.textContent = 'Apply';
+    } else {
+      applyBtn.style.background = (n >= 2) ? '#10b981' : '#f59e0b';
+      applyBtn.style.cursor = 'pointer';
+      applyBtn.textContent = (n >= 2)
+        ? ('Apply either/or (' + n + ') → ' + targets.length + ' slot' + (targets.length === 1 ? '' : 's'))
+        : ('Apply → ' + targets.length + ' slot' + (targets.length === 1 ? '' : 's'));
+    }
+  };
+
   categoryDefs.forEach(cat => {
     if (cat.items.length === 0) return;
     const groupLabel = document.createElement('div');
+    groupLabel.className = 'bo-pick-group';
     groupLabel.style.cssText = 'padding:6px 12px 2px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;';
     groupLabel.textContent = cat.label;
-    picker.appendChild(groupLabel);
-
+    body.appendChild(groupLabel);
+    const rowsInGroup = [];
     cat.items.forEach(item => {
       const row = document.createElement('div');
-      row.style.cssText = 'padding:5px 12px;cursor:pointer;font-size:12px;color:#374151;';
-      row.textContent = item.label;
-      row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
-      row.onmouseleave = () => { row.style.background = ''; };
+      row.className = 'bo-pick-row';
+      row.dataset.search = (item.name + ' ' + (item.label || '')).toLowerCase();
+      row.style.cssText = 'padding:5px 12px;cursor:pointer;font-size:12px;color:#374151;display:flex;align-items:center;gap:8px;';
+      const check = document.createElement('span');
+      check.style.cssText = 'width:14px;display:inline-block;color:#10b981;font-weight:700;';
+      const lbl = document.createElement('span');
+      lbl.textContent = item.label;
+      row.appendChild(check);
+      row.appendChild(lbl);
+      row.onmouseenter = () => { if (!chosen.has(item.name)) row.style.background = '#f1f5f9'; };
+      row.onmouseleave = () => { if (!chosen.has(item.name)) row.style.background = ''; };
       row.onclick = () => {
-        _boApplyOverride(bunk, startMin, endMin, item, layerType);
-        picker.remove();
+        if (chosen.has(item.name)) {
+          chosen.delete(item.name); check.textContent = ''; row.style.background = '';
+        } else {
+          chosen.set(item.name, item); check.textContent = '✓'; row.style.background = '#ecfdf5';
+        }
+        updateApply();
       };
-      picker.appendChild(row);
+      body.appendChild(row);
+      rowEls.push(row);
+      rowsInGroup.push(row);
     });
+    groupLabel._rows = rowsInGroup;
   });
 
-  document.body.appendChild(picker);
+  // Footer
+  const footer = document.createElement('div');
+  footer.style.cssText = 'padding:8px 10px;border-top:1px solid #e5e7eb;background:#f8fafc;';
+  const hint = document.createElement('div');
+  hint.style.cssText = 'font-size:10px;color:#64748b;margin-bottom:6px;';
+  hint.textContent = 'Pick 1 = set activity · pick 2+ = either/or (solver decides).';
+  applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.style.cssText = 'width:100%;padding:7px;font-size:12px;background:#cbd5e1;color:#fff;border:none;border-radius:6px;cursor:not-allowed;font-weight:700;';
+  applyBtn.textContent = 'Apply';
+  applyBtn.disabled = true;
+  footer.appendChild(hint);
+  footer.appendChild(applyBtn);
+  picker.appendChild(footer);
 
-  // Close on outside click
+  const doApply = () => {
+    if (chosen.size === 0) return;
+    _boApplyOverrideBulk(targets, Array.from(chosen.values()), layerType);
+    picker.remove();
+  };
+  applyBtn.onclick = doApply;
+
+  search.oninput = () => {
+    const q = search.value.trim().toLowerCase();
+    rowEls.forEach(r => { r.style.display = (!q || r.dataset.search.includes(q)) ? 'flex' : 'none'; });
+    body.querySelectorAll('.bo-pick-group').forEach(g => {
+      const anyVisible = (g._rows || []).some(r => r.style.display !== 'none');
+      g.style.display = anyVisible ? 'block' : 'none';
+    });
+  };
+  search.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (chosen.size > 0) { doApply(); return; }
+      const firstVisible = rowEls.find(r => r.style.display !== 'none');
+      if (firstVisible) { firstVisible.onclick(); doApply(); }
+    } else if (e.key === 'Escape') {
+      picker.remove();
+    }
+  };
+
+  document.body.appendChild(picker);
+  setTimeout(() => { try { search.focus(); } catch (_e) {} }, 30);
+
   const closeHandler = (e) => {
     if (!picker.contains(e.target) && e.target !== anchorEl) {
       picker.remove();
@@ -6273,31 +7904,62 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
-function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
+// Write one override per target cell. items.length === 1 ⇒ concrete override;
+// items.length >= 2 ⇒ an "either/or" sportPool the solver resolves at gen time.
+function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
+  if (!targets || !targets.length || !items || !items.length) return;
   let overrides = currentOverrides.bunkActivityOverrides || [];
-  // Remove any existing override for this bunk + same time + same layer (or no
-  // layerType for legacy manual-mode overrides). Different layers at the same
-  // time (auto-mode floaters) coexist.
-  overrides = overrides.filter(o => !(
-    o.bunk === bunk
-    && o.startMin === startMin
-    && o.endMin === endMin
-    && (o.layerType || null) === (layerType || null)
-  ));
-  overrides.push({
-    id: uid(),
-    bunk: bunk,
-    activity: item.name,
-    location: item.location || null,
-    startTime: minutesToTime(startMin),
-    endTime: minutesToTime(endMin),
-    startMin: startMin,
-    endMin: endMin,
-    type: item.type,
-    layerType: layerType || null
+  const isPool = items.length >= 2;
+  const names = items.map(it => it.name);
+  targets.forEach(t => {
+    const lt = (t.layerType != null ? t.layerType : layerTypeFallback) || null;
+    // Replace any existing override at this exact (bunk, window, layer).
+    overrides = overrides.filter(o => !(
+      o.bunk === t.bunk
+      && o.startMin === t.startMin
+      && o.endMin === t.endMin
+      && (o.layerType || null) === lt
+    ));
+    if (isPool) {
+      overrides.push({
+        id: uid(),
+        bunk: t.bunk,
+        activity: names.join(' / '),
+        overrideMode: 'sportPool',
+        type: 'sportPool',
+        sportPool: names.slice(),
+        poolItems: items.map(it => ({ name: it.name, type: it.type, location: it.location || null })),
+        location: null,
+        startTime: minutesToTime(t.startMin),
+        endTime: minutesToTime(t.endMin),
+        startMin: t.startMin,
+        endMin: t.endMin,
+        layerType: lt
+      });
+    } else {
+      const it = items[0];
+      overrides.push({
+        id: uid(),
+        bunk: t.bunk,
+        activity: it.name,
+        location: it.location || null,
+        startTime: minutesToTime(t.startMin),
+        endTime: minutesToTime(t.endMin),
+        startMin: t.startMin,
+        endMin: t.endMin,
+        type: it.type,
+        layerType: lt
+      });
+    }
   });
   _boSaveOverrides(overrides);
+  _boSelectedCells.clear();
   renderBunkOverridesUI();
+}
+
+// Back-compat single-cell apply (window-exposed; delegates to the bulk writer).
+function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
+  _boApplyOverrideBulk([{ bunk, startMin, endMin, layerType: layerType || null }], [item], layerType || null);
 }
 
 function createChip(name, color) {
@@ -6317,6 +7979,45 @@ function createChip(name, color) {
 // =================================================================
 // RESOURCE OVERRIDES UI
 // =================================================================
+
+// Module-scope so BOTH renderResourceOverridesUI (facility / league toggles) AND
+// renderOverrideDetailPane (time-rule + per-field sport-disable handlers) can
+// call it. Previously this was a closure inside renderResourceOverridesUI, so
+// calls from the detail pane silently threw ReferenceError → time rules and
+// sport disables only wrote to cloud, never to localStorage, and were lost on
+// reload.
+function saveOverridesUnified() {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const fullOverrides = {
+    leagues: currentOverrides.leagues || [],
+    disabledFields: currentOverrides.disabledFields || [],
+    disabledSpecials: currentOverrides.disabledSpecials || []
+  };
+  window.saveCurrentDailyData?.("overrides", fullOverrides);
+  window.saveCurrentDailyData?.("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+  window.saveCurrentDailyData?.("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+  window.saveCurrentDailyData?.("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+  window.saveCurrentDailyData?.("dailyActivityBunkRestrictions", currentOverrides.dailyActivityBunkRestrictions);
+  try {
+    localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+      overrides: fullOverrides,
+      dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+      dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+      disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || [],
+      dailyActivityBunkRestrictions: currentOverrides.dailyActivityBunkRestrictions || []
+    }));
+    // Iron-gate time-rules key (read by _ironGateTimeRulesV1 in
+    // scheduler_core_auto.js as PRIMARY for time-rule clearing).
+    localStorage.setItem('campTimeRulesEnforce_' + dateKey, JSON.stringify(currentOverrides.dailyFieldAvailability || {}));
+  } catch (e) {}
+  try {
+    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
+      fullOverrides.disabledFields.length + ' disabled fields, ' +
+      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
+      fullOverrides.leagues.length + ' disabled leagues');
+  } catch (_e) {}
+}
+
 function renderResourceOverridesUI() {
   const container = document.getElementById('da-resources-container');
   if (!container) return;
@@ -6324,7 +8025,6 @@ function renderResourceOverridesUI() {
   const isRainy = isRainyDayActive();
   const rainyBanner = isRainy ? `
     <div class="da-rainy-banner">
-      <span>🌧️</span>
       <div>
         <strong>Rainy Day Mode Active</strong>
         <div style="font-size:12px;opacity:0.85;">Outdoor fields are automatically disabled</div>
@@ -6352,32 +8052,12 @@ function renderResourceOverridesUI() {
     </div>
   `;
   
-  const saveOverrides = () => {
-    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-    const fullOverrides = {
-      leagues: currentOverrides.leagues || [],
-      disabledFields: currentOverrides.disabledFields || [],
-      disabledSpecials: currentOverrides.disabledSpecials || []
-    };
-    // Save to dailyData (cloud sync)
-    window.saveCurrentDailyData("overrides", fullOverrides);
-    window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
-    window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
-    window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
-    // ★ v7.0: Also save to dedicated localStorage key (survives cloud overwrites)
-    try {
-      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
-        overrides: fullOverrides,
-        dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
-        dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-        disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
-      }));
-    } catch(e) {}
-    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
-      fullOverrides.disabledFields.length + ' disabled fields, ' +
-      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
-      fullOverrides.leagues.length + ' disabled leagues');
-  };
+  // Local alias delegates to the module-scope unified saver so toggling
+  // facility/league/specialty-league checkboxes uses the SAME persistence
+  // path as the detail-pane handlers (time-rule add/remove + per-field
+  // sport disable). Eliminates the scope mismatch that left those two
+  // categories unable to call saveOverrides.
+  const saveOverrides = () => saveOverridesUnified();
   
   // Unified Facilities list (reads window.getFacilities() from facilities.js).
   // Disabling a facility cascades to any special activities hosted at it so
@@ -6454,19 +8134,153 @@ function renderResourceOverridesUI() {
   renderOverrideDetailPane();
 }
 
+// =================================================================
+// BUNK-ONLY ACCESS — per-facility, inside the facility detail pane.
+// "On THIS facility, this activity is only available for these bunk(s) today."
+// FACILITY-SCOPED, restriction-only: listed bunks may receive it; all other
+// bunks are blocked from that (facility, activity) placement.
+// Entry shape: { id, facility, activity, bunks } where activity '*' = whole
+// facility. Persists via the dailyActivityBunkRestrictions resource-override
+// key (saveOverridesUnified → cloud + campResourceOverrides_<date>).
+// =================================================================
+
+// Which (facility||activity) row is currently expanded for editing, or null.
+let _brEditKey = null;
+
+function _brGenId() {
+  return 'r_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function _brFindEntry(facility, activity) {
+  const fLc = String(facility).toLowerCase();
+  return (currentOverrides.dailyActivityBunkRestrictions || []).find(r =>
+    r && String(r.facility).toLowerCase() === fLc && String(r.activity) === String(activity));
+}
+
+// Save (create/update) or clear a facility-scoped restriction for (facility, activity).
+// An empty bunk list removes the entry (= "all bunks", no restriction).
+function _brSetEntry(facility, activity, bunks) {
+  let arr = (currentOverrides.dailyActivityBunkRestrictions || []).filter(r =>
+    !(String(r.facility).toLowerCase() === String(facility).toLowerCase() && String(r.activity) === String(activity)));
+  if (Array.isArray(bunks) && bunks.length > 0) {
+    arr = arr.concat([{ id: _brGenId(), facility, activity, bunks }]);
+  }
+  currentOverrides.dailyActivityBunkRestrictions = arr;
+  saveOverridesUnified();
+}
+
+// Render the "Bunk-Only Access" section for ONE facility into containerEl.
+// rows = [{ activity, label, badge }] (activity '*' for the whole facility).
+function renderFacilityBunkAccess(containerEl, facilityName, rows) {
+  if (!containerEl) return;
+  containerEl.innerHTML = '';
+
+  const divisions = masterSettings.app1?.divisions || {};
+  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_rawAvail.slice())
+    : _rawAvail.slice();
+
+  rows.forEach(({ activity, label, badge }) => {
+    const key = facilityName + '||' + activity;
+    const entry = _brFindEntry(facilityName, activity);
+    const isEditing = _brEditKey === key;
+
+    const rowEl = document.createElement('div');
+    rowEl.className = 'da-access-row' + (entry ? ' da-access-row-active' : '') + (isEditing ? ' da-access-row-editing' : '');
+
+    // ── Summary line ──
+    const head = document.createElement('div');
+    head.className = 'da-access-head';
+    const summary = entry
+      ? `<span class="da-access-status da-access-status-set" title="${_escHtml((entry.bunks || []).join(', '))}">Bunks: ${_escHtml((entry.bunks || []).join(', '))}</span>`
+      : `<span class="da-access-status">All bunks</span>`;
+    head.innerHTML = `
+      <span class="da-access-label">${badge || ''}<strong>${_escHtml(label)}</strong></span>
+      <span class="da-access-controls">${summary}
+        <button class="da-btn da-btn-sm da-btn-outline br-edit">${isEditing ? 'Close' : (entry ? 'Edit' : 'Restrict')}</button>
+        ${entry ? '<button class="da-btn da-btn-sm da-btn-ghost-danger br-clear" title="Remove restriction">Clear</button>' : ''}
+      </span>`;
+    rowEl.appendChild(head);
+
+    head.querySelector('.br-edit').onclick = () => {
+      _brEditKey = isEditing ? null : key;
+      renderOverrideDetailPane();
+    };
+    const clearBtn = head.querySelector('.br-clear');
+    if (clearBtn) clearBtn.onclick = () => { _brSetEntry(facilityName, activity, []); _brEditKey = null; renderOverrideDetailPane(); };
+
+    // ── Inline chip picker (only for the expanded row) ──
+    if (isEditing) {
+      const preselect = new Set(entry ? (entry.bunks || []).map(String) : []);
+      const picker = document.createElement('div');
+      picker.className = 'da-access-picker';
+      const hint = document.createElement('div');
+      hint.className = 'da-access-picker-hint';
+      hint.textContent = 'Select the bunk(s) allowed here today:';
+      picker.appendChild(hint);
+      const chipsWrap = document.createElement('div');
+      if (availableDivisions.length === 0) {
+        chipsWrap.innerHTML = '<span class="da-access-empty">No divisions found.</span>';
+      } else {
+        availableDivisions.forEach(divName => {
+          const color = divisions[divName]?.color || '#64748b';
+          const bunks = divisions[divName]?.bunks || [];
+          if (!bunks.length) return;
+          const grp = document.createElement('div');
+          grp.className = 'da-access-grp';
+          grp.innerHTML = `<div class="da-access-grp-label" style="color:${color};">${_escHtml(divName)}</div>`;
+          const chipRow = document.createElement('div');
+          chipRow.className = 'da-access-chiprow';
+          bunks.forEach(b => {
+            const chip = createChip(b, color);
+            if (preselect.has(String(b))) {
+              chip.classList.add('selected');
+              chip.style.backgroundColor = color;
+              chip.style.color = 'white';
+            }
+            chipRow.appendChild(chip);
+          });
+          grp.appendChild(chipRow);
+          chipsWrap.appendChild(grp);
+        });
+      }
+      picker.appendChild(chipsWrap);
+
+      const actions = document.createElement('div');
+      actions.className = 'da-access-actions';
+      actions.innerHTML = `
+        <button class="da-btn da-btn-primary da-btn-sm br-save">Save</button>
+        <button class="da-btn da-btn-sm da-btn-outline br-cancel">Cancel</button>`;
+      picker.appendChild(actions);
+      rowEl.appendChild(picker);
+
+      actions.querySelector('.br-save').onclick = () => {
+        const selected = Array.from(chipsWrap.querySelectorAll('.da-chip.selected')).map(c => c.dataset.value);
+        _brSetEntry(facilityName, activity, selected);
+        _brEditKey = null;
+        renderOverrideDetailPane();
+      };
+      actions.querySelector('.br-cancel').onclick = () => { _brEditKey = null; renderOverrideDetailPane(); };
+    }
+
+    containerEl.appendChild(rowEl);
+  });
+}
+
 function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = false, isRainyDisabled = false, isRainyOnly = false, hasTimeRules = false) {
   const el = document.createElement('div');
   el.className = 'da-resource-item' + (selectedOverrideId === type + '-' + name ? ' selected' : '');
   if (isRainyDisabled) el.style.opacity = '0.6';
   
   let badges = '';
-  if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>';
-  else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">🏠 Indoor</span>';
-  if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">🌧️ Rainy</span>';
-  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">⏰ Time Rules</span>';
+  if (isOutdoor) badges += '<span class="da-badge da-badge-outdoor">Outdoor</span>';
+  else if (type === 'field') badges += '<span class="da-badge da-badge-indoor">Indoor</span>';
+  if (isRainyOnly) badges += '<span class="da-badge da-badge-rainy">Rainy</span>';
+  if (hasTimeRules) badges += '<span class="da-badge da-badge-time">Time Rules</span>';
   
   el.innerHTML = `
-    <span class="da-resource-name">${name}${badges}</span>
+    <span class="da-resource-name">${_escHtml(name)}${badges}</span>
     <label class="da-switch">
       <input type="checkbox" ${isEnabled ? 'checked' : ''} ${isRainyDisabled ? 'disabled' : ''}>
       <span class="da-switch-slider"></span>
@@ -6527,44 +8341,52 @@ function renderOverrideDetailPane() {
     const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        ${name}
-        ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
-        ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
-          ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
-          : ''}
-      </h4>
-      
+      <div class="da-detail-head">
+        <h4 class="da-detail-title">${_escHtml(name)}</h4>
+        <div class="da-detail-badges">
+          ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">Indoor</span>' : '<span class="da-badge da-badge-outdoor">Outdoor</span>') : ''}
+          ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
+            ? facility.usedFor.map(u => `<span class="da-badge da-badge-use">${_escHtml(u)}</span>`).join('')
+            : ''}
+        </div>
+      </div>
+
       <div class="da-detail-section">
-        <h5>📋 Global Rules (from Setup)</h5>
+        <div class="da-detail-eyebrow">Global Rules <span class="da-detail-eyebrow-note">from Setup</span></div>
         <div id="da-global-rules-list"></div>
       </div>
-      
+
       <div class="da-detail-section">
-        <h5>📅 Today's Time Rules</h5>
-        <p class="da-section-desc">Add custom availability windows for today only. These override global rules.</p>
+        <div class="da-detail-eyebrow">Today's Time Rules</div>
+        <p class="da-section-desc">Add custom availability windows for today only. These override the global rules.</p>
         <div id="da-daily-rules-list"></div>
-        
+
         <div class="da-time-rule-form">
           <select id="da-rule-type" class="da-select da-select-sm">
-            <option value="Available">✅ Available</option>
-            <option value="Unavailable">❌ Unavailable</option>
+            <option value="Available">Available</option>
+            <option value="Unavailable">Unavailable</option>
           </select>
-          <span style="color:#64748b;">from</span>
-          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:80px;">
-          <span style="color:#64748b;">to</span>
-          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:80px;">
+          <span class="da-form-sep">from</span>
+          <input id="da-rule-start" placeholder="9:00am" class="da-input da-input-sm" style="width:84px;">
+          <span class="da-form-sep">to</span>
+          <input id="da-rule-end" placeholder="10:00am" class="da-input da-input-sm" style="width:84px;">
           <button id="da-add-rule-btn" class="da-btn da-btn-primary da-btn-sm">Add</button>
         </div>
       </div>
-      
+
       ${isFieldLike ? `
       <div class="da-detail-section">
-        <h5>🏃 Sports Availability</h5>
+        <div class="da-detail-eyebrow">Sports Availability</div>
         <p class="da-section-desc">Disable specific sports on this field for today.</p>
         <div id="da-sports-checkboxes"></div>
       </div>
       ` : ''}
+
+      <div class="da-detail-section da-detail-section-last">
+        <div class="da-detail-eyebrow">Bunk-Only Access</div>
+        <p class="da-section-desc">Reserve this facility — or one of its activities — for specific bunk(s) today. Every other bunk is blocked from it here. Leave as "All bunks" for no restriction.</p>
+        <div id="da-bunk-access-list"></div>
+      </div>
     `;
     
     // Render global rules
@@ -6579,8 +8401,8 @@ function renderOverrideDetailPane() {
           : ' <span style="font-size:11px;color:#94a3b8;margin-left:6px;">(all grades)</span>';
         return `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()}">
-          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>${tag}
+          <span class="da-rule-type"><span class="da-rule-dot"></span>${rule.type}</span>
+          <span class="da-rule-time">${rule.start} – ${rule.end}</span>${tag}
         </div>`;
       }).join('');
     }
@@ -6592,9 +8414,9 @@ function renderOverrideDetailPane() {
     } else {
       dailyRulesEl.innerHTML = dailyRules.map((rule, idx) => `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()} da-rule-daily">
-          <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
-          <button class="da-rule-remove" data-idx="${idx}">✕</button>
+          <span class="da-rule-type"><span class="da-rule-dot"></span>${rule.type}</span>
+          <span class="da-rule-time">${rule.start} – ${rule.end}</span>
+          <button class="da-rule-remove" data-idx="${idx}" title="Remove">✕</button>
         </div>
       `).join('');
       
@@ -6604,12 +8426,11 @@ function renderOverrideDetailPane() {
           const idx = parseInt(btn.dataset.idx);
           dailyRules.splice(idx, 1);
           currentOverrides.dailyFieldAvailability[name] = dailyRules;
-          window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
-          // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
-          try {
-            const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
-            localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
-          } catch (_e) {}
+          // ★ Module-scope unified saver — writes cloud + campResourceOverrides_<date>
+          //   + campTimeRulesEnforce_<date> atomically. Previously the local
+          //   `saveOverrides` was inside renderResourceOverridesUI's closure
+          //   and silently undefined here, so removals only updated cloud.
+          saveOverridesUnified();
           renderOverrideDetailPane();
         };
       });
@@ -6629,12 +8450,9 @@ function renderOverrideDetailPane() {
       
       dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
-      window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
-      // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
-      try {
-        const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
-        localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
-      } catch (_e) {}
+      // ★ Module-scope unified saver — writes cloud + campResourceOverrides_<date>
+      //   + campTimeRulesEnforce_<date> atomically.
+      saveOverridesUnified();
       renderOverrideDetailPane();
       renderResourceOverridesUI();
     };
@@ -6658,15 +8476,42 @@ function renderOverrideDetailPane() {
             if (e.target.checked) list = list.filter(s => s !== sport);
             else if (!list.includes(sport)) list.push(sport);
             currentOverrides.dailyDisabledSportsByField[name] = list;
-            window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+            // ★ Module-scope unified saver — writes cloud + campResourceOverrides_<date>
+            //   + campTimeRulesEnforce_<date>. The local `saveOverrides` from
+            //   renderResourceOverridesUI is not in scope here (sibling function).
+            saveOverridesUnified();
           };
           checkboxesEl.appendChild(label);
         });
       }
     }
+
+    // ── Bunk-Only Access rows: whole facility + each hosted activity ──
+    {
+      const accessEl = document.getElementById('da-bunk-access-list');
+      if (accessEl) {
+        const sportBadge = '<span class="da-badge da-badge-sport">Sport</span>';
+        const specialBadge = '<span class="da-badge da-badge-special">Special</span>';
+        const rows = [{ activity: '*', label: 'Entire facility', badge: '<span class="da-badge da-badge-facility">Facility</span>' }];
+        // Sports hosted here (field-like facilities expose them as item.activities)
+        (isFieldLike ? (item.activities || []) : []).forEach(sp => {
+          rows.push({ activity: sp, label: sp, badge: sportBadge });
+        });
+        // Special activities whose configured location is this facility
+        const nameLc = String(name).toLowerCase();
+        (masterSettings.app1?.specialActivities || []).forEach(s => {
+          if (s && s.location && String(s.location).toLowerCase() === nameLc) {
+            if (!rows.some(r => String(r.activity).toLowerCase() === String(s.name).toLowerCase())) {
+              rows.push({ activity: s.name, label: s.name, badge: specialBadge });
+            }
+          }
+        });
+        renderFacilityBunkAccess(accessEl, name, rows);
+      }
+    }
   } else {
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;">${name}</h4>
+      <h4 style="margin:0 0 12px;">${_escHtml(name)}</h4>
       <p style="color:#94a3b8;">Use the toggle in the list to enable/disable this ${type === 'league' ? 'league' : 'specialty league'} for today.</p>
     `;
   }
@@ -6691,7 +8536,7 @@ function getStyles() {
       --da-danger: #ef4444;
     }
     
-    .da-container { display:flex; gap:0; height:calc(100vh - 78px); min-height:300px; background:var(--da-bg); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
+    .da-container { display:flex; gap:0; height:calc(100vh - 84px); min-height:300px; background:var(--da-bg); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
 
     /* Sidebar */
     .da-sidebar { width:172px; min-width:172px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; }
@@ -6832,6 +8677,11 @@ function getStyles() {
     .da-override-item { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:var(--da-surface); border:1px solid var(--da-border); border-radius:6px; margin-bottom:6px; }
     
     /* Resource Layout */
+    /* ★ Resources pane must scroll. The base .da-pane is overflow:hidden, which clipped the
+       facility list (55+ items, ~2455px tall) inside the height-bounded pane — the lower
+       facilities were unreachable with no scrollbar and the page itself doesn't scroll. An ID
+       selector (higher specificity than .da-pane / .ms-container .da-pane) restores scrolling. */
+    #da-pane-resources { overflow-y:auto; }
     .da-resource-layout { display:flex; gap:20px; flex-wrap:wrap; }
     .da-resource-list { flex:1; min-width:0; }
     .da-resource-detail { flex:2; min-width:0; background:var(--da-surface); border:1px solid var(--da-border); border-radius:8px; padding:16px; }
@@ -7003,11 +8853,68 @@ function getStyles() {
     .da-badge-time { background:#dbeafe; color:#1d4ed8; }
 
     /* ============================================ */
+    /* RESOURCE DETAIL PANE — REFINED               */
+    /* ============================================ */
+    .da-resource-list h4 { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--da-text3); margin:0 0 8px; }
+    .da-resource-detail { padding:20px 22px; background:var(--da-bg); }
+
+    /* Header band */
+    .da-detail-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding-bottom:14px; margin-bottom:16px; border-bottom:1px solid var(--da-border); }
+    .da-detail-title { margin:0; font-size:17px; font-weight:700; color:var(--da-text); letter-spacing:-0.01em; }
+    .da-detail-badges { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+
+    /* Section eyebrow headers */
+    .da-detail-section { margin:0 0 18px; padding-bottom:18px; border-bottom:1px solid var(--da-border); }
+    .da-detail-section-last { border-bottom:none; padding-bottom:0; margin-bottom:0; }
+    .da-detail-eyebrow { font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--da-text2); margin:0 0 8px; }
+    .da-detail-eyebrow-note { font-weight:500; text-transform:none; letter-spacing:0; color:var(--da-text3); }
+
+    /* Refined badges */
+    .da-badge { font-size:10px; line-height:1; padding:3px 8px; border-radius:999px; font-weight:600; letter-spacing:0.02em; }
+    .da-badge-use { background:#eef2ff; color:#3730a3; text-transform:capitalize; }
+    .da-badge-sport { background:#ecfdf5; color:#047857; }
+    .da-badge-special { background:#eef2ff; color:#4338ca; }
+    .da-badge-facility { background:#f1f5f9; color:#334155; }
+
+    /* Time-rule status dot (replaces emoji) */
+    .da-rule-type { display:flex; align-items:center; gap:7px; font-weight:600; min-width:96px; }
+    .da-rule-dot { width:7px; height:7px; border-radius:50%; background:var(--da-text3); flex:none; }
+    .da-rule-available .da-rule-dot { background:var(--da-success); }
+    .da-rule-unavailable .da-rule-dot { background:var(--da-danger); }
+    .da-rule-available .da-rule-type { color:#047857; }
+    .da-rule-unavailable .da-rule-type { color:#b91c1c; }
+    .da-form-sep { color:var(--da-text3); font-size:12px; }
+
+    /* Button variants */
+    .da-btn-outline { background:#fff; color:var(--da-text2); border:1px solid var(--da-border); }
+    .da-btn-outline:hover { border-color:var(--da-accent); color:var(--da-accent); background:#f8fbff; }
+    .da-btn-ghost-danger { background:transparent; color:var(--da-danger); border:1px solid transparent; }
+    .da-btn-ghost-danger:hover { background:rgba(239,68,68,0.08); }
+
+    /* Bunk-Only Access rows */
+    .da-access-row { border:1px solid var(--da-border); border-radius:8px; background:var(--da-bg); margin-bottom:8px; overflow:hidden; transition:border-color 0.15s, box-shadow 0.15s; }
+    .da-access-row-active { border-color:#bfdbfe; }
+    .da-access-row-editing { border-color:var(--da-accent); box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+    .da-access-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 12px; }
+    .da-access-label { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--da-text); }
+    .da-access-label strong { font-weight:600; }
+    .da-access-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .da-access-status { font-size:12px; color:var(--da-text3); }
+    .da-access-status-set { color:#0A4A56; font-weight:600; max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .da-access-picker { border-top:1px solid var(--da-border); background:var(--da-surface); padding:12px; }
+    .da-access-picker-hint { font-size:11px; font-weight:600; color:var(--da-text2); margin-bottom:8px; }
+    .da-access-grp { margin-bottom:10px; }
+    .da-access-grp-label { font-size:11px; font-weight:700; letter-spacing:0.02em; margin-bottom:5px; }
+    .da-access-chiprow { display:flex; gap:6px; flex-wrap:wrap; }
+    .da-access-actions { display:flex; gap:8px; margin-top:4px; }
+    .da-access-empty { color:var(--da-text3); font-size:12px; }
+
+    /* ============================================ */
     /* IN-APP MODAL STYLES (v5.2)                  */
     /* ============================================ */
-    #da-modal-input-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:100000; backdrop-filter:blur(2px); animation:daModalFadeIn 0.15s ease; }
+    [id^="da-modal-input-overlay"] { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:100000; backdrop-filter:blur(2px); animation:daModalFadeIn 0.15s ease; }
     @keyframes daModalFadeIn { from { opacity:0; } to { opacity:1; } }
-    #da-modal-input-overlay .da-modal { animation:daModalSlideUp 0.2s ease; }
+    [id^="da-modal-input-overlay"] .da-modal { animation:daModalSlideUp 0.2s ease; }
     @keyframes daModalSlideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
     .da-modal-desc { margin:0 0 16px; font-size:13px; color:#64748b; line-height:1.5; }
     .da-modal-field { margin-bottom:16px; }
@@ -7189,6 +9096,9 @@ function setupVisibilityHandler() {
 }
 
 function refreshFromCloud() {
+  // ★ Day 22.5 audit fix: never reload cloud/local state over an in-flight
+  //   generation — it would clobber the live solve or race the post-gen save.
+  if (_daOptimizerRunning) { try { console.log('[DA] refreshFromCloud skipped — generation in progress'); } catch (_e) {} return; }
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
@@ -7207,39 +9117,47 @@ function refreshFromCloud() {
 }
 
 function loadCurrentOverrides() {
-  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  // ★ Shut-off race: prefer the authoritative gen-date when a generation is in
+  //   flight (window._activeGenDate) so a refresh triggered at gen start syncs
+  //   currentOverrides to the day being generated, not a transiently-reverted
+  //   window.currentScheduleDate. Null outside a generation → normal UI date.
+  const dateKey = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const dailyData = window.loadCurrentDailyData?.() || {};
   let dailyOverrides = dailyData.overrides || {};
 
-  // ★ v7.0: Fallback to dedicated localStorage key (survives cloud overwrites)
-  if (!dailyOverrides.disabledFields?.length && !dailyOverrides.disabledSpecials?.length && !dailyOverrides.leagues?.length) {
-    try {
-      const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.overrides) {
-          dailyOverrides = parsed.overrides;
-          // Also restore other override data
-          if (parsed.dailyDisabledSportsByField) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
-          if (parsed.dailyFieldAvailability) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
-          if (parsed.disabledSpecialtyLeagues) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
-          // Sync back to dailyData for cloud
-          window.saveCurrentDailyData?.("overrides", dailyOverrides);
-          console.log('[ResourceOverrides] Restored from localStorage for ' + dateKey);
-        }
+  // ★ Multi-day audit fix: localStorage is the PRIMARY source for date-keyed
+  //   overrides during a session. dailyData.overrides is cloud-loaded async
+  //   by integration_hooks AFTER campistry-date-changed fires, so reading it
+  //   first during a date switch returns stale data from the previous date.
+  //   localStorage is keyed by date in the read, so it always returns the
+  //   right snapshot. We still write back to dailyData for cloud persistence.
+  try {
+    const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.overrides) dailyOverrides = parsed.overrides;
+        if (parsed.dailyDisabledSportsByField !== undefined) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+        if (parsed.dailyFieldAvailability !== undefined) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
+        if (parsed.disabledSpecialtyLeagues !== undefined) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+        if (parsed.dailyActivityBunkRestrictions !== undefined) dailyData.dailyActivityBunkRestrictions = parsed.dailyActivityBunkRestrictions;
+        // Sync to dailyData (cloud) so other consumers also see the right state.
+        try { window.saveCurrentDailyData?.("overrides", dailyOverrides); } catch (_e) {}
       }
-    } catch(e) {}
-  } else {
-    // Sync to dedicated key for fast reload
-    try {
-      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
-        overrides: dailyOverrides,
-        dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
-        dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
-        disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
-      }));
-    } catch(e) {}
-  }
+    } else {
+      // No localStorage entry — fall back to whatever dailyData has (cloud), and
+      // mirror it back to localStorage for next reload.
+      try {
+        localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+          overrides: dailyOverrides,
+          dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
+          dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
+          disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || [],
+          dailyActivityBunkRestrictions: dailyData.dailyActivityBunkRestrictions || []
+        }));
+      } catch (_e2) {}
+    }
+  } catch (e) {}
 
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   // ★ Day 22.5: seed the dedicated iron-gate key from whatever rules we have so they
@@ -7254,6 +9172,7 @@ function loadCurrentOverrides() {
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
+  currentOverrides.dailyActivityBunkRestrictions = dailyData.dailyActivityBunkRestrictions || [];
   // Load bunk overrides from multiple sources (same pattern as trips)
   let bunkOv = dailyData.bunkActivityOverrides || [];
   if (bunkOv.length === 0) {
@@ -7273,7 +9192,115 @@ function loadCurrentOverrides() {
     try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(bunkOv)); } catch(e) {}
   }
   currentOverrides.bunkActivityOverrides = bunkOv;
+  // Diagnostic: expose what was loaded so tests can verify the right snapshot
+  try {
+    window._daResourcesLoadDiag = {
+      ts: Date.now(),
+      dateKey: dateKey,
+      sticksDisabled: (currentOverrides.disabledFields || []).indexOf('7 Sticks') >= 0,
+      beltsHasRule: !!(currentOverrides.dailyFieldAvailability && currentOverrides.dailyFieldAvailability.Belts && currentOverrides.dailyFieldAvailability.Belts.length),
+      bbf1BaseballOff: !!(currentOverrides.dailyDisabledSportsByField && (currentOverrides.dailyDisabledSportsByField['Baseball Field 1'] || []).includes('Baseball'))
+    };
+  } catch (_eD) {}
 }
+
+// ── Resources panel: reload overrides + re-render on date change ──
+// When the user switches the calendar date picker, calendar.js dispatches
+// `campistry-date-changed`. The CRITICAL detail: calendar.js intentionally
+// does NOT update window.currentScheduleDate (per its "date round-trip drift"
+// comment) — integration_hooks's input-change handler sets it AFTER the old
+// date is cloud-saved and the new date is cloud-loaded. So a naive 50ms
+// setTimeout reads the OLD date and writes the WRONG date's storage.
+//
+// Solution: poll until window.currentScheduleDate matches the event's
+// dateKey (or a hard cap of 2000ms elapses), then call loadCurrentOverrides
+// + re-render. If polling times out, force-set currentScheduleDate to the
+// event's dateKey so loadCurrentOverrides reads the right localStorage.
+try {
+  window.addEventListener('campistry-date-changed', function (e) {
+    try {
+      var newDate = e && e.detail && e.detail.dateKey;
+      if (!newDate) return;
+      // ★ Day 22.5 audit fix: a date change clears any partial generation scope,
+      //   so a scope set for the previous date can't silently apply to the new
+      //   date (otherwise "Generate" would quietly regen only the old subset and
+      //   the user would believe the whole camp ran).
+      _generationScope = null; _generationBunkScope = null;
+      // Live diagnostics from the multi-day audit showed window.currentScheduleDate
+      // typically updates 1.5-3 seconds AFTER campistry-date-changed fires (cloud
+      // round-trip via integration_hooks). Poll for up to 5000ms to safely cover
+      // the round-trip; if it still doesn't match, force-set the date so the
+      // loader reads the correct localStorage. Also re-run the load + render
+      // ONCE MORE after we observe currentScheduleDate flipped, since
+      // integration_hooks may overwrite dailyData asynchronously after we load.
+      var start = Date.now();
+      var observedMatch = false;
+      function _tryLoad() {
+        var matched = window.currentScheduleDate === newDate;
+        if (!matched && Date.now() - start < 5000) {
+          setTimeout(_tryLoad, 100);
+          return;
+        }
+        if (!matched) {
+          window.currentScheduleDate = newDate; // hard cap: force so loader reads the right ls key
+        } else {
+          observedMatch = true;
+        }
+        try {
+          if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
+          // ★ Day 20 fix: a date change must ALSO reload the auto-mode layer
+          //   set (daAutoLayers) for the new date. Without this, daAutoLayers
+          //   stays pinned to the previously-loaded date, so the grid shows the
+          //   wrong day AND — critically — Generate (runOptimizer) sees
+          //   daAutoLayers non-empty, skips its "reload if empty" fallback, and
+          //   generates the new date using the OLD date's layers (e.g. league
+          //   layers silently vanish on a date that should have them). Layer
+          //   edits auto-save per-date via saveDAAutoLayers() on every change,
+          //   so reloading here cannot lose unsaved work.
+          if (window._daBuilderMode === 'auto' && typeof loadDAAutoLayers === 'function') {
+            try { loadDAAutoLayers(); if (typeof renderGrid === 'function') renderGrid(); } catch (_eAL) {}
+          }
+          // ★ Day 22.5 audit fix: symmetric reload for MANUAL mode. Without this,
+          //   switching dates left the PREVIOUS date's skeleton in the editor, so
+          //   an edit or Generate could save the old date's blocks under the new
+          //   date's key (cross-date contamination). Skeleton edits auto-save
+          //   per-date, so reloading here cannot lose unsaved work.
+          else if (window._daBuilderMode !== 'auto' && typeof loadDailySkeleton === 'function') {
+            try { loadDailySkeleton(); if (typeof renderGrid === 'function') renderGrid(); } catch (_eSk) {}
+          }
+          // Re-render unconditionally (don't gate on visibility). The Resources
+          // panel container may be in the DOM but offsetParent=null because a
+          // parent tab is hidden; gating on visibility means the DOM stays
+          // stale and the user sees the previous date's state next time they
+          // open the panel.
+          if (typeof renderResourceOverridesUI === 'function') {
+            try { renderResourceOverridesUI(); } catch (_eR1) {}
+          }
+          if (typeof renderOverrideDetailPane === 'function') {
+            try { renderOverrideDetailPane(); } catch (_eR2) {}
+          }
+        } catch (_e1) { try { console.warn('[ResourceOverrides] reload-on-date-change failed:', _e1 && _e1.message); } catch (_e2) {} }
+        // Belt-and-braces: re-load + re-render once more 1.5s later in case
+        // integration_hooks finished its async cloud-load after our first read.
+        if (observedMatch) {
+          setTimeout(function () {
+            try {
+              if (window.currentScheduleDate !== newDate) return;
+              if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
+              var resPanel2 = document.getElementById('da-resources-container');
+              if (resPanel2 && resPanel2.offsetParent !== null && typeof renderResourceOverridesUI === 'function') {
+                renderResourceOverridesUI();
+                if (typeof renderOverrideDetailPane === 'function') renderOverrideDetailPane();
+              }
+            } catch (_e3) {}
+          }, 1500);
+        }
+      }
+      // Start polling after one tick to let the dispatch chain settle.
+      setTimeout(_tryLoad, 50);
+    } catch (_e0) {}
+  });
+} catch (_e) {}
 
 // =================================================================
 // MAIN INIT
@@ -7460,6 +9487,145 @@ function init() {
   window.addEventListener('campistry-generation-complete', _runIronGate);
   document.addEventListener('campistry-schedule-generated', _runIronGate);
   window.addEventListener('campistry-schedule-saved', _runIronGate);
+
+  // =========================================================================
+  // CAPACITY/SHARING REPAIR GATE — post-settle, validator-driven.
+  // The in-generation sweep (scheduler_core_main STEP 7.55) runs BEFORE the
+  // async post-gen slot-resize (fixAllBunkSlotCounts, ~100ms after this event)
+  // finalizes per-bunk times — so a staggered / cross-grade / capacity share
+  // can appear only AFTER generation, which no in-gen pass can catch. This gate
+  // runs on the same post-gen events as the iron gate but DEFERRED past that
+  // resize, then loops validateAutoSchedule() and demotes exactly the offenders
+  // it reports (never a league/post-edit lock) until the validator is clean,
+  // refills freed slots with an empty-field sport, re-renders, and re-saves.
+  // Modeled on _runIronGate. Only re-saves when it changed something, so the
+  // re-save → event → re-run cycle self-terminates (second run finds 0 to fix).
+  // =========================================================================
+  let _capGateBusy = false;
+  window.__capGateRuns = window.__capGateRuns || []; // observability: presence proves the gate loaded; each run records {repaired,filled}
+  const _runCapacityRepairGate = function _capacityRepairGate() {
+    setTimeout(function () {
+      if (_capGateBusy) return;
+      if (typeof window.validateAutoSchedule !== 'function') return;
+      _capGateBusy = true;
+      try {
+        const sa = window.scheduleAssignments || {};
+        const divs = window.divisions || {};
+        const b2g = {}; Object.keys(divs).forEach(g => ((divs[g] && divs[g].bunks) || []).forEach(b => { b2g[String(b)] = g; }));
+        // ★ Build protection + sport-gate sets from the configured layers (same
+        //   source the engine uses: daAutoLayers). The gate must NEVER demote a
+        //   custom-layer activity (Morning Activity, Davening, Main Activity, …) or
+        //   a configured special and refill it with a field sport — that both wiped
+        //   the required custom and re-introduced sports into a sports-free camp
+        //   (live Harmony bug: Morning Activity → Elbow Tag / Trench / Gaga after the
+        //   post-gen save). It may only demote solver-placed field sports.
+        const _capCustomNames = {};
+        const _capSportGrades = {}; let _capSportAll = false;
+        try {
+            const _alSrc = (typeof daAutoLayers === 'object' && daAutoLayers) ? daAutoLayers : {};
+            Object.keys(_alSrc).forEach(g => {
+                (_alSrc[g] || []).forEach(l => {
+                    if (!l) return;
+                    const t = String(l.type || '').toLowerCase();
+                    if (t === 'custom') {
+                        const nm = String(l.customActivity || l.event || l.name || '').toLowerCase().trim();
+                        if (nm) _capCustomNames[nm] = 1;
+                    }
+                    if (t === 'sport' || t === 'sports') { if (!g || g === '_all') _capSportAll = true; else _capSportGrades[g] = 1; }
+                });
+            });
+        } catch (_eAL) {}
+        const isProt = e => {
+            if (!e) return false;
+            if (e._league || e._postEdit || e._isTrip || e._pinned || e._bunkOverride) return true;
+            // Custom-layer activities + configured specials are user intent — never demote.
+            if (e._activityLocked || e.type === 'custom' || e.type === 'special' ||
+                e._isSpecialLocation || e._autoSpecial) return true;
+            const a = String(e._activity || e.event || e.sport || '').toLowerCase().trim();
+            if (a && _capCustomNames[a]) return true;
+            return false;
+        };
+        const findSlot = (bunk, fieldName) => {
+          const arr = sa[bunk] || []; const fl = String(fieldName || '').toLowerCase().trim();
+          for (let i = 0; i < arr.length; i++) { const e = arr[i]; if (e && !e.continuation && e.field !== 'Free' && !isProt(e) && String(e.field || e._specialLocation || '').toLowerCase().trim() === fl) return i; }
+          return -1;
+        };
+        const demote = (bunk, idx) => {
+          const e = sa[bunk] && sa[bunk][idx]; if (!e || e.field === 'Free' || isProt(e)) return false;
+          const sm = e._startMin, em = e._endMin;
+          sa[bunk][idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: sm, _endMin: em, _fixed: true, _constraintDemoted: true, _source: 'capacity-repair-gate', continuation: false };
+          const sl = sa[bunk]; for (let k = idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', _activity: 'Free', _fixed: true, continuation: false }; } else break; }
+          return true;
+        };
+        let repaired = 0;
+        for (let pass = 0; pass < 8; pass++) {
+          let v; try { v = window.validateAutoSchedule({ silent: true }); } catch (_e) { break; }
+          const errs = (v && (v.errors || v.violations)) || [];
+          if (!errs.length) break;
+          let did = false;
+          for (const er of errs) {
+            if (!er || !er.field) continue;
+            let offBunks = [];
+            if (Array.isArray(er.bunks) && er.bunks.length) offBunks = er.bunks.map(x => x && x.bunk).filter(Boolean);
+            else Object.keys(sa).forEach(b => { if (er.grade && b2g[String(b)] !== er.grade) return; if (findSlot(b, er.field) >= 0) offBunks.push(b); });
+            for (let oi = offBunks.length - 1; oi >= 0; oi--) { const si = findSlot(offBunks[oi], er.field); if (si >= 0 && demote(offBunks[oi], si)) { repaired++; did = true; break; } }
+          }
+          if (!did) break;
+        }
+        let filled = 0;
+        if (repaired > 0) {
+          // refill freed slots with a bunk-accessible sport on a completely-empty field
+          try {
+            const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const fields = (gs.app1 && gs.app1.fields) || [];
+            const specialRooms = {}; ((gs.app1 && gs.app1.specialActivities) || []).forEach(s => { if (s && s.location) specialRooms[String(s.location).toLowerCase().trim()] = 1; });
+            const sportFields = fields.filter(f => f && f.name && f.available !== false && !specialRooms[String(f.name).toLowerCase().trim()] && Array.isArray(f.activities) && f.activities.length && !(f.timeRules && f.timeRules.enabled));
+            const occ = {}, done = {};
+            Object.keys(sa).forEach(b => { done[b] = {}; (sa[b] || []).forEach(e => { if (!e || e.continuation) return; const a = e._activity || e.sport; if (a && String(a).toLowerCase() !== 'free') done[b][String(a).toLowerCase()] = 1; const fl = String(e.field || e._specialLocation || '').toLowerCase().trim(); if (!fl || fl === 'free') return; if (e._startMin == null) return; (occ[fl] = occ[fl] || []).push({ s: e._startMin, e: e._endMin }); }); });
+            const fieldFree = (fl, s, en) => { const a = occ[fl] || []; for (let i = 0; i < a.length; i++) if (a[i].s < en && a[i].e > s) return false; return true; };
+            const access = (f, g) => { const ar = f.accessRestrictions; if (!ar || !ar.enabled) return true; const d = ar.divisions || {}; if (!Object.keys(d).length) return true; return !!d[g]; };
+            Object.keys(sa).forEach(b => { const g = b2g[String(b)] || '?'; if (!_capSportAll && !_capSportGrades[g]) return; /* ★ sports-free grade → never inject a field sport on refill */ (sa[b] || []).forEach((e, i) => { if (!e || e.continuation || !e._constraintDemoted) return; const s = e._startMin, en = e._endMin; if (s == null) return; for (let fi = 0; fi < sportFields.length; fi++) { const f = sportFields[fi]; const fl = String(f.name).toLowerCase().trim(); if (!fieldFree(fl, s, en) || !access(f, g)) continue; let act = null; for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !done[b][String(c).toLowerCase()]) { act = c; break; } } if (!act) continue; sa[b][i] = { field: f.name, sport: act, _activity: act, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, continuation: false }; (occ[fl] = occ[fl] || []).push({ s: s, e: en }); done[b][String(act).toLowerCase()] = 1; filled++; break; } }); });
+          } catch (_eff) {}
+          // ★ Partial (per-tile) regen NO-BLANK net: if a demoted slot belongs to a
+          //   regenerated tile and could not be sport-refilled above, restore its
+          //   ORIGINAL pre-regen activity (when that field is free) instead of leaving
+          //   it Free. Guarantees a regen never blanks a tile — worst case unchanged.
+          try {
+            const _rss = window.__regenSlotScope;
+            if (_rss) {
+              Object.keys(sa).forEach(b => {
+                const _o = _rss[b] && _rss[b].orig;
+                if (!_o) return;
+                (sa[b] || []).forEach((e, i) => {
+                  if (!e || e.continuation || !e._constraintDemoted) return;
+                  const o = _o[i];
+                  if (!o || !o.field || String(o.field).toLowerCase().trim() === 'free') return;
+                  const fl = String(o.field).toLowerCase().trim();
+                  const s = o._startMin, en = o._endMin;
+                  if (s == null || en == null || !fieldFree(fl, s, en)) return;
+                  sa[b][i] = Object.assign({}, o, { _fixed: true, _regenOriginalRestored: true, continuation: false });
+                  (occ[fl] = occ[fl] || []).push({ s: s, e: en });
+                  filled++;
+                });
+              });
+            }
+          } catch (_eRestore) {}
+          console.warn('[CAPACITY REPAIR GATE] demoted ' + repaired + ' validator-flagged placement(s) → Free, refilled ' + filled);
+          try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
+          const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+          try { if (window.verifiedScheduleSave) window.verifiedScheduleSave(dk); else if (window.ScheduleDB?.saveSchedule) window.ScheduleDB.saveSchedule(dk, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} }); } catch (_e) {}
+        }
+        try { window.__capGateRuns.push({ repaired: repaired, filled: filled }); } catch (_m) {}
+      } catch (e) { console.warn('[CAPACITY REPAIR GATE] error: ' + e.message); }
+      finally { _capGateBusy = false; }
+    }, 320); // run AFTER the ~100ms post-gen slot-resize fixes finalize per-bunk times
+  };
+  window.addEventListener('campistry-generation-complete', _runCapacityRepairGate);
+  document.addEventListener('campistry-schedule-generated', _runCapacityRepairGate);
+  // Also fire on save (the manual path reliably dispatches this; same coverage as the
+  // iron gate). The gate only re-saves when it changed something, so the re-save →
+  // schedule-saved → re-run cycle self-terminates (the second run finds 0 to fix).
+  window.addEventListener('campistry-schedule-saved', _runCapacityRepairGate);
 }
     
 function cleanup() {

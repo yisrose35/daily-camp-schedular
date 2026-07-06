@@ -707,8 +707,13 @@ function finishTouchResize(module, wrapper) {
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
       if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
       else {
-        // Dispatch event for MS to handle
-        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+        // ★ CB-142: this is a defensive fallback for when MasterSchedulerInternal never initialized
+        // (master_schedule_builder.js threw at load). The 'mobile-resize-complete' event below has
+        // NO listener anywhere in the repo and there is no global save fn, so in that broken state
+        // the in-memory edit above is NOT persisted. That's acceptable — the editor module itself is
+        // down — but it is NOT a working save path. Do not rely on this event; if you need mobile
+        // edits to survive an MS-init failure, persist to the campManualSkeleton_<date> key here.
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', {
           detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
         }));
       }
@@ -729,11 +734,21 @@ function finishTouchResize(module, wrapper) {
         event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
       }
 
+      // ★★★ CB-124: reconcile overlaps after the resize, exactly as the DESKTOP
+      // DA resize was patched to (daily_adjustments onMouseUp). Without this the
+      // touch-resized tile can overlap its neighbor with no bump, leaving two
+      // tiles whose [start,end) intersect (silent double-book). Run BEFORE save.
+      if (window.DailyAdjustmentsInternal?.bumpOverlappingTiles) {
+        try { window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, event.division); } catch (_) {}
+      }
       // DA exposes saveDailySkeleton and renderGrid via window.DailyAdjustmentsInternal or as globals
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; fires only if DailyAdjustmentsInternal
+        // failed to init) — the resize is NOT persisted in that broken state. See the MS-resize
+        // branch above for the full note.
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', {
           detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'da' }
         }));
       }
@@ -839,7 +854,7 @@ function onTouchRepositionMove(touch, module, wrapper) {
   }
 }
 
-function finishTouchReposition(touch, module, wrapper) {
+async function finishTouchReposition(touch, module, wrapper) {
   if (!repositionState) { isRepositioning = false; return; }
 
   const cellSelector = module === 'ms' ? '.grid-cell' : '.da-grid-cell';
@@ -863,16 +878,55 @@ function finishTouchReposition(touch, module, wrapper) {
     const y = touch.clientY - rect.top;
     const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
 
+    const _prevDiv121 = event.division;
+    const _newStartMin121 = cellStartMin + snapMin;
+
+    // ★ NIGHT ACTIVITY on touch MOVE (DA only): mirror the desktop move handler.
+    //   If the tile lands at/after the target division's end time, ask whether it's a
+    //   Night Activity and tag it so the generator schedules it (instead of dropping it
+    //   via the division-boundary clip). Declining aborts the move. MS has no night concept.
+    let _isNight121 = false;
+    if (module !== 'ms') {
+      const _tdiv = window.divisions?.[divName] || {};
+      const _tEnd = parseTimeToMinutes(_tdiv.endTime);
+      if (_tEnd !== null && _newStartMin121 >= _tEnd) {
+        _isNight121 = (typeof window.daShowConfirm === 'function')
+          ? await window.daShowConfirm('⏰ "' + minutesToTime(_newStartMin121) + '" is after this division\'s end time (' + _tdiv.endTime + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Cancel Move' })
+          : true;
+        if (!_isNight121) {
+          // declined → abort the move, run cleanup without mutating the tile
+          repositionState.tileEl.classList.remove('mobile-repositioning');
+          if (dragGhost) dragGhost.style.display = 'none';
+          isRepositioning = false;
+          repositionState = null;
+          return;
+        }
+      }
+    }
+
     event.division = divName;
-    event.startTime = minutesToTime(cellStartMin + snapMin);
-    event.endTime = minutesToTime(cellStartMin + snapMin + duration);
+    event.startTime = minutesToTime(_newStartMin121);
+    event.endTime = minutesToTime(_newStartMin121 + duration);
+    // Re-tag based on the new position (set in night zone, clear back in hours).
+    if (module !== 'ms') event.isNightActivity = _isNight121;
+
+    // ★★★ CB-121: a cross-grade reposition of a LEAGUE tile must remap its league
+    // reference to the destination grade's league. The desktop drop handlers call
+    // _mbRemapLeagueForGrade; this touch handler mutated event.division in place
+    // and NEVER remapped, so the moved tile still pointed at the SOURCE grade's
+    // league (e.g. Minors bunks scheduled against a Majors game). No-op for
+    // non-league tiles and same-grade moves.
+    if (_prevDiv121 !== divName && typeof window._mbRemapLeagueForGrade === 'function') {
+      try { window._mbRemapLeagueForGrade(event, divName); } catch (_) {}
+    }
 
     if (module === 'ms') {
       if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
       if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; MS-init-failure only) — not persisted. See finishTouchResize MS branch.
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', {
           detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
         }));
       }
@@ -884,7 +938,8 @@ function finishTouchReposition(touch, module, wrapper) {
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; DA-init-failure only) — not persisted. See finishTouchResize MS branch.
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', {
           detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'da' }
         }));
       }
@@ -953,31 +1008,9 @@ function findSkeletonEvent(tileId, module) {
 // =================================================================
 // UTILITY: Time parsing (matches both MS and DA)
 // =================================================================
-function parseTimeToMinutes(t) {
-  if (!t || typeof t !== 'string') return null;
-  let s = t.toLowerCase().trim();
-  let mer = null;
-  if (s.includes('am') || s.includes('pm')) {
-    mer = s.includes('am') ? 'am' : 'pm';
-    s = s.replace(/am|pm/g, '').trim();
-  }
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (isNaN(hh) || isNaN(mm)) return null;
-  if (mer) {
-    if (hh === 12) hh = mer === 'am' ? 0 : 12;
-    else if (mer === 'pm') hh += 12;
-  }
-  return hh * 60 + mm;
-}
+function parseTimeToMinutes(t) { return window.CampUtils.parseTimeToMinutes(t); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
-function minutesToTime(min) {
-  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 // =================================================================
 // UTILITY: Extract tile data from element

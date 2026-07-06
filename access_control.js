@@ -76,15 +76,22 @@
         OWNER: 'owner',
         ADMIN: 'admin',
         SCHEDULER: 'scheduler',
-        VIEWER: 'viewer'
+        VIEWER: 'viewer',
+        COUNSELOR: 'counselor'   // Campistry Lite: read-only bunk-level staff
     };
 
     const ROLE_HIERARCHY = {
         owner: 4,
         admin: 3,
         scheduler: 2,
-        viewer: 1
+        viewer: 1,
+        counselor: 1   // same trust level as viewer (read-only)
     };
+
+    // Roles that can never write schedule/camp data (fail-closed set).
+    function isReadOnlyRole(role) {
+        return role === ROLES.VIEWER || role === ROLES.COUNSELOR;
+    }
 
     const SUBDIVISION_COLORS = [
         '#6366F1', '#8B5CF6', '#EC4899', '#F43F5E', '#F97316', '#EAB308',
@@ -280,11 +287,16 @@
             }
 
             // Not a team member — am I an owner?
-            const { data: ownedCamp } = await window.supabase
+            // A super-admin may own multiple camps (real + debug copies), so
+            // fetch all and pick the real one (id == uid); never .maybeSingle()
+            // which throws on >1 row.
+            const { data: ownedCamps } = await window.supabase
                 .from('camps')
                 .select('id')
-                .eq('owner', _currentUser.id)
-                .maybeSingle();
+                .eq('owner', _currentUser.id);
+            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === _currentUser.id) || ownedCamps[0])
+                : null;
 
             if (ownedCamp) {
                 if (_currentRole !== ROLES.OWNER) {
@@ -454,9 +466,14 @@
     }
 
     let _subdivisionResolutionDone = false;
+    let _divisionObserverInterval = null; // ★ CB-144: hold the observer handle so refresh() can't leak a new 1s timer each call
 
     function setupDivisionChangeObserver() {
-        setInterval(() => {
+        // ★ CB-144: clear any prior interval first. initialize() calls this unconditionally and
+        // refresh() (fired on every realtime camp_users change) re-runs initialize(), so without
+        // this each refresh spawned another orphaned 1s timer that ran forever, compounding load.
+        if (_divisionObserverInterval) { clearInterval(_divisionObserverInterval); _divisionObserverInterval = null; }
+        _divisionObserverInterval = setInterval(() => {
             const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
             let recalculated = false;
 
@@ -537,13 +554,36 @@
             _membershipSubscription = window.supabase
                 .channel('my-membership-' + _currentUser.id)
                 .on('postgres_changes', {
-                    event: 'UPDATE',
+                    // ★★★ CB-125: was 'UPDATE' only, so a remote member REMOVAL (row
+                    // DELETE) never reached this session — a removed scheduler kept
+                    // full write/generate access until reload. Subscribe to ALL events
+                    // ('*') so a DELETE also fires refresh(), which re-checks
+                    // membership, finds none, and revokes access. (Filtered DELETE
+                    // delivery needs REPLICA IDENTITY FULL on camp_users; the
+                    // unfiltered DELETE handler below is the backstop.)
+                    event: '*',
                     schema: 'public',
                     table: 'camp_users',
                     filter: `user_id=eq.${_currentUser.id}`
                 }, (payload) => {
-                    console.log('🔐 Membership updated remotely, refreshing permissions...');
+                    console.log('🔐 Membership change (' + (payload && payload.eventType) + ') — refreshing permissions...');
                     refresh();
+                })
+                // Backstop: unfiltered DELETE (covers tables without REPLICA IDENTITY
+                // FULL, where a filtered DELETE payload carries only the PK). Match the
+                // removed row by id/user_id before refreshing.
+                .on('postgres_changes', {
+                    event: 'DELETE',
+                    schema: 'public',
+                    table: 'camp_users'
+                }, (payload) => {
+                    try {
+                        const gone = payload && payload.old;
+                        if (gone && (String(gone.user_id) === String(_currentUser.id))) {
+                            console.log('🔐 This membership was deleted remotely — revoking access...');
+                            refresh();
+                        }
+                    } catch (_) { refresh(); }
                 })
                 .subscribe();
             
@@ -664,12 +704,18 @@
         // ⭐ STEP 3: Check if user is a CAMP OWNER
         // =====================================================================
         try {
-            const { data: ownedCamp } = await window.supabase
+            // Multi-camp owners (super-admin with debug copies): fetch all and
+            // pick the real camp (id == uid). This STEP 3 is only reached when
+            // the user is NOT in a copy (no membership), so the real camp is
+            // the right answer here.
+            const { data: ownedCamps } = await window.supabase
                 .from('camps')
                 .select('*')
-                .eq('owner', _currentUser.id)
-                .maybeSingle();
-            
+                .eq('owner', _currentUser.id);
+            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === _currentUser.id) || ownedCamps[0])
+                : null;
+
             if (ownedCamp) {
                 console.log("🔐 User is a camp owner");
                 _currentRole = ROLES.OWNER;
@@ -852,7 +898,7 @@
             return;
         }
         
-        if (_currentRole === ROLES.VIEWER) {
+        if (isReadOnlyRole(_currentRole)) {
             _editableDivisions = [];
             console.log("🔐 View-only access");
             return;
@@ -999,7 +1045,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass — schedulers have full edit access ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
+        if (isReadOnlyRole(_currentRole)) return false;
         return _editableDivisions.includes(divisionName);
     }
 
@@ -1008,8 +1054,8 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass — schedulers have full edit access ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
-        
+        if (isReadOnlyRole(_currentRole)) return false;
+
         const divisions = window.divisions || {};
         for (const [divName, divInfo] of Object.entries(divisions)) {
             if (divInfo.bunks && divInfo.bunks.includes(bunkName)) {
@@ -1042,9 +1088,14 @@
     }
 
     function canManageSubdivisions() {
-        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
-        if (!_initialized) return false;
+        // ★★★ CB-110: owner/admin ONLY. Subdivisions ARE the scheduler-scoping
+        // mechanism (a subdivision's divisions[] define what a scheduler may
+        // generate), so letting a SCHEDULER create/rewrite them is a privilege-
+        // escalation path — a scheduler could grant itself any division. This
+        // function gates ONLY createSubdivision/updateSubdivision (no UI-read
+        // callers), and deleteSubdivision is already owner-only, so dropping
+        // scheduler here closes the write path without affecting scheduler reads.
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return false;
     }
 
@@ -1136,7 +1187,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
+        if (isReadOnlyRole(_currentRole)) return false;
         return _editableDivisions.length > 0;
     }
 
@@ -1144,7 +1195,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        return _currentRole !== ROLES.VIEWER;
+        return !isReadOnlyRole(_currentRole);
     }
 
     function canGenerateDivision(divisionName) {
@@ -1158,7 +1209,7 @@
         // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.VIEWER) return false;
+        if (isReadOnlyRole(_currentRole)) return false;
         return _editableDivisions.length > 0;
     }
 
@@ -1265,11 +1316,17 @@
     }
 
     function isViewer() {
-        return _currentRole === ROLES.VIEWER;
+        // Counselors are treated as viewers by every UI lockdown path —
+        // they are read-only on the main app (their home is Campistry Lite).
+        return isReadOnlyRole(_currentRole);
     }
 
     function isScheduler() {
         return _currentRole === ROLES.SCHEDULER;
+    }
+
+    function isCounselor() {
+        return _currentRole === ROLES.COUNSELOR;
     }
 
     function getSubdivisions() {
@@ -1381,6 +1438,10 @@
             return 'View-only access (can print and lookup campers)';
         }
 
+        if (_currentRole === ROLES.COUNSELOR) {
+            return 'Counselor access (Campistry Lite: bunk schedule, roster, leagues)';
+        }
+
         if (_currentRole === ROLES.SCHEDULER) {
             if (_editableDivisions.length === 0) {
                 return 'Full editing access (no divisions assigned for generation - contact owner)';
@@ -1421,21 +1482,24 @@
             owner: 'Owner',
             admin: 'Administrator',
             scheduler: 'Scheduler',
-            viewer: 'Viewer'
+            viewer: 'Viewer',
+            counselor: 'Counselor'
         };
-        
+
         const roleColors = {
             owner: '#7C3AED',
             admin: '#2563EB',
             scheduler: '#059669',
-            viewer: '#6B7280'
+            viewer: '#6B7280',
+            counselor: '#EE6A53'
         };
-        
+
         const roleDescriptions = {
             owner: 'Full access to all features and team management',
             admin: 'Full editing access to all divisions (no team management)',
             scheduler: 'Full editing access — generates assigned divisions only',
-            viewer: 'View-only access (can print and lookup campers)'
+            viewer: 'View-only access (can print and lookup campers)',
+            counselor: 'Campistry Lite access — bunk schedule, roster and leagues'
         };
         
         return {
@@ -1469,6 +1533,11 @@
             permissions.push({ icon: '🖨️', text: 'Print Center access' });
             permissions.push({ icon: '🔍', text: 'Camper Locator access' });
             permissions.push({ icon: '🖨️', text: 'Print schedules with saved templates' });
+        } else if (_currentRole === ROLES.COUNSELOR) {
+            permissions.push({ icon: '📱', text: 'Campistry Lite (mobile companion)' });
+            permissions.push({ icon: '📅', text: "View your bunk's daily schedule" });
+            permissions.push({ icon: '🧒', text: 'View your bunk roster' });
+            permissions.push({ icon: '🏆', text: 'View your league teams and matchups' });
         }
         
         return permissions;
@@ -1493,7 +1562,8 @@
             owner: 'Owner',
             admin: 'Admin',
             scheduler: 'Scheduler',
-            viewer: 'Viewer'
+            viewer: 'Viewer',
+            counselor: 'Counselor'
         };
         return names[role] || role;
     }
@@ -1503,7 +1573,8 @@
             owner: '#7C3AED',
             admin: '#2563EB',
             scheduler: '#059669',
-            viewer: '#6B7280'
+            viewer: '#6B7280',
+            counselor: '#EE6A53'
         };
         return colors[role] || '#6B7280';
     }
@@ -1742,12 +1813,20 @@
             return null;
         }
         
-        const myDivisions = getEditableDivisions();
+        // ★ CB-130: scope to the scheduler's ASSIGNED divisions, NOT getEditableDivisions().
+        // Under v3.13 getEditableDivisions() returns ALL divisions for a scheduler, so
+        // "delete my divisions only" would wipe every bunk — including the owner's and other
+        // schedulers' — from in-memory scheduleAssignments/leagueAssignments. This is a
+        // scheduler-only path (owner/admin already returned above), so _directDivisionAssignments
+        // is the correct scoped set. No fallback to the all-divisions resolver: an empty
+        // assignment safely yields "No divisions assigned" rather than an over-delete.
+        const myDivisions = (_directDivisionAssignments && _directDivisionAssignments.length > 0)
+            ? [..._directDivisionAssignments] : [];
         if (myDivisions.length === 0) {
             return { error: "No divisions assigned" };
         }
-        
-        console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
+
+        console.log('🗑️ [AccessControl] Deleting divisions (scoped to assignments):', myDivisions);
         
         try {
             if (window.ScheduleDB?.deleteMyScheduleOnly) {
@@ -2154,13 +2233,17 @@
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
-                .update({ assigned_divisions: divisionNames })
+                // ★ CB-133: also clear subdivision_ids. determineUserContext/verifyRoleFromDB
+                // resolve a scheduler's divisions subdivision-FIRST, so if the member already had
+                // subdivision_ids the new direct assignment was silently ignored on their next load.
+                // Assigning divisions directly is the explicit intent here → drop the stale subdivisions.
+                .update({ assigned_divisions: divisionNames, subdivision_ids: [] })
                 .eq('id', memberId)
                 .select()
                 .single();
-            
+
             if (error) throw error;
-            
+
             return { data };
         } catch (e) {
             console.error("🔐 Error assigning divisions:", e);
@@ -2309,6 +2392,7 @@
         isAdmin,
         isViewer,
         isScheduler,
+        isCounselor,
         isTeamMember,
         
         getEditableDivisions,

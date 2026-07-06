@@ -23,7 +23,7 @@
     window.TRANSITION_TYPE = TRANSITION_TYPE;
 
     // DEBUG MODE - Set to true to see why canBlockFit fails
-    const DEBUG_FITS = false;
+    let DEBUG_FITS = false; // runtime toggle via SchedulerCoreUtils._setDebugFits(true) — used by SOLVER-REGEN-DIAG
 
     const Utils = {};
 
@@ -38,6 +38,10 @@
     // schedule grid, print center, calendar, daily adjustments, etc.
     Utils.getActivityDisplayName = function (slot) {
         if (!slot) return '';
+        // Per-cell display-name ALIAS (post-edit "rename for display only"):
+        // show this instead of the real activity. _activity is left untouched so
+        // rotation/counting still credit the underlying activity.
+        if (slot._displayName) return slot._displayName;
         if (slot._partLabel) return slot._partLabel;
         if (slot._partNumber && slot._totalParts && slot._activity) {
             return slot._activity + ' ' + slot._partNumber + '/' + slot._totalParts;
@@ -399,12 +403,15 @@
 
         if (reqs.maxPlayers !== null && playerCount > reqs.maxPlayers) {
             const excess = playerCount - reqs.maxPlayers;
-            const percentageOver = excess / reqs.maxPlayers;
 
-            if (percentageOver > 0.3) {
+            // Absolute grace, not a percentage: over-max is allowed only up to +2
+            // (max+1 routine grace, max+2 last-resort). Anything beyond max+2 is a
+            // hard violation — there must never be more than 2 extra players over
+            // the maximum, even when two bunks play together on a shared field.
+            if (excess > 2) {
                 return {
                     valid: false,
-                    reason: `Maximum ${reqs.maxPlayers} players, have ${playerCount}`,
+                    reason: `Maximum ${reqs.maxPlayers} players (+2 grace), have ${playerCount}`,
                     severity: 'hard'
                 };
             }
@@ -515,28 +522,58 @@
     // ★★★ NEW: GET FIELD CAPACITY (SINGLE SOURCE OF TRUTH) ★★★
     // =================================================================
    Utils.getFieldCapacity = function(fieldName, activityProperties) {
-        const props = activityProperties?.[fieldName];
-        if (!props) return 1;
-        
-        // ★★★ v7.6: v3.0 sharing model ★★★
-        if (props.sharableWith) {
-            if (props.sharableWith.type === 'all') return parseInt(props.sharableWith.capacity) || 999;
-            if (props.sharableWith.type === 'same_division') {
-                return parseInt(props.sharableWith.capacity) || 2;
+        // Resolve a single props object → its configured capacity.
+        function _capFromProps(props) {
+            if (!props) return null;
+            // ★★★ v7.6: v3.0 sharing model ★★★
+            if (props.sharableWith) {
+                if (props.sharableWith.type === 'all') return parseInt(props.sharableWith.capacity) || 999;
+                if (props.sharableWith.type === 'same_division') return parseInt(props.sharableWith.capacity) || 2;
+                if (props.sharableWith.type === 'not_sharable') return 1;
+                if (props.sharableWith.type === 'custom') return parseInt(props.sharableWith.capacity) || 2;
+                if (props.sharableWith.capacity) return parseInt(props.sharableWith.capacity);
             }
-            if (props.sharableWith.type === 'not_sharable') return 1;
-            if (props.sharableWith.type === 'custom') {
-                return parseInt(props.sharableWith.capacity) || 2;
-            }
-            if (props.sharableWith.capacity) {
-                return parseInt(props.sharableWith.capacity);
-            }
+            // Legacy sharable check
+            if (props.sharable) return 2;
+            return 1; // Default: not sharable
         }
-        
-        // Legacy sharable check
-        if (props.sharable) return 2;
-        
-        return 1; // Default: not sharable
+
+        let cap = _capFromProps(activityProperties?.[fieldName]);
+        if (cap == null) cap = 1;
+
+        // ★★★ SHARED-ROOM MOST-RESTRICTIVE FIX (manual cap-bug, 2026-06-04) ★★★
+        // activityProperties is keyed by activity/special NAME, so it only sees ONE
+        // definition for a given location. But two specials can map to the SAME physical
+        // room with DIFFERENT caps — e.g. "Arts & Crafts 3" (not_sharable, cap 1) and
+        // "Arts and Crafts 3" (same_division, cap 2) both at room "Arts and Crafts 3".
+        // The generator would read the laxer twin (cap 2) and overbook, while the
+        // validator (location-keyed) flags cap 1. A physical room can only honor its
+        // MOST RESTRICTIVE constraint, so when NO real facility-field owns this location
+        // (field precedence preserved → a permissive field reused by a special is not
+        // over-restricted), fold in the minimum cap across every special sharing it.
+        try {
+            const target = String(fieldName || '').toLowerCase().trim();
+            if (target) {
+                const gs = (typeof window !== 'undefined' && window.loadGlobalSettings)
+                    ? window.loadGlobalSettings() : ((typeof window !== 'undefined' && window.globalSettings) || {});
+                const fields = (gs.app1 && gs.app1.fields) || gs.fields || [];
+                const hasField = fields.some(f => f && f.name && String(f.name).toLowerCase().trim() === target);
+                if (!hasField) {
+                    const specials = (gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [];
+                    for (let i = 0; i < specials.length; i++) {
+                        const s = specials[i];
+                        if (!s) continue;
+                        const loc = String(s.location || s.name || '').toLowerCase().trim();
+                        const nm = String(s.name || '').toLowerCase().trim();
+                        if (loc !== target && nm !== target) continue;
+                        const c = _capFromProps(s);
+                        if (c != null && c < cap) cap = c;
+                    }
+                }
+            }
+        } catch (_e) { /* fall back to the base capacity */ }
+
+        return cap;
     };
 
     // =================================================================
@@ -572,10 +609,12 @@
         if (rules.length === 0) return props.available !== false;
         if (!props.available) return false;
 
-        let allowed = !rules.some(r => r.type === "Available");
+        // ★ Case-insensitive type match (see note at the main fit-check): tolerate
+        //   lowercase 'available'/'unavailable' so config field timeRules are enforced.
+        let allowed = !rules.some(r => String(r.type).toLowerCase() === "available");
 
         for (const rule of rules) {
-            if (rule.type === "Available" &&
+            if (String(rule.type).toLowerCase() === "available" &&
                 slotStart >= rule.startMin &&
                 slotEnd <= rule.endMin) {
                 allowed = true;
@@ -586,7 +625,7 @@
         if (!allowed) return false;
 
         for (const rule of rules) {
-            if (rule.type === "Unavailable" &&
+            if (String(rule.type).toLowerCase() === "unavailable" &&
                 slotStart < rule.endMin &&
                 slotEnd > rule.startMin) {
                 return false;
@@ -594,6 +633,79 @@
         }
 
         return true;
+    };
+
+    /**
+     * =========================================================================
+     * PER-DATE BUNK-ONLY ACTIVITY RESTRICTION (Daily Adjustments → Resources)
+     * =========================================================================
+     * "On THIS facility, this activity is only available for these bunk(s) today."
+     * FACILITY-SCOPED, restriction-only (allow-list): if a matching restriction
+     * exists and this bunk is NOT in its allow-list, the bunk is BLOCKED from that
+     * (facility, activity) placement. Other facilities hosting the same activity
+     * are unaffected.
+     *
+     * Entry shape: { id, facility, activity, bunks:[...] } where:
+     *   - facility = the field/facility name the restriction is scoped to
+     *   - activity = a specific sport/special name, OR '*' = the ENTIRE facility
+     *                (every activity on it restricted to the listed bunks)
+     *
+     * Field resolution: callers at field-level gates (canBlockFit, isFieldAvailable,
+     * the fill pass) pass the concrete fieldName. Field-agnostic gates
+     * (calculateLimitScore, isSpecialAvailableForBunk) pass fieldName=null; we then
+     * resolve the activity's host facility via getLocationForActivity — which
+     * returns a special's fixed host (and null for sports, so multi-field sports
+     * are left to the field-level gates and never over-blocked here).
+     *
+     * Data lives in the per-date Resources overrides (dailyActivityBunkRestrictions),
+     * mirrored to the campResourceOverrides_<date> localStorage blob — read with the
+     * same fallback as the sport-disable / dailyFieldAvailability paths so it works
+     * post-gen and on fresh devices. Fail-open on any read error / empty list.
+     */
+    Utils.isBunkRestrictedFromTarget = function (bunkName, activityName, fieldName, divName) {
+        if (!bunkName) return false;
+        let list = (window.loadCurrentDailyData?.() || {}).dailyActivityBunkRestrictions;
+        if (!Array.isArray(list) || list.length === 0) {
+            // localStorage fallback (mirror of isFieldAvailable @ scheduler_core_auto.js:2818)
+            try {
+                const dk = window._activeGenDate || window.currentScheduleDate || '';
+                if (dk) {
+                    const stored = localStorage.getItem('campResourceOverrides_' + dk);
+                    if (stored) {
+                        const p = JSON.parse(stored);
+                        if (Array.isArray(p?.dailyActivityBunkRestrictions)) list = p.dailyActivityBunkRestrictions;
+                    }
+                }
+            } catch (_e) { /* ignore */ }
+        }
+        if (!Array.isArray(list) || list.length === 0) return false;
+
+        // Candidate facilities this placement touches. Match a restriction against
+        // EITHER the passed field OR the activity's resolved host, because a special
+        // is frequently filed under field = <special name> (NOT its host facility) —
+        // so a rule scoped to the host ("Arts & Crafts Shack") must still match a
+        // slot stored as field "Arts & Crafts". Sports resolve to no host
+        // (getLocationForActivity → null), so only their real field is considered and
+        // multi-field sports are never over-blocked.
+        const cands = new Set();
+        if (fieldName) cands.add(String(fieldName).toLowerCase().trim());
+        if (activityName && typeof window.getLocationForActivity === 'function') {
+            try { const h = window.getLocationForActivity(activityName); if (h) cands.add(String(h).toLowerCase().trim()); } catch (_e) { /* ignore */ }
+        }
+        if (cands.size === 0) return false; // no facility to scope the rule against
+
+        const actLc = activityName ? String(activityName).toLowerCase().trim() : null;
+        const bunkStr = String(bunkName);
+        for (const r of list) {
+            if (!r || !r.facility || !Array.isArray(r.bunks)) continue;
+            if (!cands.has(String(r.facility).toLowerCase().trim())) continue;
+            const isWhole = r.activity === '*' || r.activity == null;
+            const isThisAct = actLc && String(r.activity).toLowerCase().trim() === actLc;
+            if (!isWhole && !isThisAct) continue;
+            const allowed = r.bunks.some(b => String(b) === bunkStr);
+            if (!allowed) return true; // matched a facility-scoped rule, bunk not allowed → blocked
+        }
+        return false;
     };
 
     /**
@@ -612,6 +724,8 @@
      * 7. Player requirements (soft check)
      * =========================================================================
      */
+    Utils._setDebugFits = function (v) { DEBUG_FITS = !!v; };
+
     Utils.canBlockFit = function (block, fieldName, activityProperties, fieldUsageBySlot, actName, forceLeague = false) {
         if (!fieldUsageBySlot) fieldUsageBySlot = window.fieldUsageBySlot || {};
         if (!fieldName) {
@@ -639,6 +753,14 @@
             }
         }
 
+        // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
+        //   Covers special/sport (actName) and facility (fieldName) targets for the
+        //   manual + total-solver path. Allowed bunks pass; everyone else is blocked.
+        if (Utils.isBunkRestrictedFromTarget(block.bunk, actName, fieldName, block.divName || block.division)) {
+            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - target reserved for other bunk(s) today (bunk-only restriction)`);
+            return false;
+        }
+
         // Get slots for this block
         let uniqueSlots = [];
         if (block.slots && block.slots.length > 0) {
@@ -656,7 +778,22 @@
         if (window.GlobalFieldLocks && uniqueSlots.length > 0) {
             // Pass the division context so elective locks work correctly
             const divisionContext = block.divName || block.division;
-            const lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, uniqueSlots, divisionContext);
+            let lockInfo = window.GlobalFieldLocks.isFieldLocked(fieldName, uniqueSlots, divisionContext);
+
+            // ★ PARTIAL-REGEN INDEX-COLLISION FIX (2026-07-03): the index fast-path
+            //   is time-blind — a plain-index lock (e.g. a pinned event @890-970)
+            //   collides with a query at the same INDEX but a disjoint wall-clock
+            //   window on another grid. During partial regen, ignore an indexed
+            //   lock whose explicit times don't overlap this block; real overlaps
+            //   still block (and isFieldLockedByTime covers time-keyed locks).
+            //   Kill switch: window.__regenIndexLockTimeCheck = false.
+            if (lockInfo && window.__regenSlotScope && window.__regenIndexLockTimeCheck !== false
+                && lockInfo.startMin != null && lockInfo.endMin != null) {
+                const { blockStartMin: _qS, blockEndMin: _qE } = Utils.getBlockTimeRange(block);
+                if (_qS != null && _qE != null && !(lockInfo.startMin < _qE && lockInfo.endMin > _qS)) {
+                    lockInfo = null; // time-disjoint index collision — not a real conflict
+                }
+            }
 
             if (lockInfo) {
                 if (DEBUG_FITS) {
@@ -732,22 +869,28 @@
         // =================================================================
         if (effectiveProps.accessRestrictions?.enabled) {
             const divisionRules = effectiveProps.accessRestrictions.divisions || {};
-            // ★ Dual-key lookup: divisions may be keyed by string ("3") or
-            //   the original grade type (3). Matches the auto solver's
-            //   commitWriteIfLegal check at scheduler_core_auto.js:1426-1428.
-            const _divNameStr = String(block.divName);
-            if (!(_divNameStr in divisionRules) && !(block.divName in divisionRules)) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
-                return false;
-            }
-            const divRule = divisionRules[_divNameStr] || divisionRules[block.divName];
-            if (Array.isArray(divRule) && divRule.length > 0) {
-                const bunkStr = String(block.bunk);
-                const bunkNum = parseInt(block.bunk);
-                const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
-                if (!inList) {
-                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
+            // ★ Day 11 parity (#V2-15): enabled with EMPTY divisions = misconfig (toggle on,
+            //   no grades picked) → treat as NO restriction, matching auto_solver_engine and
+            //   total_solver_engine. Otherwise the division-not-in-{} check below blocks EVERY
+            //   grade and makes the field unusable in manual only (auto leaves it open).
+            if (Object.keys(divisionRules).length > 0) {
+                // ★ Dual-key lookup: divisions may be keyed by string ("3") or
+                //   the original grade type (3). Matches the auto solver's
+                //   commitWriteIfLegal check at scheduler_core_auto.js:1426-1428.
+                const _divNameStr = String(block.divName);
+                if (!(_divNameStr in divisionRules) && !(block.divName in divisionRules)) {
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
                     return false;
+                }
+                const divRule = divisionRules[_divNameStr] || divisionRules[block.divName];
+                if (Array.isArray(divRule) && divRule.length > 0) {
+                    const bunkStr = String(block.bunk);
+                    const bunkNum = parseInt(block.bunk);
+                    const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
+                    if (!inList) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
+                        return false;
+                    }
                 }
             }
         }
@@ -763,8 +906,13 @@
             
             if (blockStartMin != null && blockEndMin != null) {
                 // Separate rules by type
-                const availableRules = effectiveProps.timeRules.filter(r => r.type === 'Available' || r.available === true);
-                const unavailableRules = effectiveProps.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
+                // ★ Case-insensitive type match (mirrors auto_fill_slot.js:129 +
+                //   the DA iron-gate): config field timeRules can carry a lowercase
+                //   `type` ('unavailable'/'available') from non-UI/older paths, which
+                //   the capital-only comparison silently dropped → rule never enforced
+                //   in manual mode (auto already lowercased). Brings manual to parity.
+                const availableRules = effectiveProps.timeRules.filter(r => String(r.type).toLowerCase() === 'available' || r.available === true);
+                const unavailableRules = effectiveProps.timeRules.filter(r => String(r.type).toLowerCase() === 'unavailable' || r.available === false);
                 
                 // ★★★ v7.7: Filter rules by division applicability ★★★
                 const blockDivision = block.divName;
@@ -873,6 +1021,59 @@
         }
 
         // =================================================================
+        // ★ INSTRUCTOR (RUN-BY) CONFLICT
+        // Two activities tagged with the same `instructor` cannot occupy the
+        // same slot — the same person can't be in two places at once.
+        // Same-activity at the same slot for two bunks is NOT a conflict
+        // (that's capacity sharing of one class by the same instructor).
+        // =================================================================
+        {
+            const _normInstr = (s) => (s == null ? '' : String(s)).toLowerCase().trim();
+            const _candAct   = _normInstr(actName || effectiveProps?._activityName || '');
+            const _instrMap  = Utils._buildInstructorMap ? Utils._buildInstructorMap() : (function () {
+                const map = {};
+                try {
+                    const settings = window.loadGlobalSettings?.() || {};
+                    [
+                        ...((settings.app1 && settings.app1.specialActivities) || []),
+                        ...(settings.specialActivities || [])
+                    ].forEach(s => {
+                        if (s && s.name && typeof s.instructor === 'string' && s.instructor.trim()) {
+                            map[s.name.toLowerCase().trim()] = s.instructor.trim().toLowerCase();
+                        }
+                    });
+                    (settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(ga => {
+                        if (ga && ga.name && typeof ga.instructor === 'string' && ga.instructor.trim()) {
+                            map[ga.name.toLowerCase().trim()] = ga.instructor.trim().toLowerCase();
+                        }
+                    }));
+                } catch {}
+                return map;
+            })();
+            const _myInstr = _candAct ? _instrMap[_candAct] : null;
+            if (_myInstr) {
+                const _sched = window.scheduleAssignments || {};
+                for (const idx of uniqueSlots) {
+                    for (const otherBunk in _sched) {
+                        if (otherBunk === block.bunk) continue;
+                        const slots = _sched[otherBunk];
+                        const e = slots && slots[idx];
+                        if (!e) continue;
+                        const otherAct = e._activity || e._assignedSpecial || (typeof e.activity === 'string' ? e.activity : null) || (typeof e.sport === 'string' ? e.sport : null);
+                        if (!otherAct) continue;
+                        const _otherActNorm = _normInstr(otherAct);
+                        if (_otherActNorm === _candAct) continue; // same activity = capacity-share, not a conflict
+                        const _otherInstr = _instrMap[_otherActNorm];
+                        if (_otherInstr && _otherInstr === _myInstr) {
+                            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName} (${actName}): REJECTED - instructor "${_myInstr}" already running "${otherAct}" for ${otherBunk} at slot ${idx}`);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =================================================================
         // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
@@ -888,13 +1089,58 @@
             );
         }
 
+        // ★ PARTIAL-REGEN INDEX-COLLISION FIX (2026-07-03): slot indices are
+        //   per-division — slot N is a DIFFERENT wall-clock time in each grade's
+        //   grid. During a partial regen the full preserved schedule of every
+        //   other division sits in scheduleAssignments/fieldUsageBySlot at raw
+        //   indices, so the index-keyed usage scan below counts bunks whose
+        //   entry at index N doesn't even overlap this block's time (e.g. a
+        //   div whose slot 1 is 890-970 "occupying" a field against an 805-870
+        //   query) → false capacity rejections → solver starves → dumb 7.5
+        //   fallback fills the tile. Filter usage to bunks whose entry actually
+        //   overlaps this block's window. Preserved fields stay protected by
+        //   the TIME-aware STEP 1.7/5.6 locks + isFieldLockedByTime.
+        //   Kill switch: window.__regenTimeAwareCapacity = false.
+        const _regenTimeFilter = (window.__regenSlotScope && window.__regenTimeAwareCapacity !== false
+            && blockStartMin != null && blockEndMin != null)
+            ? function (bunkName, idx) {
+                try {
+                    const _e = (window.scheduleAssignments || {})[bunkName]?.[idx];
+                    let _s = (_e && _e._startMin != null) ? _e._startMin : null;
+                    let _en = (_e && _e._endMin != null) ? _e._endMin : null;
+                    if (_s == null || _en == null) {
+                        const _d = Utils.getDivisionForBunk(bunkName);
+                        const _sl = _d && window.divisionTimes?.[_d]?.[idx];
+                        if (_sl) { _s = _sl.startMin; _en = _sl.endMin; }
+                    }
+                    if (_s == null || _en == null) return true;      // can't resolve → keep (conservative)
+                    return _s < blockEndMin && _en > blockStartMin;   // keep only real time-overlaps
+                } catch (_) { return true; }
+            } : null;
+
         for (const idx of uniqueSlots) {
             const trackedUsage = getFieldUsageAtSlot(idx, fieldName, fieldUsageBySlot);
             const scheduleUsage = getScheduleUsageAtSlot(idx, fieldName);
 
-            const allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
-            const allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
-            const allDivisions = [...new Set([...trackedUsage.divisions, ...scheduleUsage.divisions])];
+            let allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
+            let allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
+            let allDivisions = [...new Set([...trackedUsage.divisions, ...scheduleUsage.divisions])];
+
+            if (_regenTimeFilter) {
+                const _kept = [...allBunks].filter(_b => _regenTimeFilter(_b, idx));
+                if (_kept.length !== allBunks.size) {
+                    allBunks = new Set(_kept);
+                    allActivities = new Set();
+                    const _keptDivs = new Set();
+                    for (const _b of _kept) {
+                        const _a = trackedUsage.bunks[_b] || scheduleUsage.bunks[_b];
+                        if (_a) allActivities.add(String(_a).toLowerCase().trim());
+                        const _d = Utils.getDivisionForBunk(_b);
+                        if (_d) _keptDivs.add(_d);
+                    }
+                    allDivisions = [..._keptDivs];
+                }
+            }
 
             allBunks.delete(block.bunk);
 
@@ -934,6 +1180,26 @@
             }
 
             // =================================================================
+            // ★ Day 10: cross_division ("Grade Pairs") — mirror BOTH solvers
+            //   (total_solver_engine isCrossDivAllowedManual + auto_solver_engine).
+            //   Cross-grade co-occupancy is allowed ONLY for grade pairs the user
+            //   enabled in allowedPairs (capacity already capped above). Without this,
+            //   the FILLERS (scheduler_logic_fillers call canBlockFit) could place a
+            //   non-allowed cross-grade pair the main solver would reject.
+            // =================================================================
+            if (effectiveShareType === 'cross_division' && currentCount > 0) {
+                const _pairs = (effectiveProps.sharableWith && effectiveProps.sharableWith.allowedPairs) || {};
+                for (const existingDiv of allDivisions) {
+                    if (existingDiv === myDivision) continue;
+                    const _key = [myDivision, existingDiv].sort().join('|');
+                    if (_pairs[_key] !== true) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - cross_division pair not allowed: ${_key}`);
+                        return false;
+                    }
+                }
+            }
+
+            // =================================================================
             // ★★★ v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
             // When type="custom", only allow sharing with specified divisions
             // =================================================================
@@ -964,6 +1230,33 @@
 
                     if (!activitiesMatch) {
                         if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - different activity`);
+                        return false;
+                    }
+                }
+            }
+
+            // =================================================================
+            // ★ SPORT maxPlayers — combined-headcount cap when SHARING a field.
+            //   The capacity check above limits the BUNK COUNT; a sport's
+            //   maxPlayers (rules.js sportMetaData) limits the combined PLAYER
+            //   count. Auto-builder share/fill paths could add a 2nd same-division
+            //   bunk that passes the count cap yet pushes combined headcount over
+            //   the sport max (e.g. 15+11=26 players on a max-20 sport). Enforce
+            //   here at the shared fit-check so BOTH builders honor it. Gated to
+            //   actual sharing (currentCount>0) with known sizes; a lone bunk over
+            //   max is unaffected (maxPlayers is a "combined when shared" cap).
+            // =================================================================
+            if (currentCount > 0 && mySize > 0 && actName) {
+                const _spReq = sportMeta[actName] || sportMeta[actName.toLowerCase()];
+                const _spMax = _spReq ? (parseInt(_spReq.maxPlayers) || 0) : 0;
+                if (_spMax > 0) {
+                    let _combinedPlayers = mySize;
+                    for (const _ob of allBunks) { _combinedPlayers += (bunkMeta[_ob]?.size || 0); }
+                    // Absolute combined ceiling = maxPlayers + 2 (max+1 routine grace,
+                    // max+2 last-resort, never max+3+). Mirrors the auto engines and
+                    // auto_fill_slot so the shared fit-check doesn't hard-block legal grace.
+                    if (_combinedPlayers > _spMax + 2) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport maxPlayers combined ${_combinedPlayers} > ${_spMax}+2`);
                         return false;
                     }
                 }
@@ -1295,10 +1588,33 @@
      * * @param {string} divisionName - Division name
      * @returns {Array} Array of slot objects with startMin, endMin, label
      */
+    // ★★★ CB-73: resolve the correct slot array for a bunk-OR-division. When a
+    // BUNK with per-bunk geometry (auto mode) is given, return THAT bunk's
+    // _perBunkSlots timeline; otherwise the division-level array. The index→time
+    // helpers below used to always read divisionTimes[div], so for a per-bunk
+    // schedule whose timeline differs from the division table they returned the
+    // wrong slot / time / activity. Falls back to the flat division array (manual
+    // geometry) and to [] for a per-bunk object addressed without a bunk (which
+    // was never validly iterable anyway).
+    Utils._resolveSlotArray = function(bunkOrDiv) {
+        if (bunkOrDiv == null) return [];
+        const key = String(bunkOrDiv);
+        const dt = window.divisionTimes || {};
+        const grade = Utils.getDivisionForBunk ? Utils.getDivisionForBunk(key) : null;
+        if (grade) {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][key])
+                || (dt[grade] && dt[grade]._perBunkSlots && dt[grade]._perBunkSlots[key]);
+            if (Array.isArray(pbs) && pbs.length) return pbs;
+            if (Array.isArray(dt[grade])) return dt[grade];
+            return [];
+        }
+        if (Array.isArray(dt[key])) return dt[key];
+        return [];
+    };
+
     Utils.getSlotsForDivision = function(divisionName) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr] || [];
+        // ★★★ CB-73: per-bunk aware (was: divisionTimes[div] || []).
+        return Utils._resolveSlotArray(divisionName);
     };
 
     /**
@@ -1308,9 +1624,8 @@
      * @returns {Object|null} Slot object or null
      */
     Utils.getSlotAtIndex = function(divisionName, slotIndex) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
+        // ★★★ CB-73: per-bunk aware when a bunk is passed (else division-level).
+        return Utils._resolveSlotArray(divisionName)[slotIndex] || null;
     };
 
     /**
@@ -1321,26 +1636,18 @@
      * @returns {Object} { startMin, endMin } or { startMin: null, endMin: null }
      */
     Utils.getSlotTimeRange = function(slotIdx, bunkOrDiv) {
-        // Try division-specific lookup first
-        if (bunkOrDiv && window.divisionTimes) {
-            let divName = bunkOrDiv;
-            
-            // Check if it's a bunk name, convert to division
-            const possibleDiv = Utils.getDivisionForBunk(bunkOrDiv);
-            if (possibleDiv) divName = possibleDiv;
-            
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-            const divNameStr = String(divName);
-            const slot = window.divisionTimes[divNameStr]?.[slotIdx];
+        // ★★★ CB-73: per-bunk aware. _resolveSlotArray returns the bunk's own
+        // _perBunkSlots timeline when bunkOrDiv is a per-bunk auto-mode bunk,
+        // else the division-level array. Previously it converted a bunk to its
+        // division and read divisionTimes[div][slotIdx] — wrong window for a
+        // per-bunk schedule whose timeline differs from the division table.
+        if (bunkOrDiv) {
+            const slot = Utils._resolveSlotArray(bunkOrDiv)[slotIdx];
             if (slot) {
-                return {
-                    startMin: slot.startMin,
-                    endMin: slot.endMin
-                };
+                return { startMin: slot.startMin, endMin: slot.endMin };
             }
         }
-        
-        // No fallback - division context is required
+        // No fallback - division/bunk context is required
         return { startMin: null, endMin: null };
     };
 
@@ -1518,7 +1825,11 @@
     Utils.findSlotForBunkAtTime = function(bunkName, targetMin) {
         const divName = Utils.getDivisionForBunk(bunkName);
         if (!divName) return -1;
-        return Utils.findSlotForTime(divName, targetMin);
+        // ★★★ CB-73: pass the BUNK (not its division) so findSlotForTime →
+        // getSlotsForDivision → _resolveSlotArray uses the bunk's own per-bunk
+        // timeline in auto mode. _resolveSlotArray falls back to the division
+        // array when there's no per-bunk geometry, so manual mode is unchanged.
+        return Utils.findSlotForTime(bunkName, targetMin);
     };
 
     // =================================================================
@@ -1929,14 +2240,16 @@
      */
     Utils.formatEntry = function(entry) {
         if (!entry) return '';
-        
+        // Display-name ALIAS = exact cell text; show it verbatim, no location appended.
+        if (entry._displayName) return entry._displayName;
+
         const activity = entry._activity || entry.sport || '';
         const field = Utils.fieldLabel(entry.field) || '';
-        
+
         if (activity && field && activity !== field) {
             return `${field} – ${activity}`;
         }
-        
+
         return activity || field || '';
     };
 
@@ -2278,6 +2591,28 @@
             if (!Array.isArray(slots)) return;
             if (slots.some(function(e) { return e && !e.continuation && (e._activity === activityName || e.field === activityName); })) count++;
         });
+        // ★★★ CB-66: also consult cloud rotation_counts (per-date). The local scan
+        // above reads only campDailyData_v1, so on a SECOND DEVICE (no local dates)
+        // or after the documented local-quota save-skip, period caps
+        // (maxUsage/exactFrequency per 'half'/'Nweek') silently UNDER-enforce. Take
+        // the MAX of local and a cloud period-count (count of distinct in-window
+        // dates where rotation_counts has this bunk+activity). MAX avoids
+        // double-counting dates present in both sources; it never lowers the local
+        // count, so it can only tighten (never loosen) the hard cap.
+        try {
+            var _cbd66 = (window.RotationCloud && window.RotationCloud.getCachedCountsByDate)
+                ? window.RotationCloud.getCachedCountsByDate() : null;
+            if (_cbd66) {
+                var _cloudCount66 = 0;
+                Object.keys(_cbd66).forEach(function(dateKey) {
+                    if (dateKey >= today) return;
+                    if (periodStart && dateKey < periodStart) return;
+                    var _byB = _cbd66[dateKey] && _cbd66[dateKey][bunk];
+                    if (_byB && (_byB[activityName] || 0) > 0) _cloudCount66++;
+                });
+                if (_cloudCount66 > count) count = _cloudCount66;
+            }
+        } catch (_e66) { /* non-fatal — local count stands */ }
         return count;
     };
 
@@ -2450,11 +2785,43 @@
 
         // Save to globalSettings if requested
         if (saveToCloud && window.saveGlobalSettings) {
-            window.saveGlobalSettings('historicalCounts', counts);
-            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
-            // guards stay consistent after a full rebuild.
+            // ★★★ CB-56 / CB-63: this rebuild scans ONLY local campDailyData_v1.
+            // On a near-quota browser daily schedules are not written to
+            // localStorage ("data is in cloud"), so loadAllDailyData() misses
+            // most dates and a whole-key overwrite of the SHARED cloud
+            // historicalCounts would DROP every bunk's history for the missing
+            // dates. Detect that: if the previously-counted date set
+            // (historicalCountedDates) contains dates not present in this scan,
+            // the scan is partial — merge raise-only against the previous counts
+            // (a partial scan can never LOWER the shared totals) and UNION the
+            // counted-dates set. Decrements are the job of the explicit
+            // erase / New-Half paths, not this passive rebuild.
+            let _finalCounts = counts;
             const _countedDates = {};
             Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            try {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _prevCounts = _gs.historicalCounts || {};
+                const _prevDates = _gs.historicalCountedDates || {};
+                const _scanned = new Set(Object.keys(allDaily));
+                const _partial = Object.keys(_prevDates).some(dk => !_scanned.has(dk));
+                if (_partial && Object.keys(_prevCounts).length > 0) {
+                    console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan (cloud knew dates absent locally) — merging raise-only to avoid dropping rotation history');
+                    const _merged = JSON.parse(JSON.stringify(_prevCounts));
+                    Object.keys(counts).forEach(function (bunk) {
+                        _merged[bunk] = _merged[bunk] || {};
+                        Object.keys(counts[bunk]).forEach(function (act) {
+                            _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                        });
+                    });
+                    _finalCounts = _merged;
+                    // keep previously-counted dates too
+                    Object.keys(_prevDates).forEach(function (dk) { _countedDates[dk] = true; });
+                }
+            } catch (_e) { /* fall back to authoritative overwrite */ }
+            window.saveGlobalSettings('historicalCounts', _finalCounts);
+            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
+            // guards stay consistent after a full rebuild.
             window.saveGlobalSettings('historicalCountedDates', _countedDates);
             console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
 
@@ -2605,8 +2972,25 @@ Utils.getValidActivityNames = function() {
         const valid = new Set();
         fields.forEach(f => (f.activities || []).forEach(a => valid.add(a)));
         specials.forEach(s => { if (s.name) valid.add(s.name); });
+        // ★ Also include the camp's configured sports (master list + sport metadata).
+        //   A field's `activities` list only covers sports that have a dedicated field;
+        //   a recognized sport without one (e.g. "Soccer") was therefore excluded, so a
+        //   manual daily-adjustment to it placed the activity on the schedule but the
+        //   rotation count silently ignored it. Including configured sports keeps the
+        //   schedule and rotation counts consistent for any real activity the camp set
+        //   up; unrecognized names (typos) stay excluded, as intended.
+        (g.app1?.allSports || []).forEach(s => { if (s) valid.add(s); });
+        Object.keys(g.app1?.sportMetaData || {}).forEach(s => { if (s) valid.add(s); });
         return valid;
     };
+    // ★★★ CB-96 — DEAD-BUT-WIRED. incrementHistoricalCounts / reIncrementHistoricalCounts have NO
+    //   live caller (repo-wide grep: only their defs, the window exports below, and a unit test).
+    //   Every live generation/edit path instead calls `rebuildHistoricalCounts` (full re-scan from
+    //   the final schedule), which is the authority and counts differently (it excludes league-game
+    //   sports from historicalCounts; these incremental adders include them via the sport fallback).
+    //   DO NOT re-wire these into a gen/post-edit path without first reconciling that divergence —
+    //   doing so would inflate sport counts and double-count on re-generation. Left in place (not
+    //   deleted) because a test depends on them and removal is out of scope for the audit pass.
     Utils.incrementHistoricalCounts = function(dateKey, scheduleAssignments, saveToCloud = true) {
         console.log(`📊 [SchedulerCoreUtils] Incrementing counts for ${dateKey}...`);
 

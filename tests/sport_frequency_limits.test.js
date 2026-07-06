@@ -1,0 +1,121 @@
+/**
+ * Tests for: per-sport usage/frequency limits — the same mechanism specials use.
+ *
+ * Run with:  node --test tests/sport_frequency_limits.test.js
+ *
+ * Sports live only as names inside a field's activities[] and normally get NO
+ * activity-properties entry, so maxUsage/frequencyDays/exactFrequency never
+ * applied to them. buildActivityProperties (scheduler_core_loader.js) now reads
+ * sportMetaData and, for any sport that HAS a limit configured, builds an entry
+ * carrying the same fields a special uses — so RotationEngine.calculateLimitScore
+ * enforces it identically. This verifies the wiring AND the enforcement.
+ */
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const REPO = path.join(__dirname, '..');
+
+function boot(sportMeta) {
+    const win = {};
+    const sb = {
+        window: win,
+        console: { log() {}, warn() {}, error() {}, info() {}, debug() {} },
+        setTimeout, clearTimeout,
+        Date, Math, Object, Array, JSON, String, Number, Boolean,
+        Map, Set, Promise, parseInt, parseFloat, isNaN, isFinite,
+        Infinity, NaN, Symbol, RegExp
+    };
+    sb.global = sb;
+    vm.createContext(sb);
+    win.getSportMetaData = () => sportMeta || {};
+    for (const f of ['scheduler_core_loader.js', 'rotation_engine.js']) {
+        vm.runInContext(fs.readFileSync(path.join(REPO, f), 'utf8'), sb, { filename: f });
+    }
+    return win;
+}
+
+describe('per-sport frequency limits', () => {
+    it('gives a LIMITED sport its own activity-props entry (same fields as specials)', () => {
+        const win = boot({ Soccer: { maxUsage: 2, maxUsagePeriod: 'week', frequencyDays: 3 } });
+        const props = win.buildActivityProperties([], [{ name: 'Soccer Field', activities: ['Soccer', 'Kickball'] }]);
+        assert.ok(props['Soccer'], 'Soccer gets a props entry');
+        assert.equal(props['Soccer'].type, 'sport');
+        assert.equal(props['Soccer'].maxUsage, 2);
+        assert.equal(props['Soccer'].maxUsagePeriod, 'week');
+        assert.equal(props['Soccer'].frequencyDays, 3);
+    });
+
+    it('leaves an UNLIMITED sport with no entry (unchanged behavior)', () => {
+        const win = boot({ Soccer: { maxUsage: 2 } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer', 'Kickball'] }]);
+        assert.equal(props['Kickball'], undefined, 'Kickball has no limit → stays undefined');
+    });
+
+    it('never clobbers a special of the same name', () => {
+        const win = boot({ Soccer: { maxUsage: 2 } });
+        const props = win.buildActivityProperties(
+            [{ name: 'Soccer', type: 'special', maxUsage: 9 }],
+            [{ name: 'F', activities: ['Soccer'] }]);
+        assert.equal(props['Soccer'].type, 'special', 'the special entry wins');
+        assert.equal(props['Soccer'].maxUsage, 9);
+    });
+
+    it('ENFORCEMENT: calculateLimitScore blocks the sport at its cap, allows below', () => {
+        const win = boot({ Soccer: { maxUsage: 2, maxUsagePeriod: 'week' } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        // bunk A already did Soccer twice → at the cap
+        win.RotationEngine.getActivityCount = b => (b === 'A' ? 2 : 0);
+        win.RotationEngine.clearHistoryCache();
+        assert.equal(win.RotationEngine.calculateLimitScore('A', 'Soccer', props, 'D'), Infinity, 'at cap → blocked');
+        // bunk B has done it zero times → not blocked
+        win.RotationEngine.clearHistoryCache();
+        assert.notEqual(win.RotationEngine.calculateLimitScore('B', 'Soccer', props, 'D'), Infinity, 'below cap → allowed');
+    });
+
+    it('a sport name lower-cased key is also registered (solver normName lookups)', () => {
+        const win = boot({ Soccer: { frequencyDays: 4 } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        assert.ok(props['soccer'], 'lowercase key present');
+        assert.equal(props['soccer'].frequencyDays, 4);
+    });
+
+    it('a PER-GRADE-ONLY cap (no base max) still builds an entry carrying maxUsagePerGrade', () => {
+        const win = boot({ Soccer: { maxUsagePerGrade: { D: 1 } } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        assert.ok(props['Soccer'], 'per-grade-only limit still creates an entry');
+        assert.equal(props['Soccer'].maxUsage, 0, 'no base max');
+        assert.deepEqual(props['Soccer'].maxUsagePerGrade, { D: 1 });
+    });
+
+    it('base max applies to grades WITHOUT an override; a per-grade value replaces it (base 3, 8th=2)', () => {
+        const win = boot({ Soccer: { maxUsage: 3, maxUsagePeriod: 'week', maxUsagePerGrade: { '8th': 2 } } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        assert.equal(props['Soccer'].maxUsage, 3, 'base max preserved');
+        assert.deepEqual(props['Soccer'].maxUsagePerGrade, { '8th': 2 });
+        // 8th grade → override 2: blocked at 2
+        win.RotationEngine.getActivityCount = () => 2; win.RotationEngine.clearHistoryCache();
+        assert.equal(win.RotationEngine.calculateLimitScore('b8', 'Soccer', props, '8th'), Infinity, '8th capped at 2');
+        // any other grade at 2 → base is 3, so still allowed
+        win.RotationEngine.clearHistoryCache();
+        assert.notEqual(win.RotationEngine.calculateLimitScore('b5', 'Soccer', props, '5th'), Infinity, '5th allowed at 2 (base 3)');
+        // other grade at 3 → hits base 3
+        win.RotationEngine.getActivityCount = () => 3; win.RotationEngine.clearHistoryCache();
+        assert.equal(win.RotationEngine.calculateLimitScore('b5', 'Soccer', props, '5th'), Infinity, '5th capped at 3 (base)');
+    });
+
+    it('ENFORCEMENT: a per-grade override caps that grade and leaves others uncapped', () => {
+        const win = boot({ Soccer: { maxUsagePerGrade: { D: 1 } } });
+        const props = win.buildActivityProperties([], [{ name: 'F', activities: ['Soccer'] }]);
+        win.RotationEngine.getActivityCount = () => 1; // every bunk has done Soccer once
+        win.RotationEngine.clearHistoryCache();
+        // grade D: override = 1, count 1 → at cap → blocked
+        assert.equal(win.RotationEngine.calculateLimitScore('a', 'Soccer', props, 'D'), Infinity, 'grade D capped by override');
+        // grade E: no override, no base max → not capped
+        win.RotationEngine.clearHistoryCache();
+        assert.notEqual(win.RotationEngine.calculateLimitScore('a', 'Soccer', props, 'E'), Infinity, 'grade E uncapped');
+    });
+});

@@ -97,6 +97,16 @@ let _toastTimer = null;
     // HELPERS
     // =========================================================================
     const esc = s => { if (s == null) return ''; const m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'}; return String(s).replace(/[&<>"']/g, c => m[c]); };
+    // ★★★ CB-126: make a value safe inside a SINGLE-quoted JS string literal that
+    // itself lives inside a DOUBLE-quoted HTML onclick attribute. esc() can't be
+    // used there: it turns ' into &#x27;, which the attribute parser decodes back
+    // to a bare ' BEFORE the JS runs, prematurely closing the string (e.g. an
+    // address "O'Brien St" broke "Pin as anchor"). HTML-escape &<>" (so the
+    // attribute stays intact; &quot; decodes to " which is harmless in a
+    // single-quoted JS string), then backslash-escape \ and ' for the JS string.
+    const _goJsArg = s => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+        .replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const uid = () => 'go_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6);
     function toast() { /* removed */ }
     function openModal(id) {
@@ -969,11 +979,19 @@ let _toastTimer = null;
                 const ckptRaw = localStorage.getItem(STORE + '_addr_ckpt');
                 if (ckptRaw) {
                     const ckpt = JSON.parse(ckptRaw);
-                    const ckptGeocoded = Object.values(ckpt).filter(a => a.geocoded).length;
-                    const mainGeocoded = Object.values(D.addresses || {}).filter(a => a.geocoded).length;
-                    if (ckptGeocoded > mainGeocoded) {
-                        D.addresses = ckpt;
-                        console.log('[Go] Recovered geocode checkpoint (' + ckptGeocoded + ' geocoded vs ' + mainGeocoded + ' in main store)');
+                    // ★ CB-137/CB-139: MERGE the checkpoint's geocode results into the already-
+                    // authoritative D.addresses (the cloud/local merge ran above) instead of the old
+                    // wholesale `D.addresses = ckpt` replace. Wholesale-replace decided purely on
+                    // geocoded-count dropped cloud-only keys grown on another device AND revived
+                    // addresses the user deleted. Now: only backfill onto keys that STILL EXIST and
+                    // are not yet geocoded — never add/revive a key, never clobber a fresher entry.
+                    if (D.addresses && typeof D.addresses === 'object') {
+                        let _recovered = 0;
+                        Object.keys(ckpt).forEach(function (k) {
+                            const c = ckpt[k], cur = D.addresses[k];
+                            if (cur && c && c.geocoded && !cur.geocoded) { D.addresses[k] = c; _recovered++; }
+                        });
+                        if (_recovered) console.log('[Go] Merged ' + _recovered + ' geocode checkpoint result(s) into existing addresses (no revive/drop)');
                     }
                     localStorage.removeItem(STORE + '_addr_ckpt');
                 }
@@ -1047,38 +1065,55 @@ let _toastTimer = null;
             if (cloud.state && typeof cloud.state === 'object') {
                 const s = cloud.state;
 
-                // Setup: restore if local campName is empty but cloud has one
-                if (s.setup && !D.setup.campName && s.setup.campName) {
+                // ★★★ CB-114: prefer a FRESHER cloud 'state' row over a stale-but-
+                // nonempty local one. Previously hydration was gated purely on local
+                // emptiness, so device B's older non-empty fleet/shifts/setup never
+                // accepted device A's newer cloud edits (A's changes silently lost,
+                // then re-saved stale). Compare the cloud row's updated_at to the
+                // last one we applied (persisted in localStorage); when newer, accept
+                // cloud even if local is non-empty. Falls back to the empty-only
+                // behaviour when no timestamp is available.
+                let _cloudStateNewer = false;
+                try {
+                    const _cua = cloud._updatedAt && cloud._updatedAt.state;
+                    if (_cua) {
+                        const _lastUA = localStorage.getItem('go_state_lastAppliedUA') || '';
+                        if (_cua > _lastUA) { _cloudStateNewer = true; localStorage.setItem('go_state_lastAppliedUA', _cua); }
+                    }
+                } catch (_) {}
+
+                // Setup: restore if local campName is empty OR cloud is newer
+                if (s.setup && s.setup.campName && (!D.setup.campName || _cloudStateNewer)) {
                     D.setup = Object.assign({}, D.setup, s.setup);
                     changed = true;
                     console.log('[Go] Restored setup from GoCloud (campName:', s.setup.campName + ')');
                 }
 
-                // Fleet config: restore if local is empty
-                if (!D.buses?.length && s.buses?.length) {
+                // Fleet config: restore if local is empty OR cloud is newer
+                if (s.buses?.length && (!D.buses?.length || _cloudStateNewer)) {
                     D.buses = s.buses;
                     changed = true;
-                    console.log('[Go] Restored', s.buses.length, 'buses from GoCloud');
+                    console.log('[Go] Restored', s.buses.length, 'buses from GoCloud' + (_cloudStateNewer ? ' (cloud newer)' : ''));
                 }
-                if (!D.shifts?.length && s.shifts?.length) {
+                if (s.shifts?.length && (!D.shifts?.length || _cloudStateNewer)) {
                     D.shifts = s.shifts;
                     changed = true;
                 }
-                if (!D.monitors?.length && s.monitors?.length) {
+                if (s.monitors?.length && (!D.monitors?.length || _cloudStateNewer)) {
                     D.monitors = s.monitors;
                     changed = true;
                 }
-                if (!D.counselors?.length && s.counselors?.length) {
+                if (s.counselors?.length && (!D.counselors?.length || _cloudStateNewer)) {
                     D.counselors = s.counselors;
                     changed = true;
                 }
 
                 // Mode snapshots
-                if (s.dismissal && (!D.dismissal || !D.dismissal.buses?.length)) {
+                if (s.dismissal && (!D.dismissal || !D.dismissal.buses?.length || _cloudStateNewer)) {
                     D.dismissal = Object.assign(D.dismissal || {}, s.dismissal);
                     changed = true;
                 }
-                if (s.arrival && (!D.arrival || !D.arrival.buses?.length)) {
+                if (s.arrival && (!D.arrival || !D.arrival.buses?.length || _cloudStateNewer)) {
                     D.arrival = Object.assign(D.arrival || {}, s.arrival);
                     changed = true;
                 }
@@ -1181,7 +1216,21 @@ let _toastTimer = null;
             //   'state'     — setup, buses, shifts, monitors, counselors (all modes)
             //   'addresses' — geocoded camper addresses (large; kept separate)
             //   'routes'    — computed route results (large; kept separate)
-            if (window.GoCloudSync) {
+            // ★★★ CB-116: Campistry GO had ZERO role enforcement — any camp member,
+            // including a read-only VIEWER, blindly overwrote the entire shared
+            // transportation dataset (go_standalone_data is keyed only by camp_id,
+            // no per-user dimension). Block the cloud push for read-only roles so a
+            // viewer can't stomp the shared data; their local save still works for
+            // their own view. (Full per-user row scoping needs a schema change and
+            // is out of scope; combined with the CB-114/115 recency guards this
+            // closes the worst data-loss path.)
+            var _goReadOnly116 = false;
+            try { _goReadOnly116 = !!(window.AccessControl && typeof window.AccessControl.canEdit === 'function' && window.AccessControl.canEdit() === false); } catch (_) {}
+            if (_goReadOnly116 && !window.__cb116Warned) {
+                window.__cb116Warned = true;
+                try { (window.showToast || window.toast || function(){})('Read-only role — Transportation changes are not saved to the cloud.', 'warning'); } catch (_) {}
+            }
+            if (window.GoCloudSync && !_goReadOnly116) {
                 // ── State: setup + fleet config for both modes ────────────────
                 // Snapshot the current mode's live data back into D[activeMode]
                 // before saving so the cloud copy is always up-to-date.
@@ -1568,7 +1617,9 @@ let _toastTimer = null;
         overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
         overlay.innerHTML = '<div class="modal" style="max-width:480px"><div class="modal-header"><h3>Quick Create Buses</h3><button class="modal-close" onclick="document.getElementById(\'quickCreateModal\').remove()"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">' + h + '</div><div class="modal-footer"><button class="btn btn-secondary" onclick="document.getElementById(\'quickCreateModal\').remove()">Cancel</button><button class="btn btn-primary" id="qcCreate">Create Buses</button></div></div>';
         document.body.appendChild(overlay);
-        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+        let _mdQc = false;
+        overlay.addEventListener('mousedown', e => { _mdQc = (e.target === overlay); });
+        overlay.addEventListener('click', e => { if (e.target === overlay && _mdQc) overlay.remove(); });
 
         function updatePreview() {
             const count = parseInt(document.getElementById('qcCount').value) || 1;
@@ -1836,7 +1887,7 @@ let _toastTimer = null;
 
     // ── Staff assignment actions ──
     function acceptAllStaffSuggestions() {
-        let accepted = 0;
+        let accepted = 0, skipped = 0;
         const all = [
             ...D.monitors.map(m => ({ staff: m, type: 'monitor' })),
             ...D.counselors.map(c => ({ staff: c, type: 'counselor' }))
@@ -1844,6 +1895,13 @@ let _toastTimer = null;
         for (const { staff } of all) {
             if (!staff._suggestedBusId) continue;
             if (staff._assignStatus === 'accepted' || staff._assignStatus === 'denied') continue;
+            // ★ CB-145: respect the same over-capacity guard the single-accept path enforces. The
+            // bulk path used to commit unconditionally, silently overfilling a near-full bus that
+            // single-accept would have blocked with the capacity-warning modal. Skip over-capacity
+            // suggestions (the user can single-accept to get the warning + override). Capacity is
+            // re-evaluated each iteration, so earlier accepts in this loop count toward the next.
+            const cap = _capacityAfterStaffAdd(staff._suggestedBusId);
+            if (cap && cap.overBy > 0) { skipped++; continue; }
             staff._assignStatus = 'accepted';
             staff._acceptedBus = staff._suggestedBus;
             staff._acceptedBusId = staff._suggestedBusId;
@@ -1852,9 +1910,11 @@ let _toastTimer = null;
             staff.assignedBus = staff._suggestedBusId;
             accepted++;
         }
-        if (!accepted) { toast('No pending suggestions to accept'); return; }
-        save(); renderStaff();
-        toast('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : ''));
+        if (!accepted && !skipped) { toast('No pending suggestions to accept'); return; }
+        if (accepted) { save(); renderStaff(); }
+        let msg = accepted ? ('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : '')) : '';
+        if (skipped) msg += (msg ? '; ' : '') + skipped + ' skipped (would exceed bus capacity — accept individually to override)';
+        toast(msg);
     }
 
     // ── Capacity check helper ────────────────────────────────────────────────
@@ -1961,7 +2021,9 @@ let _toastTimer = null;
             + '<button class="btn btn-primary" id="smaConfirm">Assign</button>'
             + '</div></div>';
         document.body.appendChild(overlay);
-        overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+        let _mdSma = false;
+        overlay.addEventListener('mousedown', e => { _mdSma = (e.target === overlay); });
+        overlay.addEventListener('click', e => { if (e.target === overlay && _mdSma) overlay.remove(); });
 
         // When bus changes, populate stops
         document.getElementById('smaBus').addEventListener('change', function() {
@@ -2267,7 +2329,7 @@ let _toastTimer = null;
         const grade = document.getElementById('addrGrade')?.value.trim();
         const bunk = document.getElementById('addrBunk')?.value.trim();
 
-        if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); return; }
+        if (!st) { delete D.addresses[_editCamper]; save(); if (!D.addresses || Object.keys(D.addresses).length === 0) _clearCloudDataType('addresses'); /* ★ CB-113 */ closeModal('addressModal'); renderAddresses(); updateStats(); return; }
         // ★ Starter plan: check limit if this is a NEW address
         if (!D.addresses[_editCamper]) {
             var limit = await checkCamperLimitGo(1);
@@ -2298,13 +2360,22 @@ let _toastTimer = null;
         if (!_editCamper) return;
         if (!confirm('Delete all address data for ' + _editCamper + '?\n\nThis cannot be undone.')) return;
         delete D.addresses[_editCamper];
-        save(); closeModal('addressModal'); renderAddresses(); updateStats();
+        save();
+        // ★★★ CB-113: when the map drops to empty, save() skips the cloud write
+        // (it only pushes addresses when non-empty), so the deletion never reaches
+        // cloud and reload resurrects the old set. Explicitly overwrite the cloud
+        // 'addresses' row with {} so the delete sticks.
+        if (!D.addresses || Object.keys(D.addresses).length === 0) _clearCloudDataType('addresses');
+        closeModal('addressModal'); renderAddresses(); updateStats();
         toast(_editCamper + ': address deleted');
     }
     function _quickDeleteAddress(name) {
         // Called directly from table row — confirmation already shown inline
         delete D.addresses[name];
-        save(); renderAddresses(); updateStats();
+        save();
+        // ★★★ CB-113: see deleteAddress — clear the cloud row when it becomes empty.
+        if (!D.addresses || Object.keys(D.addresses).length === 0) _clearCloudDataType('addresses');
+        renderAddresses(); updateStats();
         toast(name + ': address deleted');
     }
 
@@ -2329,7 +2400,10 @@ let _toastTimer = null;
         save();
         _clearCloudDataType('addresses');
         _clearCloudDataType('routes');
-        _clearCloudDataType('state');
+        // ★★★ CB-127: do NOT _clearCloudDataType('state') here. save() above
+        // already persisted the full current state row (buses/shifts/setup/
+        // monitors/counselors) to cloud — wiping it to {} destroyed all of that
+        // fleet config, which has nothing to do with addresses.
         _goStandaloneRoster = {};
         renderAddresses(); updateStats();
         document.getElementById('routeResults').style.display = 'none';
@@ -2345,7 +2419,10 @@ let _toastTimer = null;
         D.monitors.forEach(m => { if (D.addresses[m.name]?._isStaff) delete D.addresses[m.name]; });
         D.monitors = [];
         save();
-        _clearCloudDataType('state');
+        // ★★★ CB-107: do NOT _clearCloudDataType('state') — save() already
+        // persisted the updated state row (monitors emptied, buses/shifts/
+        // setup/counselors intact). Overwriting it with {} wiped the entire
+        // fleet config.
         if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
         renderStaff(); updateStats();
         toast(count + ' monitor(s) cleared');
@@ -2359,7 +2436,9 @@ let _toastTimer = null;
         D.counselors.forEach(c => { if (D.addresses[c.name]?._isStaff) delete D.addresses[c.name]; });
         D.counselors = [];
         save();
-        _clearCloudDataType('state');
+        // ★★★ CB-107: do NOT _clearCloudDataType('state') — save() already
+        // persisted the updated state row (counselors emptied, everything else
+        // intact). Overwriting it with {} wiped the entire fleet config.
         if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
         renderStaff(); updateStats();
         toast(count + ' counselor(s) cleared');
@@ -6075,6 +6154,13 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             const coordsArr = [{ lat: campLat, lng: campLng }];
             stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
             matrix = await fetchDistanceMatrix(coordsArr, campLat, campLng);
+            // ★★★ CB-118: stamp each stop's matrix index (coordsArr = [camp, ...stops],
+            // so stops[i] → matrix row i+1). The ETA helpers driveMin/campToStopMin
+            // read matrix[a._matrixIdx]/matrix[0][s._matrixIdx], but _matrixIdx was
+            // NEVER assigned, so those guards were always false and every ETA fell
+            // back to haversine — ignoring the road matrix just fetched. (Cleaned up
+            // by the existing `delete s._matrixIdx` at the end of this function.)
+            stops.forEach(function (s, i) { s._matrixIdx = i + 1; });
 
             const startsAtCamp = !isArrival;
             const endsAtCamp = isArrival || reoptNeedsReturn;
@@ -6153,6 +6239,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         }
 
         route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
+        // ★★★ CB-119: evict this route's cached road polyline — the stop order just
+        // changed, but the map render reads _routeGeomCache FIRST, so the old
+        // polyline would be drawn over the new stop sequence until a full regen /
+        // mode switch. delete route._roadPts too so it's rebuilt on next render.
+        try { delete _routeGeomCache[route.busId + '_' + route.shiftIdx]; delete route._roadPts; } catch (_) {}
         _generatedRoutes = D.savedRoutes; save();
         renderRouteResults(D.savedRoutes);
         console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'road-matrix' : 'haversine') + ')');
@@ -7194,7 +7285,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                 const isSpecial = stop.isMonitor || stop.isCounselor;
                 const size = isSpecial ? 20 : 26;
                 const icon = L.divIcon({ html: '<div class="stop-marker-icon" style="width:' + size + 'px;height:' + size + 'px;background:' + esc(route.busColor) + ';' + (isSpecial ? 'font-size:10px;' : '') + '">' + (isSpecial ? (stop.isMonitor ? 'M' : 'C') : stop.stopNum) + '</div>', className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
-                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
+                // ★★★ CB-120: escape camper/staff names before they go into the
+                // Leaflet popup innerHTML (sibling lines already esc() the same kind
+                // of value). A camper named <img onerror=...> otherwise executes on
+                // popup open.
+                const names = stop.isMonitor ? '🛡️ ' + esc(stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + esc(stop.counselorName || 'Counselor') : stop.campers.map(c => esc(c.name)).join('<br>');
                 const counselorNames = (stop._counselors?.length) ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee;">' + stop._counselors.map(c => '<div style="font-size:11px;display:flex;align-items:center;gap:4px;">🎒 <strong>' + esc(c.name) + '</strong> <span style="color:#888;">(' + c.walkFt + 'ft walk)</span></div>').join('') + '</div>' : '';
                 const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;">' + names + '</div>' + counselorNames + '<div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-weight:600;">Est: ' + stop.estimatedTime + '</div>' : '') + '</div>';
                 const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
@@ -7485,11 +7580,17 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     function moveCamperToBus(camperName, fromBusId, toBusId, shiftIdx) {
         if (!_generatedRoutes || !D.savedRoutes) return;
         const sr = D.savedRoutes[shiftIdx]; if (!sr) return;
+        // ★★★ CB-117: resolve the DESTINATION bus BEFORE mutating the source route.
+        // Previously the camper was spliced out of fromRoute first and toRoute was
+        // looked up only after — if the destination bus was gone (e.g. removed via a
+        // concurrent edit), the early return left the camper removed from source and
+        // re-added nowhere (permanent loss). Validate the destination up front.
+        const toRoute = sr.routes.find(r => r.busId === toBusId);
+        if (!toRoute) { toast('Bus not found', 'error'); return; }
         let camperData = null, camperStop = null;
         const fromRoute = sr.routes.find(r => r.busId === fromBusId);
         if (fromRoute) { for (const st of fromRoute.stops) { const ci = st.campers.findIndex(c => c.name === camperName); if (ci >= 0) { camperData = st.campers.splice(ci, 1)[0]; camperStop = st; break; } } fromRoute.stops = fromRoute.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor); fromRoute.stops.forEach((st, i) => { st.stopNum = i + 1; }); fromRoute.camperCount = fromRoute.stops.reduce((s, st) => s + st.campers.length, 0); }
         if (!camperData || !camperStop) { toast('Camper not found', 'error'); return; }
-        const toRoute = sr.routes.find(r => r.busId === toBusId); if (!toRoute) { toast('Bus not found', 'error'); return; }
         let added = false;
         if (camperStop.lat && camperStop.lng) { for (const st of toRoute.stops) { if (st.lat && st.lng && haversineMi(camperStop.lat, camperStop.lng, st.lat, st.lng) < 0.3) { st.campers.push(camperData); added = true; break; } } }
         if (!added) { const cLat = D.setup.campLat || _campCoordsCache?.lat || 0; const cLng = D.setup.campLng || _campCoordsCache?.lng || 0; directionalInsert(toRoute.stops, { stopNum: 0, campers: [camperData], address: camperStop.address, lat: camperStop.lat, lng: camperStop.lng, estimatedTime: camperStop.estimatedTime }, cLat, cLng); }
@@ -7515,7 +7616,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
 
     function printRoutes(printWhat) {
         if (!_generatedRoutes) { toast('Generate first', 'error'); return; }
-        if (!printWhat) { const modal = '<div style="display:flex;flex-direction:column;gap:.75rem;padding:1rem;"><h3 style="margin:0;">Print Options</h3><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'routes\');CampistryGo.closeModal(\'printModal\')">Bus Routes</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'master\');CampistryGo.closeModal(\'printModal\')">Master List</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'busSheets\');CampistryGo.closeModal(\'printModal\')">Bus Sheets (1/page)</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'driverSheets\');CampistryGo.closeModal(\'printModal\')">Driver Sheets</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'all\');CampistryGo.closeModal(\'printModal\')">Everything</button><button class="btn btn-secondary" onclick="CampistryGo.closeModal(\'printModal\')">Cancel</button></div>'; let overlay = document.getElementById('printModal'); if (!overlay) { overlay = document.createElement('div'); overlay.id = 'printModal'; overlay.className = 'modal-overlay'; overlay.innerHTML = '<div class="modal" style="max-width:360px;">' + modal + '</div>'; document.body.appendChild(overlay); overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); }); } else overlay.querySelector('.modal').innerHTML = modal; overlay.classList.add('open'); return; }
+        if (!printWhat) { const modal = '<div style="display:flex;flex-direction:column;gap:.75rem;padding:1rem;"><h3 style="margin:0;">Print Options</h3><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'routes\');CampistryGo.closeModal(\'printModal\')">Bus Routes</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'master\');CampistryGo.closeModal(\'printModal\')">Master List</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'busSheets\');CampistryGo.closeModal(\'printModal\')">Bus Sheets (1/page)</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'driverSheets\');CampistryGo.closeModal(\'printModal\')">Driver Sheets</button><button class="btn btn-primary" onclick="CampistryGo.printRoutes(\'all\');CampistryGo.closeModal(\'printModal\')">Everything</button><button class="btn btn-secondary" onclick="CampistryGo.closeModal(\'printModal\')">Cancel</button></div>'; let overlay = document.getElementById('printModal'); if (!overlay) { overlay = document.createElement('div'); overlay.id = 'printModal'; overlay.className = 'modal-overlay'; overlay.innerHTML = '<div class="modal" style="max-width:360px;">' + modal + '</div>'; document.body.appendChild(overlay); let _mdPm = false; overlay.addEventListener('mousedown', e => { _mdPm = (e.target === overlay); }); overlay.addEventListener('click', e => { if (e.target === overlay && _mdPm) overlay.classList.remove('open'); }); } else overlay.querySelector('.modal').innerHTML = modal; overlay.classList.add('open'); return; }
         const cn = D.setup.campName || 'Camp'; const modeLabel = D.activeMode === 'arrival' ? 'Pickup' : 'Drop-off'; const timeLabel = D.activeMode === 'arrival' ? 'Arrive by' : 'Departs';
         let h = '<!DOCTYPE html><html><head><title>Bus Routes — ' + esc(cn) + '</title><style>body{font-family:Arial,sans-serif;font-size:11pt;color:#222;margin:20px}h1{font-size:18pt;margin-bottom:4px}h2{font-size:14pt;margin:20px 0 8px;padding:6px 10px;color:#fff;border-radius:4px}.sub{color:#666;font-size:10pt;margin-bottom:20px}table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:10pt}th{background:#f5f5f5;text-align:left;padding:6px 8px;border:1px solid #ddd;font-size:9pt;text-transform:uppercase}td{padding:5px 8px;border:1px solid #ddd}@media print{.no-print{display:none}}</style></head><body>';
         h += '<h1>' + esc(cn) + ' — ' + modeLabel + ' Routes</h1><div class="sub">Generated: ' + new Date().toLocaleDateString() + ' | Powered by VROOM</div>';
@@ -7562,7 +7663,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             _generatedRoutes = D.savedRoutes;
             setTimeout(() => { renderRouteResults(D.savedRoutes); toast('Saved routes loaded'); }, 200);
         }
-        document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
+        document.querySelectorAll('.modal-overlay').forEach(o => { let _mdO = false; o.addEventListener('mousedown', e => { _mdO = (e.target === o); }); o.addEventListener('click', e => { if (e.target === o && _mdO) o.classList.remove('open'); }); });
         document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open')); });
         window.addEventListener('campistry-cloud-hydrated', () => {
             console.log('[Go] Cloud data hydrated');
@@ -7872,6 +7973,19 @@ window.GoFlagPersistence = (function () {
 // hitting Supabase.
 // =============================================================================
 let _flagCache = null;
+
+// ★★★ CB-115: the flag cache was loaded once and NEVER invalidated, so every
+// mutation wrote the whole stale route_flags row, clobbering another device's
+// concurrent flag edits (last-clicker-wins). Invalidate on focus / visibility so
+// a returning dispatcher re-loads fresh flags before mutating (_ensureFlags
+// reloads when _flagCache is null), shrinking the clobber window to a single
+// focused session.
+if (typeof window !== 'undefined' && window.addEventListener) {
+    try {
+        window.addEventListener('focus', function () { _flagCache = null; });
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) _flagCache = null; });
+    } catch (_) {}
+}
 
 async function _ensureFlags() {
     if (_flagCache) return _flagCache;
@@ -8343,7 +8457,7 @@ async function renderDispatcherDashboard(allShifts) {
                 } else {
                     html += '<button class="btn btn-ghost btn-sm"' +
                         ' onclick="CampistryGo.pinAnchor(' + shiftData.shiftIdx + ',\'' +
-                            esc(r.busId) + '\',\'' + esc(da.address) + '\',' +
+                            _goJsArg(r.busId) + '\',\'' + _goJsArg(da.address) + '\',' +
                             da.kidCount /* unused but keeps API parity */ + ',' + 0 + ')">' +
                         'Pin as anchor' +
                         '</button>';

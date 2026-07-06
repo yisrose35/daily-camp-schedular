@@ -85,14 +85,7 @@
      * Convert minutes to time label
      * 540 → "9:00 AM", 810 → "1:30 PM"
      */
-    function minutesToTimeLabel(mins) {
-        if (mins === null || mins === undefined) return '';
-        let h = Math.floor(mins / 60);
-        let m = mins % 60;
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        h = h % 12 || 12;
-        return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
-    }
+    function minutesToTimeLabel(mins) { return window.CampUtils.minutesToTimeLabel(mins); }  // → campistry_utils.js (canonical; identical for valid input)
 
     /**
      * Convert minutes to Date object (for compatibility)
@@ -193,6 +186,40 @@
      * @param {Object} divisions - The divisions object { "Junior Boys": { bunks: [...] }, ... }
      * @returns {Object} divisionTimes - { "Junior Boys": [slots...], "Senior Boys": [slots...] }
      */
+    // Drop exact-duplicate skeleton tiles (same division + activity + start time) before
+    // building the grid. A skeleton can carry two tiles for the same period — e.g. a
+    // base-template copy plus a per-date board copy, often differing only in capitalization
+    // or a malformed time string ("6:30" vs "6:30pm"). Two tiles in one slot register as an
+    // "overlap", which flips the division onto the boundary-union path; that path then
+    // manufactures fillable slots inside genuinely-empty gaps (a phantom activity in time
+    // the user left blank). Keep the better-formed tile (valid am/pm on both ends), drop the rest.
+    function dedupeSkeletonTiles(skeleton) {
+        if (!Array.isArray(skeleton)) return skeleton;
+        const norm = x => String(x == null ? '' : x).toLowerCase().replace(/\s+/g, ' ').trim();
+        const wellFormed = b => /(am|pm)\s*$/i.test(String((b && b.startTime) || '').trim())
+                             && /(am|pm)\s*$/i.test(String((b && b.endTime) || '').trim());
+        const seen = new Map();
+        const cleaned = [];
+        const drops = [];
+        skeleton.forEach(b => {
+            if (!b || !b.division) { cleaned.push(b); return; }
+            const key = `${b.division}|${norm(b.event)}|${parseTimeToMinutes(b.startTime)}`;
+            if (!seen.has(key)) {
+                seen.set(key, cleaned.length);
+                cleaned.push(b);
+            } else {
+                const at = seen.get(key);
+                if (wellFormed(b) && !wellFormed(cleaned[at])) { drops.push(cleaned[at]); cleaned[at] = b; }
+                else drops.push(b);
+            }
+        });
+        if (drops.length) {
+            log(`  ⚠️ DEDUPE: dropped ${drops.length} duplicate tile(s): ` +
+                drops.map(b => `${b.division}:"${b.event}" ${b.startTime}-${b.endTime}`).join(', '));
+        }
+        return cleaned;
+    }
+
     function buildDivisionTimesFromSkeleton(skeleton, divisions) {
         log('Building division times from skeleton...');
         log(`  Skeleton items: ${skeleton?.length || 0}`);
@@ -202,6 +229,9 @@
             log('  ⚠️ Empty skeleton, returning empty divisionTimes');
             return {};
         }
+
+        // ★★★ DEDUPE phantom-gap trigger: remove exact-duplicate tiles up front ★★★
+        skeleton = dedupeSkeletonTiles(skeleton);
 
         const divisionTimes = {};
 
@@ -235,6 +265,16 @@
 
             const validated = (divStartMin !== null && divEndMin !== null)
                 ? parsed.reduce((acc, block) => {
+                    // ★ NIGHT ACTIVITY: a tile flagged as a night/late-night event
+                    // legitimately ends — and often starts — AFTER the division's end
+                    // time. The boundary clip/drop below would otherwise drop it (start
+                    // ≥ divEnd) or clip it to nothing (end > divEnd), so it would never
+                    // reach the slot grid and never get scheduled, even though the DA
+                    // grid extends to display it. Exempt it and keep its real times.
+                    if (block.isNightActivity) {
+                        acc.push(block);
+                        return acc;
+                    }
                     // Entirely outside division hours → drop with warning
                     if (block.endMin <= divStartMin || block.startMin >= divEndMin) {
                         log(`  ⚠️ DROPPED block "${block.event}" (${minutesToTimeLabel(block.startMin)}-${minutesToTimeLabel(block.endMin)}) — outside ${divName} hours (${minutesToTimeLabel(divStartMin)}-${minutesToTimeLabel(divEndMin)})`);
@@ -282,6 +322,10 @@ if (hasBunkSpecificBlocks) {
 
     const sortedPoints = [...timePoints].sort((a, b) => a - b);
     const divWideBlocks = withExpandedSplits.filter(b => !b._bunk);
+    // Per-bunk (auto) blocks legitimately overlap each other and drive _perBunkSlots
+    // below; a manual skeleton has NO _bunk tiles, so its overlaps are between real
+    // div-wide tiles (e.g. two overlapping pinned events).
+    const hasPerBunkBlocks = withExpandedSplits.some(b => b._bunk);
 
     slotsForDiv = [];
     for (let i = 0; i < sortedPoints.length - 1; i++) {
@@ -289,6 +333,13 @@ if (hasBunkSpecificBlocks) {
         const e = sortedPoints[i + 1];
         if (e - s < 5) continue;
         const meta = divWideBlocks.find(b => b.startMin <= s && b.endMin >= e);
+        // ★ PHANTOM-GAP GUARD: in a pure-manual skeleton, a gap with NO covering tile
+        // is time the user deliberately left blank. The non-overlap path (consolidateBlocks)
+        // never makes a slot for such gaps; only this boundary-union path did, stamping it
+        // event:'Activity' → STEP 3.5 then filled it with a phantom sport. Honor the manual
+        // principle (tile → fill, no tile → nothing): skip uncovered gaps here. Auto per-bunk
+        // mode (_perBunkSlots is authoritative) is unaffected.
+        if (!meta && !hasPerBunkBlocks) continue;
         slotsForDiv.push({
             slotIndex: slotsForDiv.length,
             startMin: s,

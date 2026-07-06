@@ -1,0 +1,770 @@
+// ============================================================================
+// badges.js — CAMP ACHIEVEMENTS v3.1
+// ============================================================================
+// Per-camp achievements, displayed on the dashboard and awarded live.
+//
+// Categories:
+//   Milestones  — daily schedules generated (1 / 10 / 50 / 100)
+//   Years       — tenure with Campistry (camps.created_at)
+//   Enrollment  — campers enrolled (camperRoster count, else bunkMetaData sizes)
+//   Special     — Founding Member (camps.plan_status === 'founding_member')
+//   Secret      — the easter egg (awarded by easter_egg.js via CampBadges.award)
+//
+// Presentation: metallic medallions — conic-gradient metal ring (bronze/
+// silver/gold/platinum, rose-gold founder, violet secret) around a dark coin
+// face with a periodic shine sweep and tier glow. The dashboard HERO
+// (#dashHeroBadges, next to the camp name) shows the TOP earned medal of
+// each progression track (a 500-camper camp shows 500, not 50/100/250);
+// heroFreeSpace() measures the hero's real free space and the medals wrap
+// onto extra lines within it, so the strip never squeezes the camp name.
+// The chip scrolls to the full collection at the bottom, which shows ALL
+// badges. Badge IDs are unchanged — earned cloud data carries over. No SQL
+// migrations anywhere: state lives in the existing camp_state_kv table;
+// founder status reads the existing camps.plan_status.
+//
+// Storage: camp_state_kv key 'campBadges' → { earned: { badgeId: isoDate } }
+// (direct Supabase upsert with read-merge-union so badges are never lost to a
+// stale cache; localStorage mirror per camp for resilience). Badges only ever
+// accumulate — merge = union with earliest timestamp.
+//
+// Runs on BOTH pages:
+//   dashboard.html — hero strip + collection in #campBadgesGrid + evaluates
+//   flow.html      — listens for 'campistry-schedule-generated' + evaluates
+//
+// Award moment: sliding toast (queued; >3 at once collapses into a summary
+// toast). Kill switch: window.__campBadges = false
+// ============================================================================
+(function(){
+'use strict';
+
+const KV_KEY = "campBadges";
+const LOCAL_MIRROR_PREFIX = "campistry_badges_v1:";
+const SEEN_PREFIX = "campistry_badges_seen_v1:";
+const TOAST_MS = 3400;
+
+// =========================================================================
+// BADGE DEFINITIONS (ids are persisted in the cloud — never change them)
+// =========================================================================
+// medal = short text shown inside the medallion; tier = metal rank.
+// check(stats) — stats fields may be undefined when unknown; comparisons
+// against undefined are false, so badges never award on missing data.
+const BADGE_DEFS = [
+    // Milestones — schedules generated
+    { id: "first_schedule", medal: "1",   tier: "bronze",   name: "First Schedule", cat: "Milestones", desc: "Generated your first daily schedule", check: s => s.schedules >= 1 },
+    { id: "schedules_10",   medal: "10",  tier: "silver",   name: "10 Schedules",   cat: "Milestones", desc: "10 daily schedules generated",        check: s => s.schedules >= 10 },
+    { id: "schedules_50",   medal: "50",  tier: "gold",     name: "50 Schedules",   cat: "Milestones", desc: "50 daily schedules generated",        check: s => s.schedules >= 50 },
+    { id: "schedules_100",  medal: "100", tier: "platinum", name: "100 Schedules",  cat: "Milestones", desc: "100 daily schedules generated",       check: s => s.schedules >= 100 },
+    // Years with Campistry
+    { id: "rookie_season",  medal: "★",  tier: "bronze",   name: "First Season", cat: "Years with Campistry", desc: "Joined Campistry",            check: s => s.years >= 0 },
+    { id: "second_summer",  medal: "1Y", tier: "silver",   name: "One Year",     cat: "Years with Campistry", desc: "One year with Campistry",     check: s => s.years >= 1 },
+    { id: "camp_veteran",   medal: "3Y", tier: "gold",     name: "Three Years",  cat: "Years with Campistry", desc: "Three years with Campistry",  check: s => s.years >= 3 },
+    { id: "founding_legend",medal: "5Y", tier: "platinum", name: "Five Years",   cat: "Years with Campistry", desc: "Five years with Campistry",   check: s => s.years >= 5 },
+    // Enrollment
+    { id: "campers_50",     medal: "50",  tier: "bronze",   name: "50 Campers",  cat: "Enrollment", desc: "50+ campers enrolled",  check: s => s.campers >= 50 },
+    { id: "campers_100",    medal: "100", tier: "silver",   name: "100 Campers", cat: "Enrollment", desc: "100+ campers enrolled", check: s => s.campers >= 100 },
+    { id: "campers_250",    medal: "250", tier: "gold",     name: "250 Campers", cat: "Enrollment", desc: "250+ campers enrolled", check: s => s.campers >= 250 },
+    { id: "campers_500",    medal: "500", tier: "platinum", name: "500 Campers", cat: "Enrollment", desc: "500+ campers enrolled", check: s => s.campers >= 500 },
+    { id: "campers_1000",   medal: "1K",  tier: "diamond",  name: "1,000 Campers", cat: "Enrollment", desc: "1,000+ campers enrolled", check: s => s.campers >= 1000 },
+    // Special — founding camps (camps.plan_status === 'founding_member')
+    { id: "founding_member",medal: "✦",  tier: "rose",     name: "Founding Member", cat: "Special", desc: "One of Campistry's founding camps", check: s => s.foundingMember === true },
+    // Secret — event-awarded only (no check)
+    { id: "egg_hunter",     medal: "★",  tier: "accent",   name: "Easter Egg",  cat: "Secret", desc: "Discovered the hidden easter egg", secret: true },
+];
+
+const CATEGORY_ORDER = ["Milestones", "Years with Campistry", "Enrollment", "Special", "Secret"];
+
+// Campistry's founding camps — recognized regardless of camps.plan_status
+// (which also grants founding status when set to 'founding_member').
+// Founding camps earn the rose-gold badge AND the "Founding Member"
+// wordmark under the camp name on the dashboard.
+const FOUNDING_CAMPS = [
+    "f4d7979e-83d0-463c-8e2d-ae9ad8a7421f",
+    "740109c2-ab01-4a43-9e20-c7f77e20a376",
+    "8512cffe-2f8d-47d4-afd2-a483d7ad0591",
+    "a2d3525a-25a1-41dd-b694-adc37301a12a",
+    "9f682352-fa18-439f-8a97-c70089fa4795",
+];
+
+// =========================================================================
+// IDENTITY + PERSISTENCE
+// =========================================================================
+async function resolveCampId() {
+    try {
+        const direct = window.getCampId ? window.getCampId() : null;
+        if (direct) return direct;
+    } catch (_) {}
+    const cached = localStorage.getItem("campistry_camp_id") || localStorage.getItem("campistry_user_id");
+    if (cached) return cached;
+    try {
+        const { data } = await window.supabase.auth.getUser();
+        return data?.user?.id || null;
+    } catch (_) { return null; }
+}
+
+function mirrorKey(campId) { return LOCAL_MIRROR_PREFIX + campId; }
+
+function readMirror(campId) {
+    try { return JSON.parse(localStorage.getItem(mirrorKey(campId)) || "null") || { earned: {} }; }
+    catch (_) { return { earned: {} }; }
+}
+
+function writeMirror(campId, state) {
+    try { localStorage.setItem(mirrorKey(campId), JSON.stringify(state)); } catch (_) {}
+}
+
+// Union merge — badges only accumulate; earliest earned timestamp wins.
+function mergeStates(a, b) {
+    const earned = {};
+    [a, b].forEach(st => {
+        Object.entries((st && st.earned) || {}).forEach(([id, ts]) => {
+            if (!earned[id] || String(ts) < String(earned[id])) earned[id] = ts;
+        });
+    });
+    return { earned };
+}
+
+async function loadCloudState(campId) {
+    try {
+        const { data, error } = await window.supabase
+            .from("camp_state_kv")
+            .select("value")
+            .eq("camp_id", campId)
+            .eq("key", KV_KEY);
+        if (error) return null;
+        return (data && data[0] && data[0].value) || { earned: {} };
+    } catch (_) { return null; }
+}
+
+async function saveCloudState(campId, state) {
+    try {
+        const { error } = await window.supabase
+            .from("camp_state_kv")
+            .upsert(
+                { camp_id: campId, key: KV_KEY, value: state, updated_at: new Date().toISOString() },
+                { onConflict: "camp_id,key" }
+            );
+        return !error;
+    } catch (_) { return false; }
+}
+
+// Load merged state (cloud ∪ local mirror). Cloud unreachable → mirror only.
+async function loadState(campId) {
+    const cloud = await loadCloudState(campId);
+    const merged = mergeStates(cloud || { earned: {} }, readMirror(campId));
+    writeMirror(campId, merged);
+    return merged;
+}
+
+// Persist: re-merge against current cloud right before writing so a
+// concurrent award from another device is never clobbered.
+async function persistState(campId, state) {
+    const cloud = await loadCloudState(campId);
+    const merged = mergeStates(cloud || { earned: {} }, state);
+    writeMirror(campId, merged);
+    await saveCloudState(campId, merged);
+    return merged;
+}
+
+// =========================================================================
+// STATS COLLECTION (works on both pages; unknown → undefined)
+// =========================================================================
+async function collectStats(campId) {
+    const stats = {};
+
+    // -- schedules generated (distinct cloud dates) --
+    try {
+        if (window.ScheduleDB && window.ScheduleDB.listScheduleDates) {
+            const dates = await window.ScheduleDB.listScheduleDates();
+            if (Array.isArray(dates)) stats.schedules = dates.length;
+        }
+        if (stats.schedules === undefined) {
+            const { data, error } = await window.supabase
+                .from("daily_schedules")
+                .select("date_key")
+                .eq("camp_id", campId);
+            if (!error && Array.isArray(data)) {
+                const seen = {};
+                data.forEach(r => { if (r && r.date_key) seen[String(r.date_key).substring(0, 10)] = 1; });
+                stats.schedules = Object.keys(seen).length;
+            }
+        }
+    } catch (_) {}
+
+    // -- campers enrolled (roster count, else bunkMetaData size sum) --
+    try {
+        const { data, error } = await window.supabase
+            .from("camp_state_kv")
+            .select("key, value")
+            .eq("camp_id", campId)
+            .in("key", ["app1", "bunkMetaData"]);
+        if (!error && Array.isArray(data)) {
+            const state = {};
+            data.forEach(r => { state[r.key] = r.value; });
+            const roster = state.app1?.camperRoster || {};
+            let campers = Object.keys(roster).length;
+            if (campers === 0) {
+                const bunkMeta = state.bunkMetaData || state.app1?.bunkMetaData || {};
+                Object.values(bunkMeta).forEach(meta => { campers += (meta && meta.size) || 0; });
+            }
+            stats.campers = campers;
+        }
+    } catch (_) {}
+
+    // -- years with the program + founding-member plan (camps row; may be
+    //    RLS-blocked for scheduler-role users → these just don't evaluate
+    //    on that client, the owner's dashboard visit awards them) --
+    try {
+        const { data, error } = await window.supabase
+            .from("camps")
+            .select("created_at, plan_status")
+            .eq("id", campId);
+        const row = !error && data && data[0];
+        if (row && row.created_at) {
+            const ms = Date.now() - new Date(row.created_at).getTime();
+            if (ms >= 0) stats.years = Math.floor(ms / (365.25 * 24 * 3600 * 1000));
+        }
+        if (row && row.plan_status) {
+            stats.foundingMember = String(row.plan_status) === "founding_member";
+        }
+    } catch (_) {}
+    if (FOUNDING_CAMPS.indexOf(String(campId)) !== -1) stats.foundingMember = true;
+
+    return stats;
+}
+
+// =========================================================================
+// AWARD ENGINE
+// =========================================================================
+let _campId = null;
+let _userId = null;
+let _state = null;          // { earned: {id: iso} } — camp-level, cloud
+let _seen = null;           // { id: true } — per-user, cloud ∪ local cache
+let _initPromise = null;
+
+async function ensureInit() {
+    if (!_initPromise) {
+        _initPromise = (async () => {
+            // supabase client can lag page load — poll briefly
+            for (let i = 0; i < 60 && !(window.supabase && window.supabase.from); i++) {
+                await new Promise(r => setTimeout(r, 250));
+            }
+            if (!(window.supabase && window.supabase.from)) return false;
+            for (let i = 0; i < 40 && !_campId; i++) {
+                _campId = await resolveCampId();
+                if (!_campId) await new Promise(r => setTimeout(r, 500));
+            }
+            if (!_campId) return false;
+            try {
+                const { data } = await window.supabase.auth.getUser();
+                _userId = data?.user?.id || null;
+            } catch (_) {}
+            _state = await loadState(_campId);
+            // seen = cloud (per user, survives cache clears) ∪ local cache;
+            // push the union back up so pre-upgrade local-only entries migrate
+            const localSeen = readLocalSeen(_campId);
+            const cloudSeen = await loadCloudSeen(_campId, _userId);
+            _seen = Object.assign({}, cloudSeen, localSeen);
+            writeLocalSeen(_campId, _seen);
+            if (Object.keys(localSeen).some(k => !cloudSeen[k])) persistCloudSeen();
+            return true;
+        })();
+    }
+    return _initPromise;
+}
+
+function isEarned(id) { return !!(_state && _state.earned && _state.earned[id]); }
+
+// ---- per-DEVICE "seen" tracking (localStorage, separate from camp-level
+// earned state): badges awarded while this device wasn't looking replay
+// their award moment here exactly once, then are marked seen. This is what
+// lets each camp user experience badges as NEW on their own machine even
+// when another device triggered the actual award. ----
+const _unseenThisView = new Set();   // drives the NEW markers this page view
+
+function readLocalSeen(campId) {
+    try { return JSON.parse(localStorage.getItem(SEEN_PREFIX + campId) || "null") || {}; }
+    catch (_) { return {}; }
+}
+
+function writeLocalSeen(campId, seen) {
+    try { localStorage.setItem(SEEN_PREFIX + campId, JSON.stringify(seen)); } catch (_) {}
+}
+
+// Cloud copy of the per-USER seen set (camp_state_kv key campBadgesSeen:<uid>)
+// so clearing the browser cache — or switching devices — never replays
+// already-seen badges. localStorage is just a fast local cache of it.
+async function loadCloudSeen(campId, userId) {
+    if (!userId) return {};
+    try {
+        const { data, error } = await window.supabase
+            .from("camp_state_kv")
+            .select("value")
+            .eq("camp_id", campId)
+            .eq("key", "campBadgesSeen:" + userId);
+        if (error) return {};
+        return (data && data[0] && data[0].value && data[0].value.seen) || {};
+    } catch (_) { return {}; }
+}
+
+// Add-only union write, re-merged against the cloud right before writing so
+// the user's other devices can never lose seen entries.
+async function persistCloudSeen() {
+    if (!_userId || !_campId || !_seen) return;
+    try {
+        const cloud = await loadCloudSeen(_campId, _userId);
+        const merged = Object.assign({}, cloud, _seen);
+        await window.supabase.from("camp_state_kv").upsert(
+            { camp_id: _campId, key: "campBadgesSeen:" + _userId, value: { seen: merged }, updated_at: new Date().toISOString() },
+            { onConflict: "camp_id,key" }
+        );
+    } catch (_) {}
+}
+
+function markSeen(ids) {
+    if (!_campId || !ids.length) return;
+    if (!_seen) _seen = readLocalSeen(_campId);
+    ids.forEach(id => { _seen[id] = true; _unseenThisView.add(id); });
+    writeLocalSeen(_campId, _seen);
+    persistCloudSeen();   // fire-and-forget; failures self-heal on the next mark
+}
+
+// Replay the award moment for anything earned but never seen by this USER.
+function celebrateUnseen() {
+    if (window.__campBadges === false) return;
+    if (!_state || !_campId) return;
+    if (!_seen) _seen = readLocalSeen(_campId);
+    const unseen = BADGE_DEFS.filter(d => _state.earned[d.id] && !_seen[d.id]);
+    if (!unseen.length) return;
+    markSeen(unseen.map(d => d.id));
+    queueToast(unseen);
+    renderIfPresent();   // show the NEW markers
+}
+
+// Award one badge by id (used by evaluate + external callers like the egg).
+async function award(id, opts) {
+    if (window.__campBadges === false) return false;
+    const def = BADGE_DEFS.find(d => d.id === id);
+    if (!def) return false;
+    if (!(await ensureInit())) return false;
+    if (isEarned(id)) return false;
+    _state.earned[id] = new Date().toISOString();
+    _state = await persistState(_campId, _state);
+    if (!(opts && opts.silent)) queueToast([def]);
+    markSeen([id]);   // this device watched the award happen
+    renderIfPresent();
+    return true;
+}
+
+// Evaluate all stat-based badges; awards everything newly qualified.
+async function evaluate(statsOverride) {
+    if (window.__campBadges === false) return [];
+    if (!(await ensureInit())) return [];
+    const stats = statsOverride || await collectStats(_campId);
+    const newly = BADGE_DEFS.filter(d => d.check && !isEarned(d.id) && d.check(stats));
+    if (newly.length === 0) return [];
+    const now = new Date().toISOString();
+    newly.forEach(d => { _state.earned[d.id] = now; });
+    _state = await persistState(_campId, _state);
+    queueToast(newly);
+    markSeen(newly.map(d => d.id));   // this device watched the awards happen
+    renderIfPresent();
+    return newly.map(d => d.id);
+}
+
+// =========================================================================
+// MEDALLION BUILDER (shared by hero strip, collection grid, toast)
+// =========================================================================
+function buildMedal(def, opts) {
+    const locked = !!(opts && opts.locked);
+    const hidden = !!(opts && opts.hidden);
+    const medal = document.createElement("div");
+    medal.className = "cbadge-medal " + (locked ? "cbadge-tier-locked" : `cbadge-tier-${def.tier}`);
+    const face = document.createElement("span");
+    face.className = "cbadge-medal-face";
+    const text = document.createElement("span");
+    text.className = "cbadge-medal-text";
+    text.textContent = hidden ? "?" : def.medal;
+    face.appendChild(text);
+    medal.appendChild(face);
+    return medal;
+}
+
+// =========================================================================
+// AWARD TOAST (queued, sequential)
+// =========================================================================
+const _toastQueue = [];
+let _toastActive = false;
+
+function queueToast(defs) {
+    // >3 at once (e.g. retroactive first run): show 2, collapse the rest
+    if (defs.length > 3) {
+        _toastQueue.push(defs[0], defs[1], {
+            medal: "+" + (defs.length - 2), tier: "gold",
+            name: (defs.length - 2) + " more achievements earned",
+            desc: "See the full collection on your Dashboard", _summary: true,
+        });
+    } else {
+        _toastQueue.push(...defs);
+    }
+    pumpToasts();
+}
+
+function pumpToasts() {
+    if (_toastActive) return;
+    const def = _toastQueue.shift();
+    if (!def) return;
+    _toastActive = true;
+    injectStyles();
+
+    const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const toast = document.createElement("div");
+    toast.className = "cbadge-toast" + (reducedMotion ? " cbadge-noanim" : "");
+    toast.appendChild(buildMedal(def));
+    const textWrap = document.createElement("div");
+    textWrap.className = "cbadge-toast-text";
+    textWrap.innerHTML = [
+        '<div class="cbadge-toast-kicker">Achievement unlocked</div>',
+        '<div class="cbadge-toast-name"></div>',
+        '<div class="cbadge-toast-desc"></div>',
+    ].join("");
+    textWrap.querySelector(".cbadge-toast-name").textContent = def.name;
+    textWrap.querySelector(".cbadge-toast-desc").textContent = def.desc || "";
+    toast.appendChild(textWrap);
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add("cbadge-out");
+        setTimeout(() => {
+            toast.remove();
+            _toastActive = false;
+            pumpToasts();
+        }, 350);
+    }, TOAST_MS);
+}
+
+// =========================================================================
+// RENDER — HERO STRIP (earned medals by the camp name) + COLLECTION GRID
+// =========================================================================
+function renderIfPresent() {
+    if (!_state) return;
+    const grid = document.getElementById("campBadgesGrid");
+    if (grid) renderCollection(grid);
+    const strip = document.getElementById("dashHeroBadges");
+    if (strip) renderHeroStrip(strip);
+    renderFoundingMark();
+}
+
+// "✦ FOUNDING MEMBER ✦" wordmark under the camp name in the dashboard hero —
+// rose-gold letterspaced small caps with a slow shimmer, flanked by thin
+// fading rules. Rendered once for camps holding the founding_member badge.
+function renderFoundingMark() {
+    if (!isEarned("founding_member")) return;
+    if (document.getElementById("campFoundingMark")) return;
+    const title = document.querySelector(".dash-hero-left .welcome-title");
+    if (!title || !title.insertAdjacentElement) return;
+    injectStyles();
+    const mark = document.createElement("div");
+    mark.id = "campFoundingMark";
+    mark.className = "cbadge-founding-mark";
+    mark.setAttribute("title", "One of Campistry's founding camps");
+    const text = document.createElement("span");
+    text.className = "cbadge-fm-text";
+    text.textContent = "✦ Founding Member ✦";
+    mark.appendChild(text);
+    title.insertAdjacentElement("afterend", mark);
+}
+
+// Free horizontal space for the hero strip: measured from real geometry —
+// hero width minus the clock/weather block, hero padding, and a protected
+// zone for the camp-name text — so zoom and display scaling can't miscount.
+// Returns the free px (the strip wraps its medals within it), or -1 when
+// not even the count chip fits.
+function heroFreeSpace(strip) {
+    try {
+        const hero = strip.parentElement;
+        const right = hero && hero.querySelector ? hero.querySelector(".dash-hero-right") : null;
+        if (!hero || !right || !hero.clientWidth) return 9999;
+        const TITLE_MIN = 260;   // room reserved for the welcome text
+        const CHIP_W = 80;       // count chip + gap
+        const PADDING = 48;      // hero padding + strip margins
+        const free = hero.clientWidth - right.getBoundingClientRect().width - PADDING - TITLE_MIN;
+        return free < CHIP_W ? -1 : free;
+    } catch (_) { return 9999; }
+}
+
+function renderHeroStrip(strip) {
+    injectStyles();
+    const freePx = heroFreeSpace(strip);
+    if (freePx < 0) { strip.style.display = "none"; return; }
+    strip.style.maxWidth = freePx + "px";
+
+    const earned = (_state && _state.earned) || {};
+    const totalEarned = BADGE_DEFS.filter(d => earned[d.id]).length;
+
+    // Show only the TOP earned badge of each progression track (a 500-camper
+    // camp shows the 500 medal, not 50/100/250 too) — the full collection at
+    // the bottom of the page has everything. Defs within each category are
+    // ordered ascending, so the last earned one is the highest tier.
+    const heroDefs = CATEGORY_ORDER.map(cat => {
+        const got = BADGE_DEFS.filter(d => d.cat === cat && earned[d.id]);
+        return got.length ? got[got.length - 1] : null;
+    }).filter(Boolean);
+
+    strip.innerHTML = "";
+    heroDefs.forEach(def => {
+        const medal = buildMedal(def);
+        medal.setAttribute("title", def.name + " — " + (def.desc || ""));
+        strip.appendChild(medal);
+    });
+
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "cbadge-hero-chip";
+    chip.textContent = `${totalEarned} of ${BADGE_DEFS.length}`;
+    chip.setAttribute("title", "View all achievements");
+    chip.addEventListener("click", () => {
+        const section = document.getElementById("camp-badges-section");
+        if (section && section.scrollIntoView) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    strip.appendChild(chip);
+    strip.style.display = "";
+}
+
+function renderCollection(grid) {
+    injectStyles();
+    const earned = (_state && _state.earned) || {};
+    const earnedCount = BADGE_DEFS.filter(d => earned[d.id]).length;
+
+    const counter = document.getElementById("campBadgesCount");
+    if (counter) counter.textContent = `${earnedCount} of ${BADGE_DEFS.length} earned`;
+
+    grid.innerHTML = "";
+    CATEGORY_ORDER.forEach(cat => {
+        const defs = BADGE_DEFS.filter(d => d.cat === cat);
+        if (!defs.length) return;
+        const header = document.createElement("div");
+        header.className = "cbadge-cat";
+        header.textContent = cat;
+        grid.appendChild(header);
+
+        const row = document.createElement("div");
+        row.className = "cbadge-grid";
+        defs.forEach(def => {
+            const got = earned[def.id];
+            const hidden = def.secret && !got;
+            const card = document.createElement("div");
+            card.className = "cbadge-card" + (got ? " cbadge-earned" : " cbadge-locked");
+
+            const name = document.createElement("div");
+            name.className = "cbadge-name";
+            name.textContent = hidden ? "Hidden" : def.name;
+
+            let tip = hidden ? "A hidden achievement — keep exploring" : (def.desc || def.name);
+            if (got) {
+                try {
+                    tip += " — earned " + new Date(got).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+                } catch (_) {}
+            }
+            card.setAttribute("title", tip);
+
+            card.appendChild(buildMedal(def, { locked: !got, hidden }));
+            card.appendChild(name);
+            if (got && _unseenThisView.has(def.id)) {
+                const pip = document.createElement("span");
+                pip.className = "cbadge-new";
+                pip.textContent = "NEW";
+                card.appendChild(pip);
+            }
+            row.appendChild(card);
+        });
+        grid.appendChild(row);
+    });
+
+    const section = document.getElementById("camp-badges-section");
+    if (section) section.style.display = "";
+}
+
+// =========================================================================
+// STYLES (injected once; shared by hero strip, grid, toast on both pages)
+// =========================================================================
+let _styled = false;
+function injectStyles() {
+    if (_styled) return;
+    _styled = true;
+    const style = document.createElement("style");
+    style.textContent = `
+.cbadge-medal {
+    position: relative; overflow: hidden;
+    width: 48px; height: 48px; border-radius: 50%;
+    padding: 3px; flex: 0 0 auto;
+    display: flex;
+}
+.cbadge-medal-face {
+    flex: 1; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 32% 28%, #2a3560 0%, #161d3d 58%, #0e1330 100%);
+}
+.cbadge-medal-text { font-size: .76rem; font-weight: 800; letter-spacing: .02em; }
+.cbadge-tier-bronze   { background: conic-gradient(from 210deg, #8a5a2e, #e0a06a, #6f4522, #f0c395, #8a5a2e); box-shadow: 0 2px 12px rgba(200,130,70,.45); }
+.cbadge-tier-bronze   .cbadge-medal-text { color: #eab585; }
+.cbadge-tier-silver   { background: conic-gradient(from 210deg, #6e7d8c, #e8eff5, #5d6c7b, #ffffff, #6e7d8c); box-shadow: 0 2px 12px rgba(150,170,190,.5); }
+.cbadge-tier-silver   .cbadge-medal-text { color: #dde6ee; }
+.cbadge-tier-gold     { background: conic-gradient(from 210deg, #8f6b1d, #f9e076, #7a5a14, #fff3ae, #8f6b1d); box-shadow: 0 2px 14px rgba(220,180,60,.55); }
+.cbadge-tier-gold     .cbadge-medal-text { color: #f7dd7a; }
+.cbadge-tier-platinum { background: conic-gradient(from 210deg, #47596e, #d9e9f8, #3c4c5f, #f2faff, #47596e); box-shadow: 0 2px 16px rgba(150,195,235,.6), 0 0 0 1.5px rgba(210,230,250,.45); }
+.cbadge-tier-platinum .cbadge-medal-text { color: #d9e9f8; }
+.cbadge-tier-accent   { background: conic-gradient(from 210deg, #4c2fa8, #b49bfc, #3d2494, #d4c6ff, #4c2fa8); box-shadow: 0 2px 14px rgba(140,100,250,.55); }
+.cbadge-tier-accent   .cbadge-medal-text { color: #c3b0fd; }
+.cbadge-tier-rose     { background: conic-gradient(from 210deg, #8f4a3e, #f2b09b, #7a3a30, #ffd3c0, #8f4a3e); box-shadow: 0 2px 14px rgba(235,145,115,.55); }
+.cbadge-tier-rose     .cbadge-medal-text { color: #f4b8a4; }
+.cbadge-tier-diamond  { background: conic-gradient(from 210deg, #4d99ad, #e8fbff, #3a7a8c, #ffffff, #4d99ad); box-shadow: 0 2px 18px rgba(130,225,250,.65), 0 0 0 1.5px rgba(220,248,255,.55); }
+.cbadge-tier-diamond  .cbadge-medal-text { color: #c9f2fc; }
+.cbadge-medal::after {
+    content: ""; position: absolute; top: -60%; left: -80%;
+    width: 55%; height: 220%; transform: rotate(25deg);
+    background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.5) 50%, rgba(255,255,255,0) 100%);
+    animation: cbadgeShine 3.6s ease-in-out infinite;
+}
+.cbadge-tier-locked { background: repeating-conic-gradient(#dfe5ec 0deg 14deg, #f2f5f8 14deg 28deg); box-shadow: none; }
+.cbadge-tier-locked .cbadge-medal-face { background: #f8fafc; }
+.cbadge-tier-locked .cbadge-medal-text { color: #b0b9c4; }
+.cbadge-tier-locked::after { display: none; }
+@keyframes cbadgeShine {
+    0%, 76% { left: -80%; }
+    100% { left: 140%; }
+}
+
+/* Hero strip — sits between the camp name and the clock/weather widgets,
+   showing the TOP earned medal per track. heroFreeSpace() measures the
+   hero's real free space and sets max-width; medals wrap onto extra lines
+   within it, so the strip never squeezes the camp name regardless of zoom
+   or display scaling. Phones (<760px) hide the strip entirely. */
+.dash-hero-badges {
+    position: relative; z-index: 1;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 8px; row-gap: 6px; flex: 0 0 auto; margin: 0 16px;
+}
+.dash-hero-badges .cbadge-medal { width: 30px; height: 30px; padding: 2px; }
+.dash-hero-badges .cbadge-medal-text { font-size: .54rem; }
+.cbadge-hero-chip {
+    padding: 5px 10px; border-radius: 999px;
+    background: rgba(255,255,255,.14); color: #eef6f6;
+    border: 1px solid rgba(255,255,255,.28);
+    font-size: .66rem; font-weight: 700; letter-spacing: .04em;
+    white-space: nowrap;
+    cursor: pointer; transition: background .15s ease;
+}
+.cbadge-hero-chip:hover { background: rgba(255,255,255,.24); }
+@media (max-width: 760px)  { .dash-hero-badges { display: none !important; } }
+
+.cbadge-toast {
+    position: fixed; top: 18px; right: 18px; z-index: 100000;
+    display: flex; align-items: center; gap: 14px;
+    width: min(340px, 92vw); padding: 14px 18px;
+    background: #ffffff; color: #1e293b;
+    border: 1px solid #e2e8f0; border-left: 3px solid #d4af37;
+    border-radius: 12px;
+    box-shadow: 0 10px 34px rgba(15, 23, 42, .16);
+    animation: cbadgeIn .4s cubic-bezier(.25,1.2,.4,1);
+}
+.cbadge-toast.cbadge-out { opacity: 0; transform: translateX(24px); transition: opacity .35s ease, transform .35s ease; }
+.cbadge-toast.cbadge-noanim { animation: none; }
+.cbadge-toast.cbadge-noanim .cbadge-medal::after { display: none; }
+.cbadge-toast-text { min-width: 0; }
+.cbadge-toast-kicker { font-size: .66rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #a8842a; }
+.cbadge-toast-name { margin-top: 2px; font-size: .98rem; font-weight: 700; color: #0f172a; }
+.cbadge-toast-desc { margin-top: 1px; font-size: .78rem; color: #64748b; }
+@keyframes cbadgeIn {
+    0% { opacity: 0; transform: translateX(48px); }
+    100% { opacity: 1; transform: translateX(0); }
+}
+
+/* Founding Member wordmark — under the camp name in the hero */
+.cbadge-founding-mark {
+    display: inline-flex; align-items: center; gap: 12px;
+    margin-top: 10px;
+}
+.cbadge-founding-mark::before,
+.cbadge-founding-mark::after { content: ""; height: 1px; width: 36px; }
+.cbadge-founding-mark::before { background: linear-gradient(90deg, transparent, rgba(244,196,170,.85)); }
+.cbadge-founding-mark::after  { background: linear-gradient(90deg, rgba(244,196,170,.85), transparent); }
+.cbadge-fm-text {
+    font-size: .66rem; font-weight: 700;
+    letter-spacing: .3em; text-transform: uppercase; white-space: nowrap;
+    background: linear-gradient(90deg, #e9b18e 0%, #ffe9d8 45%, #e9b18e 90%);
+    background-size: 200% auto;
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent; color: transparent;
+    animation: cbadgeFmShimmer 5.5s linear infinite;
+}
+@keyframes cbadgeFmShimmer { to { background-position: 200% center; } }
+@media (prefers-reduced-motion: reduce) { .cbadge-fm-text { animation: none; } }
+@media (max-width: 760px) { .cbadge-founding-mark::before, .cbadge-founding-mark::after { width: 20px; } }
+
+.cbadge-cat {
+    margin: 16px 0 8px; font-size: .68rem; font-weight: 700;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--slate-400, #94a3b8);
+}
+.cbadge-cat:first-child { margin-top: 0; }
+.cbadge-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px;
+}
+.cbadge-card {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 12px 6px 10px; border-radius: 12px;
+    border: 1px solid var(--slate-200, #e2e8f0); background: #fff;
+    cursor: default;
+}
+.cbadge-new {
+    position: absolute; top: 6px; right: 6px;
+    padding: 2px 7px; border-radius: 999px;
+    background: linear-gradient(135deg, #ffd700, #ff9f1a);
+    color: #22160a; font-size: .56rem; font-weight: 800; letter-spacing: .08em;
+}
+.cbadge-card.cbadge-locked .cbadge-name { color: var(--slate-400, #94a3b8); }
+.cbadge-name { font-size: .74rem; font-weight: 600; color: var(--slate-700, #334155); text-align: center; line-height: 1.25; }
+`;
+    document.head.appendChild(style);
+}
+
+// =========================================================================
+// BOOT
+// =========================================================================
+async function boot() {
+    if (window.__campBadges === false) return;
+    const onDashboard = !!document.getElementById("campBadgesGrid");
+
+    if (onDashboard) {
+        if (!(await ensureInit())) return;
+        renderIfPresent();                       // show hero strip + collection immediately
+        // Medal budget depends on hero geometry — re-render on resize
+        if (typeof window.addEventListener === "function") {
+            let resizeTimer = null;
+            window.addEventListener("resize", () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(renderIfPresent, 200);
+            });
+        }
+        await evaluate();                        // then check for new awards
+        celebrateUnseen();                       // replay awards this device missed
+        renderIfPresent();
+    } else {
+        // Flow (or any page firing generation events): evaluate after each
+        // successful generation + once shortly after boot (retroactive catch-up).
+        document.addEventListener("campistry-schedule-generated", () => {
+            setTimeout(() => { evaluate().then(celebrateUnseen).catch(() => {}); }, 2000);
+        });
+        setTimeout(() => { evaluate().then(celebrateUnseen).catch(() => {}); }, 8000);
+    }
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+} else {
+    boot();
+}
+
+window.CampBadges = { award, evaluate, defs: BADGE_DEFS };
+
+})();

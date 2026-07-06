@@ -33,13 +33,23 @@
         'free', 'no field', 'lunch', 'snacks', 'dismissal',
         'swim', 'pool', 'custom', 'transition', 'buffer',
         'canteen', 'mincha', 'davening', 'lineup', 'bus',
-        'regroup', 'free play'
+        'regroup', 'free play',
+        // Transition / cleanup / generic non-facility labels. These are NOT real
+        // contended facilities (a whole grade "changes" or "cleans up" together,
+        // and "main activity" is the generic label for a custom pinned block with
+        // no assigned room). Without these, an unmapped label defaults to
+        // {not_sharable, cap 1} (see checkCrossDivision) and every co-occupancy is
+        // falsely reported as a cross-division/capacity conflict.
+        'change', 'cleanup', 'main activity'
     ]);
 
     const SKIP_ACTIVITIES = new Set([
         'free', 'lunch', 'snacks', 'dismissal', 'swim', 'pool',
         'canteen', 'gameroom', 'game room', 'transition', 'buffer',
-        'mincha', 'davening', 'lineup', 'bus', 'regroup', 'free play'
+        'mincha', 'davening', 'lineup', 'bus', 'regroup', 'free play',
+        // Transition/cleanup labels repeat every day by design (e.g. change before
+        // and after swim) — not real same-day activity repetitions.
+        'change', 'cleanup', 'main activity'
     ]);
 
     const isLeagueField = (fn) => /^game\s*\d+$/i.test(fn);
@@ -142,6 +152,63 @@
             slots.forEach((entry, idx) => {
                 if (!entry || !entry.field || entry.field === 'Free') return;
                 if (entry.continuation) return;
+                // Trips are offsite events, not field bookings — many bunks
+                // "at the Zoo" simultaneously is the intended state, not a
+                // cross-division conflict / capacity violation (FN-59).
+                if (entry._isTrip) return;
+
+                // Custom-layer blocks (user-named "Morning Activity" / "Main
+                // Activity" / Davening, etc.) used to be skipped wholesale —
+                // assumed to be whole-grade activities the entire grade does
+                // together. That assumption fails once each general activity can
+                // carry its OWN sharing config (per-activity config, "like
+                // specials"). E.g. "Morning Activity" at Auditorium configured
+                // not_sharable cap 1 → having Harmony + Prop on it at the same
+                // time IS a real conflict.
+                //
+                // Now we INCLUDE customs in the index, attach the resolved
+                // per-activity sharing (layer override → ga config → field
+                // fallback) to each entry, and let the share check consult that
+                // resolved rule for same-activity pairs.
+                const isCustomEntry = (entry.type === 'custom') || !!entry._customActivity;
+                const customActLow = String(entry._customActivity || (isCustomEntry ? (entry._activity || entry.field) : '') || '').toLowerCase().trim();
+                let _resolvedCustomSharing = null;
+                if (isCustomEntry && typeof window.getCustomActivitySharingInfo === 'function') {
+                    try {
+                        const _r = window.getCustomActivitySharingInfo(
+                            entry._customActivity || entry._activity,
+                            entry._customField || entry.field,
+                            entry._customSharing || null,
+                            (window.loadGlobalSettings ? window.loadGlobalSettings() : {})
+                        );
+                        // Normalize 'all' and orphan 'custom' to the same buckets
+                        // buildFieldSharingMap uses, so the cross-div check applies
+                        // the same gates.
+                        let _rt = _r.shareType || 'not_sharable';
+                        const _rd = Array.isArray(_r.allowedDivisions) ? _r.allowedDivisions : [];
+                        if (_rt === 'custom' && _rd.length === 0) _rt = 'same_division';
+                        if (_rt === 'all') _rt = 'same_division';
+                        _resolvedCustomSharing = {
+                            type: _rt,
+                            capacity: parseInt(_r.capacity) || (_rt === 'not_sharable' ? 1 : 2),
+                            divisions: _rd,
+                            allowedPairs: _r.allowedPairs || {},
+                            _source: _r.source
+                        };
+                    } catch (_eR) { /* fall through to field lookup */ }
+                }
+                // Honor the legacy whole-grade defaults: if the resolved sharing
+                // came from neither layer nor ga config (i.e. source='field' or
+                // 'default') AND the activity name matches the historically-
+                // exempt set (main activity / morning activity / davening etc.),
+                // keep skipping. This preserves backward compatibility for camps
+                // that haven't configured anything per-activity yet — they don't
+                // suddenly start failing validation.
+                if (isCustomEntry && _resolvedCustomSharing && (_resolvedCustomSharing._source === 'field' || _resolvedCustomSharing._source === 'default') &&
+                    (SKIP_ACTIVITIES.has(customActLow) || customActLow === '')) {
+                    return;
+                }
+                if (isCustomEntry && !_resolvedCustomSharing) return;
 
                 const fn = entry.field.toLowerCase().trim();
                 if (SKIP_FIELDS.has(fn) || isLeagueField(fn)) return;
@@ -153,7 +220,19 @@
                     _league: !!entry._league,
                     _autoSpecial: !!entry._autoSpecial,
                     _pinned: !!entry._pinned,
-                    _fixed: !!entry._fixed
+                    _fixed: !!entry._fixed,
+                    // ★ Staggered shared-room custom reserve: per-grade non-overlapping
+                    //   tiling of the SAME custom activity in a shared room is intentional,
+                    //   not a violation. Carry the flag + the custom-activity name so the
+                    //   share checks can exempt an all-reserved-same-act overlap group.
+                    _staggerReserved: !!entry._staggerReserved,
+                    _customAct: customActLow,
+                    // ★ Resolved per-activity sharing for this custom usage. When
+                    //   two usages of the SAME custom activity overlap, the share
+                    //   check uses this instead of the field's rule (Morning
+                    //   Activity may share even though Auditorium is not_sharable,
+                    //   or vice-versa).
+                    _resolvedSharing: _resolvedCustomSharing
                 };
 
                 if (!index.has(fn)) index.set(fn, []);
@@ -181,13 +260,32 @@
         const errors = [];
 
         fieldIndex.forEach((usages, fieldNorm) => {
-            const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1, divisions: [] };
+            const _rawSharing = sharingMap.get(fieldNorm);
+            const _anyPerActivity = usages.some(u => u.flags && u.flags._resolvedSharing);
+            // ★ Configured resources only (mirror of CHECK B's guard). A label NOT in
+            //   the sharing map is an unconfigured custom-layer anchor — e.g. "Morning
+            //   Activity" that each grade does in its own space with no real facility.
+            //   Defaulting it to not_sharable/cap-1 below made the validator invent a
+            //   single shared room and flag every cross-grade co-occurrence as a
+            //   conflict (172 phantom "Morning activity" errors). Skip unless a usage
+            //   carries a real per-activity sharing rule that genuinely governs sharing.
+            if (!_rawSharing && !_anyPerActivity) return;
+            const sharing = _rawSharing || { type: 'not_sharable', capacity: 1, divisions: [] };
 
-            // Skip special locations — they handle their own cross-div rules
-            if (sharing._isSpecial) return;
+            // Specials ARE enforced here, exactly like fields: a special's sharableWith
+            // governs cross-grade co-occupancy under the user's 3 options — not_sharable
+            // (never shared, any grade), same_division (one grade at a time), cross_division
+            // (any grade up to cap). Previously specials were skipped (`_isSpecial`), which
+            // let a not_sharable special be shared ACROSS grades with 0 reported errors.
+            // Unconfigured custom-layer anchors stay skipped by the `!_rawSharing` guard
+            // above, and same-grade over-capacity is still caught by CHECK B (capacity).
 
-            // Only check fields where cross-div matters
-            if (sharing.type !== 'same_division' && sharing.type !== 'not_sharable' && sharing.type !== 'custom') return;
+            // Only check fields where cross-div matters, EXCEPT keep iterating
+            // when any usage carries a per-activity resolved sharing rule (a
+            // 'cross_division' field with a 'not_sharable' per-activity rule
+            // would otherwise be skipped here and the conflict missed).
+            if (!_anyPerActivity &&
+                sharing.type !== 'same_division' && sharing.type !== 'not_sharable' && sharing.type !== 'custom') return;
 
             for (let i = 0; i < usages.length; i++) {
                 const a = usages[i];
@@ -202,36 +300,69 @@
                     if (a.grade === b.grade) continue;
                     if (!timesOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) continue;
 
+                    // ★ Reserved-tiling exemption: both are _staggerReserved uses of the
+                    //   SAME custom activity, sequenced per-grade on a common timeline in a
+                    //   shared room. Their windows are non-overlapping by construction (the
+                    //   solver only sets _staggerReserved on a genuine non-overlap), so any
+                    //   "overlap" here is boundary-touching tiling — not a real cross-grade
+                    //   share. A non-reserved consumer still flags normally.
+                    if (a.flags._staggerReserved && b.flags._staggerReserved &&
+                        a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
+
+                    // ★ Per-activity sharing for same-activity custom pairs (like
+                    //   specials). When two grades use the SAME custom activity
+                    //   (e.g. Morning Activity), the activity's own sharing rule
+                    //   governs — not the field's (Auditorium may be not_sharable
+                    //   while Morning Activity allows cross-grade share, or
+                    //   vice-versa). Different activities at the same field fall
+                    //   back to the field's rule.
+                    let effectiveSharing = sharing;
+                    if (a.flags._customAct && a.flags._customAct === b.flags._customAct &&
+                        a.flags._resolvedSharing) {
+                        effectiveSharing = a.flags._resolvedSharing;
+                    }
+
                     // Cross-division overlap detected
                     let isViolation = false;
 
-                    if (sharing.type === 'not_sharable') {
+                    if (effectiveSharing.type === 'not_sharable') {
                         isViolation = true;
-                    } else if (sharing.type === 'same_division') {
+                    } else if (effectiveSharing.type === 'same_division') {
                         isViolation = true;
-                    } else if (sharing.type === 'custom') {
-                        const allowed = sharing.divisions || [];
+                    } else if (effectiveSharing.type === 'custom') {
+                        const allowed = effectiveSharing.divisions || [];
                         if (allowed.length > 0) {
                             isViolation = !allowed.includes(a.grade) || !allowed.includes(b.grade);
                         } else {
                             isViolation = true; // empty custom = same_division
                         }
+                    } else if (effectiveSharing.type === 'cross_division') {
+                        // ★ Pair-gated cross-division share. Each ordered pair must
+                        //   be in allowedPairs; otherwise the pair is a violation.
+                        const pairs = effectiveSharing.allowedPairs || {};
+                        const pk = [String(a.grade), String(b.grade)].sort().join('|');
+                        isViolation = pairs[pk] !== true;
                     }
 
                     if (isViolation) {
                         const timeLabel = `${formatTime(Math.min(a.startMin, b.startMin))} - ${formatTime(Math.max(a.endMin, b.endMin))}`;
+                        // Label by the activity name when the per-activity rule
+                        // is what flagged this (matches the user's mental model:
+                        // "Morning Activity is not_sharable" vs. "Auditorium").
+                        const usedActivityRule = (effectiveSharing !== sharing);
+                        const subject = usedActivityRule && a.flags._customAct ? a.flags._customAct : a.field;
                         errors.push({
                             type: 'cross_division',
                             field: a.field,
                             fieldNorm,
-                            shareType: sharing.type,
+                            shareType: effectiveSharing.type,
                             bunks: [
                                 { bunk: a.bunk, grade: a.grade, time: `${a.startMin}-${a.endMin}` },
                                 { bunk: b.bunk, grade: b.grade, time: `${b.startMin}-${b.endMin}` }
                             ],
                             timeLabel,
-                            message: `<strong>Cross-Division Conflict:</strong> <u>${a.field}</u> ` +
-                                `(${sharing.type}, cap ${sharing.capacity}) used by ` +
+                            message: `<strong>Cross-Division Conflict:</strong> <u>${subject}</u> ` +
+                                `(${effectiveSharing.type}, cap ${effectiveSharing.capacity}) used by ` +
                                 `${a.bunk} (${a.grade}) @ ${formatTime(a.startMin)}-${formatTime(a.endMin)} and ` +
                                 `${b.bunk} (${b.grade}) @ ${formatTime(b.startMin)}-${formatTime(b.endMin)}`
                         });
@@ -251,7 +382,14 @@
         const errors = [];
 
         fieldIndex.forEach((usages, fieldNorm) => {
-            const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1 };
+            // ★ Only configured resources are capacity-checked. A field/room/special the
+            //   camp actually defined is in the sharing map (real fields + every special,
+            //   incl. cap-1 unconfigured ones). A label that is NOT in the map is a custom
+            //   layer or generic block (e.g. a user-named "Morning Activity" the whole grade
+            //   does together) — not a contended resource. Treating unmapped as cap-1 here
+            //   produced false positives like "Morning Activity has 4 Harmony bunks (cap 1)".
+            const sharing = sharingMap.get(fieldNorm);
+            if (!sharing) return;
 
             // Include sports + specials (both compete for the field).
             // Only exclude leagues (which run their own field-allocator).
@@ -266,7 +404,18 @@
             });
 
             Object.entries(byGrade).forEach(([grade, gradeUsages]) => {
-                if (gradeUsages.length <= sharing.capacity) return;
+                // ★ If every usage in this grade group is the SAME custom
+                //   activity with a resolved per-activity sharing, use the
+                //   activity's capacity — Morning Activity's per-activity cap
+                //   may differ from Auditorium's field cap.
+                let effectiveCap = sharing.capacity;
+                const firstAct = gradeUsages[0]?.flags?._customAct || '';
+                const firstShare = gradeUsages[0]?.flags?._resolvedSharing;
+                if (firstShare && firstAct &&
+                    gradeUsages.every(u => u.flags._customAct === firstAct && u.flags._resolvedSharing)) {
+                    effectiveCap = firstShare.capacity;
+                }
+                if (gradeUsages.length <= effectiveCap) return;
 
                 // Find peak concurrent usage using time sweep
                 const events = [];
@@ -296,21 +445,25 @@
                     }
                 });
 
-                if (peak > sharing.capacity) {
+                if (peak > effectiveCap) {
                     // Find which bunks are active at peak time
                     const peakBunks = gradeUsages.filter(u =>
                         u.startMin <= peakTime && u.endMin > peakTime
                     );
+                    // Label by the activity when the per-activity rule applied
+                    // (matches "Morning Activity (cap 4)" mental model).
+                    const usedActivityRule = (effectiveCap !== sharing.capacity);
+                    const subject = (usedActivityRule && firstAct) ? firstAct : gradeUsages[0].field;
                     errors.push({
                         type: 'capacity',
                         field: gradeUsages[0].field,
                         fieldNorm,
                         grade,
                         peak,
-                        capacity: sharing.capacity,
-                        message: `<strong>Capacity Exceeded:</strong> <u>${gradeUsages[0].field}</u> ` +
+                        capacity: effectiveCap,
+                        message: `<strong>Capacity Exceeded:</strong> <u>${subject}</u> ` +
                             `has <strong>${peak}</strong> ${grade} bunks at ${formatTime(peakTime)} ` +
-                            `(capacity: ${sharing.capacity})<br>` +
+                            `(capacity: ${effectiveCap})<br>` +
                             `<small style="color:#666;">Bunks: ${peakBunks.map(u => `${u.bunk} @ ${formatTime(u.startMin)}-${formatTime(u.endMin)}`).join(', ')}</small>`
                     });
                 }
@@ -363,8 +516,32 @@
                     // Must overlap in time
                     if (!timesOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) continue;
 
-                    // If they overlap but don't have identical times → staggered violation
-                    if (a.startMin !== b.startMin || a.endMin !== b.endMin) {
+                    // ★ Reserved-tiling exemption: both are _staggerReserved uses of the
+                    //   SAME custom activity → a legitimate sequenced share, not a stagger
+                    //   violation. A real (non-reserved) consumer still flags normally.
+                    if (a.flags._staggerReserved && b.flags._staggerReserved &&
+                        a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
+
+                    // ★ Legitimate cross-division share exemption: a resource the camp
+                    //   explicitly configured for cross-division use (cross_division /
+                    //   any_division, or custom with a divisions list) is DESIGNED for
+                    //   different divisions to use the same high-capacity resource on their
+                    //   own division clocks. Two divisions arriving at offset times to a
+                    //   shared arts room (cap 20) is the intended state, not a broken
+                    //   single-game share. Same-grade overlap is never exempt — within one
+                    //   division an offset arrival is always a real stagger. This is the
+                    //   exact pivot FN-54 in the engine uses, so engine + report agree.
+                    if (a.grade !== b.grade &&
+                        (sharing.type === 'cross_division' || sharing.type === 'any_division' || sharing.type === 'custom')) continue;
+
+                    // ★ Stagger = LATE JOIN (different start times). The disruptive case is a
+                    //   bunk walking into a session already in progress — "shows up at 9:25 to
+                    //   find another 25 min into the game." Two bunks that START TOGETHER but
+                    //   run different durations (early departure / a multi-period bunk staying
+                    //   longer) is benign: nobody joins mid-session, and rotated/multi-period
+                    //   schedules legitimately produce this. Flag only on a differing START.
+                    //   (Engine FN-54 uses the identical pivot, so report + engine agree.)
+                    if (a.startMin !== b.startMin) {
                         const key = [fieldNorm, a.bunk, b.bunk, a.startMin, b.startMin].sort().join('|');
                         if (seen.has(key)) continue;
                         seen.add(key);
@@ -379,7 +556,7 @@
                                 `${a.bunk} (${a.grade}, ${formatTime(a.startMin)}-${formatTime(a.endMin)}) and ` +
                                 `${b.bunk} (${b.grade}, ${formatTime(b.startMin)}-${formatTime(b.endMin)})` +
                                 (sameGrade ? '' : ' (cross-grade)') +
-                                `. Bunks sharing a field must start and end at the same time.`
+                                `. Bunks sharing a field must start at the same time (no mid-session joins).`
                         });
                     }
                 }
@@ -404,6 +581,17 @@
             slots.forEach((entry, idx) => {
                 if (!entry || entry.continuation) return;
                 if (entry._league || entry._autoSpecial) return;
+                // Anti-blank last-resort fills (STEP 7.66) intentionally allow a
+                // repeat rather than leave a bunk with a Free/blank period in a
+                // packed dead-end. Don't flag them as same-day-repeat errors.
+                if (entry._antiBlankFilled) return;
+                // Generic-layout tiles are CATEGORIES (Sport / Special: Uncategorized /
+                // …), not concrete activities. The model is "categories repeat, activities
+                // don't" — two "Sport" tiles in a day is NOT a repetition; only two of the
+                // same specific activity (Basketball) would be, and that uniqueness is
+                // enforced when fill assigns the concrete activity. Skip them so the
+                // generic preview doesn't report false same-day-repeat errors.
+                if (entry._generic) return;
                 if (!entry.field || entry.field === 'Free') return;
 
                 const act = (entry._activity || entry.sport || entry.field || '').toLowerCase().trim();
@@ -482,7 +670,13 @@
     // MAIN VALIDATION FUNCTION
     // =====================================================================
 
-    function validateAutoSchedule() {
+    function validateAutoSchedule(opts) {
+        // ★ opts.silent = true → run the validation LOGIC and return the result
+        //   WITHOUT showing the modal. Used by automated post-gen consumers (the
+        //   capacity-repair gate) that only need the data. The user-facing
+        //   validation BUTTON (window.validateSchedule) calls with no opts, so it
+        //   still pops the modal as before.
+        const _silent = !!(opts && opts.silent);
         console.log('🛡️ Running AUTO MODE schedule validation v1.0...');
 
         const assignments = window.scheduleAssignments || {};
@@ -533,8 +727,23 @@
         console.log('  Field reuse warnings:', summary.fieldReuse);
         console.log('  TOTAL errors:', allErrors.length);
 
-        // Show modal
-        showAutoValidatorModal(allErrors, allWarnings, summary);
+        // ── Per-error detail (so the offending field/grade/bunks are visible
+        //    in the console, not just a count). Strips the HTML from the
+        //    modal-oriented `message` into a one-line plain-text summary.
+        if (allErrors.length) {
+            const _plain = (s) => String(s || '')
+                .replace(/<br\s*\/?>/gi, ' — ')
+                .replace(/<[^>]+>/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            console.log('🛡️ Auto Validator — error detail:');
+            allErrors.forEach((e, i) => {
+                console.log('   ' + (i + 1) + '. [' + e.type + '] ' + _plain(e.message));
+            });
+        }
+
+        // Show modal (skipped for silent/automated callers)
+        if (!_silent) showAutoValidatorModal(allErrors, allWarnings, summary);
 
         return { errors: allErrors, warnings: allWarnings, summary };
     }
@@ -542,6 +751,20 @@
     // =====================================================================
     // MODAL
     // =====================================================================
+
+    // ★★★ CB-59 (twin of CB-58 in validator.js): violation/warning messages
+    // embed user-controlled field/bunk/grade names with intentional literal
+    // markup (<strong>, <u>, <small>, <br>) and were rendered raw into
+    // innerHTML. Full-escape then restore only the fixed whitelist of
+    // attribute-free intentional tags — a name carrying an <img onerror=> or
+    // <u onmouseover=> never matches the exact whitelist and stays inert.
+    function _avEscMsg(s) {
+        let e = String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+        return e.replace(/&lt;(\/?(?:strong|u|br|small))&gt;/g, '<$1>')
+                .replace(/&lt;small style=&quot;color:#666;&quot;&gt;/g, '<small style="color:#666;">');
+    }
 
     function showAutoValidatorModal(errors, warnings, summary) {
         const existing = document.getElementById('auto-validator-overlay');
@@ -620,7 +843,7 @@
                             <ul style="list-style:none; padding:0; margin:4px 0 0 0; display:${collapsed ? 'none' : 'block'}; max-height:250px; overflow-y:auto;">
                                 ${items.map(item => `
                                     <li style="background:#FFEBEE; color:#C62828; padding:10px 12px; margin-bottom:4px; border-radius:6px; border-left:4px solid #EF5350; font-size:0.9em;">
-                                        ${item.message}
+                                        ${_avEscMsg(item.message)}
                                     </li>
                                 `).join('')}
                             </ul>
@@ -640,7 +863,7 @@
                         <ul style="list-style:none; padding:0; margin:4px 0 0 0; display:${collapsed ? 'none' : 'block'}; max-height:250px; overflow-y:auto;">
                             ${warnings.map(w => `
                                 <li style="background:#FFF3E0; color:#E65100; padding:10px 12px; margin-bottom:4px; border-radius:6px; border-left:4px solid #FF9800; font-size:0.9em;">
-                                    ${w.message}
+                                    ${_avEscMsg(w.message)}
                                 </li>
                             `).join('')}
                         </ul>
@@ -679,7 +902,9 @@
         const close = () => overlay.remove();
         document.getElementById('auto-val-close-btn').onclick = close;
         document.getElementById('auto-val-close-x').onclick = close;
-        overlay.onclick = (e) => { if (e.target === overlay) close(); };
+        let _mdOverlayAutoVal = false;
+        overlay.addEventListener('mousedown', (e) => { _mdOverlayAutoVal = (e.target === overlay); });
+        overlay.onclick = (e) => { if (e.target === overlay && _mdOverlayAutoVal) close(); };
         document.addEventListener('keydown', function esc(e) {
             if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
         });

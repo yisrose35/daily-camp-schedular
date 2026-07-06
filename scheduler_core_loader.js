@@ -17,20 +17,70 @@
     }
 
     // ★★★ v2.2: Get ALL specials (filtering happens in loadAndFilterData) ★★★
+    // ★ v2.4: also drop specials whose configured location is not a real facility/field.
     function getSpecialActivities() {
-        // Try getAllSpecialActivities first (includes both regular and rainy-day-only)
+        let all;
         if (typeof window.getAllSpecialActivities === 'function') {
-            const all = window.getAllSpecialActivities();
-            const rainyOnly = (all || []).filter(s => s.rainyDayOnly || s.rainyDayExclusive);
-            console.log(`[LoadData] getSpecialActivities via getAllSpecialActivities: ${all?.length || 0} total, ${rainyOnly.length} rainy-only`);
-            return all;
+            all = window.getAllSpecialActivities() || [];
+        } else {
+            // Fallback: combine both arrays manually
+            all = [...(window.specialActivities || []), ...(window.rainyDayActivities || [])];
         }
-        // Fallback: combine both arrays manually
-        const regular = window.specialActivities || [];
-        const rainy = window.rainyDayActivities || [];
-        const combined = [...regular, ...rainy];
-        console.log(`[LoadData] getSpecialActivities fallback: ${regular.length} regular + ${rainy.length} rainy = ${combined.length} total`);
-        return combined;
+        all = filterSpecialsByFacility(all);
+        const rainyOnly = all.filter(s => s.rainyDayOnly || s.rainyDayExclusive);
+        console.log(`[LoadData] getSpecialActivities: ${all.length} schedulable, ${rainyOnly.length} rainy-only (after facility check)`);
+        return all;
+    }
+
+    // ★ A special whose `location` points at a facility/field that doesn't exist (a
+    //   deleted room, a typo, or "Canteen"/"Gameroom" that was never created) has
+    //   nowhere to be held. Left in the pool it would be pre-assigned / rotated in and
+    //   only incidentally swept out later — so the scheduler keeps emitting it. Drop it
+    //   at the source. Scheduler-only (the config UI uses window.getAllSpecialActivities
+    //   directly, so the activity still appears for editing). Fail-open: if the facility
+    //   registry can't be read, filter nothing (never silently drop everything).
+    function filterSpecialsByFacility(specials) {
+        if (!Array.isArray(specials) || specials.length === 0) return specials || [];
+        let valid;
+        let unavailable;
+        try {
+            const facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+            const facNames = Array.isArray(facs) ? facs.map(f => (f && f.name) || f) : (facs ? Object.keys(facs) : []);
+            const allFields = (getApp1Settings().fields || []);
+            const fieldNames = allFields.map(f => (f && f.name) || f);
+            const names = facNames.concat(fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
+            if (!names.length) return specials; // registry unavailable → fail open
+            valid = new Set(names);
+            // ★ CONFIG-LEVEL facility shut-off: the Facilities tab AVAILABLE/UNAVAILABLE
+            //   switch writes available:false onto the room's backing field entry. Specials
+            //   are pooled by NAME so the solver never checks the host room's availability —
+            //   drop specials whose host facility is shut off (parity with the SmartTile +
+            //   fill-pass gates; the per-date Resource version is handled elsewhere).
+            unavailable = new Set(allFields
+                .filter(f => f && f.name && f.available === false)
+                .map(f => String(f.name).trim().toLowerCase()));
+        } catch (_e) { return specials; }
+        const dropped = [];
+        const offline = [];
+        const kept = specials.filter(s => {
+            const loc = s && s.location;
+            if (!loc || !String(loc).trim()) return true;                 // no location requirement → keep
+            const locLc = String(loc).trim().toLowerCase();
+            if (unavailable.has(locLc)) {                                 // host room shut off → drop
+                offline.push((s && s.name || '?') + ' → "' + loc + '"');
+                return false;
+            }
+            if (valid.has(locLc)) return true;                           // location exists → keep
+            dropped.push((s && s.name || '?') + ' → "' + loc + '"');
+            return false;                                                 // orphan location → drop
+        });
+        if (dropped.length) {
+            console.warn('[LoadData] ⚠️ Skipped ' + dropped.length + ' special activity(ies) with a missing facility — create the facility or remove the activity: ' + dropped.join(', '));
+        }
+        if (offline.length) {
+            console.warn('[LoadData] ⚠️ Skipped ' + offline.length + ' special activity(ies) whose facility is shut off (Facilities → Unavailable): ' + offline.join(', '));
+        }
+        return kept;
     }
 
     function getDailyOverrides() {
@@ -256,7 +306,42 @@
                rainyDayAvailable: a.rainyDayAvailable !== false,
                 rainyDayOnly: a.rainyDayOnly === true,
                 rainyDayExclusive: a.rainyDayExclusive === true,
-                fullGrade: a.fullGrade === true
+                // ★ Manual-audit fix: propagate availableDays so the shared
+                //   solver gate (RotationEngine.calculateLimitScore) can enforce
+                //   the weekday restriction. Was previously dropped here, so the
+                //   manual builder placed weekday-restricted specials on disallowed
+                //   days (auto enforced it separately in its planner).
+                availableDays: Array.isArray(a.availableDays) ? a.availableDays : null,
+                // ★ Manual-audit fix: propagate the remaining rotation/frequency
+                //   config so the shared RotationEngine.calculateLimitScore gates
+                //   fire in the MANUAL solver (auto enforced these in its planner;
+                //   the manual builder, which has no planner, relied on these gates
+                //   but they read base defaults because the fields were never copied).
+                //   maxUsage was already copied above; these complete the set.
+                frequencyDays: a.frequencyDays || 0,
+                maxUsagePerGrade: a.maxUsagePerGrade || null,
+                maxUsagePeriod: a.maxUsagePeriod || null,
+                exactFrequency: a.exactFrequency || 0,
+                exactFrequencyPerGrade: a.exactFrequencyPerGrade || null,
+                exactFrequencyPeriod: a.exactFrequencyPeriod || null,
+                minFrequency: a.minFrequency || 0,
+                minFrequencyPeriod: a.minFrequencyPeriod || null,
+                rotationCohort: a.rotationCohort || null,
+                fullGrade: a.fullGrade === true,
+                // ★ Day-19 special features (manual port): propagate durations[],
+                //   multiPart, and prep config so the MANUAL builder's
+                //   computeManualSpecialFeatures (scheduler_core_main.js) can apply
+                //   best-fit durations, multiPart part labels, and prep lead-ins.
+                //   These were AUTO-only (the auto solver reads getSpecialConfig /
+                //   getSpecialActivityByName directly); buildActivityProperties never
+                //   copied them, so the manual solver's activityProperties carried
+                //   none and the features silently no-op'd. Same root cause as the
+                //   rotation/frequency fields above.
+                durations: Array.isArray(a.durations) ? a.durations : null,
+                duration: a.duration || 0,
+                multiPart: (a.multiPart && typeof a.multiPart === 'object') ? a.multiPart : null,
+                prepDuration: a.prepDuration || 0,
+                prepConfig: (a.prepConfig && typeof a.prepConfig === 'object') ? a.prepConfig : null
             });
             props[a.name] = propEntry;
             const lowerKey = a.name.toLowerCase().trim();
@@ -311,6 +396,54 @@
             if (fLower !== f.name) props[fLower] = fieldEntry;
         });
 
+        // ★ PER-SPORT usage/frequency limits (mirror specials). Sports live only as
+        //   names inside a field's activities[] and normally get NO activity-props
+        //   entry, so the maxUsage / frequencyDays / exactFrequency gates in
+        //   RotationEngine.calculateLimitScore (and the solver's calculatePenaltyCost)
+        //   never fired for them. Give any sport that has a limit configured in
+        //   sportMetaData its own entry carrying the SAME fields a special uses — the
+        //   enforcement path is then identical (already proven for specials). Only
+        //   created when a limit is actually set, so unconfigured sports are unchanged
+        //   (their props stay undefined, exactly as before). isSpecialAvailableForBunk
+        //   returns true for a non-special name, so this never false-blocks a sport.
+        try {
+            const _sportMeta = (typeof window !== 'undefined' && typeof window.getSportMetaData === 'function')
+                ? (window.getSportMetaData() || {})
+                : ((typeof window !== 'undefined' && window.sportMetaData) || {});
+            const _seenSports = new Set();
+            fields.forEach(f => (Array.isArray(f.activities) ? f.activities : []).forEach(sp => {
+                if (sp) _seenSports.add(sp);
+            }));
+            _seenSports.forEach(sp => {
+                const m = _sportMeta[sp] || {};
+                const _pgObj = (m.maxUsagePerGrade && typeof m.maxUsagePerGrade === 'object') ? m.maxUsagePerGrade : null;
+                const _hasPerGrade = _pgObj && Object.keys(_pgObj).some(k => (parseInt(_pgObj[k]) || 0) > 0);
+                const hasLimit = (parseInt(m.maxUsage) || 0) > 0
+                    || (parseInt(m.frequencyDays) || 0) > 0
+                    || (parseInt(m.exactFrequency) || 0) > 0
+                    || (parseInt(m.minFrequency) || 0) > 0
+                    || _hasPerGrade;                                      // per-grade-only cap still counts
+                if (!hasLimit) return;                                    // no limit → leave sport as-is
+                if (props[sp] && props[sp].type !== 'sport') return;      // never clobber a special/field of the same name
+                const sportEntry = {
+                    type: 'sport',
+                    available: true,
+                    maxUsage: parseInt(m.maxUsage) || 0,
+                    maxUsagePeriod: m.maxUsagePeriod || null,
+                    maxUsagePerGrade: m.maxUsagePerGrade || null,
+                    frequencyDays: parseInt(m.frequencyDays) || 0,
+                    exactFrequency: parseInt(m.exactFrequency) || 0,
+                    exactFrequencyPeriod: m.exactFrequencyPeriod || null,
+                    exactFrequencyPerGrade: m.exactFrequencyPerGrade || null,
+                    minFrequency: parseInt(m.minFrequency) || 0,
+                    minFrequencyPeriod: m.minFrequencyPeriod || null
+                };
+                props[sp] = sportEntry;
+                const spLower = String(sp).toLowerCase().trim();
+                if (spLower !== sp) props[spLower] = sportEntry;
+            });
+        } catch (_eSportLimits) { /* additive: sport limits must never break the load */ }
+
         return props;
     }
 
@@ -328,6 +461,13 @@
         // Map field.activities
         fields.forEach(f => {
             if (!f?.activities) return;
+            // ★ Config-level shut-off: a field toggled UNAVAILABLE in Facilities
+            //   (available:false) must not appear in fieldsBySport. This map feeds
+            //   loadAndFilterData(), which the total solver's second candidate loop
+            //   (total_solver_engine buildAllCandidateOptions) and the fillers read —
+            //   so an unfiltered entry re-introduced disabled fields as sport
+            //   candidates even after the masterFields filter.
+            if (f.available === false) return;
             f.activities.forEach(sport => {
                 if (!map[sport]) map[sport] = [];
                 map[sport].push(f.name);
@@ -411,7 +551,11 @@
         // Fallback: dedicated localStorage key (survives cloud overwrites)
         if (!dailyOvNested.disabledFields?.length && !dailyOvNested.disabledSpecials?.length) {
             try {
-                const dateKey = window.currentScheduleDate || '';
+                // ★ FN-14 / shut-off race: key off the authoritative gen-date
+                //   (window._activeGenDate) first so this fallback can't read a
+                //   different day's overrides when currentScheduleDate reverts
+                //   mid-gen. Null outside a generation → normal behavior.
+                const dateKey = window._activeGenDate || window.currentScheduleDate || '';
                 const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
                 if (stored) {
                     const parsed = JSON.parse(stored);

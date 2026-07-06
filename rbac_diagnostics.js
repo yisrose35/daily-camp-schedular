@@ -107,13 +107,15 @@
                 console.log("  - Auth user ID:", user.id);
                 console.log("  - Auth user email:", user.email);
                 
-                // Check if user owns a camp
-                const { data: ownedCamp, error: campError } = await window.supabase
+                // Check if user owns a camp (may own several: real + debug copies)
+                const { data: ownedCamps, error: campError } = await window.supabase
                     .from('camps')
                     .select('*')
-                    .eq('owner', user.id)
-                    .maybeSingle();
-                
+                    .eq('owner', user.id);
+                const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                    ? (ownedCamps.find(c => c.id === user.id) || ownedCamps[0])
+                    : null;
+
                 console.log("  - Owns a camp:", !!ownedCamp);
                 if (ownedCamp) {
                     console.log("    Camp name:", ownedCamp.name);

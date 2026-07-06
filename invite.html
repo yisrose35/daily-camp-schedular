@@ -648,9 +648,13 @@
             hideAll();
             document.getElementById('success-camp-name').textContent = `You've successfully joined ${campName}!`;
             document.getElementById('success-state').classList.remove('hidden');
-            
+
+            // Counselors live in Campistry Lite (mobile companion), not the admin dashboard
+            const target = (inviteData && inviteData.role === 'counselor')
+                ? '/campistry_lite.html'
+                : '/dashboard.html';
             setTimeout(() => {
-                window.location.href = '/dashboard.html';
+                window.location.href = target;
             }, 2000);
         }
         
@@ -892,17 +896,19 @@
                 owner: 'Owner',
                 admin: 'Admin',
                 scheduler: 'Scheduler',
-                viewer: 'Viewer'
+                viewer: 'Viewer',
+                counselor: 'Counselor'
             };
             return names[role] || role;
         }
-        
+
         function getRoleColor(role) {
             const colors = {
                 owner: '#7C3AED',
                 admin: '#2563EB',
                 scheduler: '#059669',
-                viewer: '#64748B'
+                viewer: '#64748B',
+                counselor: '#EE6A53'
             };
             return colors[role] || '#64748B';
         }
