@@ -157,10 +157,11 @@
             <p class="lk-hero-greeting" id="greeting">Good morning</p>
             <h1 class="lk-hero-title">Welcome back, <span id="heroParentName"></span></h1>
             <p class="lk-hero-sub" id="homeCampName"></p>
+            <div class="lk-hero-kids" id="heroKidsRow"></div>
         </div>
     </div>
     <div class="lk-home-grid">
-        <button class="lk-home-tile" onclick="nav('messages')">
+        <button class="lk-home-tile featured" data-accent="emerald" onclick="nav('messages')">
             <span class="lk-home-tile-badge" id="homeMsgBadge" style="display:none;"></span>
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -170,7 +171,7 @@
                 <div class="lk-home-tile-sub" id="homeMsgSub"></div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('canteen')">
+        <button class="lk-home-tile featured" data-accent="gold" onclick="nav('canteen')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
             </div>
@@ -179,7 +180,7 @@
                 <div class="lk-home-tile-sub" id="homeCanteenSub"></div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('photos')">
+        <button class="lk-home-tile" data-accent="violet" onclick="nav('photos')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             </div>
@@ -188,7 +189,7 @@
                 <div class="lk-home-tile-sub" id="homePhotosSub">Coming soon</div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('forms')">
+        <button class="lk-home-tile" data-accent="azure" onclick="nav('forms')">
             <span class="lk-home-tile-badge" id="homeFormsBadge" style="display:none;"></span>
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
@@ -198,7 +199,7 @@
                 <div class="lk-home-tile-sub" id="homeFormsSub">—</div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('pickup')">
+        <button class="lk-home-tile" data-accent="coral" onclick="nav('pickup')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
             </div>
@@ -207,7 +208,7 @@
                 <div class="lk-home-tile-sub">Notify the office</div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('lists')">
+        <button class="lk-home-tile" data-accent="teal" onclick="nav('lists')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
             </div>
@@ -216,7 +217,7 @@
                 <div class="lk-home-tile-sub" id="homeListsSub">Packing &amp; checklists</div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('children')">
+        <button class="lk-home-tile" data-accent="rose" onclick="nav('children')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </div>
@@ -225,7 +226,7 @@
                 <div class="lk-home-tile-sub" id="homeKidsSub"></div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('tips')">
+        <button class="lk-home-tile" data-accent="indigo" onclick="nav('tips')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
             </div>
@@ -234,7 +235,7 @@
                 <div class="lk-home-tile-sub">Show your appreciation</div>
             </div>
         </button>
-        <button class="lk-home-tile" onclick="nav('mail')">
+        <button class="lk-home-tile" data-accent="azure" onclick="nav('mail')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
             </div>
@@ -805,6 +806,14 @@ function init(){
     var msgBadge=document.getElementById('homeMsgBadge');if(msgBadge){msgBadge.textContent=unread;msgBadge.style.display=unread?'flex':'none';}
     var canteenSub=document.getElementById('homeCanteenSub');if(canteenSub)canteenSub.textContent=bal!==null?'$'+bal:'—';
     var kidsSub=document.getElementById('homeKidsSub');if(kidsSub)kidsSub.textContent=children.length?(children.length+' enrolled'):'—';
+
+    // Hero kid chips — quick personal touch under the greeting
+    var hkr=document.getElementById('heroKidsRow');
+    if(hkr){
+        hkr.innerHTML=children.map(function(c){
+            return '<div class="lk-hero-kid-chip"><div class="lk-hero-kid-avatar">'+(c.initials||'')+'</div><div class="lk-hero-kid-name">'+(c.name?c.name.split(' ')[0]:'')+(c.bunk?' · '+c.bunk:'')+'</div></div>';
+        }).join('');
+    }
 
     // Home messages
     var hm=document.getElementById('homeMessages');if(hm){hm.innerHTML='';messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg(\''+m.id+'\')},50)"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});}

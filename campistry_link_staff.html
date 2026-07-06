@@ -1,91 +1,94 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-product="link">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Tips — Campistry Link</title>
 <link rel="icon" type="image/png" href="Campistry_logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="campistry-unified.css">
+<link rel="stylesheet" href="campistry_link.css">
 <style>
-    :root {
-        --green: #2A7A35; --green-tint: #EAF5EC;
-        --slate-900: #0F172A; --slate-600: #475569; --slate-400: #94A3B8;
-        --slate-200: #E2E8F0; --slate-100: #F1F5F9; --slate-50: #F8FAFC;
-        --red: #EF4444;
-    }
-    * { box-sizing: border-box; }
-    body {
-        margin: 0; min-height: 100vh; background: var(--slate-50);
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        display: flex; align-items: flex-start; justify-content: center; padding: 32px 16px;
-        color: var(--slate-900);
-    }
-    .wrap { width: 100%; max-width: 420px; }
-    .logo { display: block; height: 42px; margin: 0 auto 10px; }
-    h1 { font-size: 1.15rem; text-align: center; margin: 0 0 4px; }
-    .sub { font-size: .82rem; color: var(--slate-600); text-align: center; margin: 0 0 22px; }
-    .card { background: #fff; border: 1px solid var(--slate-200); border-radius: 14px; padding: 22px; margin-bottom: 14px; }
+    body { display: flex; justify-content: center; padding: 0; }
+    .staff-wrap { width: 100%; max-width: 460px; min-height: 100vh; padding: 28px 18px 60px; }
+    .staff-topbar { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 6px 0 22px; }
+    .staff-topbar img { height: 30px; }
+    .staff-topbar span { font-family: var(--font-display); font-weight: 700; font-size: 1.05rem; color: var(--link-color); }
+
+    /* Reuse .lk-hero for the balance banner, with a compact staff-specific variant */
+    .staff-hero { text-align: center; padding: 34px 28px 30px; }
+    .staff-hero-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.75; margin-bottom: 10px; }
+    .staff-hero-amt { font-family: var(--font-display); font-size: 3.1rem; font-weight: 700; line-height: 1; letter-spacing: -0.02em; text-shadow: 0 2px 20px rgba(0,0,0,0.15); }
+    .staff-hero-who { margin-top: 14px; font-size: 0.95rem; font-weight: 600; opacity: 0.92; }
+    .staff-hero-who span { font-weight: 400; opacity: 0.7; }
+
+    .staff-totals { display: flex; gap: 10px; margin-top: -14px; margin-bottom: 18px; position: relative; z-index: 2; }
+    .staff-tot { flex: 1; background: #fff; border: 1px solid rgba(15,23,42,0.06); border-radius: var(--radius-lg); padding: 12px 14px; box-shadow: var(--shadow-md); text-align: center; }
+    .staff-tot .v { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; color: var(--slate-900); }
+    .staff-tot .k { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--slate-400); margin-top: 3px; }
+
+    .code-hero-icon { width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(150deg, var(--link-color), var(--link-dark)); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; box-shadow: 0 8px 20px -6px rgba(42,122,53,0.45); color: #fff; }
+    .code-title { font-family: var(--font-display); font-size: 1.3rem; font-weight: 700; text-align: center; color: var(--slate-900); margin-bottom: 4px; }
+    .code-sub { font-size: 0.84rem; color: var(--slate-400); text-align: center; margin-bottom: 20px; }
     .code-input {
-        width: 100%; padding: 13px; border: 1.5px solid var(--slate-200); border-radius: 10px;
-        font-size: 1.25rem; font-weight: 700; letter-spacing: .18em; text-align: center;
-        text-transform: uppercase; outline: none;
+        width: 100%; padding: 14px; border: 1.5px solid var(--slate-200); border-radius: var(--radius-md);
+        font-family: var(--font-body); font-size: 1.3rem; font-weight: 700; letter-spacing: 0.18em; text-align: center;
+        text-transform: uppercase; outline: none; transition: border-color 0.2s ease, box-shadow 0.2s ease; color: var(--slate-900);
     }
-    .code-input:focus { border-color: var(--green); }
-    .btn {
-        width: 100%; margin-top: 12px; padding: 12px; border: none; border-radius: 10px;
-        background: var(--green); color: #fff; font-size: .95rem; font-weight: 700; cursor: pointer;
-    }
-    .btn-ghost { background: none; color: var(--slate-400); font-weight: 600; font-size: .78rem; padding: 8px; }
-    .msg { font-size: .8rem; color: var(--red); text-align: center; min-height: 18px; margin-top: 10px; }
-    .balance-label { font-size: .72rem; font-weight: 800; letter-spacing: .08em; color: var(--slate-400); text-transform: uppercase; }
-    .balance { font-size: 2.6rem; font-weight: 800; color: var(--green); margin: 4px 0 2px; }
-    .who { font-size: .95rem; font-weight: 700; }
-    .who span { font-weight: 500; color: var(--slate-600); }
-    .totals { display: flex; gap: 10px; margin-top: 16px; }
-    .tot { flex: 1; background: var(--slate-50); border-radius: 10px; padding: 10px 12px; }
-    .tot .v { font-size: 1.05rem; font-weight: 700; }
-    .tot .k { font-size: .68rem; color: var(--slate-400); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; margin-top: 2px; }
-    .tip-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--slate-100); font-size: .85rem; }
-    .tip-row:last-child { border-bottom: none; }
-    .tip-when { color: var(--slate-400); font-size: .75rem; }
-    .tip-amt { font-weight: 700; color: var(--green); }
-    .sec-title { font-size: .78rem; font-weight: 800; letter-spacing: .06em; color: var(--slate-400); text-transform: uppercase; margin: 0 0 8px; }
-    .note { font-size: .74rem; color: var(--slate-400); text-align: center; line-height: 1.5; }
+    .code-input:focus { border-color: var(--link-color); box-shadow: 0 0 0 3px rgba(42,122,53,0.1); }
+    .code-msg { font-size: 0.8rem; color: var(--red-500); text-align: center; min-height: 18px; margin-top: 10px; }
+
+    .staff-tip-row { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--slate-100); }
+    .staff-tip-row:last-child { border-bottom: none; }
+    .staff-tip-from { font-size: 0.85rem; font-weight: 600; color: var(--slate-800); }
+    .staff-tip-when { font-size: 0.72rem; color: var(--slate-400); margin-top: 1px; }
+    .staff-tip-amt { font-family: var(--font-display); font-weight: 700; color: var(--link-color); font-size: 0.98rem; }
+
+    .staff-note { font-size: 0.76rem; color: var(--slate-400); text-align: center; line-height: 1.6; margin-top: 18px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-    <img src="Link_clean.png" class="logo" alt="Campistry Link">
-    <h1>My Tips</h1>
-    <p class="sub">Tips from camp families go straight into your account</p>
+<div class="staff-wrap">
+    <div class="staff-topbar">
+        <img src="Link_clean.png" alt="">
+        <span>My Tips</span>
+    </div>
 
     <!-- Code entry -->
-    <div class="card" id="codeCard">
-        <div style="font-size:.82rem;color:var(--slate-600);margin-bottom:10px;">Enter the access code the camp office gave you:</div>
+    <div class="lk-card" id="codeCard" style="padding: 30px 26px;">
+        <div class="code-hero-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
+        </div>
+        <div class="code-title">Check your tips</div>
+        <div class="code-sub">Camp families' tips go straight into your account. Enter the access code the camp office gave you.</div>
         <input class="code-input" id="staffCode" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off"
                oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')"
                onkeydown="if(event.key==='Enter')loadAccount()">
-        <button class="btn" onclick="loadAccount()">View My Tips</button>
-        <div class="msg" id="codeMsg"></div>
+        <button class="btn btn-primary" style="width:100%; justify-content:center; margin-top:14px; padding:12px;" onclick="loadAccount()">View My Tips</button>
+        <div class="code-msg" id="codeMsg"></div>
     </div>
 
     <!-- Account view -->
     <div id="accountView" style="display:none;">
-        <div class="card" style="text-align:center;">
-            <div class="who" id="staffWho"></div>
-            <div class="balance-label" style="margin-top:14px;">Current balance</div>
-            <div class="balance" id="staffBalance">$0.00</div>
-            <div style="font-size:.74rem;color:var(--slate-400);">paid out to you by the camp office</div>
-            <div class="totals">
-                <div class="tot"><div class="v" id="staffEarned">$0.00</div><div class="k">Total earned</div></div>
-                <div class="tot"><div class="v" id="staffPaid">$0.00</div><div class="k">Paid out</div></div>
+        <div class="lk-hero staff-hero">
+            <div class="lk-hero-left" style="position:relative; z-index:1; width:100%;">
+                <div class="staff-hero-label">Current balance</div>
+                <div class="staff-hero-amt" id="staffBalance">$0.00</div>
+                <div class="staff-hero-who">You're <span id="staffWho"></span></div>
             </div>
         </div>
-        <div class="card">
-            <p class="sec-title">Recent tips</p>
+        <div class="staff-totals">
+            <div class="staff-tot"><div class="v" id="staffEarned">$0.00</div><div class="k">Total Earned</div></div>
+            <div class="staff-tot"><div class="v" id="staffPaid">$0.00</div><div class="k">Paid Out</div></div>
+        </div>
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Recent Tips</h2></div>
             <div id="staffTips"></div>
         </div>
-        <p class="note">Balances update the moment a family sends a tip.<br>Questions about payout? Ask the camp office.</p>
-        <button class="btn btn-ghost" onclick="switchCode()">Use a different code</button>
+        <p class="staff-note">Balances update the moment a family sends a tip.<br>Questions about payout? Ask the camp office.</p>
+        <button class="btn btn-ghost btn-sm" style="width:100%; justify-content:center; margin-top:14px;" onclick="switchCode()">Use a different code</button>
     </div>
 </div>
 
@@ -144,7 +147,7 @@
         var tips = d.recent_tips || [];
         var el = document.getElementById('staffTips');
         if (!tips.length) {
-            el.innerHTML = '<div style="font-size:.82rem;color:var(--slate-400);padding:6px 0;">No tips yet — they’ll show up here.</div>';
+            el.innerHTML = '<div class="lk-empty" style="padding:20px 0;"><h3>No tips yet</h3><p>They’ll show up here the moment a family sends one.</p></div>';
             return;
         }
         el.innerHTML = tips.map(function(t) {
@@ -156,8 +159,8 @@
             } else {
                 fromWho = 'A camp family';
             }
-            return '<div class="tip-row"><div>' + esc(fromWho) + '<div class="tip-when">' + esc(when) + '</div></div>' +
-                '<div class="tip-amt">+' + money(t.amount) + '</div></div>';
+            return '<div class="staff-tip-row"><div><div class="staff-tip-from">' + esc(fromWho) + '</div><div class="staff-tip-when">' + esc(when) + '</div></div>' +
+                '<div class="staff-tip-amt">+' + money(t.amount) + '</div></div>';
         }).join('');
     }
 
