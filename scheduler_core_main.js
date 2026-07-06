@@ -7033,6 +7033,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const _rss79 = window.__regenSlotScope || null;
                 const _rssBunks79 = _rss79 ? new Set(Object.keys(_rss79)) : null;
                 let _evicted = 0;
+                const _evReheal = []; // slots demoted to Free here → retry a reservation-safe fill
                 Object.keys(_evSA).forEach(bunk => {
                     const arr = _evSA[bunk];
                     if (!Array.isArray(arr)) return;
@@ -7083,12 +7084,36 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
                                 ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" (' + hit.resv.division + ') → Free');
                             arr[idx] = { field: 'Free', _activity: 'Free', _startMin: sM, _endMin: eM, _pinnedFacilityEvicted: true };
+                            _evReheal.push({ bunk: bunk, idx: idx });
                         }
                         _evicted++;
                     });
                 });
                 if (_evicted) console.log('[STEP 7.9] Pinned-facility exclusion sweep: demoted ' + _evicted + ' conflicting placement(s) → Free');
                 else console.log('[STEP 7.9] Pinned-facility exclusion sweep: ✅ no conflicts');
+
+                // ★ RE-HEAL: a slot demoted to Free above ran AFTER every fill pass
+                //   (7.5/7.6/7.65), so nothing downstream would refill it — the eviction
+                //   just leaves a bare Free. Retry each freed slot through the same
+                //   reservation-aware fallback the STEP 7.5 fill uses (buildCandidates now
+                //   honors fieldReservations, so it can't re-pick the reserved court), so
+                //   an eviction lands a real activity when the window has any open field
+                //   instead of a Free. No-op when the window is genuinely saturated.
+                //   Killswitch: window.__pinnedEvictReheal = false.
+                if (_evReheal.length && window.__pinnedEvictReheal !== false
+                    && window.AutoFillSlot && typeof window.AutoFillSlot.autoFillSlotSilent === 'function') {
+                    let _rh = 0;
+                    _evReheal.forEach(function (s) {
+                        try {
+                            const _cur = (_evSA[s.bunk] || [])[s.idx];
+                            // Only refill the Free we just created — never clobber a restore.
+                            if (_cur && _cur._pinnedFacilityEvicted
+                                && window.AutoFillSlot.autoFillSlotSilent(s.bunk, s.idx)) _rh++;
+                        } catch (_eRh) {}
+                    });
+                    if (_rh) console.log('[STEP 7.9] Re-heal: refilled ' + _rh + ' / ' + _evReheal.length + ' evicted slot(s) with a reservation-safe activity');
+                    else console.log('[STEP 7.9] Re-heal: ' + _evReheal.length + ' evicted slot(s) had no reservation-safe fill (left Free)');
+                }
             }
         } catch (_e79) {
             console.warn('[STEP 7.9] pinned-facility exclusion sweep failed:', _e79);

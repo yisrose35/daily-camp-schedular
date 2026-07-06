@@ -92,6 +92,22 @@
             }
         } catch (_eL) {}
 
+        // Skeleton field reservations — a pinned event / league reserves a facility
+        // for a window via window.fieldReservations, WITHOUT a GlobalFieldLock or a
+        // scheduleAssignments block (e.g. a "Max Leagues" pin on Slam Plex 1 @740-810).
+        // canBlockFit (scheduler_core_utils.js:835) and the STEP 7.9 evict sweep both
+        // reject a placement here. Without this check FQ-reopt can pull a placement ONTO
+        // a reserved court, which STEP 7.9 then demotes to Free — the exact "why are we
+        // getting Frees" case. Mirrors canBlockFit exactly (same isFieldReserved call).
+        try {
+            var _resvFQ = window.fieldReservations;
+            var _U = window.SchedulerCoreUtils;
+            if (_resvFQ && _U && typeof _U.isFieldReserved === 'function' && startMin != null && endMin != null) {
+                var _rv = _U.isFieldReserved(fieldName, startMin, endMin, _resvFQ);
+                if (_rv) return 'reserved by pinned "' + (_rv.event || 'event') + '"';
+            }
+        } catch (_eR) {}
+
         // Field access restrictions (grade + bunk). Empty divisions = misconfig → open.
         if (fld.accessRestrictions && fld.accessRestrictions.enabled
             && fld.accessRestrictions.divisions

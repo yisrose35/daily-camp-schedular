@@ -196,6 +196,26 @@
         return false;
     }
 
+    // ★ Skeleton field reservations: a pinned event / league reserves a facility for a
+    //   window via window.fieldReservations WITHOUT a GlobalFieldLock or a
+    //   scheduleAssignments block (e.g. a "Max Leagues" pin on Slam Plex 1 @740-810 —
+    //   which shows in fieldReservations but NOT in GlobalFieldLocks). canBlockFit
+    //   (scheduler_core_utils.js:835) and the STEP 7.9 evict sweep both honor it; this
+    //   raw-config fill path must too, or it re-fills a reserved court — leaving a real
+    //   double-book (7.9, having already run, won't re-catch a post-7.9 re-heal) or a
+    //   placement 7.9 later demotes to Free. Mirrors canBlockFit's check. Fail-open.
+    function isFieldPinReserved(fieldName, slotStart, slotEnd) {
+        try {
+            const resv = window.fieldReservations;
+            if (!resv || slotStart == null || slotEnd == null) return false;
+            const U = window.SchedulerCoreUtils;
+            if (U && typeof U.isFieldReserved === 'function') {
+                return !!U.isFieldReserved(fieldName, slotStart, slotEnd, resv);
+            }
+        } catch (_) {}
+        return false;
+    }
+
     // Build the set of field names blocked by combos (e.g. Full Gym blocks Gym 1)
     function getComboBlockedFields(usedFieldName) {
         const out = new Set();
@@ -345,6 +365,8 @@
             if (isFieldBlockedByTimeRules(f.name, slotStart, slotEnd, actProps, divName)) return;
             // ★ GlobalFieldLocks — skip if locked by another league/event
             if (isFieldGloballyLocked(f.name, slotStart, slotEnd, divName)) return;
+            // ★ Skeleton field reservations (pinned event / league) — canBlockFit parity
+            if (isFieldPinReserved(f.name, slotStart, slotEnd)) return;
             // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
             // ★ Specific sports disabled on THIS field today (dailyDisabledSportsByField)
@@ -419,6 +441,8 @@
                 if (loc) {
                     if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
                     if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
+                    // ★ Skeleton field reservations (pinned event / league) — canBlockFit parity
+                    if (isFieldPinReserved(loc, slotStart, slotEnd)) return;
                     // ★ wantActivity = s.name: reject this special if its room is already
                     //   held by a DIFFERENT activity (a different special, or a sport that
                     //   shares the room) — a shared room hosts one activity at a time.
