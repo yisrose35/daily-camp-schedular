@@ -10,6 +10,7 @@ var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
+var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
@@ -329,7 +330,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={families:renderFamilies,campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,broadcasts:renderBroadcasts,analytics:renderAnalytics,forms:renderForms,reports:renderReports,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,analytics:renderAnalytics,reports:renderReports,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -442,7 +443,7 @@ function acceptFamilySuggestion(idx){
         camperIds:s.campers.slice(),
         balance:0,totalPaid:0,notes:'Auto-detected family'
     };
-    save();render('families');toast(s.lastName+' Family created with '+s.campers.length+' campers');
+    save();renderCampers();toast(s.lastName+' Family created with '+s.campers.length+' campers');
 }
 
 function dismissFamilySuggestion(idx){
@@ -452,18 +453,23 @@ function dismissFamilySuggestion(idx){
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     dismissed.push(s.campers.sort().join('|'));
     localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
-    render('families');toast('Suggestion dismissed');
+    renderCampers();toast('Suggestion dismissed');
 }
 
 function acceptAddToFamily(famKey,camperName){
     if(!families[famKey]) return;
     if(!families[famKey].camperIds) families[famKey].camperIds=[];
     if(families[famKey].camperIds.indexOf(camperName)<0) families[famKey].camperIds.push(camperName);
-    save();render('families');toast(camperName+' added to '+families[famKey].name);
+    save();renderCampers();toast(camperName+' added to '+families[famKey].name);
 }
 
-function renderFamilies(){
-    var c=document.getElementById('page-families'),e=Object.entries(families);
+// Body-only family bundles view — rendered INSIDE the Campers page (see
+// renderCampers) as the "Families" tab, rather than as its own sidebar
+// section. optHighlight is an optional camper name whose family card should
+// be scrolled to and briefly highlighted (used by the "family" link on a
+// camper row in the main list).
+function _familyBundlesHtml(optHighlight){
+    var e=Object.entries(families);
 
     // Detect family suggestions
     var suggestions=detectFamilySuggestions();
@@ -472,7 +478,7 @@ function renderFamilies(){
     var addToExisting=suggestions.addToExisting;
     var totalSuggestions=newFams.length+addToExisting.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
+    var h='<div class="sec-hd"><div><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
 
     // Show suggestions banner
     if(newFams.length||addToExisting.length){
@@ -509,7 +515,8 @@ function renderFamilies(){
     if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started, or import campers and we\'ll detect families automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
     else e.forEach(function([id,f]){
         var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
-        h+='<div class="fam-card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
+        var isHighlight=optHighlight&&(f.camperIds||[]).indexOf(optHighlight)>=0;
+        h+='<div class="fam-card" id="famcard-'+je(id)+'"'+(isHighlight?' style="box-shadow:0 0 0 2px var(--me)"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
         (f.households||[]).forEach(function(hh){
             h+='<div class="hh"><div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">'+esc(hh.label||'Primary')+(hh.billingContact?' · Billing':'')+'</div>';
             (hh.parents||[]).forEach(function(p){h+='<div style="font-size:.8rem;margin-bottom:2px"><strong>'+esc(p.name)+'</strong>'+(p.phone?' — <a href="tel:'+esc(p.phone)+'" style="color:var(--me)">'+esc(p.phone)+'</a>':'')+'</div>'});
@@ -520,7 +527,24 @@ function renderFamilies(){
         (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+esc(cn.split(' ')[0])+'</span>'});
         h+='</div></div>';
     });
-    c.innerHTML=h;
+    return h;
+}
+function _familyForCamper(camperName){
+    var found=null;
+    Object.entries(families).forEach(function(pair){
+        if(found)return;
+        if((pair[1].camperIds||[]).indexOf(camperName)>=0)found={id:pair[0],name:pair[1].name};
+    });
+    return found;
+}
+function viewFamilyFromCamper(camperName){
+    campersView='family';
+    document.getElementById('page-campers').innerHTML=_campersTabsHtml()+_familyBundlesHtml(camperName);
+    var fam=_familyForCamper(camperName);
+    if(fam){
+        var el=document.getElementById('famcard-'+fam.id);
+        if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+    }
 }
 
 // Family create/edit
@@ -575,15 +599,29 @@ function deleteFamily(id){
     var nm=families[id].name||'this family';
     if(!confirm('Delete "'+nm+'"? Its campers will remain in the roster but be unassigned from this family. This cannot be undone.'))return;
     delete families[id];
-    save();closeModal('familyModal');render('families');toast('Family deleted');
+    save();closeModal('familyModal');renderCampers();toast('Family deleted');
 }
 
 // ── CAMPERS ──────────────────────────────────────────────────────
+function switchCampersView(v){campersView=v;renderCampers()}
+function _campersTabsHtml(){
+    var _cvTabs=[{k:'list',l:'All Campers'},{k:'family',l:'Families'}];
+    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+_cvTabs.map(function(t){
+        return '<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(campersView===t.k?'var(--me)':'transparent')+';color:'+(campersView===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.switchCampersView(\''+t.k+'\')">'+t.l+'</button>';
+    }).join('')+'</div>';
+}
 function renderCampers(filter){
     var c=document.getElementById('page-campers'),entries=Object.entries(roster),total=entries.length;
     if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
     entries.sort(function(a,b){return a[0].localeCompare(b[0])});
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var tabs=_campersTabsHtml();
+
+    if(campersView==='family'){
+        c.innerHTML=tabs+_familyBundlesHtml();
+        return;
+    }
+
+    var h=tabs+'<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     if(!entries.length){h+='<div class="me-empty"><h3>No campers yet</h3><p>Add campers or import from CSV.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>'}
     else{
         h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Grade</th><th>Teacher</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
@@ -591,7 +629,9 @@ function renderCampers(filter){
             var hasMed=!!(d.allergies||d.medications);
             var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
             var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
-            var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
+            var fam=_familyForCamper(n);
+            var famChip=fam?'<div style="margin-top:2px"><span style="font-size:.68rem;color:var(--me);font-weight:600;cursor:pointer" onclick="event.stopPropagation();CampistryMe.viewFamilyFromCamper(\''+je(n)+'\')">👨‍👩‍👧‍👦 '+esc(fam.name)+'</span></div>':'';
+            var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'')+famChip;
             h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+nameCell+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+esc(d.schoolGrade||'—')+'</td><td>'+esc(d.teacher||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
         });
         h+='</tbody></table></div></div>';
@@ -844,6 +884,13 @@ function saveCamper(){
             }
         }
     }
+    // Adding a camper directly here (not through an Enrollment application)
+    // means they're already accepted into camp — reflect that in Registration
+    // immediately, rather than leaving them with zero enrollment record (which
+    // meant no Link invite could ever be generated for them and Registration
+    // undercounted actual campers).
+    var wasNew=!editingCamper;
+    if(wasNew)_autoCreateAcceptedEnrollment(full);
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
     // Keep any already-issued parent portal invite in sync. The invite stores
     // a snapshot of camper_data at creation time (see _syncParentInviteSnapshot)
@@ -851,6 +898,27 @@ function saveCamper(){
     // reach a parent who already has portal access until someone manually
     // clicked "Get Invite Link" again.
     _syncInvitesForCamper(full);
+}
+function _autoCreateAcceptedEnrollment(camperName){
+    if(Object.values(enrollments).some(function(e){return e.camperName===camperName}))return;
+    var c=roster[camperName]||{};
+    var last=camperName.split(' ').slice(1).join(' ');
+    var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+    enrollments[id]={
+        camperName:camperName,camperLast:last,
+        parentName:c.parent1Name||'',parentEmail:c.parent1Email||'',parentPhone:c.parent1Phone||'',
+        dob:c.dob||'',gender:c.gender||'',
+        school:c.school||'',schoolGrade:c.schoolGrade||'',
+        street:c.street||'',city:c.city||'',state:c.state||'',zip:c.zip||'',
+        allergies:c.allergies||'',medications:c.medications||'',
+        session:'',sessionTuition:0,
+        status:'accepted',
+        statusHistory:[{from:null,to:'accepted',date:new Date().toISOString(),by:'office'}],
+        appliedDate:new Date().toISOString().split('T')[0],
+        formsRequired:3,formsCompleted:0,
+        paymentStatus:'pending',paymentAmount:0,
+        notes:'Auto-accepted — added directly via Campers'
+    };
 }
 // ★ #4 cascade helpers. Camper records are keyed by NAME in `roster`, and several
 // other stores reference campers by that same name string: families[].camperIds,
@@ -5249,6 +5317,7 @@ window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,
+    switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
