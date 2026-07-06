@@ -383,6 +383,57 @@ test('cut-scoped generate: unpinned post-cut entries land in orig (no-blank fall
   assert.ok(scope.A.keep[0]._midDayPreserved, 'kept straddle-pinned morning entry stays');
 });
 
+test('sunny→rainy→sunny sequence: every kept segment stays in the rotation count; only post-last-cut regenerates', () => {
+  const divisions = { Div1: { bunks: ['A'] } };
+  const divisionTimes = { Div1: [
+    { startMin: 600, endMin: 660 },
+    { startMin: 660, endMin: 720 },
+    { startMin: 720, endMin: 780 },
+    { startMin: 780, endMin: 840 },
+  ] };
+  // Fully generated outdoor day.
+  let sa = { A: [
+    { _activity: 'Soccer', field: 'Field 1' },
+    { _activity: 'Baseball', field: 'Field 2' },
+    { _activity: 'Tennis', field: 'Court 2' },
+    { _activity: 'Hockey', field: 'Rink' },
+  ] };
+
+  // ── CUT 1: rain at 700 (slot 1 is 40/60 = 67% done → erased) ──
+  const rainSplit = rainySplitScheduleAt(sa, divisionTimes, divisions, 700);
+  sa = { A: rainSplit.assignments.A };
+  assert.ok(sa.A[0]._pinned && sa.A[0]._activity === 'Soccer', 'sunny morning kept + pinned');
+  assert.strictEqual(sa.A[1], null, '67%-done Baseball erased (<75%)');
+  assert.deepStrictEqual(countRotation(sa).A, { Soccer: 1 }, 'after rain cut: only the kept morning counts');
+
+  // The cut-scoped generate may fill exactly the post-cut slots (1,2,3).
+  let scope = rainyBuildMidDayRegenScope(sa, divisionTimes, divisions, 700).scope;
+  assert.deepStrictEqual([...scope.A.regen].sort(), [1, 2, 3]);
+
+  // Simulate the indoor rest-of-day the user generates.
+  sa.A[1] = { _activity: 'Dodgeball', field: 'Gym' };
+  sa.A[2] = { _activity: 'Arts & Crafts', field: 'Art Room' };
+  sa.A[3] = { _activity: 'Movie Marathon', field: 'Rec Room' };
+
+  // ── CUT 2: sun's out at 790 (slot 3 is 10/60 = 17% done → erased) ──
+  const sunSplit = rainySplitScheduleAt(sa, divisionTimes, divisions, 790);
+  sa = { A: sunSplit.assignments.A };
+  assert.ok(sa.A[0]._pinned && sa.A[1]._pinned && sa.A[2]._pinned, 'sunny morning AND rainy segment kept');
+  assert.strictEqual(sa.A[3], null, '17%-done Movie Marathon erased');
+
+  // ★ The user's requirement: the first half of the day — including the rainy
+  //   indoor segment that ran — STAYS in the rotation count.
+  assert.deepStrictEqual(countRotation(sa).A,
+    { Soccer: 1, Dodgeball: 1, 'Arts & Crafts': 1 },
+    'kept sunny + rainy segments both count; erased tail does not');
+
+  // A Generate after the sun cut may only refill from 790 onward.
+  scope = rainyBuildMidDayRegenScope(sa, divisionTimes, divisions, 790).scope;
+  assert.deepStrictEqual([...scope.A.regen], [3], 'only the post-sun-cut slot regenerates');
+  assert.deepStrictEqual(Object.keys(scope.A.keep).map(Number).sort(), [0, 1, 2],
+    'both kept segments protected byte-for-byte');
+});
+
 test('bunks outside the passed divisions are never scanned or returned; input not mutated', () => {
   const { divisions, divisionTimes, scheduleAssignments } = fixture();
   const before = JSON.parse(JSON.stringify(scheduleAssignments));
