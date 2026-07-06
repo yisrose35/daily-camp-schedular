@@ -176,6 +176,77 @@
     /**
      * Insert a broadcast record into link_broadcasts.
      */
+    /**
+     * Insert a direct admin->parent message into link_messages (migration 020).
+     * Non-blocking — failures log a warning but don't break the local flow.
+     * Without this, msg.send() only ever wrote to the admin's own browser
+     * localStorage, so a message could never reach a parent on another device.
+     */
+    function _insertMessageRow(m) {
+        var db = _db(); if (!db) return;
+        db.client
+            .from('link_messages')
+            .insert({
+                id:           m.id,
+                camp_id:      db.campId,
+                thread_id:    m.threadId || m.id,
+                direction:    m.direction || 'out',
+                parent_name:  m.to || '',
+                parent_email: (m.metadata && m.metadata.parentEmail) || '',
+                camper_name:  (m.metadata && m.metadata.camperName) || null,
+                subject:      m.subject || '',
+                body:         m.body    || '',
+                channels:     m.channels || ['app'],
+                read:         !!m.read
+            })
+            .then(function(res) {
+                if (res.error) console.warn('[Link] link_messages insert error:', res.error.message);
+            });
+    }
+
+    /**
+     * Load message history from link_messages (cloud) — both directions, so
+     * the admin inbox picks up parent replies made via submit_message_reply,
+     * not just messages sent from this same browser.
+     */
+    function loadCloudMessages(limit) {
+        var db = _db(); if (!db) return;
+        limit = limit || 200;
+        db.client
+            .from('link_messages')
+            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, created_at')
+            .eq('camp_id', db.campId)
+            .order('created_at', { ascending: false })
+            .limit(limit)
+            .then(function(res) {
+                if (res.error) { console.warn('[Link] loadCloudMessages error:', res.error.message); return; }
+                var rows = res.data || [];
+                var existingIds = new Set(_store.messages.map(function(m) { return m.id; }));
+                rows.forEach(function(row) {
+                    if (existingIds.has(row.id)) return;
+                    _store.messages.push({
+                        id: row.id, direction: row.direction,
+                        from: row.direction === 'in' ? (row.parent_name || 'Parent') : 'Camp Admin',
+                        to:   row.direction === 'out' ? (row.parent_name || '') : 'Camp Office',
+                        toType: 'individual',
+                        subject: row.subject, body: row.body,
+                        channels: row.channels || ['app'],
+                        date: row.created_at, read: row.read, replied: false,
+                        threadId: row.thread_id,
+                        metadata: { parentEmail: row.parent_email, camperName: row.camper_name }
+                    });
+                });
+                saveStore();
+                console.log('[Link] Cloud messages loaded:', rows.length, 'records');
+                // Refresh whatever's currently on screen so a parent reply
+                // doesn't require navigating away and back to appear.
+                try {
+                    if (window.currentMsgTab === 'inbox' && typeof window.renderAdminMsgs === 'function') window.renderAdminMsgs('all');
+                    if (window.currentMsgTab === 'outbox' && typeof window.renderSentList === 'function') window.renderSentList();
+                } catch (e) {}
+            });
+    }
+
     function _insertBroadcastRow(b) {
         var db = _db(); if (!db) return;
         db.client
@@ -548,6 +619,7 @@
         };
         _store.messages.push(m);
         saveStore();
+        _insertMessageRow(m);
         return m;
     };
 
@@ -1093,11 +1165,13 @@
         function tryLoadCloud() {
             if (_db()) {
                 loadCloudHistory(100);
+                loadCloudMessages(200);
             } else {
                 // CampistryDB fires campistry-db-ready once campId is resolved
                 window.addEventListener('campistry-db-ready', function onDbReady() {
                     window.removeEventListener('campistry-db-ready', onDbReady);
                     loadCloudHistory(100);
+                    loadCloudMessages(200);
                 }, { once: true });
             }
         }
@@ -1131,7 +1205,8 @@
         getStore: function() { return _store; },
         refresh: function() { loadStore(); },
         save: saveStore,
-        loadCloudHistory: loadCloudHistory
+        loadCloudHistory: loadCloudHistory,
+        loadCloudMessages: loadCloudMessages
     };
 
     console.log('[Link] Data Bridge ready. Parents:', data.getParentDirectory().length, '| Campers:', Object.keys(data.getRoster()).length);

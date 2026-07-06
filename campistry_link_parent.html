@@ -1136,6 +1136,11 @@ function openMsg(id){
             var store=_readLinkStore();
             var sm=(store.messages||[]).find(function(x){return x.id===m._storeId});
             if(sm){sm.read=true;_writeLinkStore(store);}
+            // Let the admin's inbox reflect that this was actually read —
+            // only meaningful for admin-sent ('direct') messages.
+            if(m.type==='direct'&&typeof window._markMessageReadCloud==='function'){
+                window._markMessageReadCloud(m._storeId);
+            }
         }
     }
     var unread=messages.filter(function(x){return!x.read}).length;
@@ -1150,20 +1155,27 @@ function sendMsgReply(threadId, subject){
     var ta=document.getElementById('msgReplyBody');
     var body=(ta?ta.value:'').trim();
     if(!body){toast('Write a reply first.');return;}
-    var now=new Date();
-    var store=_readLinkStore();
-    if(!store.messages)store.messages=[];
-    store.messages.unshift({
-        id:'msg_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5),
-        direction:'in',from:parent.name||'Parent',to:'Camp Office',toType:'individual',
-        subject:'RE: '+(subject||''),body:body,channels:['app'],date:now.toISOString(),
-        read:false,replied:false,threadId:threadId||null,
-        metadata:{parentEmail:parent.email,isReply:true}
+    if(typeof window._submitMessageReplyCloud!=='function'){toast('Connection not ready — try again in a moment.');return;}
+    window._submitMessageReplyCloud(threadId||null,'RE: '+(subject||''),body,function(res){
+        if(res.error||!res.data||!res.data.success){
+            toast('Could not send reply — please try again.');
+            return;
+        }
+        var now=new Date();
+        var store=_readLinkStore();
+        if(!store.messages)store.messages=[];
+        store.messages.unshift({
+            id:res.data.id,
+            direction:'in',from:parent.name||'Parent',to:'Camp Office',toType:'individual',
+            subject:'RE: '+(subject||''),body:body,channels:['app'],date:now.toISOString(),
+            read:true,replied:false,threadId:res.data.thread_id||threadId||null,
+            metadata:{parentEmail:parent.email,isReply:true}
+        });
+        _writeLinkStore(store);
+        if(ta)ta.value='';
+        toast('Reply sent to camp!');
+        closeMsgDetail();
     });
-    _writeLinkStore(store);
-    if(ta)ta.value='';
-    toast('Reply sent to camp!');
-    closeMsgDetail();
 }
 function toggleCompose(show){
     document.getElementById('msgComposeView').style.display=show?'block':'none';
@@ -1174,18 +1186,24 @@ function sendComposedMsg(){
     var subj=document.getElementById('composeSubject').value.trim();
     var body=document.getElementById('composeBody').value.trim();
     if(!subj||!body){toast('Please fill in subject and message.');return;}
-    var now=new Date();
-    var msgId='msg_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5);
-    var msg={id:msgId,direction:'in',from:parent.name||'Parent',to:to||'Camp Office',toType:'individual',
-        subject:subj,body:body,channels:['app'],date:now.toISOString(),read:false,replied:false,threadId:null,
-        metadata:{parentEmail:parent.email}};
-    var store=_readLinkStore();
-    if(!store.messages)store.messages=[];
-    store.messages.unshift(msg);
-    _writeLinkStore(store);
-    toggleCompose(false);
-    renderMsgs(); // reloads from store, will show sent message
-    toast('Message sent to '+to+'!');
+    if(typeof window._submitMessageReplyCloud!=='function'){toast('Connection not ready — try again in a moment.');return;}
+    window._submitMessageReplyCloud(null,subj,body,function(res){
+        if(res.error||!res.data||!res.data.success){
+            toast('Could not send message — please try again.');
+            return;
+        }
+        var now=new Date();
+        var msg={id:res.data.id,direction:'in',from:parent.name||'Parent',to:to||'Camp Office',toType:'individual',
+            subject:subj,body:body,channels:['app'],date:now.toISOString(),read:true,replied:false,threadId:res.data.thread_id,
+            metadata:{parentEmail:parent.email}};
+        var store=_readLinkStore();
+        if(!store.messages)store.messages=[];
+        store.messages.unshift(msg);
+        _writeLinkStore(store);
+        toggleCompose(false);
+        renderMsgs(); // reloads from store, will show sent message
+        toast('Message sent to '+to+'!');
+    });
 }
 
 // Schedule date navigation
@@ -1426,6 +1444,57 @@ function hydratePickupRequests(){
 // ── Shared message store helpers ──────────────────────────────────────────────
 function _readLinkStore(){try{return JSON.parse(localStorage.getItem(LINK_STORE_KEY)||'{}');}catch(e){return {};}}
 function _writeLinkStore(s){try{localStorage.setItem(LINK_STORE_KEY,JSON.stringify(s));}catch(e){}}
+
+// Pull real admin<->parent messages + camp broadcasts from the cloud
+// (migration 020 / get_my_messages, get_camp_broadcasts). Before this, the
+// portal only ever read its own local campistry_link_v1 key — a message
+// sent by the admin, or a reply sent from a different device, could never
+// show up here. Merges into the same local store _loadMessages() already
+// reads, keyed off id so nothing gets duplicated on repeat syncs.
+function _syncMessagesFromCloud(){
+    if(typeof window._loadMyMessagesCloud==='function'){
+        window._loadMyMessagesCloud(function(){
+            var store=_readLinkStore();
+            if(!store.messages)store.messages=[];
+            var existingIds={};store.messages.forEach(function(m){existingIds[m.id]=true;});
+            (window._cloudMessages||[]).forEach(function(cm){
+                if(existingIds[cm.id])return;
+                store.messages.push({
+                    id:cm.id, direction:cm.direction,
+                    from: cm.direction==='in' ? (parent.name||'Parent') : 'Camp Office',
+                    to:   cm.direction==='out'? (parent.name||parent.email||'') : 'Camp Office',
+                    toType:'individual',
+                    subject:cm.subject||'', body:cm.body||'',
+                    channels:['app'], date:cm.created_at,
+                    read: cm.direction==='in' ? true : !!cm.read,
+                    replied:false, threadId:cm.thread_id,
+                    metadata:{parentEmail:parent.email}
+                });
+            });
+            _writeLinkStore(store);
+            if(typeof renderMsgs==='function')renderMsgs();
+            var hm=document.getElementById('homeMsgBadge'), hs=document.getElementById('homeMsgSub');
+            if(typeof messages!=='undefined'&&(hm||hs)){
+                var unread=messages.filter(function(m){return!m.read;}).length;
+                if(hs)hs.textContent=unread?unread+' unread':'All caught up';
+                if(hm){hm.textContent=unread;hm.style.display=unread?'flex':'none';}
+            }
+        });
+    }
+    if(typeof window._loadCampBroadcastsCloud==='function'){
+        window._loadCampBroadcastsCloud(parent.campId,function(){
+            var store=_readLinkStore();
+            if(!store.broadcasts)store.broadcasts=[];
+            var existingIds={};store.broadcasts.forEach(function(b){existingIds[b.id]=true;});
+            (window._cloudBroadcasts||[]).forEach(function(cb){
+                if(existingIds[cb.id])return;
+                store.broadcasts.push({id:cb.id, subject:cb.subject||'', body:cb.body||'', date:cb.created_at});
+            });
+            _writeLinkStore(store);
+            if(typeof renderMsgs==='function')renderMsgs();
+        });
+    }
+}
 
 function _formatMsgDate(d){
     if(!d)return '—';
@@ -1777,6 +1846,36 @@ window.addEventListener('storage', function(e) {
         });
     }
 
+    // ── Messages bridge (migration 020) ───────────────────────────────────────
+    // Before this, Messages had no cloud path at all in either direction — a
+    // message sent by the admin, or a reply sent from another device, could
+    // never appear here. Same pattern as forms/mail/tips above.
+    window._submitMessageReplyCloud = function(threadId, subject, body, done) {
+        db.rpc('submit_message_reply', { p_thread_id: threadId || null, p_subject: subject || '', p_body: body || '' }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] Message reply cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+            }
+            if (done) done(res);
+        });
+    };
+    window._markMessageReadCloud = function(messageId) {
+        db.rpc('mark_message_read', { p_message_id: messageId }).then(function(res) {
+            if (res.error) console.warn('[Parent] mark_message_read failed:', res.error.message);
+        });
+    };
+    window._loadMyMessagesCloud = function(cb) {
+        db.rpc('get_my_messages').then(function(res) {
+            window._cloudMessages = (!res.error && res.data && res.data.success) ? (res.data.messages || []) : [];
+            if (cb) cb();
+        });
+    };
+    window._loadCampBroadcastsCloud = function(campId, cb) {
+        db.rpc('get_camp_broadcasts', { p_camp_id: campId }).then(function(res) {
+            window._cloudBroadcasts = (!res.error && res.data && res.data.success) ? (res.data.broadcasts || []) : [];
+            if (cb) cb();
+        });
+    };
+
     console.log('[Parent] Auth init. Token in URL:', urlToken ? urlToken.slice(0,8)+'…' : 'none');
 
     // ── Overlay helpers ───────────────────────────────────────────────────────
@@ -1874,7 +1973,8 @@ window.addEventListener('storage', function(e) {
             _loadSnacksData(realChildren); // instant local echo while the live cloud fetch below is in flight
             _syncCanteenFromCloud(realChildren, d.camp_id);
         }
-        _loadMessages(); // pull messages/broadcasts/notifications from shared store
+        _loadMessages(); // instant local echo while the live cloud fetch below is in flight
+        _syncMessagesFromCloud();
         init();
         hydratePickupRequests();
         _hideOverlay('parentAuthOverlay');
