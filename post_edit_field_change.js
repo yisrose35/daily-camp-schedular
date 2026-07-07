@@ -232,7 +232,8 @@
     return Object.keys(set).sort();
   }
 
-  // Teams / sports configured for a league (drives the matchup-editor dropdowns).
+  // Teams / sports configured for a league (drives the matchup-editor dropdowns
+  // and the sport auto-suggest).
   function leagueConfig(leagueName) {
     var byName = window.leaguesByName ||
       (typeof window.loadGlobalSettings === 'function' && (window.loadGlobalSettings() || {}).leaguesByName) || {};
@@ -241,7 +242,105 @@
       var k = Object.keys(byName || {}).filter(function (n) { return norm(n) === norm(leagueName); })[0];
       lg = k ? byName[k] : null;
     }
-    return { teams: (lg && Array.isArray(lg.teams)) ? lg.teams.slice() : [] };
+    return {
+      teams: (lg && Array.isArray(lg.teams)) ? lg.teams.slice() : [],
+      sports: (lg && Array.isArray(lg.sports)) ? lg.sports.slice() : []
+    };
+  }
+
+  // Short labels for WHAT occupies a field during the game's window — mirrors
+  // the regular post-edit report's in-use chips ("League game", "Basketball").
+  // Same three sources fieldHasTimeConflict checks, but collecting names.
+  function fieldOccupants(fieldName, ctx) {
+    var out = [], seen = {};
+    function add(lbl) {
+      lbl = String(lbl == null ? '' : lbl).trim();
+      var k = norm(lbl);
+      if (!lbl || seen[k]) return;
+      seen[k] = 1; out.push(lbl);
+    }
+    if (!fieldName || ctx.startMin == null || ctx.endMin == null) return out;
+    var nf = norm(fieldName);
+    var GFL = window.GlobalFieldLocks;
+    if (GFL && typeof GFL.isFieldLockedByTime === 'function') {
+      try {
+        var lock = GFL.isFieldLockedByTime(fieldName, ctx.startMin, ctx.endMin, ctx.divName);
+        if (lock) {
+          var by = String(lock.lockedBy || '');
+          if (lock.leagueName || by.indexOf('league') !== -1) add('League game');
+          else add(lock.activity || by || 'Reserved');
+        }
+      } catch (e) { /* labels are advisory */ }
+    }
+    var sa = window.scheduleAssignments || {};
+    for (var bunk in sa) {
+      if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
+      var row = sa[bunk]; if (!Array.isArray(row)) continue;
+      for (var i = 0; i < row.length; i++) {
+        var e = row[i]; if (!e) continue;
+        var s = e._startMin, en = e._endMin;
+        if (s == null || en == null || !(s < ctx.endMin && en > ctx.startMin)) continue;
+        var label = (typeof window.fieldLabel === 'function') ? window.fieldLabel(e.field) : e.field;
+        if (label && norm(label) === nf) add(e._activity || bunk);
+        if (Array.isArray(e._allMatchups)) {
+          for (var k = 0; k < e._allMatchups.length; k++) {
+            var p = PEFC.parseMatchup(e._allMatchups[k]);
+            if (p.field && norm(p.field) === nf) add('League game');
+          }
+        }
+        if (Array.isArray(e._assignments)) {
+          for (var j = 0; j < e._assignments.length; j++) {
+            var a = e._assignments[j];
+            if (a && a.field && norm(a.field) === nf) add('League game');
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Does ANY field host this sport free & clear at the game's time?
+  function sportHasFreeField(sport, ctx) {
+    var probe = Object.assign({}, ctx, { selectedSport: sport });
+    var rows = candidateFields(probe);
+    for (var i = 0; i < rows.length; i++) if (rows[i].free) return true;
+    return false;
+  }
+
+  // Auto-suggest: rank the league's sports for the CURRENT pair the way the
+  // scheduler would — a sport with an open field that neither team has played
+  // yet first, then least-played-by-both. Returns up to 3 {sport, reason, free}.
+  function sportSuggestions(ctx, teamA, teamB, curSport) {
+    var LPR = window.LeaguePlayReport;
+    if (!ctx.leagueName || !teamA || !teamB || !LPR || typeof LPR.buildData !== 'function') return [];
+    var data;
+    try { data = LPR.buildData(ctx.leagueName, 'regular'); } catch (e) { return []; }
+    var cfg = leagueConfig(ctx.leagueName);
+    var sports = (cfg.sports && cfg.sports.length) ? cfg.sports : allSports();
+    function cnt(team, sport) {
+      var lt = norm(team);
+      for (var t in data.byTeam) {
+        if (norm(t) !== lt) continue;
+        var rec = data.byTeam[t].sports || {};
+        for (var sName in rec) if (norm(sName) === norm(sport)) return rec[sName];
+        return 0;
+      }
+      return 0;
+    }
+    var scored = [];
+    sports.forEach(function (s) {
+      if (!s || norm(s) === norm(curSport)) return;
+      var cA = cnt(teamA, s), cB = cnt(teamB, s);
+      scored.push({ sport: s, cA: cA, cB: cB, total: cA + cB, free: sportHasFreeField(s, ctx) });
+    });
+    scored.sort(function (a, b) {
+      return (b.free - a.free) || (a.total - b.total) || a.sport.localeCompare(b.sport);
+    });
+    return scored.slice(0, 3).map(function (r) {
+      var reason = (!r.cA && !r.cB) ? 'new for both'
+        : esc(teamA) + ' ' + r.cA + '× · ' + esc(teamB) + ' ' + r.cB + '×';
+      return { sport: r.sport, reason: reason, free: r.free };
+    });
   }
 
   // ── context builder ──────────────────────────────────────────────────────
@@ -601,26 +700,68 @@
     // clickable and busy ones show as plain greyed text (conflict-safe default).
     var override = !!ctx.override;
 
-    // Render one field as a button. `busy` fields are only clickable under
-    // override; the current field is never re-rendered as a button (it's shown
-    // in the summary header above).
+    // Auto-suggest for THIS matchup: what should these two teams play, given
+    // their sport history and which fields are actually open right now.
+    var suggestHtml = '';
+    if (canEditSport) {
+      var sugs = sportSuggestions(ctx, curA, curB, curSport);
+      if (sugs.length) {
+        suggestHtml = '<div style="background:#f5f6ff;border:1px solid #e0e3fb;border-radius:10px;padding:9px 11px;margin-bottom:14px;">' +
+          '<div style="font-weight:700;color:#4338ca;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;">Suggested for ' + esc(curA) + ' vs ' + esc(curB) + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;">' +
+          sugs.map(function (s) {
+            return '<button class="pefc-suggest" data-sport="' + esc(s.sport) + '" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid ' + (s.free ? '#c7d2fe' : '#e5e7eb') + ';border-radius:20px;background:#fff;cursor:pointer;font-size:0.8rem;color:#312e81;font-weight:600;">' +
+              esc(s.sport) +
+              '<span style="font-weight:400;color:#6366f1;font-size:0.7rem;">' + s.reason + (s.free ? ' · field open' : ' · no field free') + '</span></button>';
+          }).join('') + '</div></div>';
+      }
+    }
+
+    // Section header — same look as the regular post-edit report's
+    // "OPEN FIELDS NOW / IN USE NOW" rows.
+    function sectionHdr(t, n) {
+      return '<div style="display:flex;align-items:center;gap:6px;margin:12px 0 7px 0;">' +
+        '<span style="font-weight:700;color:#6b7280;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;">' + t + '</span>' +
+        (n != null ? '<span style="background:#eef2ff;color:#4338ca;font-size:0.65rem;font-weight:700;border-radius:10px;padding:1px 7px;">' + n + '</span>' : '') +
+        '<span style="flex:1;height:1px;background:#f0f0f2;"></span></div>';
+    }
+
+    // Render one pickable field as a pill button. `busy` fields are only
+    // clickable under override; the current field is never re-rendered as a
+    // button (it's shown in the summary header above).
     function fieldBtn(c, busy) {
       var isCur = norm(c.name) === norm(ctx.game.field);
       var clickable = !isCur && (!busy || override);
-      var border = isCur ? '#cbd5e1' : (busy ? (override ? '#fca5a5' : '#e5e7eb') : '#86efac');
-      var bg = isCur ? '#f1f5f9' : (busy ? (override ? '#fef2f2' : '#f9fafb') : '#f0fdf4');
-      var color = isCur ? '#94a3b8' : (busy ? (override ? '#b91c1c' : '#9ca3af') : '#065f46');
+      var border = isCur ? '#cbd5e1' : (busy ? '#fca5a5' : '#bbf7d0');
+      var bg = isCur ? '#f1f5f9' : (busy ? '#fef2f2' : '#dcfce7');
+      var color = isCur ? '#94a3b8' : (busy ? '#b91c1c' : '#166534');
       return '<button class="pefc-field" data-f="' + esc(c.name) + '" data-busy="' + (busy ? '1' : '') + '" ' + (clickable ? '' : 'disabled') +
-        ' style="padding:8px 13px;margin:0 8px 8px 0;border:1.5px solid ' + border + ';border-radius:8px;background:' + bg + ';color:' + color + ';font-size:0.85rem;font-weight:500;cursor:' + (clickable ? 'pointer' : 'default') + ';">' +
-        (busy && override ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') +
-        (c.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + c.capacity + ')</span>' : '') +
-        (busy && override ? ' <span style="opacity:0.75;font-size:0.72rem;">in use</span>' : '') + '</button>';
+        ' style="padding:6px 14px;margin:0 8px 8px 0;border:1px solid ' + border + ';border-radius:20px;background:' + bg + ';color:' + color + ';font-size:0.82rem;font-weight:500;cursor:' + (clickable ? 'pointer' : 'default') + ';">' +
+        (busy ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') +
+        (c.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.72rem;">(cap:' + c.capacity + ')</span>' : '') + '</button>';
+    }
+
+    // Non-clickable red chip for an in-use field, labeled with WHAT is on it
+    // ("League game", "Basketball", a bunk) like the regular post-edit report.
+    function busyChip(c) {
+      var occ = fieldOccupants(c.name, ctx);
+      var lbl = occ.length
+        ? ' <span style="opacity:0.75;font-weight:400;margin-left:4px;">' + esc(occ.slice(0, 2).join(', ')) + (occ.length > 2 ? ' +' + (occ.length - 2) : '') + '</span>'
+        : '';
+      return '<span style="display:inline-flex;align-items:center;background:#fee2e2;color:#991b1b;border-radius:20px;padding:6px 14px;font-size:0.82rem;font-weight:500;margin:0 8px 8px 0;">' + esc(c.name) + lbl + '</span>';
     }
 
     // Don't list the game's own current field (it's just where the game already
     // is). Everything else busy is genuinely occupied/blocked.
     var busyReal = busyOnes.filter(function (c) { return !c.current; });
-    var freeHtml = freeOnes.map(function (c) { return fieldBtn(c, false); }).join('');
+    var freeHtml = freeOnes.length
+      ? freeOnes.map(function (c) { return fieldBtn(c, false); }).join('')
+      : '<div style="color:#9ca3af;font-size:0.78rem;font-style:italic;margin-bottom:6px;">No open fields at this time</div>';
+
+    var openSection =
+      sectionHdr('Open fields now' + (canEditSport && curSport ? ' — ' + esc(curSport) : ''), freeOnes.length) +
+      (freeOnes.length ? '<div style="font-size:0.7rem;color:#9ca3af;margin:-2px 0 6px;">Click a field to move this game there</div>' : '') +
+      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>';
 
     var noFreeNote = (!freeOnes.length && !override)
       ? '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No free fields for this game at this time. Turn on Override below to place it anyway, or free up a field first.</div>'
@@ -631,10 +772,14 @@
       '<input type="checkbox" id="pefc-override"' + (override ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
       'Override — let me pick <strong>any</strong> field (may double-book)</label>';
 
-    // Busy fields: clickable warning buttons under override, plain text otherwise.
-    var busyHtml = override
-      ? (busyReal.length ? '<div style="margin-top:6px;"><div style="font-weight:600;font-size:0.8rem;color:#b91c1c;margin-bottom:6px;">In use — pick to place anyway:</div><div style="display:flex;flex-wrap:wrap;">' + busyReal.map(function (c) { return fieldBtn(c, true); }).join('') + '</div></div>' : '')
-      : (busyReal.length ? '<div style="margin-top:12px;font-size:0.78rem;color:#9ca3af;">In use: ' + busyReal.map(function (c) { return esc(c.name); }).join(', ') + '</div>' : '');
+    // In-use fields: labeled red chips; under override they become clickable
+    // warning buttons so the game can be deliberately double-booked.
+    var busyHtml = busyReal.length
+      ? sectionHdr('In use now', busyReal.length) +
+        (override ? '<div style="font-size:0.7rem;color:#b91c1c;margin:-2px 0 6px;">Pick one to place the game anyway (double-books the field)</div>' : '') +
+        '<div style="display:flex;flex-wrap:wrap;">' +
+        busyReal.map(function (c) { return override ? fieldBtn(c, true) : busyChip(c); }).join('') + '</div>'
+      : '';
 
     // "Save changes" is ALWAYS available so a teams / sport edit can be committed
     // WITHOUT moving fields (field buttons MOVE the game; this keeps it put).
@@ -650,9 +795,9 @@
       '<div style="color:#6b7280;margin-top:2px;">' + (ctx.game.sport ? esc(ctx.game.sport) + ' · ' : '') + 'now on <strong>' + esc(ctx.game.field || '—') + '</strong></div></div>' +
       miniReportHtml(ctx, [curA, curB], canEditSport ? curSport : (ctx.game.sport || '')) +
       teamsHtml +
+      suggestHtml +
       sportHtml +
-      '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields' + (canEditSport ? ' for ' + esc(curSport) : '') + ':</div>' +
-      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + noFreeNote + overrideHtml + busyHtml + keepFieldHtml +
+      openSection + noFreeNote + overrideHtml + busyHtml + keepFieldHtml +
       '<div style="display:flex;gap:10px;margin-top:18px;">' +
       (ctx.games.length > 1 ? '<button id="pefc-back" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">← Back</button>' : '') +
       '<button id="pefc-cancel" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">Cancel</button></div>');
@@ -680,8 +825,19 @@
       captureEdits(); ctx.selectedSport = sportSel.value; showFieldPicker(ctx);
     };
 
-    // Team edits re-tint the play-history mini report so the pair being
-    // considered is highlighted live (no full re-render needed).
+    // Suggestion chips: adopt the sport and re-render (field list re-filters
+    // to that sport; matchup notes update).
+    box.querySelectorAll('.pefc-suggest').forEach(function (btn) {
+      btn.onclick = function () {
+        captureEdits();
+        ctx.selectedSport = btn.dataset.sport;
+        showFieldPicker(ctx);
+      };
+    });
+
+    // Team change → full re-render so the suggestions, matchup notes and
+    // report highlight all follow the new pair. While typing in a free-text
+    // team box, live-tint just the mini report (cheap) until blur commits.
     function refreshMiniReport() {
       var LPR = window.LeaguePlayReport;
       if (!LPR || typeof LPR.refreshMiniBody !== 'function' || !ctx.leagueName) return;
@@ -695,8 +851,8 @@
     ['#pefc-teamA', '#pefc-teamB'].forEach(function (id) {
       var el = box.querySelector(id);
       if (!el) return;
-      el.addEventListener('change', refreshMiniReport);
-      el.addEventListener('input', refreshMiniReport);
+      el.addEventListener('change', function () { captureEdits(); showFieldPicker(ctx); });
+      if (el.tagName === 'INPUT') el.addEventListener('input', refreshMiniReport);
     });
 
     // Override toggle re-renders so busy fields become clickable warning buttons.
