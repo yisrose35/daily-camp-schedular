@@ -3247,11 +3247,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         }
 
         var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        // ★ Off-paper "Build Day" mode: the builder owns window.scheduleAssignments
-        //   in memory (a blank template being hand-filled) — reloading the saved
-        //   day here would wipe the user's in-progress entries. Skip the reload
-        //   while building; a normal render restores from cloud on exit.
-        if (!window._postEditInProgress && !window.__blankDayMode) loadScheduleForDate(dateKey);
+        if (!window._postEditInProgress) loadScheduleForDate(dateKey);
 
         var skeleton = getSkeleton(dateKey);
         var divisions = window.divisions || {};
@@ -3284,10 +3280,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         // its own transposed renderer with time-scaled positioning, league
         // and trip overlays, free-gap clickers, etc.). Manual mode uses the
         // unified flat table built below.
-        // ★ Off-paper "Build Day" always uses the manual flat grid (the template
-        //   grid the user hand-fills), regardless of the camp's builder mode.
-        var currentBuilderMode = window.__blankDayMode ? 'manual'
-            : ((window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual');
+        var currentBuilderMode = (window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual';
         if (currentBuilderMode === 'auto' && window.AutoScheduleGrid && window.AutoScheduleGrid.render) {
             var divisionsAuto = Object.keys(divisions);
             if (divisionsAuto.length === 0 && window.availableDivisions) divisionsAuto = window.availableDivisions;
@@ -3354,11 +3347,8 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         }
         var _haveHydratedDivTimes = window.divisionTimes && Object.keys(window.divisionTimes).length > 0;
         try {
-            if (!window.__blankDayMode && _dateOwnsSkeleton && skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+            if (_dateOwnsSkeleton && skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
                 // Active build/edit date: rebuild clean div-level geometry from its own skeleton.
-                // ★ Off-paper Build Day owns window.divisionTimes (the chosen template) — never
-                //   rebuild from the date's skeleton while building, or the grid would switch to
-                //   the wrong period structure mid-fill.
                 var _miRebuilt = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
                 if (_miRebuilt && Object.keys(_miRebuilt).length) {
                     Object.keys(_miRebuilt).forEach(function (g) {
@@ -3470,14 +3460,8 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             // Pre-compute which slots in this division have identical content
             // for every bunk — those will merge into a single rowspan cell.
             var mergeSlots = {}; // slotIdx -> true
-            // ★ Off-paper "Build Day" mode: an all-empty blank template would make
-            //   every slot a full-division merge (all bunks identical = null),
-            //   collapsing each slot to ONE cell and defeating per-bunk entry.
-            //   Skip merging while building so every bunk gets its own clickable cell.
-            if (!window.__blankDayMode) {
-                for (var msi = 0; msi < divSlots.length; msi++) {
-                    if (_slotIsFullDivisionMerge(msi, bunks, divSlots)) mergeSlots[msi] = true;
-                }
+            for (var msi = 0; msi < divSlots.length; msi++) {
+                if (_slotIsFullDivisionMerge(msi, bunks, divSlots)) mergeSlots[msi] = true;
             }
 
             bunks.forEach(function (bunk, bi) {

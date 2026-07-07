@@ -2894,62 +2894,6 @@
         }
     };
 
-    // ★ Off-paper "Build Day": lightweight lookup of the leagues a division plays,
-    //   used to populate the manual matchup editor (teams + sports per league).
-    window.LeaguesAPI.getLeaguesForDivision = function (divName) {
-        try {
-            return Object.keys(leaguesByName)
-                .map(function (n) { return leaguesByName[n]; })
-                .filter(function (l) { return l && Array.isArray(l.divisions) && l.divisions.indexOf(divName) >= 0; })
-                .map(function (l) { return { name: l.name, teams: (l.teams || []).slice(), sports: (l.sports || []).slice() }; });
-        } catch (e) { return []; }
-    };
-
-    // ★ Off-paper "Build Day": record a hand-entered league game (matchup + result)
-    //   for a date so it feeds standings exactly like a played+scored game. Mirrors
-    //   syncGamesFromGeneration but is tagged importedFrom:'offpaper' (never touched
-    //   by the auto-game replace path) and carries the winner via scoreA/scoreB
-    //   (1-0 / 0-1 / 1-1). Idempotent per (date, gameLabel): a re-save replaces the
-    //   prior off-paper game with the same label instead of duplicating it.
-    window.LeaguesAPI.recordManualGameResult = function (leagueName, dateKey, gameLabel, matches) {
-        try {
-            const league = leaguesByName[leagueName];
-            if (!league || !dateKey || !Array.isArray(matches) || matches.length === 0) return false;
-            if (!Array.isArray(league.games)) league.games = [];
-            const label = gameLabel || 'Off-Paper Game';
-            league.games = league.games.filter(function (g) {
-                return !(g.date === dateKey && g.gameLabel === label && g.importedFrom === 'offpaper');
-            });
-            const numMatch = String(label).match(/Game\s*(\d+)/i);
-            league.games.push({
-                date: dateKey,
-                gameLabel: label,
-                gameNumber: numMatch ? parseInt(numMatch[1], 10) : null,
-                matches: matches.map(function (m) {
-                    return {
-                        teamA: m.teamA, teamB: m.teamB,
-                        scoreA: (m.scoreA != null ? m.scoreA : null),
-                        scoreB: (m.scoreB != null ? m.scoreB : null),
-                        sport: m.sport || null
-                    };
-                }),
-                importedFrom: 'offpaper',
-                importedAt: new Date().toISOString()
-            });
-            league.games.sort(function (a, b) {
-                return (a.date || '').localeCompare(b.date || '') || (a.gameNumber || 0) - (b.gameNumber || 0);
-            });
-            recalcStandings(league);
-            saveLeaguesData();
-            _refreshGamesUIIfShowing(leagueName);
-            console.log('[LEAGUES] 📝 Recorded off-paper game "' + label + '" for "' + leagueName + '" on ' + dateKey);
-            return true;
-        } catch (e) {
-            console.error('[LEAGUES] recordManualGameResult failed:', e);
-            return false;
-        }
-    };
-
     // Auto-load on script run
     window.loadLeagueGlobals();
 
