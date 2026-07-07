@@ -203,7 +203,11 @@
         // =====================================================================
         try {
             const timedUsages = collectTimedUsages(assignments, divisions, divisionTimes, bunkDivMap);
+            annotatePinSpans(timedUsages);
             checkLeagueFieldConflicts(timedUsages).forEach(e => errors.push(e));
+            // ★ CHECK 17: pin-vs-pin facility conflicts — span-linked ("together")
+            //   tiles pass as one shared reservation, unlinked collisions flag.
+            checkPinnedTileConflicts(timedUsages, activityProperties).forEach(e => errors.push(e));
             checkFieldQuality(timedUsages).forEach(w => warnings.push(w));
             const sportRules = checkSportPlayerRules(timedUsages);
             sportRules.errors.forEach(e => errors.push(e));
@@ -1273,7 +1277,7 @@
                 if (group.length < 2) return;
                 const kinds = new Set(group.map(g => g.kind));
                 if (kinds.size === 1 && kinds.has('bunk')) return;   // CHECK 1 covers it
-                if (kinds.size === 1 && kinds.has('event')) return;  // pinned-vs-pinned: by design
+                if (kinds.size === 1 && kinds.has('event')) return;  // pin-vs-pin: CHECK 17 (span-aware)
                 const owners = [...new Set(group.map(g => g.owner))];
                 if (owners.length < 2) return;
                 const sig = group[0].fkey + '|' + owners.sort().join(',') + '|' + Math.min(...group.map(g => g.startMin));
@@ -1285,6 +1289,95 @@
                 errors.push(
                     `<strong>League/Event Field Conflict:</strong> <u>${group[0].facility}</u> is double-booked during ${timeLabel}<br>` +
                     `<small style="color:#666;">${occ}</small>`
+                );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ CHECK 17: PINNED-vs-PINNED facility conflicts (span-aware).
+     * Two pinned tiles reserving the same facility at overlapping times used to
+     * be exempt ("user-placed, by design"). With multi-grade tile spanning the
+     * intent is now expressible: tiles linked into one span (shared spanGroup)
+     * are ONE joint activity and pass; unlinked colliding pins are flagged.
+     * Facility capacity still applies — a facility that allows N simultaneous
+     * groups passes with up to N occupants (e.g. an open/sharable facility).
+     */
+    function annotatePinSpans(usages) {
+        // The generated entries don't carry spanGroup — read it off the day's
+        // skeleton tiles (Daily Adjustments' live skeleton, falling back to the
+        // builder's) by matching division + overlapping time + facility/event.
+        const skelRaw = (Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length)
+            ? window.dailyOverrideSkeleton
+            : (window.MasterSchedulerInternal?.dailySkeleton || []);
+        const spanTiles = (skelRaw || []).filter(t => t && t.spanGroup);
+        if (!spanTiles.length) return usages;
+        const parse = (t) => window.SchedulerCoreUtils?.parseTimeToMinutes?.(t) ?? null;
+
+        usages.forEach(u => {
+            if (u.kind !== 'event') return;
+            const hit = spanTiles.find(t => {
+                if (String(t.division) !== String(u.divName)) return false;
+                const ts = parse(t.startTime), te = parse(t.endTime);
+                if (ts == null || te == null) return false;
+                if (!(ts < u.endMin && te > u.startMin)) return false;
+                const locs = [];
+                if (t.location) locs.push(t.location);
+                if (t.swimLocation) locs.push(t.swimLocation);
+                if (Array.isArray(t.reservedFields)) locs.push(...t.reservedFields);
+                if (locs.some(l => normalizeFieldName(l) === u.fkey)) return true;
+                // Fallback: same event name (pin whose facility came from defaults)
+                const evName = _lc(t.event || '');
+                return !!evName && evName === _lc(u.activity || '');
+            });
+            if (hit) u.spanGroup = hit.spanGroup;
+        });
+        return usages;
+    }
+
+    function checkPinnedTileConflicts(usages, activityProperties) {
+        const errors = [];
+        const events = usages.filter(u => u.kind === 'event');
+        if (events.length < 2) return errors;
+
+        const byF = {};
+        events.forEach(u => { (byF[u.fkey] = byF[u.fkey] || []).push(u); });
+        const seen = new Set();
+
+        Object.values(byF).forEach(list => {
+            if (list.length < 2) return;
+            buildOverlapGroups(list).forEach(group => {
+                if (group.length < 2) return;
+
+                // Members sharing a spanGroup are ONE joint reservation
+                // ("together" — the grades do this activity as one).
+                const occupants = new Map(); // occupant key → members
+                group.forEach((g, i) => {
+                    const k = g.spanGroup ? ('span:' + g.spanGroup) : ('u:' + i);
+                    if (!occupants.has(k)) occupants.set(k, []);
+                    occupants.get(k).push(g);
+                });
+                if (occupants.size < 2) return; // all linked → together → pass
+
+                // Capacity-aware: an open/sharable facility can hold several.
+                const cap = getFieldCapacity(group[0].fkey, activityProperties);
+                if (isFinite(cap) && cap > 0 && occupants.size <= cap) return;
+
+                const owners = [...new Set(group.map(g => g.owner))];
+                if (owners.length < 2) return;
+                const sig = group[0].fkey + '|' + owners.sort().join(',') + '|' + Math.min(...group.map(g => g.startMin));
+                if (seen.has(sig)) return;
+                seen.add(sig);
+
+                const timeLabel = formatTime(Math.min(...group.map(g => g.startMin))) + ' - ' +
+                                  formatTime(Math.max(...group.map(g => g.endMin)));
+                const occ = group.map(g => `${g.owner} ${formatTime(g.startMin)}-${formatTime(g.endMin)}`).join(' · ');
+                errors.push(
+                    `<strong>Pinned Tile Conflict:</strong> <u>${group[0].facility}</u> is reserved by more than one pinned tile during ${timeLabel}<br>` +
+                    `<small style="color:#666;">${occ}<br>` +
+                    `If these grades do this activity <em>together</em>, stretch one tile across their grade columns ` +
+                    `(drag its left/right edge in the builder) so it counts as one shared reservation.</small>`
                 );
             });
         });
@@ -1949,7 +2042,10 @@
             isPinnedEventEntry,
             // v3.2: sports rules
             checkCooldownRules,
-            checkSportPlayerRules
+            checkSportPlayerRules,
+            // CHECK 17: span-aware pin-vs-pin facility conflicts
+            annotatePinSpans,
+            checkPinnedTileConflicts
         }
     };
 
