@@ -11,6 +11,7 @@ var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
+var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
@@ -2208,11 +2209,20 @@ function renderEnrollment(){
     h+='<a href="campistry_register.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openFormConfig()">⚙ Customize Form</button></div>';
 
-    // Pipeline stats
+    // Pipeline sections — click a card to filter the list below to that group
     h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
-    var stages=[{label:'Applied',count:applied,color:'var(--s500)'},{label:'Accepted',count:accepted,color:'#3B82F6'},{label:'Waitlisted',count:waitlisted,color:'var(--me)'},{label:'Enrolled',count:enrolled,color:'var(--ok)'},{label:'Declined',count:byStatus.declined||0,color:'var(--err)'},{label:'Withdrawn',count:byStatus.withdrawn||0,color:'var(--s400)'}];
+    var stages=[
+        {label:'All',count:total,color:'var(--s700)',key:'all'},
+        {label:'Applied',count:applied,color:'var(--s500)',key:'applied'},
+        {label:'Waitlist',count:waitlisted,color:'var(--me)',key:'waitlisted'},
+        {label:'Accepted',count:accepted,color:'#3B82F6',key:'accepted'},
+        {label:'Enrolled',count:enrolled,color:'var(--ok)',key:'enrolled'},
+        {label:'Withdrawn',count:byStatus.withdrawn||0,color:'var(--s400)',key:'withdrawn'},
+        {label:'Declined',count:byStatus.declined||0,color:'var(--err)',key:'declined'}
+    ];
     stages.forEach(function(s){
-        h+='<div style="flex:1;min-width:90px;background:#fff;border-radius:var(--r);padding:10px 12px;border:1px solid var(--s200);text-align:center">';
+        var active=regFilter===s.key;
+        h+='<div class="click" onclick="CampistryMe.setRegFilter(\''+s.key+'\')" style="flex:1;min-width:86px;background:'+(active?'var(--s50)':'#fff')+';border-radius:var(--r);padding:10px 12px;border:2px solid '+(active?s.color:'var(--s200)')+';text-align:center;cursor:pointer">';
         h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+s.count+'</div>';
         h+='<div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">'+s.label+'</div></div>';
     });
@@ -2251,13 +2261,18 @@ function renderEnrollment(){
         h+='</div></div>';
     }
 
-    // Applications table
+    // Applications — filtered to the active section
+    var sectionLabel=(stages.filter(function(s){return s.key===regFilter})[0]||{}).label||'All';
+    var filtered=eArr.filter(function(pair){return regFilter==='all'||(pair[1].status||'applied')===regFilter;});
     if(!eArr.length){
         h+='<div class="me-empty"><h3>No applications yet</h3><p>Create a session and start accepting applications.</p></div>';
     }else{
-        h+='<div class="me-card"><div class="me-card-head"><h3>All Applications</h3></div>';
+        h+='<div class="me-card"><div class="me-card-head"><h3>'+esc(regFilter==='all'?'All Applications':sectionLabel)+' ('+filtered.length+')</h3></div>';
+        if(!filtered.length){
+            h+='<div class="me-empty" style="padding:26px 20px"><p>No '+esc(sectionLabel.toLowerCase())+' campers.</p></div>';
+        }else{
         h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:100px"></th></tr></thead><tbody>';
-        eArr.sort(function(a,b){return(b[1].appliedDate||'').localeCompare(a[1].appliedDate||'')}).forEach(function([id,e]){
+        filtered.sort(function(a,b){return(b[1].appliedDate||'').localeCompare(a[1].appliedDate||'')}).forEach(function([id,e]){
             var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
             var formsDone=e.formsCompleted||0,formsTotal=e.formsRequired||0;
             var formsColor=formsTotal===0?'var(--s400)':formsDone>=formsTotal?'var(--ok)':'var(--me)';
@@ -2270,24 +2285,49 @@ function renderEnrollment(){
             h+='<td>'+bdg(e.status||'applied',sc)+'</td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+payColor+'">'+esc(e.paymentStatus||'pending')+'</span></td>';
-            h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:flex-end">';
+            h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap">';
             h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">Review</button>';
             // Status change buttons
             if(e.status==='applied'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>';
             }else if(e.status==='accepted'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">Enroll</button>';
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">🔗 Invite</button>';
+                h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">Rescind</button>';
             }else if(e.status==='waitlisted'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
             }else if(e.status==='enrolled'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">🔗 Invite</button>';
+                h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">Rescind</button>';
+            }else if(e.status==='withdrawn'||e.status==='declined'){
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
             }
             h+='</div></td></tr>';
         });
-        h+='</tbody></table></div></div>';
+        h+='</tbody></table></div>';
+        }
+        h+='</div>';
     }
     c.innerHTML=h;
+}
+
+function setRegFilter(f){ regFilter=f; renderEnrollment(); }
+
+// Rescind a registration: mark the application Withdrawn AND remove the
+// camper from the roster (so they drop off the Campers list), cascading the
+// removal through families / bunk assignments. The application record stays
+// for the audit trail. Frees a session seat → next waitlisted is promoted.
+function rescindEnrollment(id){
+    var e=enrollments[id]; if(!e) return;
+    var nm=e.camperName||'this camper';
+    if(!confirm('Rescind '+nm+'’s registration?\n\nThey are removed from the Campers list. The application stays here marked Withdrawn. This cannot be undone.')) return;
+    if(e.camperName && roster[e.camperName]){ delete roster[e.camperName]; cascadeCamperDelete(e.camperName); }
+    var prev=e.status; e.status='withdrawn';
+    e.statusHistory=e.statusHistory||[];
+    e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+    if(e.session && prev!=='waitlisted') autoPromoteWaitlist(e.session);
+    save(); render(curPage); toast(nm+' rescinded — removed from the Campers list');
 }
 
 // ── FORM CUSTOMIZER ───────────────────────────────────────────
@@ -5377,7 +5417,7 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
