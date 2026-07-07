@@ -2591,6 +2591,15 @@ function openFillOnline(formIdx, camperName, camperId){
     document.getElementById('foTitle').textContent = formDef.name || 'Form';
     document.getElementById('foFor').textContent = 'For: ' + camperName;
 
+    // Respect form-level "accepting responses" / close-date settings.
+    var closed = _foFormClosed(formDef);
+    if (closed){
+        document.getElementById('foBody').innerHTML = '<div style="text-align:center;padding:44px 18px;color:#64748B;font-size:.92rem;line-height:1.6;">' + LinkForms.esc(closed) + '</div>';
+        document.getElementById('foBackdrop').classList.add('open');
+        document.getElementById('foDrawer').classList.add('open');
+        return;
+    }
+
     var fields = formDef.fields || [];
     _foSections = LinkForms.buildSections(fields);
     _foSecIdx = 0; _foSecStack = []; _foVisited = { 0: true };
@@ -2694,6 +2703,20 @@ function _foPrefill(){
         var el = document.getElementById(_foFid(field));
         if (el && !el.value) el.value = _foCamper;
     });
+}
+
+// A form can stop accepting responses (toggle) or close on a date.
+function _foFormClosed(def){
+    var s = (def && def.settings) || {};
+    if (s.acceptingResponses === false) return 'This form is no longer accepting responses.';
+    if (s.closeDate){
+        var cd = new Date(s.closeDate + 'T23:59:59');
+        if (!isNaN(cd.getTime()) && Date.now() > cd.getTime()){
+            var nice = new Date(s.closeDate + 'T00:00:00').toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
+            return 'This form closed on ' + nice + '.';
+        }
+    }
+    return null;
 }
 
 // DOM id for a field's control (id-based so it's independent of section order).
