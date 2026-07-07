@@ -634,8 +634,17 @@ function deleteFamily(id){
 // just unassigned from this family). Reversible via re-detect or Edit.
 function removeCamperFromFamily(familyId,camperName){
     var f=families[familyId]; if(!f)return;
-    f.camperIds=(f.camperIds||[]).filter(function(c){return c!==camperName});
-    save();renderCampers();toast((camperName.split(' ')[0])+' removed from '+(f.name||'family'));
+    var others=(f.camperIds||[]).filter(function(c){return c!==camperName});
+    f.camperIds=others;
+    save();renderCampers();
+    // Refresh the parent-portal Link snapshots so the removed camper actually
+    // drops off this family's parent link: re-sync a remaining family member
+    // (rebuilds the family's snapshot without them) and the removed camper
+    // (gives them their own portal if they had an invite).
+    if(typeof _syncInvitesForCamper==='function'){
+        try{ if(others[0]) _syncInvitesForCamper(others[0]); _syncInvitesForCamper(camperName); }catch(_){}
+    }
+    toast((camperName.split(' ')[0])+' removed from '+(f.name||'family'));
 }
 
 // ── CAMPERS ──────────────────────────────────────────────────────
@@ -2934,11 +2943,22 @@ function _syncParentInviteSnapshot(enrollId,silent){
     }
 
     function doUpsert(){
-        // Build snapshot for ALL accepted/enrolled campers belonging to this parent email.
-        // This ensures siblings are always grouped together and the invite is always fresh.
+        // Which campers show up in this parent's portal?
+        //  • If the invited camper belongs to a FAMILY, use that family's
+        //    members — the family is the source of truth, so removing a camper
+        //    from the family also drops them from the parent's portal.
+        //  • Otherwise fall back to grouping by parent email (an implied
+        //    family), so un-familied siblings still group together.
+        var famCamperIds=null;
+        Object.keys(families).some(function(fk){
+            if((families[fk].camperIds||[]).indexOf(e.camperName)>=0){ famCamperIds=(families[fk].camperIds||[]); return true; }
+            return false;
+        });
         var familyEnrollments=Object.values(enrollments).filter(function(en){
+            if(en.status!=='accepted'&&en.status!=='enrolled') return false;
+            if(famCamperIds) return famCamperIds.indexOf(en.camperName)>=0;
             var em=en.parentEmail||en.parent1Email||'';
-            return em===parentEmail&&(en.status==='accepted'||en.status==='enrolled');
+            return em===parentEmail;
         });
         var camperNames=familyEnrollments.map(function(en){return en.camperName;});
         var camperData={};
