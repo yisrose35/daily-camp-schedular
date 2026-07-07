@@ -61,6 +61,7 @@
     <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
     <div class="sidebar-label">Parent</div>
     <button class="sidebar-item" data-page="parent-requests"><span class="sidebar-dot"></span> Parent Requests <span class="sb-badge warn" id="sbParentReqCount" style="display:none;">0</span></button>
+    <button class="sidebar-item" data-page="camper-mail"><span class="sidebar-dot"></span> Camper Mail <span class="sb-badge warn" id="sbMailCount" style="display:none;">0</span></button>
 </aside>
 
 <!-- ═══ MAIN CONTENT ═══ -->
@@ -205,6 +206,26 @@
     <div id="parentRequestsBody"><div class="empty-state">No parent requests yet — they'll appear here when parents submit from Campistry Link</div></div>
 </div>
 
+<div id="page-camper-mail" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>
+        <div><h1>Camper Mail</h1><p>Letters families write in Campistry Link — print them and hand them out</p></div>
+    </div>
+    <div class="page-header">
+        <div style="display:flex;gap:6px;align-items:center;">
+            <button class="btn btn-secondary btn-sm mail-tab active" data-mailtab="new" onclick="CamperMail.tab('new',this)">To print</button>
+            <button class="btn btn-secondary btn-sm mail-tab" data-mailtab="printed" onclick="CamperMail.tab('printed',this)">Printed</button>
+            <select class="btn btn-secondary btn-sm" id="mailDivFilter" onchange="CamperMail.render()" style="min-width:140px;"><option value="">All divisions</option></select>
+        </div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="CamperMail.render()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+            <button class="btn btn-secondary" onclick="CamperMail.printSelected()">Print selected</button>
+            <button class="btn btn-primary" onclick="CamperMail.printAllNew()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print all new</button>
+        </div>
+    </div>
+    <div id="camperMailBody"><div class="empty-state">Letters families write in Campistry Link will appear here to print.</div></div>
+</div>
+
 </div><!-- end app-content -->
 
 <!-- ═══ ABSENCE MODAL ═══ -->
@@ -310,6 +331,7 @@
             var bn=document.querySelector('.cs-bnav-item[data-page="'+p+'"]');if(bn)bn.classList.add('active');
             close();
             if(p==='parent-requests'&&window.ParentRequests) ParentRequests.render();
+            if(p==='camper-mail'&&window.CamperMail) CamperMail.render();
         });
     });
 })();
@@ -432,6 +454,110 @@ var ParentRequests = (function(){
     updateBadge();
 
     return {render:render,confirm:confirm,decline:decline,refresh:refresh,updateBadge:updateBadge};
+})();
+</script>
+<script>
+// ── Camper Mail — letters families write in Campistry Link (link_camper_mail).
+//    Secretaries print them here in Live. Reads/writes the cloud directly.
+var CamperMail = (function(){
+    function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
+    var _rows=[], _tab='new', _sel={};
+    function _db(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id)?{client:c,campId:id}:null; }
+    function _toast(msg){ var el=document.getElementById('toastEl'); if(!el)return; el.textContent=msg; el.className='toast'; requestAnimationFrame(function(){el.classList.add('show');setTimeout(function(){el.classList.remove('show')},2500)}); }
+    function _campName(){ try{ var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); return (g.campistryMe&&g.campistryMe.campName)||g.campName||'Camp'; }catch(e){ return 'Camp'; } }
+
+    function load(cb){
+        var db=_db();
+        if(!db){ if(cb)cb(); return; }
+        db.client.from('link_camper_mail')
+            .select('id, camper_name, division, grade, bunk, parent_name, subject, body, status, created_at')
+            .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(2000)
+            .then(function(res){
+                if(res.error){ console.warn('[Live] link_camper_mail load:',res.error.message); }
+                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, division:r.division||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at }; }); }
+                if(cb)cb();
+            });
+    }
+    function badge(){ var n=_rows.filter(function(m){return m.status!=='printed';}).length; var b=document.getElementById('sbMailCount'); if(b){ b.textContent=n; b.style.display=n?'':'none'; } }
+    function render(){ load(function(){ _render(); }); }
+    function _render(){
+        badge();
+        var el=document.getElementById('camperMailBody'); if(!el) return;
+        var divSel=document.getElementById('mailDivFilter');
+        if(divSel){ var cur=divSel.value; var divs={}; _rows.forEach(function(m){if(m.division)divs[m.division]=1;}); divSel.innerHTML='<option value="">All divisions</option>'+Object.keys(divs).sort().map(function(d){return '<option value="'+esc(d)+'">'+esc(d)+'</option>';}).join(''); divSel.value=cur; }
+        var dv=divSel?divSel.value:'';
+        var rows=_rows.filter(function(m){ if(_tab==='new'&&m.status==='printed')return false; if(_tab==='printed'&&m.status!=='printed')return false; if(dv&&m.division!==dv)return false; return true; });
+        if(!rows.length){ el.innerHTML='<div class="empty-state">'+(_tab==='new'?'Nothing waiting to print — letters families write in Campistry Link appear here.':'No printed letters yet.')+'</div>'; return; }
+        el.innerHTML='<div class="card"><div class="card-body" style="padding:0 18px;">'+rows.map(function(m){
+            var d=m.date?new Date(m.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
+            var where=[m.division,m.bunk].filter(Boolean).join(' · ');
+            var b=m.status==='printed'?'<span class="badge badge-ok">Printed</span>':'<span class="badge badge-warn">New</span>';
+            return '<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--slate-100);">'
+              +'<input type="checkbox" '+(_sel[m.id]?'checked':'')+' onchange="CamperMail.sel(\''+esc(m.id)+'\',this.checked)" style="width:16px;height:16px;flex-shrink:0;">'
+              +'<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc(m.camper)+'</span>'+(where?'<span style="font-size:.72rem;color:var(--slate-400);">'+esc(where)+'</span>':'')+b+'</div>'
+              +'<div style="font-size:.75rem;color:var(--slate-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(m.subject?'<strong>'+esc(m.subject)+'</strong> — ':'')+esc(String(m.body).slice(0,100))+'</div></div>'
+              +'<span style="font-size:.72rem;color:var(--slate-400);white-space:nowrap;">From '+esc(m.parentName||'parent')+' · '+d+'</span>'
+              +'<div style="display:flex;gap:5px;flex-shrink:0;"><button class="btn btn-secondary btn-sm" onclick="CamperMail.view(\''+esc(m.id)+'\')">Read</button><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\'])">Print</button></div>'
+              +'</div>';
+        }).join('')+'</div></div>';
+    }
+    function sel(id,v){ _sel[id]=v; }
+    function tab(t,btn){ _tab=t; document.querySelectorAll('[data-mailtab]').forEach(function(x){x.classList.toggle('active',x.dataset.mailtab===t)}); _render(); }
+    function view(id){
+        var m=_rows.find(function(x){return x.id===id;}); if(!m)return;
+        var d=m.date?new Date(m.date).toLocaleString():'';
+        var el=document.createElement('div');
+        el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
+        el.innerHTML='<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">'
+          +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--slate-200);position:sticky;top:0;background:#fff;"><span style="font-size:.92rem;font-weight:700;">Letter for '+esc(m.camper)+'</span><div style="display:flex;gap:6px;"><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\']);this.closest(\'[style*=fixed]\').remove()">Print</button><button class="btn btn-secondary btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">Close</button></div></div>'
+          +'<div style="padding:18px 20px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:12px;">From '+esc(m.parentName||'parent')+' · '+esc(d)+([m.division,m.bunk].filter(Boolean).length?' · '+esc([m.division,m.bunk].filter(Boolean).join(' · ')):'')+'</div>'+(m.subject?'<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">'+esc(m.subject)+'</div>':'')+'<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">'+esc(m.body)+'</div></div></div>';
+        el.addEventListener('click',function(e){ if(e.target===el) el.remove(); });
+        document.body.appendChild(el);
+    }
+    function print(ids){
+        var letters=_rows.filter(function(m){return ids.indexOf(m.id)>=0;});
+        if(!letters.length)return;
+        var camp=_campName();
+        var pages=letters.map(function(m){
+            var d=m.date?new Date(m.date).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'}):'';
+            return '<div class="letter"><div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
+              +'<div class="lt-to">To: <strong>'+esc(m.camper)+'</strong>'+(m.bunk?' &nbsp;·&nbsp; '+esc(m.bunk):'')+(m.division?' &nbsp;·&nbsp; '+esc(m.division):'')+'</div>'
+              +(m.subject?'<div class="lt-subject">'+esc(m.subject)+'</div>':'')
+              +'<div class="lt-body">'+esc(m.body)+'</div>'
+              +'<div class="lt-from">— From '+esc(m.parentName||'your family')+', with love ❤</div></div>';
+        }).join('');
+        var w=window.open('','_blank');
+        if(!w){ _toast('Allow pop-ups to print letters'); return; }
+        w.document.write('<!DOCTYPE html><html><head><title>Camper Mail — '+letters.length+' letter'+(letters.length!==1?'s':'')+'</title><style>'
+          +'body{font-family:Georgia,\'Times New Roman\',serif;color:#1a1a1a;margin:0;}'
+          +'.letter{padding:56px 64px;page-break-after:always;min-height:90vh;box-sizing:border-box;}'
+          +'.letter:last-child{page-break-after:auto;}'
+          +'.lt-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #ccc;padding-bottom:10px;margin-bottom:22px;}'
+          +'.lt-camp{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#666;}'
+          +'.lt-date{font-size:13px;color:#666;}'
+          +'.lt-to{font-size:15px;margin-bottom:18px;color:#333;}'
+          +'.lt-subject{font-size:22px;font-weight:bold;margin-bottom:16px;}'
+          +'.lt-body{font-size:16px;line-height:1.9;white-space:pre-wrap;}'
+          +'.lt-from{margin-top:34px;font-size:15px;font-style:italic;color:#444;}'
+          +'@media print{.letter{min-height:auto;}}'
+          +'</style></head><body>'+pages+'</body></html>');
+        w.document.close(); w.focus();
+        setTimeout(function(){ w.print(); },250);
+        _markPrinted(ids);
+    }
+    function _markPrinted(ids){
+        var db=_db(), iso=new Date().toISOString();
+        _rows.forEach(function(m){ if(ids.indexOf(m.id)>=0) m.status='printed'; });
+        if(db){ db.client.from('link_camper_mail').update({status:'printed',printed_at:iso}).in('id',ids).then(function(res){ if(res.error)console.warn('[Live] mark printed:',res.error.message); }); }
+        _sel={}; _render();
+        _toast(ids.length+' letter'+(ids.length!==1?'s':'')+' sent to the printer');
+    }
+    function printSelected(){ var ids=Object.keys(_sel).filter(function(id){return _sel[id];}); if(!ids.length){ _toast('Tick the letters you want to print'); return; } print(ids); }
+    function printAllNew(){ var ids=_rows.filter(function(m){return m.status!=='printed';}).map(function(m){return m.id;}); if(!ids.length){ _toast('Nothing waiting to print'); return; } print(ids); }
+
+    // Prime the sidebar badge on load.
+    load(function(){ badge(); });
+    return { render:render, tab:tab, sel:sel, view:view, print:print, printSelected:printSelected, printAllNew:printAllNew };
 })();
 </script>
 <script src="campistry_notes_quick.js"></script>
