@@ -868,13 +868,10 @@ function init(){
     var sn=document.getElementById('settingsName');if(sn)sn.value=parent.name;
     var se=document.getElementById('settingsEmail');if(se)se.value=parent.email;
 
-    var unread=messages.filter(function(m){return!m.read}).length;
-    var nm=document.getElementById('navMsgCount');if(nm){nm.textContent=unread;nm.style.display=unread?'':'none';}
+    _updateMsgBadges();
     var bal=children.length?(children.reduce(function(s,c){return s+(c.canteenBalance||0)},0)).toFixed(2):null;
 
     // Home tile subtitles
-    var msgSub=document.getElementById('homeMsgSub');if(msgSub)msgSub.textContent=unread?unread+' unread':'All caught up';
-    var msgBadge=document.getElementById('homeMsgBadge');if(msgBadge){msgBadge.textContent=unread;msgBadge.style.display=unread?'flex':'none';}
     var canteenSub=document.getElementById('homeCanteenSub');if(canteenSub)canteenSub.textContent=bal!==null?'$'+bal:'—';
     var kidsSub=document.getElementById('homeKidsSub');if(kidsSub)kidsSub.textContent=children.length?(children.length+' enrolled'):'—';
 
@@ -1114,9 +1111,20 @@ function _bunkStaffRowsHtml(c){
 
 // MESSAGES
 var _curMsgFilter='all';
+// Single source of truth for the unread badge (nav + home). Archived unread
+// messages don't count — they're tucked away. Call after any open/delete/
+// archive/render so the count reflects reality immediately.
+function _updateMsgBadges(){
+    var arr=(typeof messages!=='undefined'&&messages)?messages:[];
+    var unread=arr.filter(function(m){return !m.read && !m._archived;}).length;
+    var nm=document.getElementById('navMsgCount'); if(nm){nm.textContent=unread;nm.style.display=unread?'':'none';}
+    var mb=document.getElementById('homeMsgBadge'); if(mb){mb.textContent=unread;mb.style.display=unread?'flex':'none';}
+    var ms=document.getElementById('homeMsgSub'); if(ms)ms.textContent=unread?unread+' unread':'All caught up';
+}
 function renderMsgs(){ _loadMessages(); fMsg(_curMsgFilter); }
 function fMsg(f,btn){
     _curMsgFilter=f;
+    _updateMsgBadges();
     if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
     var archivedView=(f==='archived');
     var list=archivedView?messages.filter(function(m){return m._archived}):messages.filter(function(m){return!m._archived});
@@ -1158,8 +1166,7 @@ function openMsg(id){
             }
         }
     }
-    var unread=messages.filter(function(x){return!x.read}).length;
-    var nm2=document.getElementById('navMsgCount');if(nm2){nm2.textContent=unread;nm2.style.display=unread?'':'none';}
+    _updateMsgBadges();
     document.getElementById('msgListView').style.display='none';document.getElementById('msgDetailView').style.display='block';
     var typeBadge=m.type==='announcement'?'<span class="badge badge-warn">Announcement</span>':'<span class="badge badge-info">Direct</span>';
     var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" id="msgReplyBody" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="sendMsgReply(\''+String(m.id).replace(/'/g,'')+'\',\''+String(m.subject||'').replace(/[\'"<>]/g,'')+'\')">Send Reply</button></div></div>':'';
@@ -1646,12 +1653,7 @@ function _syncMessagesFromCloud(){
             });
             _writeLinkStore(store);
             if(typeof renderMsgs==='function')renderMsgs();
-            var hm=document.getElementById('homeMsgBadge'), hs=document.getElementById('homeMsgSub');
-            if(typeof messages!=='undefined'&&(hm||hs)){
-                var unread=messages.filter(function(m){return!m.read;}).length;
-                if(hs)hs.textContent=unread?unread+' unread':'All caught up';
-                if(hm){hm.textContent=unread;hm.style.display=unread?'flex':'none';}
-            }
+            _updateMsgBadges();
         });
     }
     if(typeof window._loadCampBroadcastsCloud==='function'){
