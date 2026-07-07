@@ -542,21 +542,22 @@
     };
 
     /**
-     * Camper names that should NOT receive messages/forms: those whose
-     * enrollment is withdrawn/declined with no active (accepted/enrolled)
-     * enrollment. Campers with no enrollment record at all are treated as
-     * active (manually-added roster campers).
+     * Camper names that should NOT receive messages/forms — ONLY those that are
+     * genuinely out: every one of their enrollments is withdrawn or declined.
+     * Any other status (applied, waitlisted, accepted, enrolled, …) keeps them
+     * active, and campers with no enrollment record at all stay active too.
+     * Deliberately conservative so a current camper is never dropped.
      */
     data.getInactiveCamperNames = function() {
         var enr = (data.getMe().enrollments) || {};
-        var seen = {}, active = {};
+        var seen = {}, stillIn = {};
         Object.keys(enr).forEach(function(k) {
             var e = enr[k]; if (!e || !e.camperName) return;
             seen[e.camperName] = 1;
-            if (e.status === 'accepted' || e.status === 'enrolled') active[e.camperName] = 1;
+            if (e.status !== 'withdrawn' && e.status !== 'declined') stillIn[e.camperName] = 1;
         });
         var inactive = {};
-        Object.keys(seen).forEach(function(n) { if (!active[n]) inactive[n] = 1; });
+        Object.keys(seen).forEach(function(n) { if (!stillIn[n]) inactive[n] = 1; });
         return inactive;
     };
 
