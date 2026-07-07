@@ -504,30 +504,43 @@
       '<button id="pefc-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;">&times;</button></div>';
   }
 
-  // League play-history mini report card (who played what & when) shown inside
-  // the edit modal — same idea as the bunk mini report in the activity editor.
-  // opts.highlightTeams tints the matchup currently being edited.
-  function miniReportHtml(ctx, highlightTeams) {
+  // League play-history mini report (who played what & when) shown inside the
+  // edit modal — compact: matchup + sport notes for the game being edited,
+  // full history behind a collapsed toggle. Rendered by league_play_report.js.
+  function miniReportHtml(ctx, highlightTeams, selectedSport) {
     if (!ctx || !ctx.leagueName) return '';
     var LPR = window.LeaguePlayReport;
     if (!LPR || typeof LPR.renderMiniCard !== 'function') return '';
     try {
       return LPR.renderMiniCard(ctx.leagueName, ctx.kind === 'specialty' ? 'specialty' : 'regular',
-        { highlightTeams: highlightTeams || [] });
+        { highlightTeams: highlightTeams || [], selectedSport: selectedSport || '' });
     } catch (e) { return ''; }
   }
 
   function showGamePicker(ctx) {
+    // Tiny per-game history note ("First meeting" / "Played 2× · last Jul 6")
+    // instead of a full report — the picker stays a simple list.
+    var lprData = null;
+    var LPR = window.LeaguePlayReport;
+    if (ctx.leagueName && LPR && typeof LPR.buildData === 'function') {
+      try { lprData = LPR.buildData(ctx.leagueName, ctx.kind === 'specialty' ? 'specialty' : 'regular'); }
+      catch (e) { lprData = null; }
+    }
     var rows = ctx.games.map(function (g, i) {
+      var histNote = '';
+      if (lprData && typeof LPR.pairNoteHtml === 'function') {
+        var n = LPR.pairNoteHtml(null, ctx.kind, g.teamA, g.teamB, lprData);
+        if (n) histNote = '<div style="font-size:0.72rem;margin-top:2px;">' + n + '</div>';
+      }
       return '<button class="pefc-game" data-i="' + i + '" style="display:block;width:100%;text-align:left;padding:11px 13px;margin-bottom:8px;border:1.5px solid #e5e7eb;border-radius:9px;background:#f9fafb;cursor:pointer;font-size:0.92rem;">' +
         '<div style="font-weight:600;color:#1f2937;">' + esc(g.teams) + '</div>' +
         '<div style="font-size:0.8rem;color:#6b7280;margin-top:2px;">' +
-        (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div></button>';
+        (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div>' +
+        histNote + '</button>';
     }).join('');
     var box = shell(header('Edit a league game') +
       '<div style="font-size:0.85rem;color:#6b7280;margin-bottom:12px;">' + esc(ctx.leagueName || 'League') + ' — pick the game to edit:</div>' +
-      rows +
-      miniReportHtml(ctx));
+      rows);
     box.querySelector('#pefc-close').onclick = closeModal;
     box.querySelectorAll('.pefc-game').forEach(function (btn) {
       btn.onclick = function () {
@@ -633,7 +646,7 @@
       '<div style="background:#f3f4f6;padding:9px 12px;border-radius:8px;margin-bottom:14px;font-size:0.85rem;">' +
       '<div style="font-weight:600;color:#374151;">' + esc(ctx.game.teams) + '</div>' +
       '<div style="color:#6b7280;margin-top:2px;">' + (ctx.game.sport ? esc(ctx.game.sport) + ' · ' : '') + 'now on <strong>' + esc(ctx.game.field || '—') + '</strong></div></div>' +
-      miniReportHtml(ctx, [curA, curB]) +
+      miniReportHtml(ctx, [curA, curB], canEditSport ? curSport : (ctx.game.sport || '')) +
       teamsHtml +
       sportHtml +
       '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields' + (canEditSport ? ' for ' + esc(curSport) : '') + ':</div>' +
@@ -671,9 +684,10 @@
       var LPR = window.LeaguePlayReport;
       if (!LPR || typeof LPR.refreshMiniBody !== 'function' || !ctx.leagueName) return;
       var t = readTeams();
+      var sp = sportSel ? sportSel.value : (ctx.game.sport || '');
       try {
         LPR.refreshMiniBody(ctx.leagueName, ctx.kind === 'specialty' ? 'specialty' : 'regular',
-          { highlightTeams: [t.teamA, t.teamB] });
+          { highlightTeams: [t.teamA, t.teamB], selectedSport: sp });
       } catch (e) { /* report is advisory — never block the edit */ }
     }
     ['#pefc-teamA', '#pefc-teamB'].forEach(function (id) {

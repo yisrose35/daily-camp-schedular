@@ -123,6 +123,23 @@ test('matchupCounts — unordered pairs aggregated across dates', () => {
   assert.strictEqual(mc[0], lt); // most-played pair sorts first
 });
 
+test('pairSummary — count and most recent meeting, order-insensitive', () => {
+  const d = LPR.buildData(REGULAR_CFG, 'regular', regularHistory());
+  const s = LPR.pairSummary(null, 'regular', 'tigers', 'LIONS', d); // case/order-proof
+  assert.strictEqual(s.count, 1);
+  assert.strictEqual(s.last.date, '2026-07-06');
+  assert.strictEqual(s.last.sport, 'Baseball');
+  const none = LPR.pairSummary(null, 'regular', 'Lions', 'Wolves', d);
+  assert.strictEqual(none.count, 0);
+  assert.strictEqual(none.last, null);
+});
+
+test('pairNoteHtml — first meeting vs rematch annotations', () => {
+  const d = LPR.buildData(REGULAR_CFG, 'regular', regularHistory());
+  assert.match(LPR.pairNoteHtml(null, 'regular', 'Lions', 'Wolves', d), /First meeting/);
+  assert.match(LPR.pairNoteHtml(null, 'regular', 'Lions', 'Tigers', d), /Played 1×/);
+});
+
 test('renderMiniBody / renderMiniCard — never throw without a DOM', () => {
   // Renderers are string builders; they must degrade gracefully when the
   // page globals (loadGlobalSettings etc.) are absent.

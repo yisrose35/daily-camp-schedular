@@ -323,51 +323,135 @@
     }
 
     // ── 1) MINI REPORT (post-edit modal) ─────────────────────────────────────
-    // opts: { highlightTeams: [teamA, teamB] }  → tint the game being edited.
+    // Unordered-pair summary for a matchup: how often these two met and the
+    // most recent meeting. `dataOpt` lets callers reuse an already-built data.
+    LPR.pairSummary = function (leagueOrName, kind, teamA, teamB, dataOpt) {
+        var data = dataOpt || LPR.buildData(leagueOrName, kind);
+        var a = norm(teamA), b = norm(teamB);
+        var met = data.games.filter(function (g) {
+            var gA = norm(g.teamA), gB = norm(g.teamB);
+            return (gA === a && gB === b) || (gA === b && gB === a);
+        });
+        return { count: met.length, last: met[0] || null }; // games are date-desc
+    };
+
+    // One-line matchup annotation ("First meeting" / "Played 2× · last Jul 6").
+    LPR.pairNoteHtml = function (leagueOrName, kind, teamA, teamB, dataOpt) {
+        try {
+            var s = LPR.pairSummary(leagueOrName, kind, teamA, teamB, dataOpt);
+            if (!s.count) {
+                return '<span style="color:#15803d;">First meeting</span>';
+            }
+            var when = s.last ? fmtDate(s.last.date) : '';
+            var sport = s.last && s.last.sport ? ' (' + esc(s.last.sport) + ')' : '';
+            return '<span style="color:#4338ca;">Played ' + s.count + '×</span>' +
+                (when ? '<span style="color:#9ca3af;"> · last ' + esc(when) + sport + '</span>' : '');
+        } catch (e) { return ''; }
+    };
+
+    function noteHtml(bg, bd, fg, txt) {
+        return '<div style="display:flex;gap:7px;align-items:flex-start;background:' + bg + ';border:1px solid ' + bd + ';color:' + fg + ';border-radius:8px;padding:7px 10px;font-size:0.78rem;line-height:1.35;margin-bottom:7px;">' +
+            '<span style="width:6px;height:6px;border-radius:50%;background:' + fg + ';margin-top:6px;flex:0 0 auto;"></span><span>' + txt + '</span></div>';
+    }
+
+    // Compact body: answers "have these two met?", "how does this sport sit
+    // with each team?", one line per team — full matrix/log behind a collapsed
+    // toggle so the modal stays light.
+    // opts: { highlightTeams: [teamA, teamB], selectedSport }
     LPR.renderMiniBody = function (leagueOrName, kind, opts) {
         try {
             opts = opts || {};
             var data = LPR.buildData(leagueOrName, kind);
-            var hl = {};
-            (opts.highlightTeams || []).forEach(function (t) { if (t) hl[norm(t)] = 1; });
-            if (!data.totalGames && !data.teams.length) {
-                return emptyNote('No play history recorded for this league yet.');
+            if (!data.totalGames) {
+                return emptyNote('No league games recorded yet.');
             }
-            var stats = '<div style="display:flex;gap:8px;margin-bottom:6px;">' +
-                statPill(data.totalGames, 'Games played', '#4338ca') +
-                statPill(data.dates.length, 'Days', '#0f766e') +
-                statPill(data.teams.length, 'Teams', '#b45309') +
-                '</div>';
-            return stats +
-                sectionTitle('Times each team played each sport', data.totalGames || null) +
-                (data.totalGames ? sportMatrixHtml(data, hl, true) : emptyNote('No games recorded yet.')) +
-                sectionTitle('Who played who & when', data.totalGames || null) +
-                gameLogHtml(data, { highlightSet: hl, compact: true, maxHeight: '190px', todayDate: editedDate() });
+            var pick = (opts.highlightTeams || []).filter(Boolean);
+            var teamA = pick[0] || null, teamB = pick[1] || null;
+            // Resolve into the data's canonical team spelling.
+            function canon(t) {
+                if (!t) return null;
+                var lt = norm(t);
+                for (var i = 0; i < data.teams.length; i++) if (norm(data.teams[i]) === lt) return data.teams[i];
+                return t;
+            }
+            teamA = canon(teamA); teamB = canon(teamB);
+            var hl = {};
+            [teamA, teamB].forEach(function (t) { if (t) hl[norm(t)] = 1; });
+
+            var html = '';
+
+            // Note 1 — this matchup.
+            if (teamA && teamB) {
+                var ps = LPR.pairSummary(null, kind, teamA, teamB, data);
+                if (!ps.count) {
+                    html += noteHtml('#f0fdf4', '#bbf7d0', '#15803d',
+                        'First meeting — <b>' + esc(teamA) + '</b> and <b>' + esc(teamB) + '</b> haven’t played each other yet.');
+                } else {
+                    var lastBits = ps.last ? (esc(fmtDate(ps.last.date)) + (ps.last.sport ? ' · ' + esc(ps.last.sport) : '')) : '';
+                    html += noteHtml('#eff6ff', '#bfdbfe', '#1d4ed8',
+                        '<b>' + esc(teamA) + '</b> vs <b>' + esc(teamB) + '</b>: played ' + ps.count + '× before' +
+                        (lastBits ? ' (last ' + lastBits + ')' : '') + '.');
+                }
+            }
+
+            // Note 2 — the selected sport vs each team's history.
+            var sport = (opts.selectedSport || '').trim();
+            if (sport && teamA && teamB) {
+                function sportCount(t) {
+                    var rec = data.byTeam[t];
+                    if (!rec) return 0;
+                    for (var s in rec.sports) if (norm(s) === norm(sport)) return rec.sports[s];
+                    return 0;
+                }
+                var cA = sportCount(teamA), cB = sportCount(teamB);
+                if (!cA && !cB) {
+                    html += noteHtml('#f0fdf4', '#bbf7d0', '#15803d', '<b>' + esc(sport) + '</b> is new for both teams.');
+                } else {
+                    html += noteHtml('#fffbeb', '#fde68a', '#b45309',
+                        '<b>' + esc(sport) + '</b>: ' + esc(teamA) + ' played ' + cA + '×, ' + esc(teamB) + ' ' + cB + '×.');
+                }
+            }
+
+            // One compact line per team: total + top sports.
+            function teamLine(t) {
+                var rec = data.byTeam[t] || { total: 0, sports: {} };
+                var parts = Object.keys(rec.sports)
+                    .sort(function (a, b) { return rec.sports[b] - rec.sports[a] || a.localeCompare(b); })
+                    .slice(0, 3)
+                    .map(function (s) { return esc(s) + ' ×' + rec.sports[s]; });
+                var more = Object.keys(rec.sports).length - 3;
+                if (more > 0) parts.push('+' + more + ' more');
+                return '<div style="display:flex;align-items:baseline;gap:6px;padding:2px 0;font-size:0.78rem;">' +
+                    '<span style="font-weight:700;color:#111827;white-space:nowrap;">' + esc(t) + '</span>' +
+                    '<span style="color:#6b7280;">' + rec.total + ' game' + (rec.total === 1 ? '' : 's') +
+                    (parts.length ? ' · ' + parts.join(', ') : '') + '</span></div>';
+            }
+            if (teamA) html += teamLine(teamA);
+            if (teamB) html += teamLine(teamB);
+
+            // Full detail — collapsed by default.
+            html += '<details style="margin-top:7px;">' +
+                '<summary style="cursor:pointer;font-size:0.72rem;font-weight:600;color:#6366f1;outline:none;">Full history — all ' + data.teams.length + ' teams, ' + data.totalGames + ' games</summary>' +
+                '<div style="margin-top:6px;">' +
+                sportMatrixHtml(data, hl, true) +
+                sectionTitle('Who played who & when', data.totalGames) +
+                gameLogHtml(data, { highlightSet: hl, compact: true, maxHeight: '170px', todayDate: editedDate() }) +
+                '</div></details>';
+            return html;
         } catch (e) {
             try { console.warn('[LeaguePlayReport] renderMiniBody error:', e); } catch (_) { /* noop */ }
             return '';
         }
     };
 
-    // Collapsible card wrapper (same shell style as the bunk mini report).
+    // Slim wrapper — a light box, not a full card, so the modal stays compact.
     LPR.renderMiniCard = function (leagueOrName, kind, opts) {
         try {
-            var league = resolveLeague(leagueOrName, kind);
-            var name = league.name || String(leagueOrName || 'League');
             var body = LPR.renderMiniBody(leagueOrName, kind, opts);
             if (!body) return '';
-            return '<details id="lpr-mini-report" open style="background:#fff;border:1px solid #e8eaed;border-radius:12px;padding:0;margin-bottom:14px;box-shadow:0 1px 3px rgba(16,24,40,0.05);overflow:hidden;">' +
-                '<summary style="list-style:none;cursor:pointer;outline:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 13px;background:linear-gradient(180deg,#fafbff,#f4f6fb);border-bottom:1px solid #eef0f4;">' +
-                '<span style="display:flex;align-items:center;gap:8px;">' +
-                '<span style="width:26px;height:26px;border-radius:7px;background:#eef2ff;color:#4338ca;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:800;">' + esc((name || '?').trim().charAt(0).toUpperCase()) + '</span>' +
-                '<span style="display:flex;flex-direction:column;line-height:1.15;">' +
-                '<span style="font-weight:700;color:#111827;font-size:0.88rem;">' + esc(name) + '</span>' +
-                '<span style="font-weight:500;color:#9ca3af;font-size:0.66rem;">League play report — who played what &amp; when</span>' +
-                '</span></span>' +
-                '<span style="width:8px;height:8px;border-right:2px solid #c4c7ce;border-bottom:2px solid #c4c7ce;transform:rotate(45deg);display:inline-block;margin-right:2px;"></span>' +
-                '</summary>' +
-                '<div id="lpr-mini-report-body" style="padding:10px 13px 12px;">' + body + '</div>' +
-                '</details>';
+            return '<div style="background:#fafbff;border:1px solid #e8eaed;border-radius:10px;padding:9px 11px;margin-bottom:14px;">' +
+                '<div id="lpr-mini-report-body">' + body + '</div>' +
+                '</div>';
         } catch (e) {
             try { console.warn('[LeaguePlayReport] renderMiniCard error:', e); } catch (_) { /* noop */ }
             return '';
@@ -399,7 +483,7 @@
 
         var intro = document.createElement('div');
         intro.style.cssText = 'font-size:0.8rem;color:#6B7280;margin-bottom:12px;';
-        intro.textContent = 'Everything the scheduler has recorded for this league — how many times each team played each sport, and who played who on each day. Post-edit changes to matchups and sports are reflected here.';
+        intro.textContent = 'Who played who, what, and when — straight from the scheduler (post-edits included).';
         wrap.appendChild(intro);
 
         if (!data.totalGames) {
@@ -423,23 +507,32 @@
         // Team filter for the game log
         var state = { filterTeam: '' };
 
-        // Section: sport balance matrix
-        var matrixSec = document.createElement('div');
-        matrixSec.innerHTML = sectionTitle('Times each team played each sport') + sportMatrixHtml(data, null, false);
-        wrap.appendChild(matrixSec);
+        // Collapsible section shell — keeps the tab scannable: the game log is
+        // the headline, the aggregate tables open on demand.
+        function collapsible(title, badge, innerHtml, open) {
+            var d = document.createElement('details');
+            if (open) d.open = true;
+            d.style.cssText = 'margin-bottom:10px;border:1px solid #F3F4F6;border-radius:8px;padding:8px 12px;background:#fff;';
+            d.innerHTML = '<summary style="cursor:pointer;outline:none;font-weight:700;color:#6b7280;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em;">' +
+                esc(title) +
+                (badge != null ? ' <span style="background:#eef2ff;color:#4338ca;font-size:0.65rem;font-weight:700;border-radius:10px;padding:1px 7px;text-transform:none;letter-spacing:0;">' + badge + '</span>' : '') +
+                '</summary><div style="margin-top:8px;">' + innerHtml + '</div>';
+            return d;
+        }
 
-        // Section: matchup counts (who played who, how many times)
+        // Section: sport balance matrix (collapsed by default)
+        wrap.appendChild(collapsible('Times each team played each sport', null, sportMatrixHtml(data, null, false), false));
+
+        // Section: matchup counts (collapsed by default)
         var mc = LPR.matchupCounts(data);
-        var mcSec = document.createElement('div');
         var chips = mc.map(function (m) {
             return '<span style="display:inline-flex;align-items:center;gap:5px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:20px;padding:3px 10px;font-size:0.75rem;color:#374151;margin:0 6px 6px 0;">' +
                 esc(m.teamA) + ' <span style="color:#9ca3af;">vs</span> ' + esc(m.teamB) +
                 '<span style="background:#eef2ff;color:#4338ca;font-weight:700;border-radius:10px;padding:0 6px;font-size:0.7rem;">×' + m.count + '</span></span>';
         }).join('');
-        mcSec.innerHTML = sectionTitle('Matchup counts', mc.length) + '<div>' + chips + '</div>';
-        wrap.appendChild(mcSec);
+        wrap.appendChild(collapsible('Matchup counts — who played who', mc.length, '<div>' + chips + '</div>', false));
 
-        // Section: game log with team filter
+        // Section: game log with team filter (the headline — always open)
         var logSec = document.createElement('div');
         var logHead = document.createElement('div');
         logHead.innerHTML = sectionTitle('Game log — who played who, what & when', data.totalGames);
