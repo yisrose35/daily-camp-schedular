@@ -5763,6 +5763,26 @@ if (bypassStatus.highlight) {
             fieldResult.style.display = 'block';
             locationSelect.value = '';
 
+            // A busy/restricted field is never hard-hidden — it's still offered as
+            // an amber "override" button. Picking it surfaces the conflict/warning
+            // and the soft gate confirms on save (product decision: never block,
+            // only warn). Reason is shown so the user knows what they're overriding.
+            const _busyReason = (b) => b.reason === 'access_restricted' ? 'no access'
+                : b.reason === 'league_locked' ? 'league game'
+                : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
+            const _busyBtnHtml = (b) => `<button class="pe-field-pick-busy" data-field="${escapeHtml(b.name)}" style="padding:8px 14px;background:#fffbeb;border:1.5px dashed #f59e0b;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#92400e;">${escapeHtml(b.name)} <span style="opacity:0.75;font-size:0.72rem;">(${_busyReason(b)} — override)</span></button>`;
+            const _wireBusyPicks = () => {
+                fieldResult.querySelectorAll('.pe-field-pick-busy').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        fieldResult.querySelectorAll('.pe-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                        fieldResult.querySelectorAll('.pe-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
+                        btn.style.background = '#fde68a'; btn.style.borderStyle = 'solid'; btn.style.borderColor = '#d97706';
+                        locationSelect.value = btn.dataset.field;
+                        renderConflictArea(btn.dataset.field);
+                    });
+                });
+            };
+
             if (open.length > 0) {
                 const fieldButtons = open.map(l => {
                     const bg = l.shared ? '#fffbeb' : '#f0fdf4';
@@ -5771,33 +5791,40 @@ if (bypassStatus.highlight) {
                     const label = escapeHtml(l.name) + (l.shared ? ' <span style="font-size:0.72rem;opacity:0.8;">! shared</span>' : '') + (l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : '');
                     return `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:${bg};border:1.5px solid ${border};border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:${color};transition:all 0.15s;">${label}</button>`;
                 }).join('');
-                const busyNote = busy.length > 0
-                    ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => {
-                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
-                        return escapeHtml(b.name) + ' <span style="opacity:0.7">(' + reason + ')</span>';
-                    }).join(', ')}</div>`
+                const busyBlock = busy.length > 0
+                    ? `<div style="margin-top:10px;">
+                        <div style="font-size:0.75rem;color:#9ca3af;margin-bottom:6px;">In use / restricted — pick to override:</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;">${busy.map(_busyBtnHtml).join('')}</div>
+                       </div>`
                     : '';
                 fieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
                     <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
                     <div style="display:flex;flex-wrap:wrap;gap:8px;">${fieldButtons}</div>
-                    ${busyNote}
+                    ${busyBlock}
                 </div>`;
                 fieldResult.querySelectorAll('.pe-field-pick').forEach(btn => {
                     btn.addEventListener('click', () => {
                         fieldResult.querySelectorAll('.pe-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                        fieldResult.querySelectorAll('.pe-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
                         btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
                         locationSelect.value = btn.dataset.field;
                         renderConflictArea(btn.dataset.field);
                     });
                 });
+                _wireBusyPicks();
             } else {
+                const busyBlock = busy.length > 0
+                    ? `<div style="font-size:0.82rem;color:#78350f;margin-bottom:6px;">No free field for <strong>${escapeHtml(actVal)}</strong> right now — pick one to use anyway (you'll get a warning):</div>
+                       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">${busy.map(_busyBtnHtml).join('')}</div>`
+                    : `<div style="font-size:0.82rem;color:#78350f;margin-bottom:6px;">No field configured for <strong>${escapeHtml(actVal)}</strong>.</div>`;
                 fieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                    All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
-                    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                    ${busyBlock}
+                    <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
                         <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no field)</button>
                         <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
                     </div>
                 </div>`;
+                _wireBusyPicks();
                 fieldResult.querySelector('#pe-ignore-field')?.addEventListener('click', () => {
                     locationSelect.value = '';
                     fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
@@ -6796,35 +6823,58 @@ function minutesToTimeString(mins) {
                 document.getElementById('multi-conflict-preview').style.display = 'none';
                 if (multiLocSel) multiLocSel.value = '';
 
+                // Busy/restricted fields stay pickable as amber "override" buttons
+                // (never hard-hidden); picking one previews + the soft gate warns
+                // on submit. Consistent with the single-bunk picker.
+                const _mBusyReason = (b) => b.reason === 'access_restricted' ? 'no access'
+                    : b.reason === 'league_locked' ? 'league game'
+                    : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
+                const _mBusyBtnHtml = (b) => `<button class="multi-field-pick-busy" data-field="${escapeHtml(b.name)}" style="padding:8px 14px;background:#fffbeb;border:1.5px dashed #f59e0b;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#92400e;">${escapeHtml(b.name)} <span style="opacity:0.75;font-size:0.72rem;">(${_mBusyReason(b)} — override)</span></button>`;
+                const _wireMultiBusyPicks = () => {
+                    multiFieldResult.querySelectorAll('.multi-field-pick-busy').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            multiFieldResult.querySelectorAll('.multi-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                            multiFieldResult.querySelectorAll('.multi-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
+                            btn.style.background = '#fde68a'; btn.style.borderStyle = 'solid'; btn.style.borderColor = '#d97706';
+                            if (multiLocSel) multiLocSel.value = btn.dataset.field;
+                            previewMultiBunkEdit();
+                        });
+                    });
+                };
+
                 if (open.length > 0) {
                     const fieldButtons = open.map(l =>
                         `<button class="multi-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#065f46;transition:all 0.15s;">${escapeHtml(l.name)}${l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : ''}</button>`
                     ).join('');
-                    const busyNote = busy.length > 0
-                        ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => escapeHtml(b.name)).join(', ')}</div>`
+                    const busyBlock = busy.length > 0
+                        ? `<div style="margin-top:10px;"><div style="font-size:0.75rem;color:#9ca3af;margin-bottom:6px;">In use / restricted — pick to override:</div><div style="display:flex;flex-wrap:wrap;gap:8px;">${busy.map(_mBusyBtnHtml).join('')}</div></div>`
                         : '';
                     multiFieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
                         <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
                         <div style="display:flex;flex-wrap:wrap;gap:8px;">${fieldButtons}</div>
-                        ${busyNote}
+                        ${busyBlock}
                     </div>`;
                     multiFieldResult.querySelectorAll('.multi-field-pick').forEach(btn => {
                         btn.addEventListener('click', () => {
                             multiFieldResult.querySelectorAll('.multi-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                            multiFieldResult.querySelectorAll('.multi-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
                             btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
                             if (multiLocSel) multiLocSel.value = btn.dataset.field;
                             // Auto-preview immediately after field selection
                             previewMultiBunkEdit();
                         });
                     });
+                    _wireMultiBusyPicks();
                 } else if (busy.length > 0) {
                     multiFieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                        All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
-                        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                        <div style="font-size:0.82rem;color:#78350f;margin-bottom:6px;">No free field for <strong>${escapeHtml(actVal)}</strong> right now — pick one to use anyway (you'll get a warning):</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">${busy.map(_mBusyBtnHtml).join('')}</div>
+                        <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
                             <button id="multi-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;">Place Anyway (no field)</button>
                             <button id="multi-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
                         </div>
                     </div>`;
+                    _wireMultiBusyPicks();
                     multiFieldResult.querySelector('#multi-ignore-field')?.addEventListener('click', () => {
                         if (multiLocSel) multiLocSel.value = '';
                         multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
