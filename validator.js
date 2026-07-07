@@ -73,7 +73,7 @@
     // =========================================================================
 
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.6...');
+        console.log('🛡️ Running comprehensive schedule validation v3.7...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -160,7 +160,7 @@
                                     if (comboSeen.has(key)) return;
                                     comboSeen.add(key);
                                     errors.push(
-                                        `<strong>${fn}</strong> (${bunk}) + ${exField} (${ob}) ${_ctr(slot.startMin, slot.endMin)} - same physical space`
+                                        `[[Same space]] <strong>${fn}</strong> (${bunk}) + ${exField} (${ob}) ${_ctr(slot.startMin, slot.endMin)} - same physical space`
                                     );
                                 });
                             });
@@ -499,7 +499,7 @@
                 return `<u>${g}</u> (${spans.join(', ')})`;
             });
             warnings.push(
-                `<strong>${league.name}</strong> - ${parts.join(' vs ')} - no shared game time`
+                `[[League times]] <strong>${league.name}</strong> - ${parts.join(' vs ')} - no shared game time`
             );
         });
 
@@ -629,7 +629,7 @@
                     if (sharingType === 'not_sharable') {
                         const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                         errors.push(
-                            `<strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - not sharable across divisions`
+                            `[[Field conflict]] <strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - not sharable across divisions`
                         );
                         return; // Don't also report capacity for this group
                     }
@@ -638,7 +638,7 @@
                     if (sharingType === 'same_division') {
                         const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                         errors.push(
-                            `<strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - same-division sharing only`
+                            `[[Field conflict]] <strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - same-division sharing only`
                         );
                         return;
                     }
@@ -648,7 +648,7 @@
                         const disallowedDivs = uniqueDivisions.filter(d => !allowedDivisions.includes(d));
                         if (disallowedDivs.length > 0) {
                             errors.push(
-                                `<strong>${fieldName}</strong> ${ctLabel} - Div. ${disallowedDivs.join(', Div. ')} - not on the field's allowed sharing list`
+                                `[[Field conflict]] <strong>${fieldName}</strong> ${ctLabel} - Div. ${disallowedDivs.join(', Div. ')} - not on the field's allowed sharing list`
                             );
                             return;
                         }
@@ -659,7 +659,7 @@
                         if (group.length > maxCapacity) {
                             const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                             errors.push(
-                                `<strong>${fieldName}</strong> ${ctLabel} - ${group.length} bunks (${bunkList}) - over capacity (max ${maxCapacity})`
+                                `[[Over capacity]] <strong>${fieldName}</strong> ${ctLabel} - ${group.length} bunks (${bunkList}) - over capacity (max ${maxCapacity})`
                             );
                         }
                         return;
@@ -681,7 +681,7 @@
                         const bunkList = divUsages.map(g => g.bunk).join(', ');
 
                         errors.push(
-                            `<strong>${fieldName}</strong> ${_ctr(divTimeStart, divTimeEnd)} - ${divUsages.length} bunks in Div. ${divName} (${bunkList}) - over capacity (max ${maxCapacity})`
+                            `[[Over capacity]] <strong>${fieldName}</strong> ${_ctr(divTimeStart, divTimeEnd)} - ${divUsages.length} bunks in Div. ${divName} (${bunkList}) - over capacity (max ${maxCapacity})`
                         );
                     }
                 });
@@ -773,7 +773,7 @@
                 if (occurrences.length > 1) {
                     const timeLabels = occurrences.map(o => o.timeLabel).join(', ');
                     errors.push(
-                        `<strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${activity} ${occurrences.length}× today (${timeLabels})`
+                        `[[Repeat]] <strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${activity} ${occurrences.length}× today (${timeLabels})`
                     );
                 }
             });
@@ -820,7 +820,7 @@
                     
                     const timeLabels = occurrences.map(o => `${o.timeLabel} ${o.activity}`).join(', ');
                     warnings.push(
-                        `<strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${field} ${occurrences.length}× today (${timeLabels})`
+                        `[[Field reuse]] <strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${field} ${occurrences.length}× today (${timeLabels})`
                     );
                 }
             });
@@ -872,7 +872,7 @@
                     
                     if (!hasActivity) {
                         warnings.push(
-                            `<strong>${bunk}</strong> (Div. ${divName}) - no ${required} today`
+                            `[[Missing]] <strong>${bunk}</strong> (Div. ${divName}) - no ${required} today`
                         );
                     }
                 });
@@ -924,7 +924,7 @@
                         : `slot ${slotIdx}`;
 
                     warnings.push(
-                        `<strong>Div. ${divName}</strong> ${timeLabel} - all ${totalBunks} bunks empty`
+                        `[[Empty]] <strong>Div. ${divName}</strong> ${timeLabel} - all ${totalBunks} bunks empty`
                     );
                 }
             });
@@ -952,7 +952,7 @@
                 // Bunk completely missing from assignments
                 if (!slots) {
                     warnings.push(
-                        `<strong>${bunk}</strong> (Div. ${divName}) - no schedule at all`
+                        `[[Empty]] <strong>${bunk}</strong> (Div. ${divName}) - no schedule at all`
                     );
                     return;
                 }
@@ -964,7 +964,7 @@
                 
                 if (filledSlots.length === 0 && !hasAnyLeague) {
                     warnings.push(
-                        `<strong>${bunk}</strong> (Div. ${divName}) - all ${divSlots.length} slots empty`
+                        `[[Empty]] <strong>${bunk}</strong> (Div. ${divName}) - all ${divSlots.length} slots empty`
                     );
                 }
             });
@@ -1156,7 +1156,7 @@
                 const si = divSlots[idx];
                 const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
                 errors.push(
-                    `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - not allowed for this grade/bunk`
+                    `[[No access]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - not allowed for this grade/bunk`
                 );
             });
         });
@@ -1229,13 +1229,13 @@
                     if (actName && offSpecials.has(_lc(actName))) {
                         const h = offSpecials.get(_lc(actName));
                         errors.push(
-                            `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
+                            `[[Turned off]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                         );
                     }
                     if (fName && offFields.has(fName)) {
                         const h = offFields.get(fName);
                         errors.push(
-                            `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
+                            `[[Turned off]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                         );
                     }
                     return;
@@ -1258,7 +1258,7 @@
                     //   a turned-off resource is a MUST-FIX, same as regular
                     //   placements.
                     errors.push(
-                        `<strong>${label}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
+                        `[[Turned off]] <strong>${label}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                     );
                 });
             });
@@ -1307,7 +1307,7 @@
                 const target = actName && rawField && _lc(actName) !== _lc(rawField)
                     ? `${actName} on ${rawField}` : (actName || rawField);
                 errors.push(
-                    `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${target} - bunk-only access reserves it for other bunks today`
+                    `[[Bunk-only]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${target} - bunk-only access reserves it for other bunks today`
                 );
             });
         });
@@ -1340,7 +1340,7 @@
                 seen.add(sig);
                 const timeLabel = _ctr(Math.min(...group.map(g => g.startMin)), Math.max(...group.map(g => g.endMin)));
                 errors.push(
-                    `<strong>${group[0].facility}</strong> ${timeLabel} - ${owners.join(' + ')} - double-booked`
+                    `[[Double-booked]] <strong>${group[0].facility}</strong> ${timeLabel} - ${owners.join(' + ')} - double-booked`
                 );
             });
         });
@@ -1438,7 +1438,7 @@
 
                 const timeLabel = _ctr(Math.min(...group.map(g => g.startMin)), Math.max(...group.map(g => g.endMin)));
                 errors.push(
-                    `<strong>${group[0].facility}</strong> ${timeLabel} - pinned by ${owners.join(' + ')} - not linked (stretch one tile across the grades to share)`
+                    `[[Pinned overlap]] <strong>${group[0].facility}</strong> ${timeLabel} - pinned by ${owners.join(' + ')} - not linked (stretch one tile across the grades to share)`
                 );
             });
         });
@@ -1549,7 +1549,7 @@
                         if (seen.has(sig)) continue;
                         seen.add(sig);
                         errors.push(
-                            `<strong>${bunk}</strong> (Div. ${div}) ${_ctr(sM, eM)} - ${act} on ${rec.key} - reserved by ${r.division}'s elective`
+                            `[[Elective clash]] <strong>${bunk}</strong> (Div. ${div}) ${_ctr(sM, eM)} - ${act} on ${rec.key} - reserved by ${r.division}'s elective`
                         );
                         break;
                     }
@@ -1675,7 +1675,7 @@
                 if (seenMiss.has(sig)) break;
                 seenMiss.add(sig);
                 warnings.push(
-                    `<strong>${u.owner}</strong> (Div. ${u.divName}) ${_ctr(u.startMin, u.endMin)} - #${info.rank} ${info.name} - better field free (#${m.rank} ${m.name})`
+                    `[[Better field free]] <strong>${u.owner}</strong> (Div. ${u.divName}) ${_ctr(u.startMin, u.endMin)} - #${info.rank} ${info.name} - better field free (#${m.rank} ${m.name})`
                 );
                 break;
             }
@@ -1700,7 +1700,7 @@
                 if (seenInv.has(sig)) continue;
                 seenInv.add(sig);
                 warnings.push(
-                    `<strong>Div. ${a.divName}</strong> (${a.owner}) ${_ct(Math.max(a.startMin, b.startMin))} - #${ra} ${keyInfo[a.fkey].name} - junior Div. ${b.divName} holds better #${rb} ${keyInfo[b.fkey].name}`
+                    `[[Seniority]] <strong>Div. ${a.divName}</strong> (${a.owner}) ${_ct(Math.max(a.startMin, b.startMin))} - #${ra} ${keyInfo[a.fkey].name} - junior Div. ${b.divName} holds better #${rb} ${keyInfo[b.fkey].name}`
                 );
             }
         });
@@ -1768,7 +1768,7 @@
                 try { res = SR.checkCandidateDetailed(cand, template, { mode }); } catch (e2) { return; }
                 (res.violated || []).forEach(rule => {
                     errors.push(
-                        `<strong>${bunk}</strong> (Div. ${divName}) ${_ct(cand.startMin)} - ${cand.event || cand.field} - spacing rule: ${describe(rule)}`
+                        `[[Spacing rule]] <strong>${bunk}</strong> (Div. ${divName}) ${_ct(cand.startMin)} - ${cand.event || cand.field} - spacing rule: ${describe(rule)}`
                     );
                 });
             });
@@ -1826,11 +1826,11 @@
                         // ★ v3.5 severity re-tier (user decision): player-cap
                         //   overflows are a REVIEW item, not a hard error.
                         warnings.push(
-                            `<strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - over sport max ${max} (+2)`
+                            `[[Too many]] <strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - over sport max ${max} (+2)`
                         );
                     } else if (min > 0 && total < min) {
                         warnings.push(
-                            `<strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - under sport min ${min}`
+                            `[[Too few]] <strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - under sport min ${min}`
                         );
                     }
                 });
@@ -1842,11 +1842,6 @@
     // =========================================================================
     // SHOW VALIDATION MODAL (★★★ v3.0: Collapsible sections + counts ★★★)
     // =========================================================================
-
-    // ── v3.6 modal helpers ──────────────────────────────────────────────
-    function _valPlainText(msg) {
-        return String(msg || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    }
 
     function showValidationModal(errors, warnings = []) {
         // Remove existing modal
@@ -1895,9 +1890,7 @@
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#94a3b8; padding:0 6px; line-height:1;">&times;</button>
                 </div>
                 <div id="val-body" style="display:flex; gap:0; overflow:hidden; flex:1; align-items:stretch;">${body}</div>
-                <div style="padding:12px 20px; border-top:1px solid #e2e8f0; display:flex; gap:8px; align-items:center; background:#f8fafc;">
-                    ${clean ? '' : `<button id="val-copy-btn" class="val-mini-btn">📋 Copy report</button>`}
-                    <div style="flex:1;"></div>
+                <div style="padding:12px 20px; border-top:1px solid #e2e8f0; display:flex; gap:8px; align-items:center; justify-content:flex-end; background:#f8fafc;">
                     <button id="val-rerun-btn" class="val-mini-btn">↻ Re-check</button>
                     <button id="val-close-btn" style="padding:10px 22px; background:#0f172a; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.95em;">Close</button>
                 </div>
@@ -1921,41 +1914,6 @@
                     const count = col.querySelector('.val-sev-count');
                     if (count) count.textContent = q ? `${visible}/${total}` : String(total);
                 });
-            };
-        }
-
-        // ── Copy a plain-text report ──
-        const copyBtn = overlay.querySelector('#val-copy-btn');
-        if (copyBtn) {
-            copyBtn.onclick = () => {
-                const lines = [];
-                lines.push('Schedule Check — ' + (window.currentScheduleDate || ''));
-                if (errors.length) {
-                    lines.push('', 'MUST FIX (' + errors.length + '):');
-                    errors.forEach(m => lines.push('  - ' + _valPlainText(m)));
-                }
-                if (warnings.length) {
-                    lines.push('', 'REVIEW (' + warnings.length + '):');
-                    warnings.forEach(m => lines.push('  - ' + _valPlainText(m)));
-                }
-                const text = lines.join('\n');
-                const done = () => {
-                    copyBtn.textContent = '✓ Copied';
-                    setTimeout(() => { copyBtn.textContent = '📋 Copy report'; }, 1500);
-                };
-                try {
-                    navigator.clipboard.writeText(text).then(done, done);
-                } catch (e) {
-                    try {
-                        const ta = document.createElement('textarea');
-                        ta.value = text;
-                        document.body.appendChild(ta);
-                        ta.select();
-                        document.execCommand('copy');
-                        ta.remove();
-                        done();
-                    } catch (_) {}
-                }
             };
         }
 
@@ -1992,7 +1950,21 @@
         const labelColor = red ? '#b91c1c' : '#92400e';
         const bg = red ? '#fef2f2' : '#fffbeb';
         const fg = red ? '#991b1b' : '#92400e';
+        const tagBg = red ? '#fecaca' : '#fde68a';
+        const tagFg = red ? '#7f1d1d' : '#78350f';
         const borderSide = red ? 'border-right:1px solid #e2e8f0;' : '';
+
+        // Each message starts with a "[[Issue type]]" tag — render it as a
+        // small pill so the problem is named at a glance.
+        const renderItem = (item) => {
+            const m = String(item).match(/^\[\[([^\]]+)\]\]\s*/);
+            const tag = m ? m[1] : '';
+            const rest = m ? String(item).slice(m[0].length) : String(item);
+            const pill = tag
+                ? `<span style="display:inline-block; background:${tagBg}; color:${tagFg}; border-radius:5px; padding:1px 7px; font-size:0.78em; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; margin-right:8px; vertical-align:1px; white-space:nowrap;">${_valEsc(tag)}</span>`
+                : '';
+            return pill + escMsg(rest);
+        };
 
         return `
             <div class="val-sev" data-sev="${kind}" style="flex:1; min-width:0; display:flex; flex-direction:column; ${borderSide}">
@@ -2004,7 +1976,7 @@
                 <ul style="list-style:none; padding:10px 14px; margin:0; overflow-y:auto; flex:1;">
                     ${items.map(item => `
                         <li class="val-item" style="background:${bg}; color:${fg}; padding:8px 12px; margin-bottom:4px; border-radius:8px; border-left:3px solid ${dot}; font-size:0.88em; line-height:1.45;">
-                            ${escMsg(item)}
+                            ${renderItem(item)}
                         </li>
                     `).join('')}
                 </ul>
@@ -2085,6 +2057,6 @@
         }
     };
 
-    console.log('🛡️ Validator v3.6 loaded — compact one-line findings, red|yellow side-by-side results');
+    console.log('🛡️ Validator v3.7 loaded — issue-type tags on findings, red|yellow side-by-side');
 
 })();
