@@ -227,18 +227,19 @@ describe('checkPinnedTileConflicts (CHECK 17)', () => {
 
         const res = V.checkDisabledResources(assignments, bunkDivMap, {});
 
-        assert.equal(res.errors.length, 1, 'regular placement on day-disabled field is an error');
-        assert.match(res.errors[0], /Rink/);
-        assert.match(res.errors[0], /Daily Adjustments/);
-
-        assert.equal(res.warnings.length, 2, 'one pinned warning per tile+resource (deduped across bunks)');
-        const rinkWarn = res.warnings.find(w => /Rink/.test(w));
-        const lakeWarn = res.warnings.find(w => /Lake/.test(w));
-        assert.ok(rinkWarn, 'pinned tile reserving the day-disabled Rink warns');
-        assert.match(rinkWarn, /pinned/);
-        assert.match(rinkWarn, /Daily Adjustments/);
-        assert.ok(lakeWarn, 'pinned tile on the Facilities-disabled Lake warns');
-        assert.match(lakeWarn, /Facilities/);
+        // v3.5 severity re-tier: pinned hits are ERRORS too (user decision).
+        assert.equal(res.errors.length, 3, '1 regular + 2 pinned (deduped across bunks), all errors');
+        assert.deepEqual(res.warnings, []);
+        const regular = res.errors.find(e => !/pinned/.test(e));
+        assert.ok(regular, 'regular placement on day-disabled field flags');
+        assert.match(regular, /Rink/);
+        assert.match(regular, /Daily Adjustments/);
+        const rinkPin = res.errors.find(e => /pinned/.test(e) && /Rink/.test(e));
+        const lakePin = res.errors.find(e => /pinned/.test(e) && /Lake/.test(e));
+        assert.ok(rinkPin, 'pinned tile reserving the day-disabled Rink flags');
+        assert.match(rinkPin, /Daily Adjustments/);
+        assert.ok(lakePin, 'pinned tile on the Facilities-disabled Lake flags');
+        assert.match(lakePin, /Facilities/);
 
         delete global.loadCurrentDailyData;
     });

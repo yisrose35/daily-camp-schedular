@@ -409,7 +409,7 @@ const bunkDivMapOf = (divisions) => {
         fkey: 'court', facility: 'Court', divName: div, bunk, owner: 'Bunk ' + bunk,
         kind: 'bunk', startMin: 600, endMin: 660, activity: 'Basketball',
     });
-    // T18a: 12 + 11 = 23 > 20 + 2 → error
+    // T18a: 12 + 11 = 23 > 20 + 2 → warning (v3.5 severity re-tier)
     {
         const { v } = makeValidator({
             divisions, fields,
@@ -417,8 +417,8 @@ const bunkDivMapOf = (divisions) => {
             bunkMetaData: { a1: { size: 12 }, b1: { size: 11 } },
         });
         const r = v.checkSportPlayerRules([mkU('a1', 'A'), mkU('b1', 'B')]);
-        check('T18a combined campers over maxPlayers+2 → error',
-            r.errors.length === 1 && r.errors[0].includes('23'), JSON.stringify(r));
+        check('T18a combined campers over maxPlayers+2 → warning',
+            r.warnings.length === 1 && r.warnings[0].includes('23') && r.errors.length === 0, JSON.stringify(r));
     }
     // T18b: 11 + 11 = 22 = max + 2 → within grace, clean
     {
