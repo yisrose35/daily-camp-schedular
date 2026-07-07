@@ -191,12 +191,12 @@
             if (fld && fld.accessRestrictions && fld.accessRestrictions.enabled) {
                 const divs = fld.accessRestrictions.divisions || {};
                 if (gradeKey != null && !(gradeKey in divs) && !(grade in divs)) {
-                    return { ok: false, soft: false, reason: 'Field ' + location + ' is not allowed for ' + grade };
+                    return { ok: false, soft: true, reason: 'Field ' + location + ' is not normally allowed for ' + grade };
                 }
                 const bunkList = divs[gradeKey] || divs[grade];
                 if (Array.isArray(bunkList) && bunkList.length > 0
                     && !bunkList.map(String).includes(String(bunk))) {
-                    return { ok: false, soft: false, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + location };
+                    return { ok: false, soft: true, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + location };
                 }
             }
 
@@ -204,12 +204,12 @@
             if (spByName && spByName.accessRestrictions && spByName.accessRestrictions.enabled) {
                 const divs = spByName.accessRestrictions.divisions || {};
                 if (gradeKey != null && !(gradeKey in divs) && !(grade in divs)) {
-                    return { ok: false, soft: false, reason: 'Special ' + activity + ' is not allowed for ' + grade };
+                    return { ok: false, soft: true, reason: 'Special ' + activity + ' is not normally allowed for ' + grade };
                 }
                 const bunkList = divs[gradeKey] || divs[grade];
                 if (Array.isArray(bunkList) && bunkList.length > 0
                     && !bunkList.map(String).includes(String(bunk))) {
-                    return { ok: false, soft: false, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + activity };
+                    return { ok: false, soft: true, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + activity };
                 }
             }
 
