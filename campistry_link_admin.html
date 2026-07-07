@@ -426,7 +426,7 @@
                     <option value="bunk">By Bunk</option>
                     <option value="individual">Specific Parent</option>
                 </select>
-                <select class="lk-input" id="cScopeVal" style="max-width:195px;display:none;" onchange="onScopeValChange()"></select>
+                <select class="lk-input" id="cScopeVal" multiple size="4" style="max-width:195px;display:none;" onchange="onScopeValChange()" title="Hold Ctrl (⌘ on Mac) to pick more than one"></select>
                 <div id="cIndivWrap" style="display:none;flex:1;min-width:170px;position:relative;">
                     <input type="text" class="lk-input" id="cIndivSearch" placeholder="Type camper or parent name, add as many as needed" oninput="onIndivSearch(this.value)" autocomplete="off">
                     <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
@@ -817,7 +817,7 @@
                     <option value="grade">By Grade</option>
                     <option value="bunk">By Bunk</option>
                 </select>
-                <select class="lk-input" id="fsScopeVal" style="max-width:200px;display:none;" onchange="updateFsCount()"></select>
+                <select class="lk-input" id="fsScopeVal" multiple size="4" style="max-width:200px;display:none;" onchange="updateFsCount()" title="Hold Ctrl (⌘ on Mac) to pick more than one"></select>
                 <span id="fsScopeCount" style="font-size:.76rem;color:var(--text-muted);"></span>
             </div>
         </div>
@@ -1193,10 +1193,21 @@ function onFsScopeChange() {
     updateFsCount();
 }
 
+// Read the selected value(s) from a scope <select> — supports multi-select.
+function _selectedScopeVals(el) {
+    if (!el) return [];
+    if (el.multiple) {
+        var out = [];
+        Array.prototype.forEach.call(el.selectedOptions || [], function(o) { if (o.value) out.push(o.value); });
+        return out;
+    }
+    return el.value ? [el.value] : [];
+}
+
 function _getFsTargets() {
     var cl = CL(); if (!cl) return [];
     var scope = (document.getElementById('fsScope') || {}).value || 'all';
-    var value = ((document.getElementById('fsScopeVal') || {}).value || '').trim();
+    var values = _selectedScopeVals(document.getElementById('fsScopeVal'));
     var map = cl.data.getCamperParentMap();
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
     var out = [];
@@ -1204,9 +1215,9 @@ function _getFsTargets() {
         var name = e[0], c = e[1]; if (!c.parentName) return;
         if (inactive[name]) return; // withdrawn/declined — no form
         var match = scope === 'all' ||
-            (scope === 'division' && value && c.division === value) ||
-            (scope === 'grade'    && value && c.grade    === value) ||
-            (scope === 'bunk'     && value && c.bunk     === value);
+            (scope === 'division' && values.indexOf(c.division) >= 0) ||
+            (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
+            (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
         if (match) out.push({ camperName: name, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
     });
     return out;
@@ -1334,7 +1345,7 @@ function sendFormCompose() {
         id: 'sf_' + Date.now(), formName: formName, formId: formId,
         mode: isBuilt ? 'digital' : 'upload',
         scope: (document.getElementById('fsScope') || {}).value || 'all',
-        scopeValue: ((document.getElementById('fsScopeVal') || {}).value || '').trim(),
+        scopeValue: _selectedScopeVals(document.getElementById('fsScopeVal')).join(', '),
         recipients: sent, date: new Date().toISOString()
     });
     _saveSentForms(sentForms);
@@ -1556,7 +1567,7 @@ function onScopeChange() {
         scopeVal.style.display = '';
         var cl = CL();
         var struct = cl ? cl.data.getStructure() : {};
-        var opts = ['<option value="">— Select —</option>'];
+        var opts = [];
         if (scope === 'division') {
             Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
         } else if (scope === 'grade') {
@@ -1639,7 +1650,7 @@ function msgParent(name) {
 function _getComposeTargets() {
     var cl = CL(); if (!cl) return [];
     var scope = (document.getElementById('cScope') || {}).value || 'all';
-    var value = ((document.getElementById('cScopeVal') || {}).value || '').trim();
+    var values = _selectedScopeVals(document.getElementById('cScopeVal'));
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
 
     if (scope === 'individual') {
@@ -1674,9 +1685,9 @@ function _getComposeTargets() {
         if (!c.parentName) return;
         if (inactive[name]) return; // withdrawn/declined — no message
         var match = (scope === 'all') ||
-            (scope === 'division' && value && c.division === value) ||
-            (scope === 'grade'    && value && c.grade    === value) ||
-            (scope === 'bunk'     && value && c.bunk     === value);
+            (scope === 'division' && values.indexOf(c.division) >= 0) ||
+            (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
+            (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
         if (!match) return;
         targets.push({
             camperName:  name,
