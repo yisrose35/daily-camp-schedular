@@ -307,9 +307,15 @@
                 <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
                 <button class="lk-tab" onclick="filterAdminMsgs('important',this)">Important</button>
                 <button class="lk-tab" onclick="filterAdminMsgs('archived',this)">Archived</button>
-                <label style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--text-muted);cursor:pointer;white-space:nowrap;padding-bottom:6px;" title="When on, deleting a message asks you to confirm first.">
-                    <input type="checkbox" id="admConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)" style="accent-color:var(--link-color);width:15px;height:15px;"> Confirm deletes
-                </label>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:14px;padding-bottom:6px;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:.72rem;color:var(--text-muted);cursor:pointer;white-space:nowrap;" title="When on, deleting a message asks you to confirm first.">
+                        <input type="checkbox" id="admConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)" style="accent-color:var(--link-color);width:15px;height:15px;"> Confirm deletes
+                    </label>
+                    <button class="btn btn-primary btn-sm" onclick="openComposeDrawer()" style="flex-shrink:0;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Compose
+                    </button>
+                </div>
             </div>
             <!-- Filter bar -->
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
