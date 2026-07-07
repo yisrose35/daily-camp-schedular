@@ -541,7 +541,26 @@
         return map;
     };
 
-    /** 
+    /**
+     * Camper names that should NOT receive messages/forms: those whose
+     * enrollment is withdrawn/declined with no active (accepted/enrolled)
+     * enrollment. Campers with no enrollment record at all are treated as
+     * active (manually-added roster campers).
+     */
+    data.getInactiveCamperNames = function() {
+        var enr = (data.getMe().enrollments) || {};
+        var seen = {}, active = {};
+        Object.keys(enr).forEach(function(k) {
+            var e = enr[k]; if (!e || !e.camperName) return;
+            seen[e.camperName] = 1;
+            if (e.status === 'accepted' || e.status === 'enrolled') active[e.camperName] = 1;
+        });
+        var inactive = {};
+        Object.keys(seen).forEach(function(n) { if (!active[n]) inactive[n] = 1; });
+        return inactive;
+    };
+
+    /**
      * SMART LOOKUP: Get bus stop info for a specific camper
      * Returns { busName, busColor, stopNum, stopAddress, estimatedTime, shiftLabel } or null
      */

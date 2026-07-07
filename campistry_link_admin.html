@@ -1198,9 +1198,11 @@ function _getFsTargets() {
     var scope = (document.getElementById('fsScope') || {}).value || 'all';
     var value = ((document.getElementById('fsScopeVal') || {}).value || '').trim();
     var map = cl.data.getCamperParentMap();
+    var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
     var out = [];
     Object.entries(map).forEach(function(e) {
         var name = e[0], c = e[1]; if (!c.parentName) return;
+        if (inactive[name]) return; // withdrawn/declined — no form
         var match = scope === 'all' ||
             (scope === 'division' && value && c.division === value) ||
             (scope === 'grade'    && value && c.grade    === value) ||
@@ -1638,6 +1640,7 @@ function _getComposeTargets() {
     var cl = CL(); if (!cl) return [];
     var scope = (document.getElementById('cScope') || {}).value || 'all';
     var value = ((document.getElementById('cScopeVal') || {}).value || '').trim();
+    var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
 
     if (scope === 'individual') {
         var chips = document.querySelectorAll('#cIndivChips [data-name]');
@@ -1649,6 +1652,7 @@ function _getComposeTargets() {
             var entry = dir.find(function(p) { return p.parentName === parentName; });
             if (!entry) return;
             entry.children.forEach(function(child) {
+                if (inactive[child.name]) return; // withdrawn/declined — no message
                 targets.push({
                     camperName:  child.name,
                     parentName:  entry.parentName,
@@ -1668,6 +1672,7 @@ function _getComposeTargets() {
     Object.entries(map).forEach(function(entry) {
         var name = entry[0], c = entry[1];
         if (!c.parentName) return;
+        if (inactive[name]) return; // withdrawn/declined — no message
         var match = (scope === 'all') ||
             (scope === 'division' && value && c.division === value) ||
             (scope === 'grade'    && value && c.grade    === value) ||
