@@ -2268,6 +2268,16 @@
         const activity = entry._activity || entry.sport || '';
         const field = Utils.fieldLabel(entry.field) || '';
 
+        // ★ entry.field may already be a composite "Location – Activity" (post-edit /
+        //   some solver writes). If so it already reads correctly — don't append the
+        //   activity again, which produced "Location – Activity – Activity".
+        if (field && activity && field.indexOf(' – ') !== -1) {
+            const _p = field.split(' – ');
+            if (_p[_p.length - 1].trim().toLowerCase() === String(activity).toLowerCase()) {
+                return field;
+            }
+        }
+
         if (activity && field && activity !== field) {
             return `${field} – ${activity}`;
         }

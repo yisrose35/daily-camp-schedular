@@ -1280,7 +1280,19 @@ function shouldHighlightBunk(bunkName) {
         //   field (and read as "playing another bunk on a different field" when
         //   it's really sharing the new one). A special stores field = its NAME, so
         //   only override for a REAL field (present, not 'Free', ≠ the activity name).
-        const _fieldReal = fieldLabel(entry.field);
+        let _fieldReal = fieldLabel(entry.field);
+        // ★ entry.field is sometimes stored as a composite "Location – Activity"
+        //   (post-edit applyDirectEdit + some solver write paths). Strip the trailing
+        //   activity so the location resolves to just "Location" — otherwise
+        //   formatEntry prepends the activity and renders "Activity – Location –
+        //   Activity" (the duplicated-name bug). Only strip when the tail actually
+        //   equals this entry's activity, so real field names are never truncated.
+        if (_fieldReal && name && _fieldReal.indexOf(' – ') !== -1) {
+            const _parts = _fieldReal.split(' – ');
+            if (_parts[_parts.length - 1].trim().toLowerCase() === String(name).toLowerCase()) {
+                _fieldReal = _parts.slice(0, -1).join(' – ').trim();
+            }
+        }
         if (_fieldReal && _fieldReal !== 'Free' && _fieldReal.toLowerCase() !== String(name).toLowerCase()) {
             return _fieldReal;
         }
