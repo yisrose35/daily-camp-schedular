@@ -490,7 +490,9 @@
     ov.addEventListener('mousedown', function (e) { _mdFieldChangeOv = (e.target === ov); });
     ov.onclick = function (e) { if (e.target === ov && _mdFieldChangeOv) closeModal(); };
     var box = document.createElement('div');
-    box.style.cssText = 'background:#fff;border-radius:12px;padding:22px;min-width:380px;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-height:80vh;overflow:auto;';
+    // Roomy on desktop (field buttons + play report need the width), shrinks
+    // cleanly on small screens.
+    box.style.cssText = 'background:#fff;border-radius:12px;padding:24px 26px;width:min(620px,94vw);box-sizing:border-box;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-height:88vh;overflow:auto;';
     box.onclick = function (e) { e.stopPropagation(); };
     box.innerHTML = innerHtml;
     ov.appendChild(box);

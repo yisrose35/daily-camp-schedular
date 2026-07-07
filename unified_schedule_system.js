@@ -4722,7 +4722,8 @@ if (bypassStatus.highlight) {
         overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
         const modal = document.createElement('div'); 
         modal.id = MODAL_ID;
-        modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
+        // Match post_edit_system's roomier modal (this is its legacy fallback).
+        modal.style.cssText = 'background: white; border-radius: 12px; padding: 26px 28px; width: min(760px, 94vw); box-sizing: border-box; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 92vh; overflow-y: auto;';
         overlay.appendChild(modal); 
         document.body.appendChild(overlay);
         let _mdOverlayUnified = false;
