@@ -72,8 +72,9 @@
     // MAIN VALIDATION FUNCTION
     // =========================================================================
 
-    function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.7...');
+    function validateSchedule(opts) {
+        const silent = !!(opts && opts.silent);
+        console.log('🛡️ Running comprehensive schedule validation v3.8...' + (silent ? ' (silent)' : ''));
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -231,9 +232,60 @@
 
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
-        showValidationModal(errors, warnings);
+        if (!silent) showValidationModal(errors, warnings);
         return { errors, warnings };
     }
+
+    // =========================================================================
+    // ★ v3.8: AUTO-OPEN AFTER GENERATION (opt-in toggle, default OFF)
+    // When enabled, every generation is followed by a silent validation run;
+    // if any RED conflicts exist the results modal opens by itself. Toggle
+    // lives in the modal footer and persists (settings + localStorage).
+    // =========================================================================
+    const VAL_AUTO_OPEN_KEY = 'validatorAutoOpenOnRed';
+
+    function getValidatorAutoOpen() {
+        try {
+            const app1 = window.loadGlobalSettings?.()?.app1;
+            if (app1 && typeof app1.validatorAutoOpenOnRed === 'boolean') return app1.validatorAutoOpenOnRed;
+        } catch (e) { /* fall through */ }
+        try { return localStorage.getItem(VAL_AUTO_OPEN_KEY) === 'true'; } catch (e) { return false; }
+    }
+
+    function setValidatorAutoOpen(on) {
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            if (!gs.app1) gs.app1 = {};
+            gs.app1.validatorAutoOpenOnRed = !!on;
+            window.saveGlobalSettings?.('app1', gs.app1);
+            window.forceSyncToCloud?.();
+        } catch (e) { /* localStorage below still persists locally */ }
+        try { localStorage.setItem(VAL_AUTO_OPEN_KEY, on ? 'true' : 'false'); } catch (e) {}
+    }
+
+    let _valAutoTimer = null;
+    function _valAutoOpenAfterGen() {
+        if (!getValidatorAutoOpen()) return;
+        // The auto builder routes to its own validator (auto_validator.js) —
+        // this auto-open covers the manual validator's checks.
+        if (window._daBuilderMode === 'auto') return;
+        clearTimeout(_valAutoTimer);
+        // Let the post-generation passes (capacity repair gate, slot fixes)
+        // settle before judging the schedule.
+        _valAutoTimer = setTimeout(() => {
+            try {
+                const res = validateSchedule({ silent: true });
+                if (res && Array.isArray(res.errors) && res.errors.length > 0) {
+                    console.log('🛡️ Auto-open: ' + res.errors.length + ' red conflict(s) found after generation');
+                    showValidationModal(res.errors, res.warnings);
+                }
+            } catch (e) { console.warn('🛡️ auto-open validation failed:', e); }
+        }, 1400);
+    }
+    try {
+        document.addEventListener('campistry-schedule-generated', _valAutoOpenAfterGen);
+        window.addEventListener('campistry-generation-complete', _valAutoOpenAfterGen);
+    } catch (e) { /* non-fatal */ }
 
     // =========================================================================
     // HELPERS
@@ -1890,7 +1942,12 @@
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#94a3b8; padding:0 6px; line-height:1;">&times;</button>
                 </div>
                 <div id="val-body" style="display:flex; gap:0; overflow:hidden; flex:1; align-items:stretch;">${body}</div>
-                <div style="padding:12px 20px; border-top:1px solid #e2e8f0; display:flex; gap:8px; align-items:center; justify-content:flex-end; background:#f8fafc;">
+                <div style="padding:12px 20px; border-top:1px solid #e2e8f0; display:flex; gap:8px; align-items:center; background:#f8fafc;">
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.85em; color:#475569; cursor:pointer; user-select:none; margin-right:auto;">
+                        <input type="checkbox" id="val-auto-open" ${getValidatorAutoOpen() ? 'checked' : ''}
+                            style="width:16px; height:16px; cursor:pointer; accent-color:#dc2626;">
+                        Open automatically after generation when there are red conflicts
+                    </label>
                     <button id="val-rerun-btn" class="val-mini-btn">↻ Re-check</button>
                     <button id="val-close-btn" style="padding:10px 22px; background:#0f172a; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.95em;">Close</button>
                 </div>
@@ -1916,6 +1973,10 @@
                 });
             };
         }
+
+        // ── Auto-open toggle ──
+        const autoOpenCb = overlay.querySelector('#val-auto-open');
+        if (autoOpenCb) autoOpenCb.onchange = () => setValidatorAutoOpen(autoOpenCb.checked);
 
         // ── Close / re-run ──
         const close = () => overlay.remove();
@@ -2035,6 +2096,9 @@
         // Standalone league-time-mismatch check so the generator can warn the
         // user immediately after a manual build (without popping the full modal).
         checkLeagueTimeMismatch: () => checkLeagueTimeMismatch(window.divisionTimes || {}),
+        // ★ v3.8: auto-open-after-generation toggle (persisted)
+        getAutoOpenOnRed: getValidatorAutoOpen,
+        setAutoOpenOnRed: setValidatorAutoOpen,
         // ★ v3.1 checks exposed individually (console use + node sims)
         _v31: {
             collectTimedUsages,
@@ -2057,6 +2121,6 @@
         }
     };
 
-    console.log('🛡️ Validator v3.7 loaded — issue-type tags on findings, red|yellow side-by-side');
+    console.log('🛡️ Validator v3.8 loaded — auto-open-on-red toggle (default off) + tagged findings, red|yellow side-by-side');
 
 })();
