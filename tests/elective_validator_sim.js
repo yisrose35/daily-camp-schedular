@@ -27,7 +27,13 @@ const path = require('path');
     const a = fs.readFileSync(path.join(__dirname, '..', 'auto_validator.js'), 'utf8');
     assert.ok(/function checkElectiveReservations/.test(a), 'auto_validator.js defines checkElectiveReservations');
     assert.ok(/electiveErrors\.forEach/.test(a), 'auto_validator.js pushes elective errors into allErrors');
-    console.log('SOURCE GUARD PASS — both validators define + wire the elective-reservation check');
+    // Phantom-reservation guard: a reserving division that wasn't generated today
+    // (no live schedule) must be skipped in BOTH validators.
+    assert.ok(/liveDivisions/.test(v) && /!liveDivisions\.has\(String\(r\.division\)\)/.test(v),
+        'validator.js skips electives whose division has no live schedule today');
+    assert.ok(/liveDivisions/.test(a) && /!liveDivisions\.has\(String\(r\.division\)\)/.test(a),
+        'auto_validator.js skips electives whose division has no live schedule today');
+    console.log('SOURCE GUARD PASS — both validators define + wire the elective check + phantom-division guard');
 }
 
 // ---- (B) BEHAVIORAL MIRROR ---------------------------------------------------
@@ -43,12 +49,21 @@ const resv = Utils.getFieldReservationsFromSkeleton([{
     electiveActivities: ['Pizza Making', 'Gaming Center']
 }]);
 
-// Mirror of the validator's detection (elective-only, own-grade exempt).
+// Mirror of the validator's detection (elective-only, own-grade exempt,
+// phantom-division guard). A reserving division with no live (non-empty)
+// schedule today wasn't generated → its reservation is skipped.
 function findElectiveViolations(assignments, bunkDiv, divTimes) {
     const keyLc = {};
     Object.keys(resv).forEach(k => {
         const list = (resv[k] || []).filter(r => r && (r.type === 'elective' || r.type === 'swim_elective'));
         if (list.length) keyLc[String(k).toLowerCase().trim()] = { key: k, list };
+    });
+    const liveDivisions = new Set();
+    Object.keys(assignments).forEach(bunk => {
+        const dv = bunkDiv[bunk];
+        if (dv == null) return;
+        if ((assignments[bunk] || []).some(e => e && !e.continuation && (e._activity || (e.field && e.field !== 'Free'))))
+            liveDivisions.add(String(dv));
     });
     const out = [];
     Object.keys(assignments).forEach(bunk => {
@@ -66,6 +81,7 @@ function findElectiveViolations(assignments, bunkDiv, divTimes) {
                 for (const r of rec.list) {
                     if (!(r.startMin < eM && r.endMin > sM)) continue;
                     if (String(r.division) === String(div)) continue;          // own grade exempt
+                    if (r.division && !liveDivisions.has(String(r.division))) continue; // phantom division
                     if (String(act).toLowerCase() === String(r.event).toLowerCase()) continue;
                     out.push({ bunk, div, act, field: rec.key });
                     return;
@@ -83,13 +99,18 @@ const divTimes = {
 };
 const bunkDiv = { 'ח': 'Camp Agudah > 6', 'Masmidim': 'מתמדים', 'כ': '7' };
 
-// TEST 1 — foreign grade on the elective facility IS flagged.
+// TEST 1 — foreign grade on the elective facility IS flagged when the reserving
+// division is LIVE today (its elective window renders empty, but it has other
+// real entries, so it counts as generated).
 {
-    const assignments = { 'ח': [ { field: 'Pizza Making', _activity: 'Pizza Making', _startMin: 1030, _endMin: 1110 } ] };
+    const assignments = {
+        'ח':        [ { field: 'Pizza Making', _activity: 'Pizza Making', _startMin: 1030, _endMin: 1110 } ],
+        'Masmidim': [ { field: 'Beis Medrash', _activity: 'Learning',     _startMin: 1200, _endMin: 1260 } ],
+    };
     const v = findElectiveViolations(assignments, bunkDiv, divTimes);
     assert.strictEqual(v.length, 1, 'foreign-grade elective conflict flagged');
     assert.strictEqual(v[0].field, 'Pizza Making');
-    console.log('TEST 1 PASS — foreign grade on elective facility is flagged');
+    console.log('TEST 1 PASS — foreign grade on a LIVE elective division is flagged');
 }
 
 // TEST 2 — the elective's OWN grade is NOT flagged.
@@ -107,6 +128,20 @@ const bunkDiv = { 'ח': 'Camp Agudah > 6', 'Masmidim': 'מתמדים', 'כ': '7'
     };
     assert.strictEqual(findElectiveViolations(assignments, bunkDiv, divTimes).length, 0, 'no false positives');
     console.log('TEST 3 PASS — disjoint time / unreserved facility not flagged');
+}
+
+// TEST 4 — PHANTOM DIVISION (the reported false positive): the reserving
+// division (מתמדים) was NOT generated today — it has NO real entries anywhere,
+// so its skeleton elective tile holds rooms nobody occupies. A foreign grade on
+// those rooms must NOT be flagged.
+{
+    const assignments = {
+        'ח':        [ { field: 'Pizza Making', _activity: 'Pizza Making', _startMin: 1030, _endMin: 1110 } ],
+        'Masmidim': [],   // division present in roster but not generated → phantom
+    };
+    assert.strictEqual(findElectiveViolations(assignments, bunkDiv, divTimes).length, 0,
+        'phantom (non-generated) elective division must not produce a conflict');
+    console.log('TEST 4 PASS — phantom (non-generated) elective division not flagged');
 }
 
 console.log('\n✅ ALL elective_validator_sim TESTS PASSED');

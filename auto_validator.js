@@ -707,6 +707,22 @@
         const resolveLoc = window.getLocationForActivity;
         const IGN = { 'free': 1, 'free play': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'transition': 1, 'buffer': 1 };
 
+        // Divisions actually generated today. An elective tile lives in the shared
+        // skeleton even for a division that was NOT part of this generation (e.g. a
+        // learning division with no schedule today). Its reservation then holds
+        // rooms that nobody from that division occupies, so flagging another
+        // division on those rooms is a false positive. Only honor an elective
+        // reservation whose division has a live (non-empty) schedule today.
+        const liveDivisions = new Set();
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            const g = bunkGrade[String(bunk)];
+            if (g == null) return;
+            if (arr.some(e => e && !e.continuation && (e._activity || (e.field && e.field !== 'Free'))))
+                liveDivisions.add(String(g));
+        });
+
         const seen = new Set();
         Object.keys(assignments).forEach(bunk => {
             const arr = assignments[bunk];
@@ -733,6 +749,8 @@
                     for (const r of rec.list) {
                         if (!(r.startMin < eM && r.endMin > sM)) continue;
                         if (r.division && String(r.division) === String(grade)) continue;
+                        // Reserving division wasn't generated today → phantom reservation.
+                        if (r.division && !liveDivisions.has(String(r.division))) continue;
                         if (String(act).toLowerCase().trim() === String(r.event || '').toLowerCase().trim()) continue;
                         const sig = rec.key + '|' + bunk + '|' + sM;
                         if (seen.has(sig)) continue;
