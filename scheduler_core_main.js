@@ -1124,6 +1124,55 @@
             return true;
         }
 
+        // ★ PARTIAL-REGEN cross-division seed for the claim tracker.
+        //   When only some divisions are regenerated, the OUT-OF-SCOPE divisions keep
+        //   their PRESERVED schedules (restored at STEP 1.5) and already occupy shared
+        //   cap-1 special ROOMS. _specialClaims starts EMPTY, so without this the
+        //   in-scope division happily re-claims a room a preserved division already
+        //   holds → both land on the same cap-1 room in the FINAL schedule → STEP 7.55
+        //   room-capacity sweep demotes the surplus → Free → STEP 7.6 refills with
+        //   GENERIC SPORTS. That is the live "8th grade got sports" bug: a partial regen
+        //   of div 8 re-grabbed Gaming Center / Pizza Making / Sushi Making that div 9's
+        //   preserved tile already held at the same window, so 3 bunks were demoted and
+        //   refilled with sports instead of falling to their Swim fallback.
+        //   Seeding those preserved specials makes _canClaim / _reserveRotationSpecials
+        //   see them, so the in-scope tile skips the taken room and falls through to
+        //   Swim. Only OUT-OF-SCOPE divisions are seeded (in-scope divisions re-place and
+        //   register their own claims). Genuinely shareable specials (type 'all' / custom
+        //   cap>1) are unaffected — _canClaim still allows them under their own cap.
+        if (allowedDivisions) {
+            const _seedScope = (allowedDivisions instanceof Set)
+                ? allowedDivisions
+                : new Set((allowedDivisions || []).map(String));
+            const _seedSA = window.scheduleAssignments || {};
+            const _seedDivs = window.divisions || {};
+            const _seedB2G = {};
+            Object.keys(_seedDivs).forEach(g => (((_seedDivs[g] && _seedDivs[g].bunks) || []).forEach(b => { _seedB2G[String(b)] = g; })));
+            const _seedDT = window.divisionTimes || {};
+            let _seededClaims = 0;
+            Object.keys(_seedSA).forEach(bunk => {
+                const g = _seedB2G[String(bunk)];
+                if (g == null || _seedScope.has(String(g))) return; // in-scope divs re-place + register their own
+                const slots = _seedSA[bunk];
+                if (!Array.isArray(slots)) return;
+                slots.forEach((e, idx) => {
+                    if (!e || e.continuation || e._noRoomCap) return;
+                    const nm = e._activity || e._assignedSpecial || e.field;
+                    if (!nm || !knownSpecialNames.has(String(nm).toLowerCase().trim())) return; // only shared special rooms
+                    const ds = _seedDT[g];
+                    const s = (e._startMin != null) ? e._startMin : (ds && ds[idx] && ds[idx].startMin);
+                    const en = (e._endMin != null) ? e._endMin : (ds && ds[idx] && ds[idx].endMin);
+                    if (s == null || en == null) return;
+                    const _existing = _specialClaims[_claimKey(nm)];
+                    if (_existing && _existing.some(c => c.startMin === s && c.endMin === en
+                        && c.divName === g && c.actLower === String(nm).toLowerCase())) return;
+                    _registerClaim(nm, s, en, g);
+                    _seededClaims++;
+                });
+            });
+            if (_seededClaims) console.log(`[SmartTile] Partial-regen: seeded ${_seededClaims} preserved cross-division special claim(s) → in-scope tiles skip taken rooms and fall to fallback (not demoted to Sports)`);
+        }
+
         // ★ BUNK-LEVEL ROTATION GATE — single source of truth (rotation_engine.js).
         //   Every OTHER manual special-placement path scores candidates through
         //   RotationEngine.calculateLimitScore; the Smart Tile budget pre-pass,
