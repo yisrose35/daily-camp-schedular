@@ -1682,9 +1682,16 @@ function _loadMessages(){
     var store=_readLinkStore();
     var storeMsgs=store.messages||[], broadcasts=store.broadcasts||[], notifs=store.notifications||[];
     messages=[];
+    var _pEmail=(parent.email||'').trim().toLowerCase();
     storeMsgs.forEach(function(m){
-        var forMe=m.direction==='out'&&(m.to===parent.name||m.to===parent.email);
-        var byMe =m.direction==='in' &&(m.from===parent.name||(m.metadata&&m.metadata.parentEmail===parent.email));
+        // Scope strictly by the recipient's email (the reliable key). Names are
+        // too loose and leak other parents' messages when a device holds more
+        // than one parent's data. Fall back to name only for legacy rows that
+        // never recorded a parentEmail.
+        var mEmail=(m.metadata&&m.metadata.parentEmail?String(m.metadata.parentEmail):'').trim().toLowerCase();
+        var emailMatch=mEmail&&_pEmail&&mEmail===_pEmail;
+        var forMe=m.direction==='out'&&( emailMatch || (!mEmail&&(m.to===parent.name||m.to===parent.email)) );
+        var byMe =m.direction==='in' &&( emailMatch || (!mEmail&&(m.from===parent.name)) );
         if(!forMe&&!byMe)return;
         messages.push({
             id:m.id,type:byMe?'sent':'direct',
