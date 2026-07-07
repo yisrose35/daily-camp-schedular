@@ -3426,12 +3426,21 @@ function boot() {
         _loadCloudTips(function() {
             if (document.getElementById('page-tips').classList.contains('active')) _renderTipHistory();
         });
-        // Near-realtime inbox: poll cloud messages every 12s while visible, and
-        // on tab focus, so a parent's reply shows up without a manual reload.
-        // loadCloudMessages re-renders only when something actually changed.
+        // TRUE realtime — subscribe to this camp's link_messages over a
+        // websocket so a parent's reply (or any change) shows up instantly.
+        // loadCloudMessages re-renders only when something actually changed. A
+        // slow 30s poll + focus-sync remain as a safety net if the socket drops.
         function _pollMsgs(){ if (window.CampistryLink && window.CampistryLink.loadCloudMessages) window.CampistryLink.loadCloudMessages(200); }
         _pollMsgs();
-        if (!window._adminMsgPoll) window._adminMsgPoll = setInterval(function(){ if (document.visibilityState !== 'hidden') _pollMsgs(); }, 7000);
+        try {
+            var _rt = _dbc();
+            if (_rt && _rt.client && _rt.client.channel && !window._adminMsgChannel) {
+                window._adminMsgChannel = _rt.client.channel('admin-msgs')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'link_messages', filter: 'camp_id=eq.' + _rt.campId }, function(){ _pollMsgs(); })
+                    .subscribe();
+            }
+        } catch (e) { console.warn('[Link Admin] realtime subscribe failed, falling back to poll', e); }
+        if (!window._adminMsgPoll) window._adminMsgPoll = setInterval(function(){ if (document.visibilityState !== 'hidden') _pollMsgs(); }, 30000);
         if (!window._adminMsgVis) { window._adminMsgVis = true; document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') _pollMsgs(); }); }
     }
     if (_dbc()) _initCloudSubs();

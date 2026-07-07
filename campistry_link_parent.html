@@ -2180,12 +2180,21 @@ window.addEventListener('storage', function(e) {
         }
         _loadMessages(); // instant local echo while the live cloud fetch below is in flight
         _syncMessagesFromCloud();
-        // Near-realtime inbox: poll every 12s while the tab is visible, and
-        // sync immediately when the tab regains focus — new camp messages show
-        // up without a manual reload. (True push would need parent SELECT RLS
-        // on link_messages; polling is reliable cross-device with no migration.)
+        // TRUE realtime — subscribe to this parent's own message rows over a
+        // websocket (migration 023 gives them a SELECT policy scoped to their
+        // email, so RLS limits the stream to their messages). New camp messages
+        // appear instantly. A slow 30s poll + focus-sync stay as a safety net if
+        // the socket drops.
+        try {
+            if (typeof db !== 'undefined' && db && db.channel) {
+                if (window._parentMsgChannel) { try { db.removeChannel(window._parentMsgChannel); } catch(_){} }
+                window._parentMsgChannel = db.channel('parent-msgs')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'link_messages' }, function(){ _syncMessagesFromCloud(); })
+                    .subscribe();
+            }
+        } catch (e) { console.warn('[Parent] realtime subscribe failed, falling back to poll', e); }
         if(!window._msgPollTimer){
-            window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 7000);
+            window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 30000);
         }
         if(!window._msgVisWired){
             window._msgVisWired=true;
