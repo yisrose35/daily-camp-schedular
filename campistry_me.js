@@ -533,7 +533,7 @@ function _familyBundlesHtml(optHighlight){
             h+='</div>';
         });
         h+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">';
-        (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+esc(cn.split(' ')[0])+'</span>'});
+        (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 5px 3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600"><span style="cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+esc(cn.split(' ')[0])+'</span><button title="Remove from family" onclick="event.stopPropagation();CampistryMe.removeCamperFromFamily(\''+je(id)+'\',\''+je(cn)+'\')" style="border:none;background:none;cursor:pointer;color:var(--s400);font-size:.9rem;line-height:1;padding:0 1px">&times;</button></span>'});
         h+='</div></div>';
     });
     return h;
@@ -609,6 +609,14 @@ function deleteFamily(id){
     if(!confirm('Delete "'+nm+'"? Its campers will remain in the roster but be unassigned from this family. This cannot be undone.'))return;
     delete families[id];
     save();closeModal('familyModal');renderCampers();toast('Family deleted');
+}
+
+// Pull a single camper out of a family (the camper stays in the roster,
+// just unassigned from this family). Reversible via re-detect or Edit.
+function removeCamperFromFamily(familyId,camperName){
+    var f=families[familyId]; if(!f)return;
+    f.camperIds=(f.camperIds||[]).filter(function(c){return c!==camperName});
+    save();renderCampers();toast((camperName.split(' ')[0])+' removed from '+(f.name||'family'));
 }
 
 // ── CAMPERS ──────────────────────────────────────────────────────
@@ -5338,7 +5346,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
-    addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,
+    addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
