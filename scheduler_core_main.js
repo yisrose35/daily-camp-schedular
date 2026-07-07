@@ -5916,8 +5916,23 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const la = window.leagueAssignments?.[d]?.[si];
                     return !!(la && Array.isArray(la.matchups) && la.matchups.length > 0);
                 };
+                // ★ Electives are a camper-choice MENU: STEP 2.5 reserves the elective's
+                //   rooms but never assigns one activity per bunk, so these cells are
+                //   Free BY DESIGN (the bunk picks e.g. Gaming Center vs Pizza Making).
+                //   Same rationale as the league skip above — don't let the silent
+                //   fallback stuff a random activity into the menu tile.
+                const _isElectiveSlot75 = (bunk, si) => {
+                    const d = _b2d75[String(bunk)];
+                    if (!d) return false;
+                    const ds = window.divisionTimes?.[d];
+                    const sl = Array.isArray(ds) ? ds[si] : null;
+                    if (!sl) return false;
+                    const t = String(sl.type || '').toLowerCase();
+                    if (t === 'elective' || t === 'swim_elective') return true;
+                    return Array.isArray(sl.electiveActivities) && sl.electiveActivities.length > 0;
+                };
                 const _freeFills = [];
-                let _lgSkipped75 = 0;
+                let _lgSkipped75 = 0, _elSkipped75 = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                     if (_allowedBunks && !_allowedBunks.has(bunk)) return;
                     const arr = window.scheduleAssignments[bunk] || [];
@@ -5929,6 +5944,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         const e = arr[si];
                         if (_rs75 && _rs75.regen && typeof _rs75.regen.has === 'function' && !_rs75.regen.has(si)) continue;
                         if (_isLeagueSlot75(bunk, si)) { _lgSkipped75++; continue; }
+                        if (_isElectiveSlot75(bunk, si)) { _elSkipped75++; continue; }
                         if (!e) { _freeFills.push({ bunk, si }); continue; }
                         if (e.continuation || e._isTransition || e._fixed || e._pinned || e._h2h || e._bunkOverride) continue;
                         const actLower = String(e._activity || e.field || e.sport || '').toLowerCase().trim();
@@ -5938,6 +5954,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     }
                 });
                 if (_lgSkipped75 > 0) console.log(`[STEP 7.5] FN-56: left ${_lgSkipped75} league-period slot(s) alone`);
+                if (_elSkipped75 > 0) console.log(`[STEP 7.5] left ${_elSkipped75} elective menu slot(s) alone`);
                 // ★ Build a reliable (bunk|slotIdx) → tile-kind map from the schedulable
                 //   blocks. The solver stamps _slotKind on these from the raw skeleton
                 //   event, so it is authoritative — divisionTimes' slot.event is not

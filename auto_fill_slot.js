@@ -54,6 +54,21 @@
         return !entry || entry.field === 'Free' || entry._activity === 'Free' || (!entry.field && !entry._activity);
     }
 
+    // An elective (or swim+elective hybrid) tile is a camper-choice MENU, not a
+    // solver-assigned slot. STEP 2.5 of the generator (scheduler_core_main.js) only
+    // RESERVES the elective's rooms — it never writes one chosen activity into each
+    // bunk's cell, so the per-bunk entry stays "Free" ON PURPOSE (the bunk picks e.g.
+    // Gaming Center vs Pizza Making itself). We detect it off the divisionTimes slot
+    // so the ⚡ Auto Fill button skips these tiles — clicking it would clobber the menu
+    // with a single auto-picked activity. Genuinely-failed empty slots (no elective
+    // menu) are unaffected and still get the button.
+    function isElectiveSlot(slot) {
+        if (!slot) return false;
+        const t = String(slot.type || '').toLowerCase();
+        if (t === 'elective' || t === 'swim_elective') return true;
+        return Array.isArray(slot.electiveActivities) && slot.electiveActivities.length > 0;
+    }
+
     function toast(msg, type) {
         if (window.showToast) { window.showToast(msg, type); return; }
         const id = 'afs-toast';
@@ -649,6 +664,14 @@
 
             const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
             if (!isFreeEntry(entry)) return;
+
+            // ★ Skip elective / swim-elective "choice menu" tiles: they're Free by
+            //   design (see isElectiveSlot). Killswitch: window.__autoFillSkipElectives = false
+            if (window.__autoFillSkipElectives !== false) {
+                const divName = getDivision(bunk);
+                const slot = divName ? getSlotInfo(divName, slotIdx, bunk) : null;
+                if (isElectiveSlot(slot)) return;
+            }
 
             if (td.querySelector('.afs-btn')) return; // already injected
 
