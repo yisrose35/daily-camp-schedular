@@ -4309,6 +4309,15 @@ a:hover {
 .resize-handle-bottom{bottom:-2px;}
 .grid-event:hover .resize-handle{opacity:1;background:rgba(99,102,241,0.25);}
 .grid-event.resizing{box-shadow:0 0 0 2px #6366f1 !important;z-index:100 !important;}
+/* ★ Multi-grade span: horizontal grips (drag left/right to cover neighboring grades) */
+.resize-handle-h{position:absolute;top:0;bottom:0;width:8px;cursor:ew-resize;z-index:6;opacity:0;transition:opacity 0.15s;}
+.resize-handle-h-left{left:0;}
+.resize-handle-h-right{right:0;}
+.grid-event:hover .resize-handle-h{opacity:1;background:rgba(16,185,129,0.3);}
+/* A merged span tile paints over its neighbor columns' gridlines/disabled zones */
+.grid-event.span-multi{z-index:3;}
+.grid-event.span-multi:hover{z-index:4;}
+.grid-event.span-multi.selected{z-index:5;}
 #resize-tooltip{position:fixed;padding:8px 12px;background:#1e293b;color:#fff;border-radius:6px;font-size:12px;font-weight:600;pointer-events:none;z-index:10002;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.2);}
 #drag-ghost{position:fixed;padding:8px 12px;background:#fff;border:2px solid #6366f1;border-radius:6px;box-shadow:0 4px 12px rgba(99,102,241,0.2);pointer-events:none;z-index:10001;display:none;font-size:12px;}
 .drop-preview{display:none;position:absolute;left:2%;width:96%;background:rgba(99,102,241,0.06);border:2px dashed #a5b4fc;border-radius:4px;pointer-events:none;z-index:5;}

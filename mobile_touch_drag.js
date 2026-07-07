@@ -702,6 +702,16 @@ function finishTouchResize(module, wrapper) {
       event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
       event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
 
+      // ★ Multi-grade span: every grade's copy keeps the same times (mirrors
+      //   the desktop resize handler in master_schedule_builder.js).
+      if (event.spanGroup && window.MasterSchedulerInternal?.spanMembers) {
+        try {
+          window.MasterSchedulerInternal.spanMembers(event).forEach(m => {
+            if (m.id !== event.id) { m.startTime = event.startTime; m.endTime = event.endTime; }
+          });
+        } catch (_) {}
+      }
+
       // Trigger save and re-render through the module's methods
       if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
@@ -904,9 +914,27 @@ async function finishTouchReposition(touch, module, wrapper) {
       }
     }
 
-    event.division = divName;
-    event.startTime = minutesToTime(_newStartMin121);
-    event.endTime = minutesToTime(_newStartMin121 + duration);
+    // ★ Multi-grade span (MS): the span moves together in TIME and keeps its
+    //   grades — membership only changes via the horizontal resize grips.
+    //   Mutating event.division here would corrupt the span geometry.
+    let _spanMoved = false;
+    if (module === 'ms' && event.spanGroup && window.MasterSchedulerInternal?.spanMembers) {
+      try {
+        const _members = window.MasterSchedulerInternal.spanMembers(event);
+        if (_members.length > 1) {
+          const _ns = minutesToTime(_newStartMin121);
+          const _ne = minutesToTime(_newStartMin121 + duration);
+          _members.forEach(m => { m.startTime = _ns; m.endTime = _ne; });
+          _spanMoved = true;
+        }
+      } catch (_) {}
+    }
+
+    if (!_spanMoved) {
+      event.division = divName;
+      event.startTime = minutesToTime(_newStartMin121);
+      event.endTime = minutesToTime(_newStartMin121 + duration);
+    }
     // Re-tag based on the new position (set in night zone, clear back in hours).
     if (module !== 'ms') event.isNightActivity = _isNight121;
 
@@ -916,7 +944,7 @@ async function finishTouchReposition(touch, module, wrapper) {
     // and NEVER remapped, so the moved tile still pointed at the SOURCE grade's
     // league (e.g. Minors bunks scheduled against a Majors game). No-op for
     // non-league tiles and same-grade moves.
-    if (_prevDiv121 !== divName && typeof window._mbRemapLeagueForGrade === 'function') {
+    if (!_spanMoved && _prevDiv121 !== divName && typeof window._mbRemapLeagueForGrade === 'function') {
       try { window._mbRemapLeagueForGrade(event, divName); } catch (_) {}
     }
 
