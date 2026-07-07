@@ -634,7 +634,20 @@ body {
 .lkf-sig-clear { margin-top: 6px; background: none; border: none; color: var(--link-color); font-size: 0.78rem; font-weight: 600; cursor: pointer; padding: 0; font-family: var(--font-body); }
 
 .lkf-heading { font-size: 1.05rem; font-weight: 800; color: var(--slate-900); margin: 22px 0 6px; padding-bottom: 6px; border-bottom: 2px solid var(--link-tint); }
+.lkf-heading:first-child { margin-top: 0; }
 .lkf-paragraph { font-size: 0.86rem; color: var(--slate-600); line-height: 1.6; margin: 0 0 14px; }
+
+/* Multi-section navigation + progress (parent fill drawer) */
+.lkf-progress { height: 6px; background: var(--slate-100); border-radius: var(--radius-full); overflow: hidden; margin-bottom: 5px; }
+.lkf-progress-bar { height: 100%; background: var(--link-color); border-radius: var(--radius-full); transition: width 0.28s ease; }
+.lkf-progress-label { font-size: 0.72rem; color: var(--slate-400); margin-bottom: 14px; font-weight: 600; }
+.lkf-nav { display: flex; gap: 8px; align-items: center; padding-top: 16px; border-top: 1px solid var(--slate-200); margin-top: 8px; }
+.lkf-nav-right { display: flex; gap: 8px; margin-left: auto; }
+.lkf-btn { border: none; border-radius: var(--radius-sm); padding: 9px 20px; font-size: 0.85rem; font-weight: 600; cursor: pointer; font-family: var(--font-body); }
+.lkf-btn-primary { background: var(--link-color); color: #fff; }
+.lkf-btn-primary:hover { filter: brightness(1.05); }
+.lkf-btn-ghost { background: none; border: 1px solid var(--slate-300); color: var(--slate-500); }
+.lkf-btn-ghost:hover { background: var(--slate-50); }
 
 /* RECIPIENT PICKER */
 .recip-picker { border: 1px solid var(--slate-200); border-radius: var(--radius-md); max-height: 240px; overflow-y: auto; }

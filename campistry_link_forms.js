@@ -333,5 +333,69 @@
         return true;
     };
 
+    // ── Sections & conditional logic ───────────────────────────────────────
+    // A form is a flat fields[] list; a `heading` field starts a new section.
+    // Fields before the first heading form an implicit opening section.
+    LF.buildSections = function (fields) {
+        var secs = [], cur = { id: '__sec0', title: '', desc: '', heading: null, fields: [] };
+        (fields || []).forEach(function (f) {
+            if (f.type === 'heading') {
+                if (cur.fields.length || cur.heading) secs.push(cur);
+                cur = { id: f.id, title: f.label || '', desc: f.help || '', heading: f, fields: [] };
+            } else {
+                cur.fields.push(f);
+            }
+        });
+        secs.push(cur);
+        if (secs.length > 1 && secs[0].id === '__sec0' && !secs[0].fields.length) secs.shift();
+        secs.forEach(function (s, i) { s.index = i; });
+        return secs;
+    };
+
+    // Evaluate a single condition { field, op, value } against an answers map
+    // keyed by field id. Missing answer → treated as empty.
+    LF.evalCond = function (cond, answers) {
+        if (!cond || !cond.field) return true;
+        var a = answers[cond.field]; if (a == null) a = '';
+        var aStr = String(a), v = String(cond.value == null ? '' : cond.value);
+        switch (cond.op || 'eq') {
+            case 'eq': return aStr === v;
+            case 'ne': return aStr !== v;
+            case 'contains': return aStr.toLowerCase().indexOf(v.toLowerCase()) >= 0;
+            case 'filled': return aStr.trim() !== '';
+            case 'empty': return aStr.trim() === '';
+            case 'gt': return parseFloat(aStr) > parseFloat(v);
+            case 'lt': return parseFloat(aStr) < parseFloat(v);
+            default: return true;
+        }
+    };
+    LF.visible = function (field, answers) { return field.showIf && field.showIf.field ? LF.evalCond(field.showIf, answers) : true; };
+
+    // Where does a section send the respondent next? Per-question option
+    // branching (Google-Forms style) wins; else the section's own nextSection;
+    // else the following section. Returns a section id, 'next' or 'submit'.
+    LF.sectionTarget = function (section, answers) {
+        for (var i = 0; i < section.fields.length; i++) {
+            var f = section.fields[i];
+            if (f.branchOn && f.branch) {
+                var ans = answers[f.id];
+                if (ans != null && ans !== '' && f.branch[ans]) return f.branch[ans];
+            }
+        }
+        if (section.heading && section.heading.nextSection) return section.heading.nextSection;
+        return 'next';
+    };
+
+    // Read every answerable field into { fieldId: value } for logic evaluation.
+    // idFn(field, index) → the DOM base id used when the field was rendered.
+    LF.collectById = function (fields, idFn) {
+        var out = {};
+        (fields || []).forEach(function (f, i) {
+            if (f.type === 'heading' || f.type === 'paragraph') return;
+            try { out[f.id] = LF.read(f, idFn(f, i)).value; } catch (e) { out[f.id] = ''; }
+        });
+        return out;
+    };
+
     global.LinkForms = LF;
 })(typeof window !== 'undefined' ? window : this);

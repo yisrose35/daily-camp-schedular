@@ -2568,6 +2568,10 @@ window.addEventListener('storage', function(e) {
 var _foFormDef = null;
 var _foCamper = null;
 var _foCamperId = null;
+var _foSections = [];
+var _foSecIdx = 0;
+var _foSecStack = [];
+var _foVisited = {};
 var _currentDigitalForms = [];
 var FORM_SUB_KEY_P = 'campistry_link_form_submissions_v1';
 
@@ -2587,47 +2591,182 @@ function openFillOnline(formIdx, camperName, camperId){
     document.getElementById('foTitle').textContent = formDef.name || 'Form';
     document.getElementById('foFor').textContent = 'For: ' + camperName;
 
-    var body = '';
     var fields = formDef.fields || [];
-    fields.forEach(function(field, i){
-        var fid = 'foF_' + i;
-        if (field.type === 'heading') {
-            body += '<div class="lkf-heading">' + LinkForms.esc(field.label||'') + '</div>';
-            if (field.help) body += '<p class="lkf-paragraph">' + LinkForms.esc(field.help) + '</p>';
-            return;
+    _foSections = LinkForms.buildSections(fields);
+    _foSecIdx = 0; _foSecStack = []; _foVisited = { 0: true };
+
+    var body = '';
+    _foSections.forEach(function(sec){
+        body += '<div class="fo-section" data-sec="'+sec.index+'"'+(sec.index===0?'':' style="display:none;"')+'>';
+        if (sec.heading){
+            body += '<div class="lkf-heading">' + LinkForms.esc(sec.title||'') + '</div>';
+            if (sec.desc) body += '<p class="lkf-paragraph">' + LinkForms.esc(sec.desc) + '</p>';
         }
-        if (field.type === 'paragraph') {
-            body += '<p class="lkf-paragraph">' + LinkForms.esc(field.text||'') + '</p>';
-            return;
-        }
-        var req = field.required ? '<span class="req">*</span>' : '';
-        body += '<div class="fo-field lkf-field" id="'+fid+'_wrap">';
-        body += '<label class="fo-label lkf-label" for="'+fid+'">' + LinkForms.esc(field.label||'') + req + '</label>';
-        if (field.help) body += '<div class="lkf-help">' + LinkForms.esc(field.help) + '</div>';
-        body += LinkForms.renderInput(field, { id: fid, mode: 'live' });
+        sec.fields.forEach(function(field){
+            var fid = _foFid(field);
+            if (field.type === 'paragraph') { body += '<p class="lkf-paragraph">' + LinkForms.esc(field.text||'') + '</p>'; return; }
+            var req = field.required ? '<span class="req">*</span>' : '';
+            body += '<div class="fo-field lkf-field" id="'+fid+'_wrap" data-fid="'+LinkForms.esc(field.id)+'">';
+            body += '<label class="fo-label lkf-label" for="'+fid+'">' + LinkForms.esc(field.label||'') + req + '</label>';
+            if (field.help) body += '<div class="lkf-help">' + LinkForms.esc(field.help) + '</div>';
+            body += LinkForms.renderInput(field, { id: fid, mode: 'live' });
+            body += '</div>';
+        });
         body += '</div>';
     });
 
     if (!fields.length) {
         body += '<div style="font-size:.86rem;color:#64748B;padding:12px 0;">This form has no fields configured yet.</div>';
     }
+    body += '<div id="foNav"></div>';
 
-    body += '<div style="padding-top:16px;border-top:1px solid #E2E8F0;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">';
-    body += '<button onclick="closeFillOnline()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 18px;font-size:.85rem;font-weight:600;color:#64748B;cursor:pointer;">Cancel</button>';
-    body += '<button onclick="submitFillOnline()" style="background:#3B82F6;color:#fff;border:none;border-radius:8px;padding:9px 22px;font-size:.85rem;font-weight:600;cursor:pointer;">Submit</button>';
-    body += '</div>';
+    var foBody = document.getElementById('foBody');
+    foBody.innerHTML = body;
 
-    document.getElementById('foBody').innerHTML = body;
-
-    // Init signature canvases + wire live behaviours (rating fill, selection
-    // limits, signature clear) via the shared form engine.
-    fields.forEach(function(field, i){
-        if (field.type === 'signature') { LinkForms.initSignature(document.getElementById('foF_' + i + '_c')); }
+    // Init signatures + wire live behaviours (rating fill, selection limits,
+    // signature clear) via the shared engine.
+    fields.forEach(function(field){
+        if (field.type === 'signature') { LinkForms.initSignature(document.getElementById(_foFid(field) + '_c')); }
     });
-    LinkForms.wireLive(document.getElementById('foBody'));
+    LinkForms.wireLive(foBody);
+
+    // Live conditional logic — re-evaluate show/hide on any answer change.
+    // Bound once to the persistent foBody element (innerHTML swaps don't drop it).
+    if (!foBody._logicWired){
+        foBody._logicWired = true;
+        foBody.addEventListener('input', _foApplyLogic);
+        foBody.addEventListener('change', _foApplyLogic);
+    }
+
+    _foShowSection(0);
 
     document.getElementById('foBackdrop').classList.add('open');
     document.getElementById('foDrawer').classList.add('open');
+}
+
+// DOM id for a field's control (id-based so it's independent of section order).
+function _foFid(field){ return 'foF_' + (field && field.id ? field.id : 'x'); }
+function _foFidFn(field){ return _foFid(field); }
+
+// Show/hide fields per their showIf condition, evaluated against live answers.
+function _foApplyLogic(){
+    if (!_foFormDef) return;
+    var fields = _foFormDef.fields || [];
+    var answers = LinkForms.collectById(fields, _foFidFn);
+    fields.forEach(function(field){
+        if (field.type === 'heading' || field.type === 'paragraph') return;
+        var wrap = document.getElementById(_foFid(field) + '_wrap');
+        if (!wrap) return;
+        wrap.style.display = LinkForms.visible(field, answers) ? '' : 'none';
+    });
+}
+
+function _foSectionEl(idx){ return document.querySelector('#foBody .fo-section[data-sec="'+idx+'"]'); }
+
+function _foShowSection(idx){
+    _foSecIdx = idx;
+    document.querySelectorAll('#foBody .fo-section').forEach(function(s){
+        s.style.display = (+s.getAttribute('data-sec') === idx) ? '' : 'none';
+    });
+    _foApplyLogic();
+    _foRenderNav();
+    var d = document.getElementById('foDrawer'); if (d) d.scrollTop = 0;
+}
+
+// Is this the final step (submit, not next)?
+function _foIsLastStep(idx){
+    var sec = _foSections[idx];
+    var answers = LinkForms.collectById(_foFormDef.fields || [], _foFidFn);
+    var tgt = LinkForms.sectionTarget(sec, answers);
+    if (tgt === 'submit') return true;
+    var resolved = _foResolveTarget(tgt);
+    var next = (resolved == null) ? idx + 1 : resolved;
+    return next >= _foSections.length;
+}
+function _foResolveTarget(tgt){
+    if (tgt === 'submit') return 'submit';
+    if (tgt === 'next' || !tgt) return null;
+    for (var i=0;i<_foSections.length;i++){ if (_foSections[i].id === tgt) return _foSections[i].index; }
+    return null;
+}
+
+function _foRenderNav(){
+    var nav = document.getElementById('foNav'); if (!nav) return;
+    var total = _foSections.length;
+    var multi = total > 1;
+    var pct = multi ? Math.round(((_foSecIdx + 1) / total) * 100) : 0;
+    var last = _foIsLastStep(_foSecIdx);
+    var html = '';
+    if (multi){
+        html += '<div class="lkf-progress"><div class="lkf-progress-bar" style="width:'+pct+'%;"></div></div>';
+        html += '<div class="lkf-progress-label">Section ' + (_foSecIdx + 1) + ' of ' + total + '</div>';
+    }
+    html += '<div class="lkf-nav">';
+    html += '<button class="lkf-btn lkf-btn-ghost" onclick="closeFillOnline()">Cancel</button>';
+    html += '<div class="lkf-nav-right">';
+    if (_foSecStack.length) html += '<button class="lkf-btn lkf-btn-ghost" onclick="_foBack()">Back</button>';
+    html += last
+        ? '<button class="lkf-btn lkf-btn-primary" onclick="submitFillOnline()">Submit</button>'
+        : '<button class="lkf-btn lkf-btn-primary" onclick="_foNext()">Next</button>';
+    html += '</div></div>';
+    nav.innerHTML = html;
+}
+
+function _foBack(){
+    if (!_foSecStack.length) return;
+    _foShowSection(_foSecStack.pop());
+}
+
+function _foNext(){
+    var sec = _foSections[_foSecIdx];
+    // Validate the visible fields in this section before advancing.
+    var err = _foValidateFields(sec.fields);
+    if (err){ _foToast('Please fix the highlighted fields'); return; }
+    var answers = LinkForms.collectById(_foFormDef.fields || [], _foFidFn);
+    var tgt = LinkForms.sectionTarget(sec, answers);
+    if (tgt === 'submit'){ submitFillOnline(); return; }
+    var resolved = _foResolveTarget(tgt);
+    var nextIdx = (resolved == null) ? _foSecIdx + 1 : resolved;
+    if (nextIdx >= _foSections.length){ submitFillOnline(); return; }
+    _foSecStack.push(_foSecIdx);
+    _foVisited[nextIdx] = true;
+    _foShowSection(nextIdx);
+}
+
+// Validate a list of fields (skipping conditionally-hidden ones). Marks errors
+// inline and returns the first offending field id, or null if all pass.
+function _foValidateFields(fieldList){
+    var foBody = document.getElementById('foBody');
+    var answers = LinkForms.collectById(_foFormDef.fields || [], _foFidFn);
+    var firstErr = null;
+    fieldList.forEach(function(field){
+        if (field.type === 'heading' || field.type === 'paragraph') return;
+        if (!LinkForms.visible(field, answers)) return;
+        var fid = _foFid(field);
+        var wrap = document.getElementById(fid + '_wrap');
+        if (wrap){ wrap.querySelectorAll('.lkf-err-msg').forEach(function(n){ n.remove(); }); var inp = document.getElementById(fid); if (inp && inp.classList) inp.classList.remove('lkf-err'); }
+        var err;
+        if (field.type === 'signature'){
+            var cv = document.getElementById(fid + '_c');
+            err = (field.required && LinkForms.signatureEmpty(cv)) ? ('Please sign: ' + field.label) : null;
+        } else {
+            err = LinkForms.validate(field, LinkForms.read(field, fid));
+        }
+        if (err){ _foFieldError(fid, err); if (!firstErr) firstErr = fid; }
+    });
+    if (firstErr){ var w = document.getElementById(firstErr + '_wrap') || document.getElementById(firstErr); if (w && w.scrollIntoView) w.scrollIntoView({ behavior:'smooth', block:'center' }); }
+    return firstErr;
+}
+
+// Navigate to whichever section contains a field (used when a submit-time
+// error lives on an earlier page).
+function _foGotoField(field){
+    for (var i=0;i<_foSections.length;i++){
+        if (_foSections[i].fields.some(function(f){ return f.id === field.id; })){
+            if (_foSecIdx !== i) _foShowSection(i);
+            return;
+        }
+    }
 }
 
 function closeFillOnline(){
@@ -2682,13 +2821,23 @@ function submitFillOnline(){
     foBody.querySelectorAll('.lkf-err-msg').forEach(function(n){ n.remove(); });
     foBody.querySelectorAll('.lkf-err').forEach(function(n){ n.classList.remove('lkf-err'); });
 
-    for (var i=0; i<fields.length; i++){
-        var field = fields[i], fid = 'foF_'+i;
+    // Only the fields the respondent actually reached (visited sections) and
+    // that are currently visible (conditional logic) are collected/validated.
+    var answers = LinkForms.collectById(fields, _foFidFn);
+    var toProcess = [];
+    (_foSections || []).forEach(function(sec){
+        if (_foVisited[sec.index]) sec.fields.forEach(function(f){ toProcess.push(f); });
+    });
+    if (!toProcess.length) toProcess = fields.slice(); // no sections (safety)
+
+    for (var i=0; i<toProcess.length; i++){
+        var field = toProcess[i], fid = _foFid(field);
         if (field.type === 'heading' || field.type === 'paragraph') continue;
+        if (!LinkForms.visible(field, answers)) continue;
 
         if (field.type === 'signature'){
             var cv = document.getElementById(fid+'_c');
-            if (field.required && LinkForms.signatureEmpty(cv)){ _foFieldError(fid, 'Please sign: '+field.label); if(!firstErr) firstErr = fid; continue; }
+            if (field.required && LinkForms.signatureEmpty(cv)){ _foFieldError(fid, 'Please sign: '+field.label); if(!firstErr) firstErr = firstErr||fid; _foGotoField(field); continue; }
             if (!LinkForms.signatureEmpty(cv)){ sigDataUrl = cv.toDataURL('image/png'); values[field.label] = '[signature]'; }
             else values[field.label] = '';
             continue;
@@ -2696,7 +2845,7 @@ function submitFillOnline(){
 
         var rd = LinkForms.read(field, fid);
         var err = LinkForms.validate(field, rd);
-        if (err){ _foFieldError(fid, err); if(!firstErr) firstErr = fid; continue; }
+        if (err){ _foFieldError(fid, err); if(!firstErr){ firstErr = fid; _foGotoField(field); } continue; }
 
         if (field.type === 'file'){
             if (rd.file) fileTasks.push({ field: field, fid: fid, label: field.label });

@@ -2736,6 +2736,37 @@ function _fbValNum(i, key, val) { var f = _fbFields[i]; f.validation = f.validat
 function _fbCfg(label, inner) { return '<div style="flex:1;min-width:96px;"><div style="font-size:.58rem;font-weight:800;letter-spacing:.05em;color:var(--slate-400);margin-bottom:3px;">' + label + '</div>' + inner + '</div>'; }
 function _fbChk(i, prop, label) { return '<label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;color:var(--slate-600);white-space:nowrap;cursor:pointer;"><input type="checkbox" ' + (_fbFields[i][prop] ? 'checked' : '') + ' onchange="_fbSet(' + i + ',\'' + prop + '\',this.checked)" style="width:13px;height:13px;"> ' + label + '</label>'; }
 
+// ── Logic config helpers ──────────────────────────────────────────────────
+function _fbShowIf(i, key, val) {
+    var f = _fbFields[i];
+    if (key === 'field' && !val) { delete f.showIf; return; }
+    f.showIf = f.showIf || { op: 'eq', value: '' };
+    f.showIf[key] = val;
+}
+function _fbBranch(i, opt, val) {
+    var f = _fbFields[i]; f.branch = f.branch || {};
+    if (!val || val === 'next') delete f.branch[opt]; else f.branch[opt] = val;
+}
+function _fbFieldOptions(curId, selId) {
+    return '<option value="">— Always show —</option>' + _fbFields.filter(function(f) {
+        return f.id !== curId && !LinkForms.isStatic(f.type);
+    }).map(function(f) {
+        var lab = (f.label || f.type || '').slice(0, 44);
+        return '<option value="' + esc(f.id) + '"' + (selId === f.id ? ' selected' : '') + '>' + esc(lab) + '</option>';
+    }).join('');
+}
+function _fbOpOptions(sel) {
+    var ops = [['eq', 'is'], ['ne', 'is not'], ['contains', 'contains'], ['filled', 'is answered'], ['empty', 'is blank'], ['gt', 'greater than'], ['lt', 'less than']];
+    return ops.map(function(o) { return '<option value="' + o[0] + '"' + (sel === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('');
+}
+function _fbSectionOptions(sel) {
+    var hs = _fbFields.filter(function(f) { return f.type === 'heading'; });
+    var html = '<option value="next"' + (!sel || sel === 'next' ? ' selected' : '') + '>Continue to next</option>';
+    html += hs.map(function(f, idx) { return '<option value="' + esc(f.id) + '"' + (sel === f.id ? ' selected' : '') + '>Go to: ' + esc((f.label || ('Section ' + (idx + 1))).slice(0, 32)) + '</option>'; }).join('');
+    html += '<option value="submit"' + (sel === 'submit' ? ' selected' : '') + '>Submit form</option>';
+    return html;
+}
+
 function _fbSettings(f, i) {
     var t = f.type, v = f.validation || {}, s = '';
     var textIn = 'class="lk-input" style="font-size:.82rem;"';
@@ -2805,6 +2836,38 @@ function _fbSettings(f, i) {
             _fbCfg('PATTERN MESSAGE', '<input type="text" class="lk-input" value="' + esc(v.patternMsg || '') + '" placeholder="Shown if the pattern fails" oninput="_fbVal(' + i + ',\'patternMsg\',this.value)" style="font-size:.82rem;">') +
             '</div>';
     }
+
+    // ── Logic ──────────────────────────────────────────────────────────────
+    // Section navigation: where does the form go after this section?
+    if (t === 'heading') {
+        s += '<div style="margin-top:9px;border-top:1px dashed var(--slate-200);padding-top:9px;">' +
+            _fbCfg('AFTER THIS SECTION', '<select class="lk-input" onchange="_fbSet(' + i + ',\'nextSection\',this.value)" style="font-size:.82rem;">' + _fbSectionOptions(f.nextSection) + '</select>') +
+            '</div>';
+    }
+    // Conditional visibility for any answerable field.
+    if (!LinkForms.isStatic(t)) {
+        var si = f.showIf || {};
+        s += '<div style="margin-top:10px;border-top:1px dashed var(--slate-200);padding-top:9px;">' +
+            '<div style="font-size:.6rem;font-weight:800;letter-spacing:.05em;color:var(--slate-400);margin-bottom:5px;">CONDITIONAL LOGIC</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' +
+                '<span style="font-size:.74rem;color:var(--slate-500);">Show only if</span>' +
+                '<select class="lk-input" onchange="_fbShowIf(' + i + ',\'field\',this.value)" style="font-size:.8rem;flex:1;min-width:110px;">' + _fbFieldOptions(f.id, si.field) + '</select>' +
+                '<select class="lk-input" onchange="_fbShowIf(' + i + ',\'op\',this.value)" style="font-size:.8rem;width:118px;">' + _fbOpOptions(si.op) + '</select>' +
+                '<input type="text" class="lk-input" value="' + esc(si.value || '') + '" oninput="_fbShowIf(' + i + ',\'value\',this.value)" placeholder="value" style="font-size:.8rem;width:100px;">' +
+            '</div></div>';
+    }
+    // Per-answer section branching (Google-Forms style) for radio/dropdown.
+    if (t === 'radio' || t === 'dropdown') {
+        s += '<div style="margin-top:9px;"><label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;color:var(--slate-600);cursor:pointer;"><input type="checkbox" ' + (f.branchOn ? 'checked' : '') + ' onchange="_fbSet(' + i + ',\'branchOn\',this.checked);renderFbCanvas()" style="width:13px;height:13px;"> Go to section based on answer</label>';
+        if (f.branchOn) {
+            var bopts = (f.options || []).map(function(o) { return String(o).trim(); }).filter(Boolean);
+            s += '<div style="margin-top:6px;display:flex;flex-direction:column;gap:5px;">' + bopts.map(function(o) {
+                return '<div style="display:flex;gap:6px;align-items:center;"><span style="font-size:.76rem;color:var(--slate-600);flex:1;min-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(o) + '</span>' +
+                    '<select class="lk-input" data-opt="' + esc(o) + '" onchange="_fbBranch(' + i + ',this.getAttribute(\'data-opt\'),this.value)" style="font-size:.8rem;flex:1;">' + _fbSectionOptions((f.branch || {})[o]) + '</select></div>';
+            }).join('') + '</div>';
+        }
+        s += '</div>';
+    }
     return s;
 }
 
@@ -2851,6 +2914,8 @@ function fbDup(i) {
     if (c.rows) c.rows = c.rows.slice();
     if (c.cols) c.cols = c.cols.slice();
     if (c.validation) c.validation = Object.assign({}, c.validation);
+    if (c.showIf) c.showIf = Object.assign({}, c.showIf);
+    if (c.branch) c.branch = Object.assign({}, c.branch);
     _fbFields.splice(i + 1, 0, c);
     renderFbCanvas();
 }
