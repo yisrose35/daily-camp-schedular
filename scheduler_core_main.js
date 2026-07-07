@@ -4610,7 +4610,24 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
 
-            if (allowedDivisionsSet && !allowedDivisionsSet.has(String(electiveDivision))) {
+            // ★ Electives lock their facilities UNCONDITIONALLY — regardless of regen
+            //   scope — exactly like the STEP 2.45 pinned pre-lock. An elective is a
+            //   fancy custom-pinned tile: its facility must stay reserved for its whole
+            //   [startMin,endMin] window in FULL *and* PARTIAL regens. In a partial regen
+            //   the elective's OWN division is often out of scope (its schedule is
+            //   preserved via STEP 1.5, not re-solved) — but the SmartTile specials and
+            //   free-fill passes for the IN-SCOPE divisions gate on
+            //   GlobalFieldLocks.isFieldLockedByTime, NOT window.fieldReservations. If we
+            //   skipped an out-of-scope elective's lock, an in-scope division's special /
+            //   free-fill could land on the reserved facility. window.divisionTimes is
+            //   built from the FULL skeleton (STEP 1), so findSlotsForRange resolves for
+            //   out-of-scope divisions too, and the division lock exempts the elective's
+            //   OWN grade so a partial regen of that grade is never self-blocked. (The
+            //   sport path is already protected in both cases because
+            //   window.fieldReservations is built from the FULL skeleton.)
+            //   Previously this early-returned on allowedDivisionsSet, leaving a partial
+            //   regen able to poach an out-of-scope elective's facility with a special.
+            if (!((divisions[electiveDivision] && divisions[electiveDivision].bunks) || []).length) {
                 return;
             }
 
