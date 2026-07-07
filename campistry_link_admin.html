@@ -916,6 +916,7 @@
 <script src="integration_hooks.js"></script>
 <script src="campistry_cloud_bootstrap.js"></script>
 <script src="campistry_link_data.js"></script>
+<script src="campistry_link_forms.js"></script>
 <script src="campistry_link_photos.js"></script>
 <script src="campistry_link_export.js"></script>
 <script>
@@ -2211,7 +2212,7 @@ function _responsesTable(formId, formName) {
         });
     }
     subs.forEach(function(d) {
-        Object.keys(d.values || {}).forEach(function(k) { if (qCols.indexOf(k) < 0) qCols.push(k); });
+        Object.keys(d.values || {}).forEach(function(k) { if (k.indexOf('_file_') === 0) return; if (qCols.indexOf(k) < 0) qCols.push(k); });
     });
     var headers = ['Submitted', 'Camper', 'Parent', 'Division', 'Grade', 'Bunk'].concat(qCols);
     var rows = subs.map(function(d) {
@@ -2639,27 +2640,41 @@ function _saveLinkForms(lf) {
     }
 }
 
-var FB_TYPES = [
-    { t: 'text',       label: 'Short Text',      icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="14" y2="15"/></svg>' },
-    { t: 'textarea',   label: 'Long Text',       icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="12" y2="18"/></svg>' },
-    { t: 'email',      label: 'Email',           icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>' },
-    { t: 'phone',      label: 'Phone',           icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>' },
-    { t: 'number',     label: 'Number',          icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>' },
-    { t: 'date',       label: 'Date',            icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
-    { t: 'dropdown',   label: 'Dropdown',        icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="9 11 12 14 15 11"/></svg>', opts: true },
-    { t: 'radio',      label: 'Multiple Choice', icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="3"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="3"/><line x1="13" y1="7" x2="21" y2="7"/><line x1="13" y1="17" x2="21" y2="17"/></svg>', opts: true },
-    { t: 'checkboxes', label: 'Checkboxes',      icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="7" height="7" rx="1.5"/><polyline points="6 7.5 7.2 8.7 9.2 6.3"/><rect x="4" y="14" width="7" height="7" rx="1.5"/><line x1="14" y1="7.5" x2="21" y2="7.5"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg>', opts: true },
-    { t: 'yesno',      label: 'Yes / No',        icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 12 8 16 12 9"/><line x1="16" y1="8" x2="21" y2="13"/><line x1="21" y1="8" x2="16" y2="13"/></svg>' },
-    { t: 'checkbox',   label: 'Agreement Box',   icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="8 12 11 15 16 9"/></svg>' },
-    { t: 'signature',  label: 'Signature',       icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>' },
-    { t: 'heading',    label: 'Section Heading', icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 4v16M18 4v16M6 12h12"/></svg>', static: true },
-    { t: 'paragraph',  label: 'Paragraph Text',  icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4v16M17 4v16M19 4H9.5a4.5 4.5 0 0 0 0 9H13"/></svg>', static: true }
-];
+// Field-type icons for the palette. Field type registry itself lives in the
+// shared engine (campistry_link_forms.js → LinkForms.TYPES) so builder,
+// preview and the parent portal never drift.
+var _S = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">';
+var FB_ICONS = {
+    text:       _S + '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="14" y2="15"/></svg>',
+    textarea:   _S + '<line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="12" y2="18"/></svg>',
+    email:      _S + '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>',
+    phone:      _S + '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>',
+    number:     _S + '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>',
+    date:       _S + '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+    time:       _S + '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+    daterange:  _S + '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/></svg>',
+    dropdown:   _S + '<rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="9 11 12 14 15 11"/></svg>',
+    radio:      _S + '<circle cx="7" cy="7" r="3"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="3"/><line x1="13" y1="7" x2="21" y2="7"/><line x1="13" y1="17" x2="21" y2="17"/></svg>',
+    checkboxes: _S + '<rect x="4" y="4" width="7" height="7" rx="1.5"/><polyline points="6 7.5 7.2 8.7 9.2 6.3"/><rect x="4" y="14" width="7" height="7" rx="1.5"/><line x1="14" y1="7.5" x2="21" y2="7.5"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg>',
+    yesno:      _S + '<polyline points="4 12 8 16 12 9"/><line x1="16" y1="8" x2="21" y2="13"/><line x1="21" y1="8" x2="16" y2="13"/></svg>',
+    scale:      _S + '<line x1="3" y1="12" x2="21" y2="12"/><circle cx="8" cy="12" r="2.4" fill="currentColor" stroke="none"/><line x1="3" y1="9" x2="3" y2="15"/><line x1="21" y1="9" x2="21" y2="15"/></svg>',
+    rating:     _S + '<polygon points="12 3 14.5 9 21 9.3 16 13.3 17.7 19.6 12 16 6.3 19.6 8 13.3 3 9.3 9.5 9 12 3"/></svg>',
+    grid:       _S + '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>',
+    checkgrid:  _S + '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><polyline points="15 5.5 16.5 7 19 4.5"/></svg>',
+    file:       _S + '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+    checkbox:   _S + '<rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="8 12 11 15 16 9"/></svg>',
+    signature:  _S + '<path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>',
+    heading:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 4v16M18 4v16M6 12h12"/></svg>',
+    paragraph:  _S + '<path d="M13 4v16M17 4v16M19 4H9.5a4.5 4.5 0 0 0 0 9H13"/></svg>'
+};
+var FB_GROUP_LABEL = { text: 'Text', datetime: 'Date & time', choice: 'Choice', grid: 'Grid', special: 'Special', layout: 'Layout' };
+var FB_TYPES = (window.LinkForms ? LinkForms.TYPES : []);
 var _fbFields = [];
 window._fbPreviewOn = false;
 
 function _fbId() { return 'f_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-function _fbMeta(t) { return FB_TYPES.find(function(x) { return x.t === t; }) || { t: t, label: t }; }
+function _fbMeta(t) { return (window.LinkForms ? LinkForms.meta(t) : { t: t, label: t }); }
+function _fbIcon(t) { return FB_ICONS[t] || _S + '<circle cx="12" cy="12" r="9"/></svg>'; }
 
 function openFormBuilder(existing) {
     if (existing && existing.type === 'built') {
@@ -2681,9 +2696,15 @@ function openFormBuilder(existing) {
 function closeFormBuilder() { document.getElementById('formBuilderOverlay').classList.remove('open'); }
 
 function _renderFbPalette() {
-    document.getElementById('fbPalette').innerHTML =
-        '<div style="font-size:.66rem;font-weight:800;letter-spacing:.07em;color:var(--text-muted);margin-bottom:10px;">ADD A FIELD</div>' +
-        FB_TYPES.map(function(ft) { return '<button class="fb-pal-btn" onclick="fbAddField(\'' + ft.t + '\')">' + ft.icon + '<span>' + ft.label + '</span></button>'; }).join('');
+    var groups = ['text', 'datetime', 'choice', 'grid', 'special', 'layout'];
+    var html = '<div style="font-size:.66rem;font-weight:800;letter-spacing:.07em;color:var(--text-muted);margin-bottom:10px;">ADD A FIELD</div>';
+    groups.forEach(function(g) {
+        var items = FB_TYPES.filter(function(ft) { return ft.group === g; });
+        if (!items.length) return;
+        html += '<div style="font-size:.6rem;font-weight:800;letter-spacing:.08em;color:var(--slate-400);margin:12px 0 5px;">' + (FB_GROUP_LABEL[g] || g).toUpperCase() + '</div>';
+        html += items.map(function(ft) { return '<button class="fb-pal-btn" onclick="fbAddField(\'' + ft.t + '\')">' + _fbIcon(ft.t) + '<span>' + ft.label + '</span></button>'; }).join('');
+    });
+    document.getElementById('fbPalette').innerHTML = html;
 }
 
 function fbAddField(t) {
@@ -2691,6 +2712,10 @@ function fbAddField(t) {
     var f = { id: _fbId(), type: t, label: t === 'heading' ? 'Section Title' : (t === 'paragraph' ? '' : meta.label), required: false };
     if (meta.opts) f.options = ['Option 1', 'Option 2'];
     if (t === 'paragraph') f.text = '';
+    if (t === 'scale') { f.scaleMin = 1; f.scaleMax = 5; f.scaleMinLabel = ''; f.scaleMaxLabel = ''; }
+    if (t === 'rating') { f.ratingMax = 5; }
+    if (t === 'grid' || t === 'checkgrid') { f.rows = ['Row 1', 'Row 2']; f.cols = ['Column 1', 'Column 2']; }
+    if (t === 'file') { f.maxMB = 5; }
     _fbFields.push(f);
     if (window._fbPreviewOn) _setFbMode(false);
     renderFbCanvas();
@@ -2701,6 +2726,88 @@ function fbAddField(t) {
     if (last) { var inp = last.querySelector('input[type="text"],textarea'); if (inp) inp.focus(); }
 }
 
+// ── Field-config mutation helpers (mutate in place, no re-render so inputs
+//    keep focus while typing) ──────────────────────────────────────────────
+function _fbSet(i, prop, val) { _fbFields[i][prop] = val; }
+function _fbSetNum(i, prop, val) { var n = parseFloat(val); _fbFields[i][prop] = (val === '' || isNaN(n)) ? '' : n; }
+function _fbLines(i, prop, val) { _fbFields[i][prop] = val.split(String.fromCharCode(10)); }
+function _fbVal(i, key, val) { var f = _fbFields[i]; f.validation = f.validation || {}; f.validation[key] = val; }
+function _fbValNum(i, key, val) { var f = _fbFields[i]; f.validation = f.validation || {}; var n = parseFloat(val); f.validation[key] = (val === '' || isNaN(n)) ? '' : n; }
+function _fbCfg(label, inner) { return '<div style="flex:1;min-width:96px;"><div style="font-size:.58rem;font-weight:800;letter-spacing:.05em;color:var(--slate-400);margin-bottom:3px;">' + label + '</div>' + inner + '</div>'; }
+function _fbChk(i, prop, label) { return '<label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;color:var(--slate-600);white-space:nowrap;cursor:pointer;"><input type="checkbox" ' + (_fbFields[i][prop] ? 'checked' : '') + ' onchange="_fbSet(' + i + ',\'' + prop + '\',this.checked)" style="width:13px;height:13px;"> ' + label + '</label>'; }
+
+function _fbSettings(f, i) {
+    var t = f.type, v = f.validation || {}, s = '';
+    var textIn = 'class="lk-input" style="font-size:.82rem;"';
+    // Help / description (all except paragraph)
+    if (t !== 'paragraph') {
+        s += '<input type="text" ' + textIn + ' value="' + esc(f.help || '') + '" placeholder="' + (t === 'heading' ? 'Description under this heading (optional)' : 'Help text (optional)') + '" oninput="_fbSet(' + i + ',\'help\',this.value)" style="margin-top:6px;font-size:.8rem;">';
+    }
+    // Placeholder for free-text inputs
+    if (t === 'text' || t === 'textarea' || t === 'email' || t === 'phone' || t === 'number') {
+        s += '<input type="text" ' + textIn + ' value="' + esc(f.placeholder || '') + '" placeholder="Placeholder (optional)" oninput="_fbSet(' + i + ',\'placeholder\',this.value)" style="margin-top:6px;font-size:.8rem;">';
+    }
+    // Options for choice fields
+    if (_fbMeta(t).opts) {
+        s += '<div style="margin-top:8px;"><div style="font-size:.62rem;font-weight:800;letter-spacing:.05em;color:var(--slate-400);margin-bottom:4px;">OPTIONS — ONE PER LINE</div>' +
+            '<textarea class="lk-textarea" oninput="_fbLines(' + i + ',\'options\',this.value)" style="min-height:60px;font-size:.8rem;">' + esc((f.options || []).join('\n')) + '</textarea></div>';
+        s += '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:7px;align-items:center;">';
+        if (t === 'radio' || t === 'checkboxes') s += _fbChk(i, 'allowOther', 'Add “Other”');
+        s += _fbChk(i, 'shuffle', 'Shuffle order');
+        if (t === 'checkboxes') s += '<div style="display:flex;align-items:center;gap:5px;font-size:.72rem;color:var(--slate-600);">Max choices <input type="number" min="1" class="lk-input" value="' + esc(f.limitSel || '') + '" oninput="_fbSetNum(' + i + ',\'limitSel\',this.value)" style="width:56px;font-size:.8rem;padding:4px 6px;"></div>';
+        s += '</div>';
+    }
+    // Linear scale
+    if (t === 'scale') {
+        s += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
+            _fbCfg('MIN', '<input type="number" class="lk-input" value="' + esc(f.scaleMin != null ? f.scaleMin : 1) + '" oninput="_fbSetNum(' + i + ',\'scaleMin\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('MAX', '<input type="number" class="lk-input" value="' + esc(f.scaleMax != null ? f.scaleMax : 5) + '" oninput="_fbSetNum(' + i + ',\'scaleMax\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('LOW LABEL', '<input type="text" class="lk-input" value="' + esc(f.scaleMinLabel || '') + '" oninput="_fbSet(' + i + ',\'scaleMinLabel\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('HIGH LABEL', '<input type="text" class="lk-input" value="' + esc(f.scaleMaxLabel || '') + '" oninput="_fbSet(' + i + ',\'scaleMaxLabel\',this.value)" style="font-size:.82rem;">') +
+            '</div>';
+    }
+    // Star rating
+    if (t === 'rating') {
+        s += '<div style="display:flex;gap:8px;margin-top:8px;max-width:160px;">' + _fbCfg('STARS', '<input type="number" min="3" max="10" class="lk-input" value="' + esc(f.ratingMax || 5) + '" oninput="_fbSetNum(' + i + ',\'ratingMax\',this.value)" style="font-size:.82rem;">') + '</div>';
+    }
+    // Grids
+    if (t === 'grid' || t === 'checkgrid') {
+        s += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">' +
+            _fbCfg('ROWS — ONE PER LINE', '<textarea class="lk-textarea" oninput="_fbLines(' + i + ',\'rows\',this.value)" style="min-height:56px;font-size:.8rem;">' + esc((f.rows || []).join('\n')) + '</textarea>') +
+            _fbCfg('COLUMNS — ONE PER LINE', '<textarea class="lk-textarea" oninput="_fbLines(' + i + ',\'cols\',this.value)" style="min-height:56px;font-size:.8rem;">' + esc((f.cols || []).join('\n')) + '</textarea>') +
+            '</div>';
+    }
+    // File upload
+    if (t === 'file') {
+        s += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
+            _fbCfg('MAX SIZE (MB)', '<input type="number" min="1" max="20" class="lk-input" value="' + esc(f.maxMB || 5) + '" oninput="_fbSetNum(' + i + ',\'maxMB\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('ACCEPTED TYPES', '<input type="text" class="lk-input" value="' + esc(f.accept || '') + '" placeholder="e.g. .pdf,image/*" oninput="_fbSet(' + i + ',\'accept\',this.value)" style="font-size:.82rem;">') +
+            '</div>';
+    }
+    // Agreement text
+    if (t === 'checkbox') {
+        s += '<input type="text" class="lk-input" value="' + esc(f.agreeText || '') + '" placeholder="Agreement text (default: I confirm and agree)" oninput="_fbSet(' + i + ',\'agreeText\',this.value)" style="margin-top:6px;font-size:.8rem;">';
+    }
+    // Validation
+    if (t === 'number') {
+        s += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
+            _fbCfg('MIN VALUE', '<input type="number" class="lk-input" value="' + esc(v.min != null ? v.min : '') + '" oninput="_fbValNum(' + i + ',\'min\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('MAX VALUE', '<input type="number" class="lk-input" value="' + esc(v.max != null ? v.max : '') + '" oninput="_fbValNum(' + i + ',\'max\',this.value)" style="font-size:.82rem;">') +
+            '</div>';
+    }
+    if (t === 'text' || t === 'textarea') {
+        s += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
+            _fbCfg('MIN LENGTH', '<input type="number" min="0" class="lk-input" value="' + esc(v.minLen != null ? v.minLen : '') + '" oninput="_fbValNum(' + i + ',\'minLen\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('MAX LENGTH', '<input type="number" min="0" class="lk-input" value="' + esc(v.maxLen != null ? v.maxLen : '') + '" oninput="_fbValNum(' + i + ',\'maxLen\',this.value)" style="font-size:.82rem;">') +
+            '</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">' +
+            _fbCfg('PATTERN (REGEX, OPTIONAL)', '<input type="text" class="lk-input" value="' + esc(v.pattern || '') + '" placeholder="e.g. ^[A-Za-z ]+$" oninput="_fbVal(' + i + ',\'pattern\',this.value)" style="font-size:.82rem;">') +
+            _fbCfg('PATTERN MESSAGE', '<input type="text" class="lk-input" value="' + esc(v.patternMsg || '') + '" placeholder="Shown if the pattern fails" oninput="_fbVal(' + i + ',\'patternMsg\',this.value)" style="font-size:.82rem;">') +
+            '</div>';
+    }
+    return s;
+}
+
 function renderFbCanvas() {
     var c = document.getElementById('fbCanvas');
     if (!_fbFields.length) {
@@ -2709,26 +2816,24 @@ function renderFbCanvas() {
     }
     c.innerHTML = _fbFields.map(function(f, i) {
         var meta = _fbMeta(f.type);
+        var isStatic = LinkForms.isStatic(f.type);
         var controls =
             '<button class="fb-icon-btn" onclick="fbMove(' + i + ',-1)" title="Move up">&uarr;</button>' +
             '<button class="fb-icon-btn" onclick="fbMove(' + i + ',1)" title="Move down">&darr;</button>' +
             '<button class="fb-icon-btn" onclick="fbDup(' + i + ')" title="Duplicate">&#10697;</button>' +
             '<button class="fb-icon-btn" onclick="fbDel(' + i + ')" title="Delete" style="color:var(--red-500);">&#10005;</button>';
-        var req = meta.static ? '' :
-            '<label style="display:flex;align-items:center;gap:4px;font-size:.73rem;font-weight:600;color:var(--slate-700);white-space:nowrap;cursor:pointer;"><input type="checkbox" ' + (f.required ? 'checked' : '') + ' onchange="_fbFields[' + i + '].required=this.checked" style="width:13px;height:13px;"> Required</label>';
+        var req = isStatic ? '' :
+            '<label style="display:flex;align-items:center;gap:4px;font-size:.73rem;font-weight:600;color:var(--slate-700);white-space:nowrap;cursor:pointer;"><input type="checkbox" ' + (f.required ? 'checked' : '') + ' onchange="_fbSet(' + i + ',\'required\',this.checked)" style="width:13px;height:13px;"> Required</label>';
         var body;
         if (f.type === 'paragraph') {
-            body = '<textarea class="lk-textarea" placeholder="Paragraph text shown to parents..." oninput="_fbFields[' + i + '].text=this.value" style="min-height:60px;font-size:.82rem;">' + esc(f.text || '') + '</textarea>';
+            body = '<textarea class="lk-textarea" placeholder="Description text shown to parents..." oninput="_fbSet(' + i + ',\'text\',this.value)" style="min-height:60px;font-size:.82rem;">' + esc(f.text || '') + '</textarea>';
         } else {
-            body = '<input type="text" class="lk-input" value="' + esc(f.label || '') + '" placeholder="' + (f.type === 'heading' ? 'Section title' : 'Question / label') + '" oninput="_fbFields[' + i + '].label=this.value" style="font-weight:600;">';
+            body = '<input type="text" class="lk-input" value="' + esc(f.label || '') + '" placeholder="' + (f.type === 'heading' ? 'Section title' : 'Question / label') + '" oninput="_fbSet(' + i + ',\'label\',this.value)" style="font-weight:600;">';
         }
-        if (f.options) {
-            body += '<div style="margin-top:8px;"><div style="font-size:.66rem;font-weight:800;letter-spacing:.06em;color:var(--text-muted);margin-bottom:4px;">OPTIONS — ONE PER LINE</div>' +
-                '<textarea class="lk-textarea" oninput="_fbFields[' + i + '].options=this.value.split(String.fromCharCode(10))" style="min-height:64px;font-size:.8rem;">' + esc((f.options || []).join('\n')) + '</textarea></div>';
-        }
-        return '<div class="fb-field-card' + (meta.static ? ' fb-static' : '') + '">' +
-            '<div class="fb-fc-top"><span class="fb-type-chip">' + meta.label + '</span><div style="flex:1;"></div>' + req + controls + '</div>' +
+        return '<div class="fb-field-card' + (isStatic ? ' fb-static' : '') + '">' +
+            '<div class="fb-fc-top"><span class="fb-type-chip">' + _fbIcon(f.type) + ' ' + meta.label + '</span><div style="flex:1;"></div>' + req + controls + '</div>' +
             body +
+            _fbSettings(f, i) +
         '</div>';
     }).join('');
 }
@@ -2743,6 +2848,9 @@ function fbDup(i) {
     var c = Object.assign({}, _fbFields[i]);
     c.id = _fbId();
     if (c.options) c.options = c.options.slice();
+    if (c.rows) c.rows = c.rows.slice();
+    if (c.cols) c.cols = c.cols.slice();
+    if (c.validation) c.validation = Object.assign({}, c.validation);
     _fbFields.splice(i + 1, 0, c);
     renderFbCanvas();
 }
@@ -2764,35 +2872,21 @@ function _setFbMode(preview) {
 function renderFbPreview() {
     var p = document.getElementById('fbPreview');
     var name = document.getElementById('fbName').value.trim() || 'Untitled Form';
-    function wrap(f, control) {
-        var req = f.required ? ' <span style="color:var(--red-500);">*</span>' : '';
-        return '<div style="margin-bottom:16px;"><label style="display:block;font-size:.82rem;font-weight:600;color:var(--slate-700);margin-bottom:5px;">' + esc(f.label || '') + req + '</label>' + control + '</div>';
-    }
-    var inner = _fbFields.map(function(f) {
-        var opts = (f.options || []).map(function(o) { return o.trim(); }).filter(Boolean);
-        switch (f.type) {
-            case 'heading':
-                return '<div style="font-size:1.02rem;font-weight:800;color:var(--slate-900);margin:20px 0 6px;padding-bottom:6px;border-bottom:2px solid var(--link-tint);">' + esc(f.label || '') + '</div>';
-            case 'paragraph':
-                return '<p style="font-size:.84rem;color:var(--slate-600);line-height:1.6;margin:0 0 14px;">' + esc(f.text || '') + '</p>';
-            case 'textarea':
-                return wrap(f, '<textarea class="lk-textarea" disabled style="min-height:70px;background:var(--slate-50);"></textarea>');
-            case 'dropdown':
-                return wrap(f, '<select class="lk-select" disabled style="background:var(--slate-50);"><option>Select...</option>' + opts.map(function(o) { return '<option>' + esc(o) + '</option>'; }).join('') + '</select>');
-            case 'radio':
-            case 'checkboxes':
-                var it = f.type === 'radio' ? 'radio' : 'checkbox';
-                return wrap(f, opts.map(function(o) { return '<label style="display:flex;align-items:center;gap:7px;font-size:.84rem;padding:4px 0;color:var(--slate-700);"><input type="' + it + '" disabled> ' + esc(o) + '</label>'; }).join('') || '<span style="font-size:.76rem;color:var(--text-muted);">No options yet</span>');
-            case 'yesno':
-                return wrap(f, '<label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;margin-right:18px;color:var(--slate-700);"><input type="radio" disabled> Yes</label><label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;color:var(--slate-700);"><input type="radio" disabled> No</label>');
-            case 'checkbox':
-                return wrap(f, '<label style="display:inline-flex;align-items:center;gap:7px;font-size:.84rem;color:var(--slate-700);"><input type="checkbox" disabled> I confirm and agree</label>');
-            case 'signature':
-                return wrap(f, '<div style="border:1.5px dashed var(--border-light);border-radius:8px;height:64px;display:flex;align-items:center;justify-content:center;font-size:.78rem;color:var(--text-muted);background:var(--slate-50);">Sign here</div>');
-            default:
-                var ht = f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text';
-                return wrap(f, '<input type="' + ht + '" class="lk-input" disabled style="background:var(--slate-50);">');
+    // Uses the SAME shared renderer parents see (campistry_link_forms.js), in
+    // preview (disabled) mode, so the preview is exactly the real form.
+    var inner = _fbFields.map(function(f, i) {
+        if (f.type === 'heading') {
+            return '<div class="lkf-heading">' + esc(f.label || '') + '</div>' + (f.help ? '<p class="lkf-paragraph">' + esc(f.help) + '</p>' : '');
         }
+        if (f.type === 'paragraph') {
+            return '<p class="lkf-paragraph">' + esc(f.text || '') + '</p>';
+        }
+        var req = f.required ? ' <span class="req">*</span>' : '';
+        return '<div class="lkf-field">' +
+            '<label class="lkf-label">' + esc(f.label || '') + req + '</label>' +
+            (f.help ? '<div class="lkf-help">' + esc(f.help) + '</div>' : '') +
+            LinkForms.renderInput(f, { id: 'fbprev_' + i, mode: 'preview' }) +
+        '</div>';
     }).join('');
     p.innerHTML = '<div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid var(--border-light);border-radius:14px;padding:26px 28px;">' +
         '<div style="font-size:1.2rem;font-weight:800;color:var(--slate-900);">' + esc(name) + '</div>' +
@@ -2800,6 +2894,7 @@ function renderFbPreview() {
         inner +
         '<button class="btn btn-primary" disabled style="margin-top:8px;opacity:.6;">Submit</button>' +
     '</div>';
+    LinkForms.wireLive(p); // paint rating stars etc. (inputs are disabled)
 }
 
 function useBuiltForm() {
@@ -2893,10 +2988,13 @@ function viewFormSubmission(subId) {
     var s = docSubmissions.find(function(x){ return x.id === subId; }); if (!s) return;
     s = Object.assign({}, s, { formName: s.name }); // render shape below
     var vals = s.values || {};
-    var rows = Object.entries(vals).map(function(kv){
+    var rows = Object.entries(vals).filter(function(kv){ return kv[0].indexOf('_file_') !== 0; }).map(function(kv){
+        var fileUrl = vals['_file_' + kv[0]];
+        var answer = kv[1] === '[signature]' ? '<em>Signed</em>'
+            : (fileUrl ? '<a href="'+fileUrl+'" download="'+esc(kv[1])+'" style="color:var(--link-color);font-weight:600;">'+esc(kv[1])+' ↓</a>' : esc(kv[1]));
         return '<div style="padding:8px 0;border-bottom:1px solid var(--slate-100);display:flex;gap:10px;">' +
             '<div style="flex:1;font-size:.8rem;font-weight:600;color:var(--slate-700);">'+esc(kv[0])+'</div>' +
-            '<div style="flex:2;font-size:.82rem;color:var(--slate-900);">'+(kv[1]==='[signature]'?'<em>Signed</em>':esc(kv[1]))+'</div>' +
+            '<div style="flex:2;font-size:.82rem;color:var(--slate-900);">'+answer+'</div>' +
         '</div>';
     }).join('');
     var sigHtml = s.signatureDataUrl ? '<div style="margin-top:14px;"><div style="font-size:.78rem;font-weight:600;color:var(--slate-700);margin-bottom:6px;">Signature</div><div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--slate-50);padding:4px;display:inline-block;"><img src="'+s.signatureDataUrl+'" style="max-width:300px;height:auto;display:block;"></div></div>' : '';

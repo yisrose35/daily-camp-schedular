@@ -1866,6 +1866,7 @@ window.addEventListener('storage', function(e) {
 });
 </script>
 <script src="campistry_notes_quick.js"></script>
+<script src="campistry_link_forms.js"></script>
 <script src="campistry_link_capacitor.js"></script>
 <script src="supabase-js@2.js"></script>
 <script src="config.js"></script>
@@ -2591,39 +2592,19 @@ function openFillOnline(formIdx, camperName, camperId){
     fields.forEach(function(field, i){
         var fid = 'foF_' + i;
         if (field.type === 'heading') {
-            body += '<div style="font-size:1rem;font-weight:800;color:#0F172A;margin:18px 0 4px;padding-bottom:6px;border-bottom:2px solid #E2E8F0;">' + _foEsc(field.label||'') + '</div>';
+            body += '<div class="lkf-heading">' + LinkForms.esc(field.label||'') + '</div>';
+            if (field.help) body += '<p class="lkf-paragraph">' + LinkForms.esc(field.help) + '</p>';
             return;
         }
         if (field.type === 'paragraph') {
-            body += '<p style="font-size:.84rem;color:#475569;line-height:1.6;margin:0 0 12px;">' + _foEsc(field.text||'') + '</p>';
+            body += '<p class="lkf-paragraph">' + LinkForms.esc(field.text||'') + '</p>';
             return;
         }
         var req = field.required ? '<span class="req">*</span>' : '';
-        body += '<div class="fo-field">';
-        body += '<label class="fo-label" for="'+fid+'">' + _foEsc(field.label||'') + req + '</label>';
-        if (field.type === 'text' || field.type === 'email' || field.type === 'phone') {
-            body += '<input type="'+(field.type==='phone'?'tel':field.type)+'" id="'+fid+'" class="lk-input" placeholder="'+_foEsc(field.label)+'">';
-        } else if (field.type === 'number') {
-            body += '<input type="number" id="'+fid+'" class="lk-input" placeholder="'+_foEsc(field.label)+'">';
-        } else if (field.type === 'date') {
-            body += '<input type="date" id="'+fid+'" class="lk-input">';
-        } else if (field.type === 'textarea') {
-            body += '<textarea id="'+fid+'" class="lk-textarea" rows="3" placeholder="'+_foEsc(field.label)+'"></textarea>';
-        } else if (field.type === 'dropdown') {
-            body += '<select id="'+fid+'" class="lk-input"><option value="">Select...</option>' + (field.options||[]).map(function(o){ return '<option value="'+_foEsc(o)+'">'+_foEsc(o)+'</option>'; }).join('') + '</select>';
-        } else if (field.type === 'radio' || field.type === 'yesno') {
-            var radioOpts = field.type === 'yesno' ? ['Yes','No'] : (field.options||[]);
-            body += '<div id="'+fid+'">' + radioOpts.map(function(o){ return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;padding:3px 0;"><input type="radio" name="'+fid+'" value="'+_foEsc(o)+'" style="width:15px;height:15px;flex-shrink:0;"> '+_foEsc(o)+'</label>'; }).join('') + '</div>';
-        } else if (field.type === 'checkboxes') {
-            body += '<div id="'+fid+'">' + (field.options||[]).map(function(o){ return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;padding:3px 0;"><input type="checkbox" value="'+_foEsc(o)+'" style="width:15px;height:15px;flex-shrink:0;"> '+_foEsc(o)+'</label>'; }).join('') + '</div>';
-        } else if (field.type === 'checkbox') {
-            body += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;line-height:1.4;">';
-            body += '<input type="checkbox" id="'+fid+'" style="width:15px;height:15px;flex-shrink:0;margin-top:2px;">';
-            body += '<span>I confirm and agree</span></label>';
-        } else if (field.type === 'signature') {
-            body += '<div class="fo-sig-wrap"><canvas id="'+fid+'_c" class="fo-sig-canvas" width="440" height="110"></canvas></div>';
-            body += '<button type="button" class="fo-sig-clear" onclick="_foClearSig(\''+fid+'_c\')">Clear signature</button>';
-        }
+        body += '<div class="fo-field lkf-field" id="'+fid+'_wrap">';
+        body += '<label class="fo-label lkf-label" for="'+fid+'">' + LinkForms.esc(field.label||'') + req + '</label>';
+        if (field.help) body += '<div class="lkf-help">' + LinkForms.esc(field.help) + '</div>';
+        body += LinkForms.renderInput(field, { id: fid, mode: 'live' });
         body += '</div>';
     });
 
@@ -2638,10 +2619,12 @@ function openFillOnline(formIdx, camperName, camperId){
 
     document.getElementById('foBody').innerHTML = body;
 
-    // Init signature canvases
+    // Init signature canvases + wire live behaviours (rating fill, selection
+    // limits, signature clear) via the shared form engine.
     fields.forEach(function(field, i){
-        if (field.type === 'signature') { _foInitSig('foF_' + i + '_c'); }
+        if (field.type === 'signature') { LinkForms.initSignature(document.getElementById('foF_' + i + '_c')); }
     });
+    LinkForms.wireLive(document.getElementById('foBody'));
 
     document.getElementById('foBackdrop').classList.add('open');
     document.getElementById('foDrawer').classList.add('open');
@@ -2679,41 +2662,71 @@ function _foSigEmpty(canvasId){
     return true;
 }
 
+function _foFieldError(fid, msg){
+    var input = document.getElementById(fid);
+    if (input && input.classList) input.classList.add('lkf-err');
+    var wrap = document.getElementById(fid+'_wrap');
+    if (wrap){ var m = document.createElement('div'); m.className='lkf-err-msg'; m.textContent = msg; wrap.appendChild(m); }
+}
+
 function submitFillOnline(){
     var formDef = _foFormDef; if (!formDef) return;
     var fields = formDef.fields || [];
     var values = {};
     var sigDataUrl = null;
+    var fileTasks = [];
+    var firstErr = null;
+
+    // Clear any prior validation state
+    var foBody = document.getElementById('foBody');
+    foBody.querySelectorAll('.lkf-err-msg').forEach(function(n){ n.remove(); });
+    foBody.querySelectorAll('.lkf-err').forEach(function(n){ n.classList.remove('lkf-err'); });
 
     for (var i=0; i<fields.length; i++){
         var field = fields[i], fid = 'foF_'+i;
-        if (field.type === 'heading' || field.type === 'paragraph'){
+        if (field.type === 'heading' || field.type === 'paragraph') continue;
+
+        if (field.type === 'signature'){
+            var cv = document.getElementById(fid+'_c');
+            if (field.required && LinkForms.signatureEmpty(cv)){ _foFieldError(fid, 'Please sign: '+field.label); if(!firstErr) firstErr = fid; continue; }
+            if (!LinkForms.signatureEmpty(cv)){ sigDataUrl = cv.toDataURL('image/png'); values[field.label] = '[signature]'; }
+            else values[field.label] = '';
             continue;
-        } else if (field.type === 'radio' || field.type === 'yesno'){
-            var selRadio = document.querySelector('input[name="'+fid+'"]:checked');
-            if (field.required && !selRadio){ _foToast(field.label+' is required'); return; }
-            values[field.label] = selRadio ? selRadio.value : '';
-        } else if (field.type === 'checkboxes'){
-            var checkedVals = [];
-            document.querySelectorAll('#'+fid+' input[type="checkbox"]:checked').forEach(function(c){ checkedVals.push(c.value); });
-            if (field.required && !checkedVals.length){ _foToast(field.label+' is required'); return; }
-            values[field.label] = checkedVals.join(', ');
-        } else if (field.type === 'signature'){
-            if (field.required && _foSigEmpty(fid+'_c')){ _foToast('Please sign: '+field.label); return; }
-            sigDataUrl = document.getElementById(fid+'_c').toDataURL('image/png');
-            values[field.label] = '[signature]';
-        } else if (field.type === 'checkbox'){
-            var chk = document.getElementById(fid);
-            if (field.required && !chk.checked){ _foToast(field.label+' is required'); return; }
-            values[field.label] = chk.checked ? 'Yes' : 'No';
-        } else {
-            var el = document.getElementById(fid);
-            var val = (el ? el.value : '').trim();
-            if (field.required && !val){ _foToast(field.label+' is required'); return; }
-            values[field.label] = val;
         }
+
+        var rd = LinkForms.read(field, fid);
+        var err = LinkForms.validate(field, rd);
+        if (err){ _foFieldError(fid, err); if(!firstErr) firstErr = fid; continue; }
+
+        if (field.type === 'file'){
+            if (rd.file) fileTasks.push({ field: field, fid: fid, label: field.label });
+            values[field.label] = rd.value; // filename (data URL added async below)
+            continue;
+        }
+        values[field.label] = rd.value;
     }
 
+    if (firstErr){
+        var w = document.getElementById(firstErr+'_wrap') || document.getElementById(firstErr);
+        if (w && w.scrollIntoView) w.scrollIntoView({ behavior:'smooth', block:'center' });
+        _foToast('Please fix the highlighted fields');
+        return;
+    }
+
+    // Read any file fields (async) then finalize.
+    if (!fileTasks.length){ _foFinalizeSubmit(values, sigDataUrl); return; }
+    var pending = fileTasks.length;
+    fileTasks.forEach(function(task){
+        LinkForms.readFile(task.field, task.fid, function(dataUrl, info){
+            if (info && info.tooBig){ _foToast(task.label + ': file over ' + info.maxMB + ' MB — skipped'); }
+            if (dataUrl) values['_file_' + task.label] = dataUrl;
+            pending--; if (pending === 0) _foFinalizeSubmit(values, sigDataUrl);
+        });
+    });
+}
+
+function _foFinalizeSubmit(values, sigDataUrl){
+    var formDef = _foFormDef; if (!formDef) return;
     var now = new Date();
     var ds = now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     // Enrich from the portal's own children data (division/grade/bunk come
