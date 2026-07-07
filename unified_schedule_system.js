@@ -1982,8 +1982,9 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
     
-    // Apply the primary edit first
-    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName });
+    // Apply the primary edit first. Carry the soft-override the caller may have
+    // already approved via the in-app gate so applyDirectEdit doesn't re-prompt.
+    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName, allowSoftOverride: !!editData._allowSoftOverride });
     
     // Lock the field
     if (window.GlobalFieldLocks) {
@@ -4853,7 +4854,71 @@ if (bypassStatus.highlight) {
         } catch (e) { console.error('[UnifiedSchedule] Notification error:', e); }
     }
 
-   
+    // =========================================================================
+    // IN-APP CONFIRM / ALERT (styled — replaces the browser's window.confirm /
+    // window.alert for edit-gate warnings so they render inside the app).
+    // Self-contained inline styles — no dependency on any page's stylesheet.
+    // =========================================================================
+    function _usEscHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function _usModalShell(bodyHtml, buttonsHtml) {
+        try { document.getElementById('us-editgate-overlay')?.remove(); } catch (_) {}
+        const overlay = document.createElement('div');
+        overlay.id = 'us-editgate-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:100001;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;';
+        overlay.innerHTML =
+            '<div role="dialog" aria-modal="true" style="background:#fff;border-radius:14px;max-width:430px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,0.32);overflow:hidden;">'
+          + '<div style="padding:22px 24px 6px;display:flex;gap:13px;align-items:flex-start;">'
+          + '<div style="flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:1.2rem;">⚠️</div>'
+          + '<div style="flex:1;min-width:0;">' + bodyHtml + '</div></div>'
+          + '<div style="display:flex;gap:10px;justify-content:flex-end;padding:16px 24px 20px;">' + buttonsHtml + '</div></div>';
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+    // Returns a Promise<boolean>: true = "Place anyway", false = cancel.
+    function usSoftConfirm(reason) {
+        return new Promise(function (resolve) {
+            const body =
+                '<div style="font-weight:700;color:#1f2937;font-size:1.02rem;margin-bottom:5px;">Heads up</div>'
+              + '<div style="color:#4b5563;font-size:0.9rem;line-height:1.45;">' + _usEscHtml(reason)
+              + '.<br>This is a manual override — you can place it anyway.</div>';
+            const buttons =
+                '<button id="us-eg-cancel" style="padding:9px 16px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-size:0.9rem;font-weight:600;cursor:pointer;">Cancel</button>'
+              + '<button id="us-eg-ok" style="padding:9px 18px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.9rem;font-weight:600;cursor:pointer;">Place anyway</button>';
+            const overlay = _usModalShell(body, buttons);
+            function done(v) { try { overlay.remove(); } catch (_) {} document.removeEventListener('keydown', escH); resolve(v); }
+            overlay.querySelector('#us-eg-cancel').onclick = function () { done(false); };
+            overlay.querySelector('#us-eg-ok').onclick = function () { done(true); };
+            let downOnOverlay = false;
+            overlay.addEventListener('mousedown', function (e) { downOnOverlay = (e.target === overlay); });
+            overlay.onclick = function (e) { if (e.target === overlay && downOnOverlay) done(false); };
+            function escH(e) { if (e.key === 'Escape') done(false); }
+            document.addEventListener('keydown', escH);
+            try { overlay.querySelector('#us-eg-ok').focus(); } catch (_) {}
+        });
+    }
+    // Returns a Promise (resolves when dismissed). Hard block — single OK.
+    function usSoftAlert(message) {
+        return new Promise(function (resolve) {
+            const body =
+                '<div style="font-weight:700;color:#1f2937;font-size:1.02rem;margin-bottom:5px;">Can’t place here</div>'
+              + '<div style="color:#4b5563;font-size:0.9rem;line-height:1.45;">' + _usEscHtml(message) + '</div>';
+            const buttons =
+                '<button id="us-eg-ok" style="padding:9px 18px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.9rem;font-weight:600;cursor:pointer;">OK</button>';
+            const overlay = _usModalShell(body, buttons);
+            function done() { try { overlay.remove(); } catch (_) {} document.removeEventListener('keydown', escH); resolve(); }
+            overlay.querySelector('#us-eg-ok').onclick = done;
+            let downOnOverlay = false;
+            overlay.addEventListener('mousedown', function (e) { downOnOverlay = (e.target === overlay); });
+            overlay.onclick = function (e) { if (e.target === overlay && downOnOverlay) done(); };
+            function escH(e) { if (e.key === 'Escape') done(); }
+            document.addEventListener('keydown', escH);
+            try { overlay.querySelector('#us-eg-ok').focus(); } catch (_) {}
+        });
+    }
 
     // =========================================================================
     // APPLY EDIT
@@ -4876,11 +4941,33 @@ if (bypassStatus.highlight) {
 
         if (!isClear && window.checkSequenceViolation && slots.length > 0) {
             const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
-            if (_seqCheck?.violated) { if (!confirm('Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_seqCheck?.violated) { if (!(await usSoftConfirm('Sequence warning: ' + _seqCheck.reason))) return; }
         }
         if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
             const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
-            if (_coolCheck?.blocked) { if (!confirm('Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_coolCheck?.blocked) { if (!(await usSoftConfirm('Location cooldown: ' + _coolCheck.reason))) return; }
+        }
+
+        // Manual legality gate surfaced as an IN-APP dialog (not a browser
+        // confirm/alert). Dry-run the same gate applyDirectEdit uses; a SOFT
+        // violation (e.g. access restriction for this bunk/grade) becomes a
+        // "Place anyway?" in-app prompt and, on accept, passes allowSoftOverride
+        // so applyDirectEdit won't re-prompt with window.confirm. A HARD block
+        // (physical conflict, disabled, time window) shows an in-app alert.
+        if (!isClear && activity && slots.length > 0 && typeof window.commitManualWriteIfLegal === 'function') {
+            const _gate = window.commitManualWriteIfLegal(
+                bunk, slots[0], activity, location, divName, startMin, endMin,
+                { allowSoftOverride: false, slotRange: slots }
+            );
+            if (_gate && !_gate.ok) {
+                if (_gate.soft) {
+                    if (!(await usSoftConfirm(_gate.reason))) return;
+                    editData._allowSoftOverride = true;
+                } else {
+                    await usSoftAlert(_gate.reason);
+                    return;
+                }
+            }
         }
 
         markPostEditInProgress();
@@ -4903,15 +4990,16 @@ if (bypassStatus.highlight) {
         if (hasConflict) {
             await resolveConflictsAndApply(bunk, slots, activity, location, editData);
         } else {
+            const _softOv = !!editData._allowSoftOverride;
             if (hasPerBunk && !isClear && startMin != null && endMin != null) {
                 const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
                 if (reshaped.length > 0) {
-                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName });
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName, allowSoftOverride: _softOv });
                 } else {
-                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, allowSoftOverride: _softOv });
                 }
             } else {
-                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
+                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, allowSoftOverride: _softOv });
             }
         }
 
