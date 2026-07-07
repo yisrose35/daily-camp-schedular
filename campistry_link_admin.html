@@ -3431,7 +3431,7 @@ function boot() {
         // loadCloudMessages re-renders only when something actually changed.
         function _pollMsgs(){ if (window.CampistryLink && window.CampistryLink.loadCloudMessages) window.CampistryLink.loadCloudMessages(200); }
         _pollMsgs();
-        if (!window._adminMsgPoll) window._adminMsgPoll = setInterval(function(){ if (document.visibilityState !== 'hidden') _pollMsgs(); }, 12000);
+        if (!window._adminMsgPoll) window._adminMsgPoll = setInterval(function(){ if (document.visibilityState !== 'hidden') _pollMsgs(); }, 7000);
         if (!window._adminMsgVis) { window._adminMsgVis = true; document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') _pollMsgs(); }); }
     }
     if (_dbc()) _initCloudSubs();

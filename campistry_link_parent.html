@@ -52,15 +52,19 @@
     </style>
     <style>
         /* Fill-online drawer */
-        .fo-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:900; }
+        .fo-backdrop { display:none; position:fixed; inset:0; background:rgba(15,23,42,.45); backdrop-filter:blur(3px); z-index:900; }
         .fo-backdrop.open { display:block; }
+        /* Form fill — centered, responsive modal (scales with the screen) */
         .fo-drawer {
-            position:fixed; top:0; right:0; bottom:0; width:480px; max-width:100vw;
-            background:#fff; box-shadow:-6px 0 32px rgba(0,0,0,.13);
-            z-index:901; overflow-y:auto; padding:0;
-            transform:translateX(100%); transition:transform .24s cubic-bezier(.4,0,.2,1);
+            position:fixed; z-index:901; top:50%; left:50%;
+            width:clamp(320px, 92vw, 620px); max-height:92vh;
+            background:#fff; border-radius:18px; box-shadow:0 24px 70px rgba(0,0,0,.28);
+            overflow-y:auto; padding:0;
+            transform:translate(-50%,-50%) scale(.96); opacity:0; pointer-events:none;
+            transition:transform .22s cubic-bezier(.4,0,.2,1), opacity .22s ease;
         }
-        .fo-drawer.open { transform:translateX(0); }
+        .fo-drawer.open { transform:translate(-50%,-50%) scale(1); opacity:1; pointer-events:auto; }
+        @media (max-width:640px){ .fo-drawer { width:96vw; max-height:94vh; border-radius:14px; } }
         .fo-head { display:flex; align-items:flex-start; justify-content:space-between; padding:18px 22px 14px; border-bottom:1px solid #E2E8F0; position:sticky; top:0; background:#fff; z-index:2; }
         .fo-head h2 { font-size:1rem; font-weight:700; margin:0 0 2px; color:#0F172A; }
         .fo-head p { font-size:.78rem; color:#64748B; margin:0; }
@@ -1883,16 +1887,12 @@ window.addEventListener('storage', function(e) {
     if (e.key === PARENT_REQ_KEY) {
         hydratePickupRequests();
     }
-    // Admin sent a message / broadcast / notification — refresh inbox badge + list
+    // Admin sent a message / broadcast / notification (same-browser) — refresh
+    // the inbox list live, not just the badge.
     if (e.key === LINK_STORE_KEY) {
-        _loadMessages();
-        var unread = messages.filter(function(m){ return !m.read; }).length;
-        var nm = document.getElementById('navMsgCount');
-        if (nm){ nm.textContent = unread; nm.style.display = unread ? '' : 'none'; }
-        var mb = document.getElementById('homeMsgBadge');
-        if (mb){ mb.textContent = unread; mb.style.display = unread ? 'flex' : 'none'; }
-        var ms = document.getElementById('homeMsgSub');
-        if (ms) ms.textContent = unread ? unread + ' unread' : 'All caught up';
+        var detailOpen = (document.getElementById('msgDetailView')||{}).style && document.getElementById('msgDetailView').style.display === 'block';
+        if (typeof renderMsgs === 'function' && !detailOpen) renderMsgs();
+        else { _loadMessages(); _updateMsgBadges(); }
     }
     // Snacks POS ran a transaction — refresh canteen balance
     if (e.key === 'campGlobalSettings_v1' && children.length) {
@@ -2185,7 +2185,7 @@ window.addEventListener('storage', function(e) {
         // up without a manual reload. (True push would need parent SELECT RLS
         // on link_messages; polling is reliable cross-device with no migration.)
         if(!window._msgPollTimer){
-            window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 12000);
+            window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 7000);
         }
         if(!window._msgVisWired){
             window._msgVisWired=true;
