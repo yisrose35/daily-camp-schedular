@@ -187,8 +187,14 @@
 
         // =====================================================================
         // 10. ★★★ v3.1: DISABLED (TURNED-OFF) SPECIALS & FIELDS ★★★
+        //     v3.4: covers Daily Adjustments' per-day disables + PINNED tiles
+        //     (pinned hits are warnings — user-placed, but worth a heads-up)
         // =====================================================================
-        try { checkDisabledResources(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        try {
+            const disRes = checkDisabledResources(assignments, bunkDivMap, divisionTimes);
+            disRes.errors.forEach(e => errors.push(e));
+            disRes.warnings.forEach(w => warnings.push(w));
+        }
         catch (e) { console.warn('🛡️ disabled-resource check failed:', e); }
 
         // =====================================================================
@@ -1173,16 +1179,49 @@
     }
 
     /**
-     * ★ v3.1 CHECK 10: specials/fields toggled OFF in Facilities
-     * (available === false) must never appear in the generated schedule.
+     * ★ v3.1 CHECK 10 (extended v3.4): specials/fields toggled OFF — either in
+     * Facilities (available === false) or for TODAY in Daily Adjustments'
+     * Resources panel (overrides.disabledFields / disabledSpecials) — must not
+     * appear in the schedule. Regular placements are ERRORS (the generator
+     * should never have used them). PINNED tiles are scanned too: a pinned
+     * tile that names or reserves a turned-off resource raises a WARNING
+     * (user-placed, so it's a heads-up, deduped per division+tile+resource).
      */
+    function getDayDisabledResources() {
+        let ov = null;
+        try { ov = (window.loadCurrentDailyData?.() || {}).overrides || null; } catch (e) { /* fall through */ }
+        if (!ov) {
+            try {
+                const raw = localStorage.getItem('campResourceOverrides_' + (window.currentScheduleDate || ''));
+                if (raw) ov = JSON.parse(raw)?.overrides || null;
+            } catch (e) { /* no fallback */ }
+        }
+        return {
+            fields: (ov?.disabledFields || []).map(String),
+            specials: (ov?.disabledSpecials || []).map(String)
+        };
+    }
+
     function checkDisabledResources(assignments, bunkDivMap, divisionTimes) {
         const errors = [];
+        const warnings = [];
+
+        // Master Facilities toggles
         const offSpecials = new Map();
-        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), s.name); });
+        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), { name: s.name, why: 'turned OFF in Facilities' }); });
         const offFields = new Map();
-        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), f.name); });
-        if (!offSpecials.size && !offFields.size) return errors;
+        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), { name: f.name, why: 'turned OFF in Facilities' }); });
+
+        // Per-day toggles (Daily Adjustments → Resources)
+        const day = getDayDisabledResources();
+        day.fields.forEach(n => { if (!offFields.has(_lc(n))) offFields.set(_lc(n), { name: n, why: 'turned OFF for today in Daily Adjustments' }); });
+        day.specials.forEach(n => { if (!offSpecials.has(_lc(n))) offSpecials.set(_lc(n), { name: n, why: 'turned OFF for today in Daily Adjustments' }); });
+
+        if (!offSpecials.size && !offFields.size) return { errors, warnings };
+
+        const offAny = (key) => offFields.get(key) || offSpecials.get(key) || null;
+        const pinSeen = new Set();
+
         Object.entries(assignments).forEach(([bunk, slots]) => {
             const divName = bunkDivMap[String(bunk)] || '?';
             if (!Array.isArray(slots)) return;
@@ -1193,21 +1232,54 @@
                 const fName = normalizeFieldName(entry.field);
                 const si = divSlots[idx];
                 const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
-                if (actName && offSpecials.has(_lc(actName))) {
-                    errors.push(
-                        `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
-                        `<strong>${offSpecials.get(_lc(actName))}</strong> at ${when}, but that special is turned OFF in Facilities`
-                    );
+
+                // Pinned reservation surface: real facilities live in
+                // _reservedFields/_location (entry.field is the EVENT name).
+                const reserved = [];
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(x => { if (x) reserved.push(String(x)); });
+                if (typeof entry._location === 'string' && entry._location.trim()) reserved.push(entry._location);
+                const isPin = entry._pinned === true || reserved.length > 0;
+
+                if (!isPin) {
+                    if (actName && offSpecials.has(_lc(actName))) {
+                        const h = offSpecials.get(_lc(actName));
+                        errors.push(
+                            `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
+                            `<strong>${h.name}</strong> at ${when}, but that special is ${h.why}`
+                        );
+                    }
+                    if (fName && offFields.has(fName)) {
+                        const h = offFields.get(fName);
+                        errors.push(
+                            `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is placed on ` +
+                            `<strong>${h.name}</strong> at ${when}, but that field is ${h.why}`
+                        );
+                    }
+                    return;
                 }
-                if (fName && offFields.has(fName)) {
-                    errors.push(
-                        `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is placed on ` +
-                        `<strong>${offFields.get(fName)}</strong> at ${when}, but that field is turned OFF in Facilities`
+
+                // ── Pinned tile: warn (user-placed) — once per division+tile+resource ──
+                const label = actName || (typeof entry.field === 'string' ? entry.field : '') || 'pinned event';
+                const hits = [];
+                if (actName && offSpecials.has(_lc(actName))) hits.push(offSpecials.get(_lc(actName)));
+                if (fName && offAny(fName)) hits.push(offAny(fName));
+                reserved.forEach(r => {
+                    const h = offAny(_lc(r));
+                    if (h) hits.push(h);
+                });
+                hits.forEach(h => {
+                    const key = divName + '|' + _lc(label) + '|' + _lc(h.name) + '|' + (entry._startMin != null ? entry._startMin : idx);
+                    if (pinSeen.has(key)) return;
+                    pinSeen.add(key);
+                    warnings.push(
+                        `<strong>Disabled Resource (pinned):</strong> the pinned tile <strong>${label}</strong> ` +
+                        `(Div ${divName}) at ${when} uses <u>${h.name}</u>, but it is ${h.why}. ` +
+                        `Move the tile or re-enable the resource.`
                     );
-                }
+                });
             });
         });
-        return errors;
+        return { errors, warnings };
     }
 
     /**

@@ -99,7 +99,7 @@ const bunkDivMapOf = (divisions) => {
         ],
     };
     const { v } = makeValidator({ divisions, specials, fields, assignments });
-    const errs = v.checkDisabledResources(assignments, bunkDivMapOf(divisions), {});
+    const errs = v.checkDisabledResources(assignments, bunkDivMapOf(divisions), {}).errors;
     check('T10 OFF special + OFF field both flagged, ON field passes',
         errs.length === 2 && errs.some(e => e.includes('Basketball Clinic')) && errs.some(e => e.includes('Max Field 1')),
         JSON.stringify(errs));

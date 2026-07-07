@@ -193,6 +193,68 @@ describe('checkPinnedTileConflicts (CHECK 17)', () => {
         assert.equal(errors.length, 1);
     });
 
+    it('CHECK 10 extended — disabled resources are flagged even on pinned tiles', () => {
+        // "Lake" special turned off in Facilities; "Rink" field turned off for
+        // TODAY in Daily Adjustments. A pinned tile using either must warn.
+        global.loadGlobalSettings = function () {
+            return {
+                app1: {
+                    fields: [{ name: 'Rink' }, { name: 'Court 1' }],
+                    specialActivities: [{ name: 'Lake', available: false }]
+                }
+            };
+        };
+        global.loadCurrentDailyData = function () {
+            return { overrides: { disabledFields: ['Rink'], disabledSpecials: [] } };
+        };
+
+        const assignments = {
+            // Two bunks of the same division carry the same pinned tile — the
+            // warning must be deduped to ONE per division+tile+resource.
+            b1: [
+                { _activity: 'Hockey Night', field: 'Hockey Night', _pinned: true, _reservedFields: ['Rink'], _startMin: 800, _endMin: 860 },
+                { _activity: 'Lake', field: 'Lake', _pinned: true, _startMin: 900, _endMin: 960 }
+            ],
+            b2: [
+                { _activity: 'Hockey Night', field: 'Hockey Night', _pinned: true, _reservedFields: ['Rink'], _startMin: 800, _endMin: 860 }
+            ],
+            // A regular (non-pinned) placement on the day-disabled field → error
+            b3: [
+                { _activity: 'Hockey', field: 'Rink', _startMin: 800, _endMin: 860 }
+            ]
+        };
+        const bunkDivMap = { b1: '4th Grade', b2: '4th Grade', b3: '5th Grade' };
+
+        const res = V.checkDisabledResources(assignments, bunkDivMap, {});
+
+        assert.equal(res.errors.length, 1, 'regular placement on day-disabled field is an error');
+        assert.match(res.errors[0], /Rink/);
+        assert.match(res.errors[0], /Daily Adjustments/);
+
+        assert.equal(res.warnings.length, 2, 'one pinned warning per tile+resource (deduped across bunks)');
+        const rinkWarn = res.warnings.find(w => /Rink/.test(w));
+        const lakeWarn = res.warnings.find(w => /Lake/.test(w));
+        assert.ok(rinkWarn, 'pinned tile reserving the day-disabled Rink warns');
+        assert.match(rinkWarn, /pinned/);
+        assert.match(rinkWarn, /Daily Adjustments/);
+        assert.ok(lakeWarn, 'pinned tile on the Facilities-disabled Lake warns');
+        assert.match(lakeWarn, /Facilities/);
+
+        delete global.loadCurrentDailyData;
+    });
+
+    it('CHECK 10 extended — clean when nothing is disabled', () => {
+        global.loadGlobalSettings = function () {
+            return { app1: { fields: [{ name: 'Rink' }], specialActivities: [{ name: 'Lake' }] } };
+        };
+        const assignments = {
+            b1: [{ _activity: 'Hockey Night', field: 'Hockey Night', _pinned: true, _reservedFields: ['Rink'], _startMin: 800, _endMin: 860 }]
+        };
+        const res = V.checkDisabledResources(assignments, { b1: '4th Grade' }, {});
+        assert.deepEqual(res.errors, []);
+        assert.deepEqual(res.warnings, []);
+    });
+
     it('matches span tiles via reservedFields too', () => {
         global.dailyOverrideSkeleton = [
             { id: 'a', type: 'custom', event: 'Hockey Night', division: '4th Grade', reservedFields: ['Rink'], startTime: '1:20pm', endTime: '2:20pm', spanGroup: 'span_r' },
