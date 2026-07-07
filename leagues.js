@@ -1624,40 +1624,52 @@
         tabNav.className = 'league-tab-nav';
         tabNav.innerHTML =
             '<button id="tab-standings" class="league-tab-btn active">Current Standings</button>' +
-            '<button id="tab-games" class="league-tab-btn">Game Results / History</button>';
+            '<button id="tab-games" class="league-tab-btn">Game Results / History</button>' +
+            '<button id="tab-playhistory" class="league-tab-btn">Play History</button>';
         container.appendChild(tabNav);
 
         const standingsDiv = document.createElement('div');
         const gamesDiv = document.createElement('div');
+        const playHistDiv = document.createElement('div');
         gamesDiv.style.display = 'none';
+        playHistDiv.style.display = 'none';
         container.appendChild(standingsDiv);
         container.appendChild(gamesDiv);
+        container.appendChild(playHistDiv);
 
         const btnStd = tabNav.querySelector('#tab-standings');
         const btnGms = tabNav.querySelector('#tab-games');
+        const btnHist = tabNav.querySelector('#tab-playhistory');
 
         // ★ FIX: Null checks for tab buttons
-        if (!btnStd || !btnGms) return;
+        if (!btnStd || !btnGms || !btnHist) return;
 
-        const setTab = function (activeBtn, inactiveBtn) {
-            activeBtn.className = 'league-tab-btn active';
-            inactiveBtn.className = 'league-tab-btn';
+        const allBtns = [btnStd, btnGms, btnHist];
+        const allDivs = [standingsDiv, gamesDiv, playHistDiv];
+        const setTab = function (activeBtn, activeDiv) {
+            allBtns.forEach(function (b) { b.className = 'league-tab-btn' + (b === activeBtn ? ' active' : ''); });
+            allDivs.forEach(function (d) { d.style.display = d === activeDiv ? 'block' : 'none'; });
         };
 
-        setTab(btnStd, btnGms);
-
         btnStd.onclick = function () {
-            standingsDiv.style.display = 'block';
-            gamesDiv.style.display = 'none';
-            setTab(btnStd, btnGms);
+            setTab(btnStd, standingsDiv);
             renderStandingsTable(league, standingsDiv);
         };
 
         btnGms.onclick = function () {
-            standingsDiv.style.display = 'none';
-            gamesDiv.style.display = 'block';
-            setTab(btnGms, btnStd);
+            setTab(btnGms, gamesDiv);
             renderGameEntryUI(league, gamesDiv);
+        };
+
+        // ★ Play History — who played who, what sport, and when, straight from
+        //   the scheduler's date-keyed game log (post-edit changes included).
+        btnHist.onclick = function () {
+            setTab(btnHist, playHistDiv);
+            if (window.LeaguePlayReport && typeof window.LeaguePlayReport.renderFullView === 'function') {
+                window.LeaguePlayReport.renderFullView(league, playHistDiv, 'regular');
+            } else {
+                playHistDiv.innerHTML = '<p class="league-empty-state">Play history module not loaded.</p>';
+            }
         };
 
         renderStandingsTable(league, standingsDiv);

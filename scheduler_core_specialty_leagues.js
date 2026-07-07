@@ -1591,6 +1591,12 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
         }
     };
 
+    // Read-only history snapshot for UI consumers (league_play_report.js) so
+    // they get the same cloud-first resolution the engine uses.
+    SpecialtyLeagues.getHistorySnapshot = function () {
+        return loadSpecialtyHistory();
+    };
+
     window.SchedulerCoreSpecialtyLeagues = SpecialtyLeagues;
 
     if (window.SchedulerCoreLeagues) {

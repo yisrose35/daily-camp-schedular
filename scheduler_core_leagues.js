@@ -3544,6 +3544,12 @@ window._debugLeagueTimeData = timeData;
         return history;
     };
 
+    // Read-only history snapshot for UI consumers (league_play_report.js) so
+    // they get the same cloud/local fresher-wins resolution the engine uses.
+    Leagues.getHistorySnapshot = function () {
+        return loadLeagueHistory();
+    };
+
     window.resetLeagueHistory = function() {
         if (confirm("Reset ALL league history? This will start fresh.")) {
             localStorage.removeItem(LEAGUE_HISTORY_KEY);
