@@ -5542,7 +5542,7 @@ function addHorizontalResizeListeners(gridEl) {
 
         const startX = e.clientX;
         let newLeftIdx = leftIdx, newRightIdx = rightIdx;
-        tile.classList.add('resizing');
+        tile.classList.add('resizing-h');
 
         const onMove = (e2) => {
           const deltaCols = Math.round((e2.clientX - startX) / colWidth);
@@ -5569,7 +5569,7 @@ function addHorizontalResizeListeners(gridEl) {
         const onUp = () => {
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
-          tile.classList.remove('resizing');
+          tile.classList.remove('resizing-h');
           tooltip.style.display = 'none';
           _mbCommitSpanResize(ev, columns.slice(newLeftIdx, newRightIdx + 1));
         };
