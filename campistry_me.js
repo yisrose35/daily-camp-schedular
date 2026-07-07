@@ -2208,7 +2208,7 @@ function renderEnrollment(){
     var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
-    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.syncAllParentPortals()" title="Rebuild every parent portal from current families — use this if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
 
     // Registration link banner
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
@@ -2906,6 +2906,25 @@ function _enrollIdsForCamper(camperName){
 function _syncInvitesForCamper(camperName){
     _enrollIdsForCamper(camperName).forEach(function(id){ _syncParentInviteSnapshot(id,true); });
 }
+
+// Rebuild EVERY active parent portal's child list from the current family /
+// roster state. Fixes any parent whose frozen invite snapshot still lists a
+// camper that has since been moved out of their family (or was mis-grouped
+// before the family rules were tightened). Silent per invite — only already-
+// issued invites are refreshed, none are created.
+function syncAllParentPortals(){
+    var seen={}, ids=[];
+    Object.keys(enrollments).forEach(function(id){
+        var en=enrollments[id];
+        if(!en||(en.status!=='accepted'&&en.status!=='enrolled')) return;
+        var key=((en.parentEmail||en.parent1Email||'')||('name:'+(en.parentName||en.parent1Name||''))).toLowerCase();
+        if(!key||seen[key]) return;
+        seen[key]=1; ids.push(id);
+    });
+    if(!ids.length){ toast('No parent portals to sync'); return; }
+    ids.forEach(function(id){ try{ _syncParentInviteSnapshot(id,true); }catch(_){} });
+    toast('Re-syncing '+ids.length+' parent portal'+(ids.length!==1?'s':'')+' from current families…');
+}
 function _syncInvitesForBunk(bunkName){
     Object.keys(roster).forEach(function(n){
         if(roster[n].bunk===bunkName)_syncInvitesForCamper(n);
@@ -2949,11 +2968,25 @@ function _syncParentInviteSnapshot(enrollId,silent){
         //    from the family also drops them from the parent's portal.
         //  • Otherwise fall back to grouping by parent email (an implied
         //    family), so un-familied siblings still group together.
-        var famCamperIds=null;
-        Object.keys(families).some(function(fk){
-            if((families[fk].camperIds||[]).indexOf(e.camperName)>=0){ famCamperIds=(families[fk].camperIds||[]); return true; }
-            return false;
-        });
+        // Prefer the family whose PRIMARY PARENT EMAIL matches this invite's
+        // parent email — its members are exactly who should see this portal,
+        // regardless of which camper triggered the sync (so a family-less
+        // camper who happens to share the email is NOT pulled back in). Fall
+        // back to the family that contains the invited camper.
+        var famCamperIds=null, _pe=(parentEmail||'').toLowerCase();
+        if(_pe){
+            Object.keys(families).some(function(fk){
+                var hp=families[fk].households&&families[fk].households[0]&&families[fk].households[0].parents&&families[fk].households[0].parents[0];
+                if(hp&&String(hp.email||'').toLowerCase()===_pe){ famCamperIds=(families[fk].camperIds||[]); return true; }
+                return false;
+            });
+        }
+        if(!famCamperIds){
+            Object.keys(families).some(function(fk){
+                if((families[fk].camperIds||[]).indexOf(e.camperName)>=0){ famCamperIds=(families[fk].camperIds||[]); return true; }
+                return false;
+            });
+        }
         var familyEnrollments=Object.values(enrollments).filter(function(en){
             if(en.status!=='accepted'&&en.status!=='enrolled') return false;
             if(famCamperIds) return famCamperIds.indexOf(en.camperName)>=0;
@@ -5437,7 +5470,7 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
