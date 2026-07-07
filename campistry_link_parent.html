@@ -1167,7 +1167,32 @@ function openMsg(id){
     // row — there's nothing to archive/delete for just this parent, so no actions.
     var headActions=m.type!=='announcement'?_msgDetailActionsHtml(String(m.id).replace(/'/g,''),!!m._archived):'';
     var titleRow='<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:6px;"><div style="font-size:1.15rem;font-weight:700;flex:1;min-width:0;">'+m.subject+'</div>'+headActions+'</div>';
-    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">'+titleRow+'<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+replyHtml;
+    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">'+titleRow+'<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+_msgFormActionHtml(m)+replyHtml;
+}
+
+// If a message is a form request ("<Form name> — <Camper>"), let the parent
+// open and fill the form right from the message. Matches the subject against
+// the camp's published fill-online forms.
+function _msgFormActionHtml(m){
+    if(!m || m.type==='announcement' || m.type==='sent') return '';
+    var subj=String(m.subject||'');
+    var dash=subj.indexOf(' — ');
+    if(dash<0) return '';
+    var fname=subj.slice(0,dash).trim();
+    var camperName=subj.slice(dash+3).trim();
+    if(!fname) return '';
+    var forms=(typeof _currentDigitalForms!=='undefined')?(_currentDigitalForms||[]):[];
+    for(var i=0;i<forms.length;i++){
+        if(String(forms[i].name||'').trim()===fname){
+            return '<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-light);"><button class="btn btn-primary" onclick="_openFormFromMsg('+i+',\''+encodeURIComponent(camperName)+'\')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:5px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Open &amp; fill '+_foEsc(fname)+'</button></div>';
+        }
+    }
+    return '';
+}
+function _openFormFromMsg(idx, encCamper){
+    var camper=''; try{ camper=decodeURIComponent(encCamper||''); }catch(e){ camper=encCamper||''; }
+    closeMsgDetail();
+    if(typeof openFillOnline==='function') openFillOnline(idx, camper, '');
 }
 function _afterMsgAction(){
     document.getElementById('msgListView').style.display='';
