@@ -671,8 +671,9 @@
       });
     });
     var freeOnes = cands.filter(function (c) { return c.free; })
-      .sort(function (a, b) { return (b.hosts - a.hosts) || a.name.localeCompare(b.name); });
-    var busyOnes = cands.filter(function (c) { return !c.free; });
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var busyOnes = cands.filter(function (c) { return !c.free; })
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
 
     // Sport editor — only for regular-league matchups, whose string carries the
     // sport ("A vs B @ Field (Sport)"). Specialty ("A vs B — Field") has none.
@@ -744,24 +745,21 @@
         '<span style="flex:1;height:1px;background:#f0f0f2;"></span></div>';
     }
 
-    // Render one pickable field as a pill button.
-    //   hosting + free  → green, always clickable (moves the game).
-    //   open, can't host the sport → neutral grey chip; clickable only under
-    //     Override (with a "not set up for <sport>" confirm).
+    // Render one pickable field as a clean pill button (no cap / sport
+    // annotations — the user knows what plays where):
+    //   open → green, always clickable (a non-hosting field just confirms
+    //     "isn't set up for <sport> — move anyway?" on click).
     //   busy → red; clickable only under Override (double-book confirm).
     function fieldBtn(c, busy) {
       var isCur = norm(c.name) === norm(ctx.game.field);
       var nohost = c.hosts === false;
-      var clickable = !isCur && (override || (!busy && !nohost));
-      var border = isCur ? '#cbd5e1' : (busy ? '#fca5a5' : (nohost ? '#e5e7eb' : '#bbf7d0'));
-      var bg = isCur ? '#f1f5f9' : (busy ? '#fef2f2' : (nohost ? '#f9fafb' : '#dcfce7'));
-      var color = isCur ? '#94a3b8' : (busy ? '#b91c1c' : (nohost ? '#6b7280' : '#166534'));
-      var note = '';
-      if (nohost && !busy && curSport) note = ' <span style="opacity:0.65;font-size:0.7rem;font-weight:400;">not for ' + esc(curSport) + '</span>';
+      var clickable = !isCur && (!busy || override);
+      var border = isCur ? '#cbd5e1' : (busy ? '#fca5a5' : '#bbf7d0');
+      var bg = isCur ? '#f1f5f9' : (busy ? '#fef2f2' : '#dcfce7');
+      var color = isCur ? '#94a3b8' : (busy ? '#b91c1c' : '#166534');
       return '<button class="pefc-field" data-f="' + esc(c.name) + '" data-busy="' + (busy ? '1' : '') + '" data-nohost="' + (nohost ? '1' : '') + '" ' + (clickable ? '' : 'disabled') +
         ' style="padding:6px 14px;margin:0 8px 8px 0;border:1px solid ' + border + ';border-radius:20px;background:' + bg + ';color:' + color + ';font-size:0.82rem;font-weight:500;cursor:' + (clickable ? 'pointer' : 'default') + ';">' +
-        (busy && override ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') +
-        (c.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.72rem;">(cap:' + c.capacity + ')</span>' : '') + note + '</button>';
+        (busy && override ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') + '</button>';
     }
 
     // Non-clickable red chip for an in-use field, labeled with WHAT is on it
@@ -777,29 +775,25 @@
     // Don't list the game's own current field (it's just where the game already
     // is). Everything else busy is genuinely occupied/blocked.
     var busyReal = busyOnes.filter(function (c) { return !c.current; });
-    var freeHosting = freeOnes.filter(function (c) { return c.hosts !== false; });
     var freeHtml = freeOnes.length
       ? freeOnes.map(function (c) { return fieldBtn(c, false); }).join('')
       : '<div style="color:#9ca3af;font-size:0.78rem;font-style:italic;margin-bottom:6px;">No open fields at this time</div>';
 
     var openCaption = freeOnes.length
-      ? '<div style="font-size:0.7rem;color:#9ca3af;margin:-2px 0 6px;">' +
-        (curSport
-          ? 'Green fields can host ' + esc(curSport) + ' — click to move the game. Grey ones are open but not set up for it.'
-          : 'Click a field to move this game there.') + '</div>'
+      ? '<div style="font-size:0.7rem;color:#9ca3af;margin:-2px 0 6px;">Click a field to move this game there</div>'
       : '';
     var openSection =
       sectionHdr('Open fields now', freeOnes.length) + openCaption +
       '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>';
 
-    var noFreeNote = (!freeHosting.length && !override)
-      ? '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No free ' + (curSport ? esc(curSport) + ' ' : '') + 'fields for this game at this time. Turn on Override below to place it anywhere, or free up a field first.</div>'
+    var noFreeNote = (!freeOnes.length && !override)
+      ? '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No open fields at this time. Turn on Override below to double-book a field, or free one up first.</div>'
       : '';
 
     var overrideHtml =
       '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;margin-bottom:4px;font-size:0.82rem;color:#7c2d12;cursor:pointer;user-select:none;">' +
       '<input type="checkbox" id="pefc-override"' + (override ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
-      'Override — let me pick <strong>any</strong> field (in use, or not set up for the sport)</label>';
+      'Override — let me pick <strong>any</strong> field (may double-book)</label>';
 
     // In-use fields: labeled red chips; under override they become clickable
     // warning buttons so the game can be deliberately double-booked.
