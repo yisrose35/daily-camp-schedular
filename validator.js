@@ -73,7 +73,7 @@
     // =========================================================================
 
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.3...');
+        console.log('🛡️ Running comprehensive schedule validation v3.4...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -1360,9 +1360,23 @@
                 });
                 if (occupants.size < 2) return; // all linked → together → pass
 
-                // Capacity-aware: an open/sharable facility can hold several.
-                const cap = getFieldCapacity(group[0].fkey, activityProperties);
-                if (isFinite(cap) && cap > 0 && occupants.size <= cap) return;
+                // Sharing-config exemption — the TYPE matters, not just the
+                // number: 'all' facilities are open to everyone; 'custom' only
+                // to its listed divisions; 'same_division' only within one
+                // grade. A plain capacity of 2 (meant for bunks of one grade
+                // sharing a court) must NOT excuse two different grades' pins.
+                const rules = getSharingRules(group[0].fkey, activityProperties);
+                const occDivs = [...new Set(group.map(g => String(g.divName)))];
+                let allowedByConfig = false;
+                if (rules.sharingType === 'all') {
+                    allowedByConfig = occupants.size <= rules.maxCapacity;
+                } else if (rules.sharingType === 'same_division') {
+                    allowedByConfig = occDivs.length === 1 && occupants.size <= rules.maxCapacity;
+                } else if (rules.sharingType === 'custom') {
+                    const allowed = new Set((rules.allowedDivisions || []).map(String));
+                    allowedByConfig = occDivs.every(d => allowed.has(d)) && occupants.size <= rules.maxCapacity;
+                }
+                if (allowedByConfig) return;
 
                 const owners = [...new Set(group.map(g => g.owner))];
                 if (owners.length < 2) return;
@@ -2049,6 +2063,6 @@
         }
     };
 
-    console.log('🛡️ Validator v3.3 loaded — conflicts + capacity + access rules + league/event timeline + field quality + sports/spacing rules + elective reservations');
+    console.log('🛡️ Validator v3.4 loaded — conflicts + capacity + access rules + league/event timeline + field quality + sports/spacing rules + elective reservations + span-aware pinned-tile conflicts');
 
 })();

@@ -143,16 +143,54 @@ describe('checkPinnedTileConflicts (CHECK 17)', () => {
         assert.deepEqual(V.checkPinnedTileConflicts(usages, {}), []);
     });
 
-    it('respects facility capacity — a sharable facility holds both', () => {
+    it("an OPEN facility (sharing type 'all') holds several pins without flagging", () => {
         const activityProperties = {
-            'main hall': { sharableWith: { type: 'custom', capacity: 2 } }
+            'Main Hall': { sharableWith: { type: 'all' } }
         };
         const usages = [
             pinUsage('4th Grade', 'Main Hall', 800, 860, 'Assembly'),
             pinUsage('5th Grade', 'Main Hall', 800, 860, 'Assembly')
         ];
         const errors = V.checkPinnedTileConflicts(usages, activityProperties);
-        assert.deepEqual(errors, [], 'capacity 2 facility can hold two pinned groups');
+        assert.deepEqual(errors, [], "type 'all' facility is open to everyone by config");
+    });
+
+    it("a bunk-sharing capacity (type 'custom', cap 2, no listed divisions) does NOT excuse two grades' pins", () => {
+        // This is the common sports-field config — capacity 2 means two bunks
+        // of a grade share a court, not that two grades may both pin it.
+        const activityProperties = {
+            'Main Hall': { sharableWith: { type: 'custom', capacity: 2 } }
+        };
+        const usages = [
+            pinUsage('4th Grade', 'Main Hall', 800, 860, 'Assembly'),
+            pinUsage('5th Grade', 'Main Hall', 800, 860, 'Assembly')
+        ];
+        const errors = V.checkPinnedTileConflicts(usages, activityProperties);
+        assert.equal(errors.length, 1, 'cross-grade pin collision flags despite bunk capacity 2');
+    });
+
+    it("type 'custom' WITH the divisions listed as allowed passes", () => {
+        const activityProperties = {
+            'Main Hall': { sharableWith: { type: 'custom', capacity: 2, divisions: ['4th Grade', '5th Grade'] } }
+        };
+        const usages = [
+            pinUsage('4th Grade', 'Main Hall', 800, 860, 'Assembly'),
+            pinUsage('5th Grade', 'Main Hall', 800, 860, 'Assembly')
+        ];
+        const errors = V.checkPinnedTileConflicts(usages, activityProperties);
+        assert.deepEqual(errors, [], 'explicitly-allowed divisions may share by config');
+    });
+
+    it("type 'same_division' does NOT excuse pins from two different grades", () => {
+        const activityProperties = {
+            'Main Hall': { sharableWith: { type: 'same_division', capacity: 2 } }
+        };
+        const usages = [
+            pinUsage('4th Grade', 'Main Hall', 800, 860, 'Assembly'),
+            pinUsage('5th Grade', 'Main Hall', 800, 860, 'Assembly')
+        ];
+        const errors = V.checkPinnedTileConflicts(usages, activityProperties);
+        assert.equal(errors.length, 1);
     });
 
     it('matches span tiles via reservedFields too', () => {
