@@ -266,14 +266,20 @@
     let _valAutoTimer = null;
     function _valAutoOpenAfterGen() {
         if (!getValidatorAutoOpen()) return;
-        // The auto builder routes to its own validator (auto_validator.js) —
-        // this auto-open covers the manual validator's checks.
-        if (window._daBuilderMode === 'auto') return;
         clearTimeout(_valAutoTimer);
         // Let the post-generation passes (capacity repair gate, slot fixes)
         // settle before judging the schedule.
         _valAutoTimer = setTimeout(() => {
             try {
+                if (window._daBuilderMode === 'auto' && typeof window.validateAutoSchedule === 'function') {
+                    // Auto builder → its own validator: silent probe, then modal.
+                    const res = window.validateAutoSchedule({ silent: true });
+                    if (res && Array.isArray(res.errors) && res.errors.length > 0) {
+                        console.log('🛡️ Auto-open (auto mode): ' + res.errors.length + ' red conflict(s) after generation');
+                        window.validateAutoSchedule();
+                    }
+                    return;
+                }
                 const res = validateSchedule({ silent: true });
                 if (res && Array.isArray(res.errors) && res.errors.length > 0) {
                     console.log('🛡️ Auto-open: ' + res.errors.length + ' red conflict(s) found after generation');

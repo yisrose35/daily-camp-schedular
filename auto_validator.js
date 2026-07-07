@@ -979,8 +979,16 @@
             }
         }
 
+        // ★ Auto-open-after-generation toggle — same persisted setting as the
+        //   manual validator (ScheduleValidator.get/setAutoOpenOnRed).
+        const _aoOn = (() => { try { return window.ScheduleValidator?.getAutoOpenOnRed?.() === true; } catch (e) { return false; } })();
         html += `
-            <div style="text-align:right; margin-top:20px; border-top:1px solid #eee; padding-top:15px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-top:20px; border-top:1px solid #eee; padding-top:15px;">
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.85em; color:#475569; cursor:pointer; user-select:none; margin-right:auto;">
+                    <input type="checkbox" id="auto-val-auto-open" ${_aoOn ? 'checked' : ''}
+                        style="width:16px; height:16px; cursor:pointer; accent-color:#dc2626;">
+                    Open automatically after generation when there are red conflicts
+                </label>
                 <button id="auto-val-close-btn" style="padding:12px 24px; background:#333; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600; font-size:1em;">
                     Close
                 </button>
@@ -989,6 +997,10 @@
 
         overlay.innerHTML = html;
         document.body.appendChild(overlay);
+
+        // Auto-open toggle
+        const _aoCb = overlay.querySelector('#auto-val-auto-open');
+        if (_aoCb) _aoCb.onchange = () => { try { window.ScheduleValidator?.setAutoOpenOnRed?.(_aoCb.checked); } catch (e) {} };
 
         // Wire toggles
         overlay.querySelectorAll('.auto-val-toggle').forEach(header => {
@@ -1039,15 +1051,15 @@
         window._legacyValidateSchedule = window.validateSchedule;
     }
 
-    window.validateSchedule = function() {
+    window.validateSchedule = function(opts) {
         const isAutoMode = window._daBuilderMode === 'auto';
         if (isAutoMode) {
             console.log('🛡️ Auto mode detected — routing to Auto Validator');
-            return validateAutoSchedule();
+            return validateAutoSchedule(opts);
         } else {
             // Fall back to legacy validator for manual mode
             if (typeof window._legacyValidateSchedule === 'function') {
-                return window._legacyValidateSchedule();
+                return window._legacyValidateSchedule(opts);
             } else {
                 console.warn('🛡️ No legacy validator found');
             }
@@ -1060,6 +1072,6 @@
         window.ScheduleValidator.validate = window.validateSchedule;
     }
 
-    console.log('🛡️ Auto Validator v1.0 loaded — auto-routes validateSchedule() in auto mode');
+    console.log('🛡️ Auto Validator v1.1 loaded — auto-routes validateSchedule() in auto mode + auto-open-on-red toggle');
 
 })();
