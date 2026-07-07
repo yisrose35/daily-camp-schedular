@@ -2208,7 +2208,7 @@ function renderEnrollment(){
     var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
-    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.syncAllParentPortals()" title="Rebuild every parent portal from current families — use this if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.auditParentEmails()" title="See which parent email each child\'s messages route to — flags emails shared across families">✉ Check Parent Emails</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.syncAllParentPortals()" title="Rebuild every parent portal from current families — use this if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
 
     // Registration link banner
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
@@ -2924,6 +2924,55 @@ function syncAllParentPortals(){
     if(!ids.length){ toast('No parent portals to sync'); return; }
     ids.forEach(function(id){ try{ _syncParentInviteSnapshot(id,true); }catch(_){} });
     toast('Re-syncing '+ids.length+' parent portal'+(ids.length!==1?'s':'')+' from current families…');
+}
+
+// Audit which parent email each camper's messages/forms route to. Messages are
+// delivered by parent EMAIL, so any email shared across DIFFERENT families
+// means those children all land in one portal — the usual cause of "a parent
+// got another child's message". Surfaces the shared emails so they can be fixed.
+function auditParentEmails(){
+    var byEmail={};
+    function add(email,camper,famName){
+        var k=(email||'').trim().toLowerCase()||'(no email)';
+        if(!byEmail[k]) byEmail[k]={email:(email||'').trim()||'(no email)',campers:[],families:{}};
+        byEmail[k].campers.push(camper);
+        byEmail[k].families[famName||'(no family)']=1;
+    }
+    var assigned={};
+    Object.values(families).forEach(function(f){
+        var hp=f.households&&f.households[0]&&f.households[0].parents&&f.households[0].parents[0];
+        (f.camperIds||[]).forEach(function(cn){ assigned[cn]=1; add(hp?hp.email:'', cn, f.name||'family'); });
+    });
+    Object.keys(roster).forEach(function(cn){
+        if(assigned[cn]) return;
+        add((roster[cn]||{}).parent1Email||'', cn, '(no family)');
+    });
+    var rows=Object.keys(byEmail).map(function(k){return byEmail[k];}).sort(function(a,b){return b.campers.length-a.campers.length;});
+    var shared=0, h='<div style="max-height:56vh;overflow:auto">';
+    rows.forEach(function(r){
+        var famCount=Object.keys(r.families).length;
+        var lasts={}; r.campers.forEach(function(cn){var p=cn.trim().split(/\s+/); if(p.length>1) lasts[p[p.length-1].toLowerCase()]=1;});
+        var suspicious=(famCount>1)||(Object.keys(lasts).length>1);
+        if(suspicious) shared++;
+        h+='<div style="padding:9px 0;border-bottom:1px solid var(--s100)">'
+          +'<div style="font-size:.82rem;font-weight:700;color:'+(suspicious?'var(--err)':'var(--s800)')+'">'+esc(r.email)+(suspicious?'  ⚠ '+famCount+' famil'+(famCount!==1?'ies':'y'):'')+'</div>'
+          +'<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+r.campers.map(function(c){return esc(c);}).join(', ')+'</div></div>';
+    });
+    h+='</div>';
+    var summary=shared
+        ? '<div style="font-size:.82rem;color:var(--err);font-weight:600;margin-bottom:10px">'+shared+' email'+(shared!==1?'s are':' is')+' shared across different families (⚠). Messages &amp; forms for ALL of those children go to that one portal. Fix: open the mis-assigned child in Campers → Edit and correct the parent email (or move them to the right family), then click “Sync Parent Portals”.</div>'
+        : '<div style="font-size:.82rem;color:var(--ok);font-weight:600;margin-bottom:10px">✓ No shared emails — every parent email maps to a single family. If a parent still sees another child, it isn’t an email collision.</div>';
+    _showMeModal('Parent email check',summary+h);
+}
+// Minimal self-contained modal (no dependency on the predefined modal divs).
+function _showMeModal(title,bodyHtml){
+    var el=document.createElement('div');
+    el.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9200;display:flex;align-items:center;justify-content:center;padding:20px';
+    el.innerHTML='<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.28)">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--s200)"><span style="font-size:.95rem;font-weight:700">'+esc(title)+'</span><button onclick="this.closest(\'[style*=fixed]\').remove()" style="border:1px solid var(--s200);background:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.8rem">Close</button></div>'
+      +'<div style="padding:16px 20px">'+bodyHtml+'</div></div>';
+    el.addEventListener('click',function(e){ if(e.target===el) el.remove(); });
+    document.body.appendChild(el);
 }
 function _syncInvitesForBunk(bunkName){
     Object.keys(roster).forEach(function(n){
@@ -5470,7 +5519,7 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
