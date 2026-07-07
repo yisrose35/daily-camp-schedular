@@ -1293,7 +1293,7 @@ function sendFormCompose() {
     var formId;
     if (isBuilt) {
         formId = _fcAttach.formId;
-        var rec = { id: formId, name: formName, category: 'custom', description: message.slice(0, 120), required: true, fields: _fcAttach.fields, created: Date.now() };
+        var rec = { id: formId, name: formName, category: 'custom', description: message.slice(0, 120), required: true, fields: _fcAttach.fields, settings: _fcAttach.settings || {}, created: Date.now() };
         var idx = lf.digital.findIndex(function(f) { return f.id === formId; });
         if (idx >= 0) lf.digital[idx] = rec; else lf.digital.push(rec);
     } else {
@@ -2680,6 +2680,7 @@ function openFormBuilder(existing) {
     if (existing && existing.type === 'built') {
         document.getElementById('fbName').value = existing.formName || '';
         _fbFields = (existing.fields || []).map(function(f) { var c = Object.assign({}, f); if (c.options) c.options = c.options.slice(); return c; });
+        _fbForm = existing.settings ? Object.assign({}, existing.settings) : {};
     } else {
         var fn = document.getElementById('fcFormName');
         document.getElementById('fbName').value = fn ? fn.value.trim() : '';
@@ -2687,6 +2688,7 @@ function openFormBuilder(existing) {
             { id: _fbId(), type: 'text', label: 'Camper Name', required: true },
             { id: _fbId(), type: 'signature', label: 'Parent Signature', required: true }
         ];
+        _fbForm = {};
     }
     _renderFbPalette();
     renderFbCanvas();
@@ -2735,6 +2737,20 @@ function _fbVal(i, key, val) { var f = _fbFields[i]; f.validation = f.validation
 function _fbValNum(i, key, val) { var f = _fbFields[i]; f.validation = f.validation || {}; var n = parseFloat(val); f.validation[key] = (val === '' || isNaN(n)) ? '' : n; }
 function _fbCfg(label, inner) { return '<div style="flex:1;min-width:96px;"><div style="font-size:.58rem;font-weight:800;letter-spacing:.05em;color:var(--slate-400);margin-bottom:3px;">' + label + '</div>' + inner + '</div>'; }
 function _fbChk(i, prop, label) { return '<label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;color:var(--slate-600);white-space:nowrap;cursor:pointer;"><input type="checkbox" ' + (_fbFields[i][prop] ? 'checked' : '') + ' onchange="_fbSet(' + i + ',\'' + prop + '\',this.checked)" style="width:13px;height:13px;"> ' + label + '</label>'; }
+
+// ── Form-level settings (confirmation message, prefill, autosave) ──────────
+var _fbForm = {};
+function _fbFormSet(prop, val) { _fbForm[prop] = val; }
+function _fbFormCard() {
+    var f = _fbForm;
+    return '<div class="fb-field-card" style="border-left:3px solid var(--link-color);">' +
+        '<div class="fb-fc-top"><span class="fb-type-chip">' + _S + '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Form settings</span></div>' +
+        _fbCfg('CONFIRMATION MESSAGE (SHOWN AFTER SUBMIT)', '<textarea class="lk-textarea" oninput="_fbFormSet(\'thankYou\',this.value)" placeholder="Thanks! Your response has been recorded." style="min-height:52px;font-size:.82rem;">' + esc(f.thankYou || '') + '</textarea>') +
+        '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;">' +
+            '<label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;color:var(--slate-600);cursor:pointer;"><input type="checkbox" ' + (f.prefillName !== false ? 'checked' : '') + ' onchange="_fbFormSet(\'prefillName\',this.checked)" style="width:13px;height:13px;"> Pre-fill camper name</label>' +
+            '<label style="display:flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;color:var(--slate-600);cursor:pointer;"><input type="checkbox" ' + (f.autosave !== false ? 'checked' : '') + ' onchange="_fbFormSet(\'autosave\',this.checked)" style="width:13px;height:13px;"> Auto-save progress</label>' +
+        '</div></div>';
+}
 
 // ── Logic config helpers ──────────────────────────────────────────────────
 function _fbShowIf(i, key, val) {
@@ -2874,10 +2890,10 @@ function _fbSettings(f, i) {
 function renderFbCanvas() {
     var c = document.getElementById('fbCanvas');
     if (!_fbFields.length) {
-        c.innerHTML = '<div style="max-width:640px;margin:40px auto;text-align:center;color:var(--text-muted);font-size:.86rem;">Your form is empty — add fields from the panel on the left.</div>';
+        c.innerHTML = _fbFormCard() + '<div style="max-width:640px;margin:24px auto;text-align:center;color:var(--text-muted);font-size:.86rem;">Your form is empty — add fields from the panel on the left.</div>';
         return;
     }
-    c.innerHTML = _fbFields.map(function(f, i) {
+    c.innerHTML = _fbFormCard() + _fbFields.map(function(f, i) {
         var meta = _fbMeta(f.type);
         var isStatic = LinkForms.isStatic(f.type);
         var controls =
@@ -2975,7 +2991,7 @@ function useBuiltForm() {
     var hasInput = fields.some(function(f) { return f.type !== 'heading' && f.type !== 'paragraph'; });
     if (!hasInput) { toast('Add at least one fillable field'); return; }
     var formId = (_fcAttach && _fcAttach.type === 'built' && _fcAttach.formId) ? _fcAttach.formId : 'lfd_' + Date.now();
-    _fcAttach = { type: 'built', formId: formId, formName: name, fields: fields };
+    _fcAttach = { type: 'built', formId: formId, formName: name, fields: fields, settings: Object.assign({}, _fbForm) };
     var fn = document.getElementById('fcFormName');
     if (fn && !fn.value.trim()) fn.value = name;
     _renderFcAttach();

@@ -2630,18 +2630,70 @@ function openFillOnline(formIdx, camperName, camperId){
     });
     LinkForms.wireLive(foBody);
 
-    // Live conditional logic — re-evaluate show/hide on any answer change.
+    // Live conditional logic + autosave — re-run on any answer change.
     // Bound once to the persistent foBody element (innerHTML swaps don't drop it).
     if (!foBody._logicWired){
         foBody._logicWired = true;
-        foBody.addEventListener('input', _foApplyLogic);
-        foBody.addEventListener('change', _foApplyLogic);
+        foBody.addEventListener('input', _foOnChange);
+        foBody.addEventListener('change', _foOnChange);
     }
 
     _foShowSection(0);
 
+    // Restore any saved draft, then pre-fill the camper name into name fields.
+    var hadDraft = _foRestoreDraft();
+    _foPrefill();
+    _foApplyLogic();
+
     document.getElementById('foBackdrop').classList.add('open');
     document.getElementById('foDrawer').classList.add('open');
+    if (hadDraft) _foToast('Draft restored');
+}
+
+function _foOnChange(){ _foApplyLogic(); _foSaveDraft(); }
+
+// ── Draft autosave / resume (per form + camper, localStorage) ──────────────
+function _foDraftKey(){ return 'campistry_link_draft_v1:' + ((_foFormDef && _foFormDef.id) || '') + ':' + (_foCamperId || _foCamper || ''); }
+function _foAutosaveOn(){ var s = _foFormDef && _foFormDef.settings; return !(s && s.autosave === false); }
+function _foSaveDraft(){
+    if (!_foAutosaveOn()) return;
+    var foBody = document.getElementById('foBody'); if (!foBody) return;
+    var v = {}, c = [];
+    foBody.querySelectorAll('input,select,textarea').forEach(function(el){
+        if (el.type === 'file' || el.type === 'button' || el.type === 'submit') return;
+        if (el.type === 'radio' || el.type === 'checkbox'){ if (el.checked) c.push({ n: el.name || '', id: el.id || '', val: el.value }); }
+        else if (el.id && el.value){ v[el.id] = el.value; }
+    });
+    try { localStorage.setItem(_foDraftKey(), JSON.stringify({ v: v, c: c, t: Date.now() })); } catch(e){}
+}
+function _foRestoreDraft(){
+    if (!_foAutosaveOn()) return false;
+    var raw; try { raw = localStorage.getItem(_foDraftKey()); } catch(e){}
+    if (!raw) return false;
+    var d; try { d = JSON.parse(raw); } catch(e){ return false; }
+    var foBody = document.getElementById('foBody');
+    Object.keys(d.v || {}).forEach(function(id){ var el = document.getElementById(id); if (el && el.type !== 'file') el.value = d.v[id]; });
+    (d.c || []).forEach(function(item){
+        var el = item.id ? document.getElementById(item.id) : null;
+        if (!el && item.n){ var nodes = foBody.querySelectorAll('[name="'+item.n+'"]'); for (var i=0;i<nodes.length;i++){ if (nodes[i].value === item.val){ el = nodes[i]; break; } } }
+        if (el) el.checked = true;
+    });
+    LinkForms.wireLive(foBody);
+    return !!(Object.keys(d.v || {}).length || (d.c || []).length);
+}
+function _foClearDraft(){ try { localStorage.removeItem(_foDraftKey()); } catch(e){} }
+
+// Pre-fill the selected camper's name into obvious name fields.
+function _foPrefill(){
+    var s = _foFormDef && _foFormDef.settings; if (s && s.prefillName === false) return;
+    if (!_foCamper) return;
+    (_foFormDef.fields || []).forEach(function(field){
+        if (field.type !== 'text') return;
+        var lab = (field.label || '').toLowerCase();
+        if (!/(camper|child|participant).*name|name of (the )?(camper|child)|camper name|child'?s? name/.test(lab)) return;
+        var el = document.getElementById(_foFid(field));
+        if (el && !el.value) el.value = _foCamper;
+    });
 }
 
 // DOM id for a field's control (id-based so it's independent of section order).
@@ -2919,12 +2971,31 @@ function _foFinalizeSubmit(values, sigDataUrl){
         });
     }
 
-    closeFillOnline();
-    _foToast('Form submitted!');
+    _foClearDraft();
 
     // Refresh forms display from the cached cloud payload to show the
     // submitted badge (re-reading localStorage here used to wipe the list)
     if (window._refreshLinkForms) window._refreshLinkForms();
+
+    // Confirmation screen (custom thank-you if the form sets one).
+    _foShowConfirmation(formDef);
+}
+
+function _foShowConfirmation(formDef){
+    var s = formDef.settings || {};
+    var msg = (s.thankYou && s.thankYou.trim()) || 'Thanks! Your form has been submitted to the camp.';
+    var nav = document.getElementById('foNav');
+    document.getElementById('foBody').innerHTML =
+        '<div style="text-align:center;padding:32px 12px 8px;">' +
+            '<div style="width:64px;height:64px;border-radius:999px;background:#ECFDF5;color:#059669;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">' +
+                '<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>' +
+            '</div>' +
+            '<div style="font-size:1.1rem;font-weight:800;color:#0F172A;margin-bottom:8px;">Submitted</div>' +
+            '<p style="font-size:.9rem;color:#475569;line-height:1.6;max-width:340px;margin:0 auto 24px;">' + LinkForms.esc(msg) + '</p>' +
+            '<button class="lkf-btn lkf-btn-primary" onclick="closeFillOnline()">Done</button>' +
+        '</div>';
+    if (nav) nav.innerHTML = '';
+    var d = document.getElementById('foDrawer'); if (d) d.scrollTop = 0;
 }
 
 function _foToast(msg){
