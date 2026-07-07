@@ -551,6 +551,59 @@
     }
 
     // =========================================================================
+    // ACCESS-RESTRICTION CHECK (soft — WARN, never hard-block a post-edit)
+    // =========================================================================
+    // Mirrors the generator's two access gates so a post-edit warning matches
+    // what the solver would have refused:
+    //   • specials → isSpecialAvailableForBunk (scheduler_core_auto.js)
+    //   • fields   → accessRestrictions (canBlockFit, scheduler_core_utils.js)
+    // Returns { allowed, label } where label is the restricted name to name in
+    // the warning. Fails OPEN (allowed) on any error — this must never block.
+    function peiIsActivityAllowedForBunk(activity, location, bunk) {
+        const div = peiGetDivForBunk(bunk);
+        if (!div) return { allowed: true };
+        const gs = window.globalSettings || null;
+
+        // The restriction lives on the chosen field/special; a special can also be
+        // typed straight into the activity box with no location. Check both names.
+        const names = [];
+        if (location) names.push(location);
+        if (activity && String(activity).toLowerCase() !== String(location || '').toLowerCase()) names.push(activity);
+
+        const specials = window.getGlobalSpecialActivities?.() ||
+            (window.loadGlobalSettings?.() || {}).app1?.specialActivities || [];
+        const props = window.SchedulerCoreUtils?.getActivityProperties?.() || window.activityProperties || {};
+
+        for (const name of names) {
+            const lname = String(name).toLowerCase();
+            const isSpecial = specials.some(s => s && String(s.name).toLowerCase() === lname);
+            if (isSpecial) {
+                if (typeof window.isSpecialAvailableForBunk === 'function') {
+                    try {
+                        if (!window.isSpecialAvailableForBunk(name, div, bunk, gs)) return { allowed: false, label: name };
+                    } catch (_) { /* fail open */ }
+                }
+                continue;
+            }
+            // Field accessRestrictions (replicates canBlockFit's division/bunk gate).
+            const ar = props[name]?.accessRestrictions;
+            if (ar?.enabled) {
+                const divRules = ar.divisions || {};
+                if (Object.keys(divRules).length > 0) {
+                    const divStr = String(div);
+                    if (!(divStr in divRules) && !(div in divRules)) return { allowed: false, label: name };
+                    const divRule = divRules[divStr] || divRules[div];
+                    if (Array.isArray(divRule) && divRule.length > 0) {
+                        const bStr = String(bunk), bNum = parseInt(bunk, 10);
+                        if (!divRule.some(b => String(b) === bStr || parseInt(b, 10) === bNum)) return { allowed: false, label: name };
+                    }
+                }
+            }
+        }
+        return { allowed: true };
+    }
+
+    // =========================================================================
     // APPLY EDIT (Main entry point)
     // =========================================================================
 
@@ -606,6 +659,24 @@
                     editData._cooldownChecked = true;
                 }
             } catch (e) { console.warn('[PostEdit] cooldown check failed:', e); }
+        }
+
+        // ★ Access-restriction soft warning — if the chosen activity/field/special
+        //   is not allowed for this bunk/grade, WARN but let the user place it
+        //   anyway. Post-edits are intentional overrides; we never hard-block them.
+        if (!isClear && !editData._accessChecked) {
+            try {
+                const acc = peiIsActivityAllowedForBunk(activity, location, bunk);
+                if (!acc.allowed) {
+                    const _div = peiGetDivForBunk(bunk) || 'this division';
+                    const proceed = window.confirm(
+                        '"' + acc.label + '" is not normally allowed for ' + bunk + ' (' + _div + ') — it has an access restriction.\n\n' +
+                        'This is a manual override, so you can still place it here.\n\nPlace anyway?'
+                    );
+                    if (!proceed) return;
+                    editData._accessChecked = true;
+                }
+            } catch (e) { console.warn('[PostEdit] access check failed:', e); }
         }
 
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
