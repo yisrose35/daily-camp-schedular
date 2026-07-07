@@ -679,6 +679,26 @@ function onTouchResizeMove(touch, module, wrapper) {
   }
 }
 
+// ★ Multi-grade span helpers (touch): resolve an event's span members from
+// the right module's skeleton and keep their times in lockstep.
+function _touchSpanMembers(event, module) {
+  try {
+    const internal = module === 'ms' ? window.MasterSchedulerInternal : window.DailyAdjustmentsInternal;
+    return (internal && typeof internal.spanMembers === 'function') ? internal.spanMembers(event) : null;
+  } catch (_) { return null; }
+}
+
+function _touchSyncSpanTimes(event, module) {
+  if (!event || !event.spanGroup) return;
+  try {
+    const members = _touchSpanMembers(event, module);
+    if (!members) return;
+    members.forEach(m => {
+      if (m.id !== event.id) { m.startTime = event.startTime; m.endTime = event.endTime; }
+    });
+  } catch (_) {}
+}
+
 function finishTouchResize(module, wrapper) {
   if (!resizeState) { isResizing = false; return; }
 
@@ -703,14 +723,8 @@ function finishTouchResize(module, wrapper) {
       event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
 
       // ★ Multi-grade span: every grade's copy keeps the same times (mirrors
-      //   the desktop resize handler in master_schedule_builder.js).
-      if (event.spanGroup && window.MasterSchedulerInternal?.spanMembers) {
-        try {
-          window.MasterSchedulerInternal.spanMembers(event).forEach(m => {
-            if (m.id !== event.id) { m.startTime = event.startTime; m.endTime = event.endTime; }
-          });
-        } catch (_) {}
-      }
+      //   the desktop resize handlers).
+      _touchSyncSpanTimes(event, 'ms');
 
       // Trigger save and re-render through the module's methods
       if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
@@ -743,6 +757,9 @@ function finishTouchResize(module, wrapper) {
         event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
         event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
       }
+
+      // ★ Multi-grade span: every grade's copy keeps the same times.
+      _touchSyncSpanTimes(event, 'da');
 
       // ★★★ CB-124: reconcile overlaps after the resize, exactly as the DESKTOP
       // DA resize was patched to (daily_adjustments onMouseUp). Without this the
@@ -914,14 +931,14 @@ async function finishTouchReposition(touch, module, wrapper) {
       }
     }
 
-    // ★ Multi-grade span (MS): the span moves together in TIME and keeps its
+    // ★ Multi-grade span: the span moves together in TIME and keeps its
     //   grades — membership only changes via the horizontal resize grips.
     //   Mutating event.division here would corrupt the span geometry.
     let _spanMoved = false;
-    if (module === 'ms' && event.spanGroup && window.MasterSchedulerInternal?.spanMembers) {
+    if (event.spanGroup) {
       try {
-        const _members = window.MasterSchedulerInternal.spanMembers(event);
-        if (_members.length > 1) {
+        const _members = _touchSpanMembers(event, module);
+        if (_members && _members.length > 1) {
           const _ns = minutesToTime(_newStartMin121);
           const _ne = minutesToTime(_newStartMin121 + duration);
           _members.forEach(m => { m.startTime = _ns; m.endTime = _ne; });
@@ -959,9 +976,18 @@ async function finishTouchReposition(touch, module, wrapper) {
         }));
       }
     } else {
-      // DA: also bump overlapping tiles
+      // DA: also bump overlapping tiles. A moved span keeps its divisions, so
+      // each member reconciles overlaps in its OWN column; a normal move
+      // reconciles in the drop column as before.
       if (window.DailyAdjustmentsInternal?.bumpOverlappingTiles) {
-        window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, divName);
+        if (_spanMoved) {
+          try {
+            (_touchSpanMembers(event, 'da') || [event]).forEach(m =>
+              window.DailyAdjustmentsInternal.bumpOverlappingTiles(m, m.division));
+          } catch (_) {}
+        } else {
+          window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, divName);
+        }
       }
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();

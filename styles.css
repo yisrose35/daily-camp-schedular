@@ -4311,16 +4311,16 @@ a:hover {
 .grid-event.resizing{box-shadow:0 0 0 2px #6366f1 !important;z-index:100 !important;}
 /* ★ Multi-grade span: horizontal grips (drag left/right to cover neighboring grades).
    Mirrors the top/bottom resize glow so "pull here" reads the same on all four
-   edges — green (vs the purple time-resize) = stretch across grades / connect. */
+   edges, in the same indigo as the time-resize handles. */
 .resize-handle-h{position:absolute;top:0;bottom:0;width:10px;cursor:ew-resize;z-index:6;opacity:0;transition:opacity 0.15s;display:flex;align-items:center;justify-content:center;}
 .resize-handle-h-left{left:0;border-radius:5px 0 0 5px;}
 .resize-handle-h-right{right:0;border-radius:0 5px 5px 0;}
-.grid-event:hover .resize-handle-h{opacity:1;background:rgba(16,185,129,0.35);}
+.grid-event:hover .resize-handle-h{opacity:1;background:rgba(99,102,241,0.25);}
 /* grip bar in the middle of the glow so the side affordance reads as "pull me" */
-.resize-handle-h::after{content:'';width:3px;height:26px;max-height:55%;border-radius:2px;background:rgba(6,95,70,0.55);}
-.resize-handle-h:hover{background:rgba(16,185,129,0.55) !important;}
-/* while actively stretching sideways: green ring (time resize keeps its purple one) */
-.grid-event.resizing-h{box-shadow:0 0 0 2px #10b981 !important;z-index:100 !important;}
+.resize-handle-h::after{content:'';width:3px;height:26px;max-height:55%;border-radius:2px;background:rgba(49,46,129,0.5);}
+.resize-handle-h:hover{background:rgba(99,102,241,0.45) !important;}
+/* while actively stretching sideways: same indigo ring as the time resize */
+.grid-event.resizing-h{box-shadow:0 0 0 2px #6366f1 !important;z-index:100 !important;}
 /* A merged span tile paints over its neighbor columns' gridlines/disabled zones */
 .grid-event.span-multi{z-index:3;}
 .grid-event.span-multi:hover{z-index:4;}

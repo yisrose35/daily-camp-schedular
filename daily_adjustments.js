@@ -181,7 +181,11 @@ function _daInjectDeleteButton(overlay, tileId) {
   btn.textContent = '🗑 Delete';
   btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
   btn.onclick = function () {
-    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return x.id !== tileId; });
+    // ★ Multi-grade span: deleting any member removes the whole span.
+    const _ev = dailyOverrideSkeleton.find(function (x) { return x.id === tileId; });
+    const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(function (m) { return m.id; }));
+    _ids.add(tileId);
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return !_ids.has(x.id); });
     selectedTileId = null;
     saveDailySkeleton();
     renderGrid();
@@ -421,6 +425,9 @@ async function daTryMergeSwimElective(newEvent, divName, skeleton) {
   const overlap = skeleton.find(ex => {
     if (ex.division !== divName) return false;
     if (ex.id === newEvent.id) return false;
+    // Never merge into a multi-grade span member — the hybrid would apply to
+    // one grade while its span siblings keep the old tile.
+    if (ex.spanGroup) return false;
     const xs = parseTimeToMinutes(ex.startTime);
     const xe = parseTimeToMinutes(ex.endTime);
     if (xs === null || xe === null) return false;
@@ -2611,8 +2618,91 @@ function bumpOverlappingTiles(newEvent, divName) {
       ev.startTime = minutesToTime(newStart);
       ev.endTime = minutesToTime(newEnd);
       currentEndMin = newEnd;
+      // ★ Multi-grade span: a bumped member drags its grade-mates with it so
+      //   the span keeps one time. One level deep — the guard stops bump
+      //   chains from ping-ponging between divisions.
+      if (ev.spanGroup && !_daBumpingSpan) {
+        _daBumpingSpan = true;
+        try {
+          _daSpanMembers(ev).forEach(m => {
+            if (m.id === ev.id) return;
+            m.startTime = ev.startTime; m.endTime = ev.endTime;
+            bumpOverlappingTiles(m, m.division);
+          });
+        } finally { _daBumpingSpan = false; }
+      }
     }
   });
+}
+
+// =========================================================================
+// ★ MULTI-GRADE TILE SPANNING (Daily Adjustments)
+// Same data model as the skeleton builder (master_schedule_builder.js): each
+// covered grade keeps its OWN tile — generation and saving are untouched —
+// linked by a shared `spanGroup` id + `spanDivisions` list. Adjacent members
+// render as one merged tile with left/right stretch grips; edits, moves and
+// deletes apply to the whole span.
+// =========================================================================
+let _daBumpingSpan = false;
+
+function _daSpanMembers(ev) {
+  if (!ev) return [];
+  if (!ev.spanGroup) return [ev];
+  return (dailyOverrideSkeleton || []).filter(m => m && m.spanGroup === ev.spanGroup);
+}
+
+function _daMakeSpanMirror(srcEv, targetDiv) {
+  const copy = JSON.parse(JSON.stringify(srcEv));
+  copy.id = 'evt_' + Math.random().toString(36).slice(2, 9);
+  copy.division = targetDiv;
+  delete copy.group1Bunks; // split-tile groups reference the SOURCE grade's bunks
+  if (typeof window._mbRemapLeagueForGrade === 'function') window._mbRemapLeagueForGrade(copy, targetDiv);
+  return copy;
+}
+
+// Propagate a tile edit to its span siblings — copies every field except the
+// per-grade ones (id, division, split-tile bunk groups).
+function _daSyncSpanSiblings(ev) {
+  if (!ev || !ev.spanGroup) return;
+  _daSpanMembers(ev).forEach(m => {
+    if (m === ev || m.id === ev.id) return;
+    const ownId = m.id, ownDiv = m.division, ownGroup1 = m.group1Bunks;
+    Object.keys(m).forEach(k => { if (!(k in ev)) delete m[k]; });
+    Object.keys(ev).forEach(k => {
+      m[k] = (ev[k] !== null && typeof ev[k] === 'object') ? JSON.parse(JSON.stringify(ev[k])) : ev[k];
+    });
+    m.id = ownId;
+    m.division = ownDiv;
+    if (ownGroup1) m.group1Bunks = ownGroup1; else delete m.group1Bunks;
+    if (typeof window._mbRemapLeagueForGrade === 'function') window._mbRemapLeagueForGrade(m, ownDiv);
+  });
+}
+
+// Heal span metadata after members were displaced/deleted outside the resize
+// path: single survivors lose their span fields, larger groups get
+// spanDivisions rebuilt from what actually exists.
+function _daRepairSpans() {
+  const groups = {};
+  (dailyOverrideSkeleton || []).forEach(ev => {
+    if (ev && ev.spanGroup) (groups[ev.spanGroup] = groups[ev.spanGroup] || []).push(ev);
+  });
+  const order = getColumnOrder();
+  Object.values(groups).forEach(members => {
+    if (members.length <= 1) {
+      members.forEach(m => { delete m.spanGroup; delete m.spanDivisions; });
+    } else {
+      const divs = [...new Set(members.map(m => m.division))]
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      members.forEach(m => { m.spanDivisions = divs.slice(); });
+    }
+  });
+}
+
+// Is this DOM node one of the resize grips (vertical time grips or the
+// horizontal multi-grade grips)? Keeps click/drag handlers off them.
+function _daIsResizeTarget(t) {
+  return !!(t && t.classList &&
+    (t.classList.contains('da-resize-handle') || t.classList.contains('da-resize-h')));
 }
 
 // =================================================================
@@ -2916,6 +3006,8 @@ function renderGrid() {
   daCleanupOrphanChangeTiles();
   // ★ Day 27: drop tiles whose division no longer exists in the camp structure
   daPruneOrphanDivisionTiles();
+  // ★ Multi-grade spans: heal groups whose members were displaced/deleted
+  _daRepairSpans();
 
   // AUTO MODE: render DAW layer timeline instead of stacking grid
   if (window._daBuilderMode === 'auto') {
@@ -2961,7 +3053,34 @@ function renderGrid() {
   
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
-  
+  gridEl.dataset.columns = JSON.stringify(availableDivisions);
+
+  // ★ Multi-grade spans: render each span group as ONE merged tile when its
+  //   grades sit in adjacent columns and share times; otherwise fall back to
+  //   individual tiles with a link badge (e.g. after a column reorder).
+  const _daSpanPlan = {};
+  {
+    const _groups = {};
+    dailyOverrideSkeleton.forEach(ev => {
+      if (ev && ev.spanGroup && ev.id) (_groups[ev.spanGroup] = _groups[ev.spanGroup] || []).push(ev);
+    });
+    Object.values(_groups).forEach(members => {
+      const idxOf = m => availableDivisions.indexOf(m.division);
+      const visible = members.filter(m => idxOf(m) !== -1).sort((a, b) => idxOf(a) - idxOf(b));
+      let merged = visible.length === members.length && visible.length > 1;
+      for (let i = 1; i < visible.length && merged; i++) {
+        if (idxOf(visible[i]) !== idxOf(visible[i - 1]) + 1) merged = false;
+        else if (visible[i].startTime !== visible[0].startTime || visible[i].endTime !== visible[0].endTime) merged = false;
+      }
+      if (merged) {
+        _daSpanPlan[visible[0].id] = { cols: visible.length, divs: visible.map(m => m.division) };
+        visible.slice(1).forEach(m => { _daSpanPlan[m.id] = { skip: true }; });
+      } else {
+        members.forEach(m => { _daSpanPlan[m.id] = { linked: true, divs: members.map(x => x.division) }; });
+      }
+    });
+  }
+
  const gridEl_isMS = gridEl.closest('.ms-container') !== null;
   const G = gridEl_isMS ? 'ms' : 'da';
   let html = `<div class="${G}-grid" style="grid-template-columns:70px repeat(${availableDivisions.length}, 1fr); column-gap:4px;">`;
@@ -3028,7 +3147,10 @@ function renderGrid() {
       if (start != null && end != null && end > start) {
         const top = (start - earliestMin) * PIXELS_PER_MINUTE;
         const height = (end - start) * PIXELS_PER_MINUTE;
-        html += renderEventTile(ev, top, height);
+        const _plan = _daSpanPlan[ev.id];
+        // Span mirrors are drawn by their anchor (leftmost member) — but the
+        // override badge below still applies to this column.
+        if (!_plan || !_plan.skip) html += renderEventTile(ev, top, height, _plan);
         // Override indicator: show a subtle badge if any bunk in this division has an override at this time
         const _ovForSlot = (currentOverrides.bunkActivityOverrides || []).filter(o => {
           const bunkDiv = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
@@ -3051,6 +3173,7 @@ function renderGrid() {
   addDropListeners(gridEl);
   addDragToRepositionListeners(gridEl);
   addResizeListeners(gridEl);
+  addHorizontalResizeListeners(gridEl);
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
 }
@@ -3285,7 +3408,12 @@ function daConvertSkeletonToLayers(skeleton) {
 
 
 
-function renderEventTile(ev, top, height) {
+// spanInfo (optional, from renderGrid's span plan):
+//   { cols, divs }   → anchor of a merged multi-grade span; draw stretched
+//                      across `cols` adjacent columns (grid column-gap: 4px).
+//   { linked, divs } → span members whose columns aren't adjacent right now;
+//                      draw individually with a link badge.
+function renderEventTile(ev, top, height, spanInfo) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
   if (!tile) {
@@ -3400,6 +3528,13 @@ function renderEventTile(ev, top, height) {
     if (ev.type === 'split' && ev.group1Bunks?.length) {
       content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">custom groups</div>`;
     }
+    // ★ Multi-grade span badge
+    if (spanInfo && spanInfo.cols > 1 && spanInfo.divs) {
+      content += `<div title="These grades do this activity together" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">↔ ${spanInfo.divs.map(_escHtml).join(' + ')}</div>`;
+    } else if (spanInfo && spanInfo.linked) {
+      const _others = (spanInfo.divs || []).filter(d => d !== ev.division);
+      content += `<div title="Linked with ${_escHtml(_others.join(', '))} — these grades do this activity together (columns not adjacent, so tiles are drawn separately)" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">🔗 with ${_others.map(_escHtml).join(', ')}</div>`;
+    }
   }
 
   // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
@@ -3423,13 +3558,27 @@ function renderEventTile(ev, top, height) {
     return html;
   })();
 
-  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
+  // ★ Multi-grade span geometry: the anchor stretches across N adjacent
+  //   equal-width columns; the grid uses column-gap:4px so add the gaps too.
+  //   (.da-event default is width:94%; left:3% from the stylesheet.)
+  const _spanCols = (spanInfo && spanInfo.cols > 1) ? spanInfo.cols : 1;
+  const _spanWidthStyle = _spanCols > 1 ? `width:calc(${_spanCols * 100}% + ${(_spanCols - 1) * 4}px - 6%);` : '';
+  const _spanClass = _spanCols > 1 ? ' da-span-multi' : '';
+
+  // Horizontal grips: drag left/right to stretch across neighboring grades.
+  // Hidden for non-adjacent linked tiles — their geometry is ambiguous until
+  // the columns sit together again.
+  const _hHandles = (spanInfo && spanInfo.linked) ? '' :
+    `<div class="da-resize-h da-resize-h-left"></div><div class="da-resize-h da-resize-h-right"></div>`;
+
+  return `<div class="da-event${_spanClass}${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${_escHtml(eventName)} (${_escHtml(timeStr)})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
+          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};${_spanWidthStyle}">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
           ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
+          ${_hHandles}
           </div>`;
 }
 
@@ -3564,6 +3713,17 @@ function addResizeListeners(gridEl) {
           event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
         }
 
+        // ★ Multi-grade span: every grade's copy keeps the same times, and
+        //   each covered grade reconciles its own overlaps.
+        if (event.spanGroup) {
+          _daSpanMembers(event).forEach(m => {
+            if (m.id !== event.id) {
+              m.startTime = event.startTime; m.endTime = event.endTime;
+              bumpOverlappingTiles(m, m.division);
+            }
+          });
+        }
+
         // ★ Day 25 fix (#1): reconcile overlaps after a resize, mirroring the
         //   move path. Resize previously wrote the new times without bumping
         //   neighbors, leaving a SILENT visual overlap that generation would
@@ -3574,6 +3734,145 @@ function addResizeListeners(gridEl) {
       }
     });
   });
+}
+
+// =================================================================
+// ★ HORIZONTAL (MULTI-GRADE) RESIZE
+// Drag a tile's left/right edge to stretch it across neighboring grade
+// columns — the horizontal twin of the top/bottom time resize (mirrors
+// the skeleton builder's implementation). Committing adds a linked mirror
+// tile per newly covered grade and removes the mirrors of grades dragged
+// back out.
+// =================================================================
+function addHorizontalResizeListeners(gridEl) {
+  let columns = [];
+  try { columns = JSON.parse(gridEl.dataset.columns || '[]'); } catch (_) { columns = []; }
+  if (!Array.isArray(columns) || columns.length === 0) return;
+  const COL_GAP = 4; // .da-grid / .ms-grid column-gap
+
+  let tooltip = document.getElementById('da-resize-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'da-resize-tooltip';
+    document.body.appendChild(tooltip);
+  }
+
+  gridEl.querySelectorAll('.da-event').forEach(tile => {
+    tile.querySelectorAll('.da-resize-h').forEach(handle => {
+      const isLeft = handle.classList.contains('da-resize-h-left');
+
+      // Keep the HTML5 drag machinery off the grips.
+      handle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const ev = dailyOverrideSkeleton.find(x => x.id === tile.dataset.id);
+        if (!ev) return;
+        const cell = tile.closest('.da-grid-cell');
+        const colWidth = cell ? cell.offsetWidth : 0;
+        if (!colWidth) return;
+        const colStride = colWidth + COL_GAP;
+
+        // Current span geometry. The rendered tile is the anchor — the span's
+        // leftmost member in display order (or a plain single-grade tile).
+        const members = _daSpanMembers(ev);
+        const spanDivs = members.map(m => m.division)
+          .sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
+        const leftIdx = columns.indexOf(spanDivs[0]);
+        const rightIdx = columns.indexOf(spanDivs[spanDivs.length - 1]);
+        const anchorIdx = columns.indexOf(ev.division);
+        if (leftIdx === -1 || rightIdx === -1 || anchorIdx === -1) return;
+
+        const startX = e.clientX;
+        let newLeftIdx = leftIdx, newRightIdx = rightIdx;
+        tile.classList.add('da-resizing-h');
+
+        const onMove = (e2) => {
+          const deltaCols = Math.round((e2.clientX - startX) / colStride);
+          if (isLeft) {
+            newLeftIdx = Math.min(Math.max(0, leftIdx + deltaCols), rightIdx);
+            newRightIdx = rightIdx;
+          } else {
+            newRightIdx = Math.max(Math.min(columns.length - 1, rightIdx + deltaCols), leftIdx);
+            newLeftIdx = leftIdx;
+          }
+          const cols = newRightIdx - newLeftIdx + 1;
+          const dcol = newLeftIdx - anchorIdx;
+          tile.style.left = `calc(${dcol * 100}% + ${dcol * COL_GAP}px + 3%)`;
+          tile.style.width = `calc(${cols * 100}% + ${(cols - 1) * COL_GAP}px - 6%)`;
+
+          const covered = columns.slice(newLeftIdx, newRightIdx + 1);
+          tooltip.innerHTML = covered.length > 1
+            ? `↔ ${covered.map(_escHtml).join(' + ')} — together`
+            : `${_escHtml(covered[0])} only`;
+          tooltip.style.display = 'block';
+          tooltip.style.left = (e2.clientX + 15) + 'px';
+          tooltip.style.top = (e2.clientY - 40) + 'px';
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          tile.classList.remove('da-resizing-h');
+          tooltip.style.display = 'none';
+          _daCommitSpanResize(ev, columns.slice(newLeftIdx, newRightIdx + 1));
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  });
+}
+
+// Commit a horizontal resize: make `ev`'s span cover exactly `newDivs`
+// (ordered, adjacent display columns). Grades entering the span get a linked
+// mirror of the dragged tile (with DA's usual overlap bumping); grades
+// leaving it lose their copy; span metadata is stamped on every survivor.
+function _daCommitSpanResize(ev, newDivs) {
+  if (!ev || !Array.isArray(newDivs) || newDivs.length === 0) { renderGrid(); return; }
+  const members = _daSpanMembers(ev);
+  const oldDivs = members.map(m => m.division);
+  const keepSet = new Set(newDivs);
+  if (oldDivs.length === newDivs.length && oldDivs.every(d => keepSet.has(d))) {
+    renderGrid(); // geometry preview may have moved the tile — repaint
+    return;
+  }
+
+  const byDiv = {};
+  members.forEach(m => { byDiv[m.division] = m; });
+
+  const removeIds = new Set(members.filter(m => !keepSet.has(m.division)).map(m => m.id));
+  if (removeIds.size) {
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(m => !removeIds.has(m.id));
+    if (removeIds.has(selectedTileId)) selectedTileId = null;
+  }
+
+  const groupId = ev.spanGroup || ('span_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  const added = [];
+  const finalMembers = newDivs.map(d => {
+    let m = byDiv[d];
+    if (!m) {
+      m = _daMakeSpanMirror(ev, d);
+      dailyOverrideSkeleton.push(m);
+      added.push(m);
+    }
+    return m;
+  });
+
+  if (finalMembers.length > 1) {
+    finalMembers.forEach(m => { m.spanGroup = groupId; m.spanDivisions = newDivs.slice(); });
+  } else {
+    finalMembers.forEach(m => { delete m.spanGroup; delete m.spanDivisions; });
+  }
+
+  // DA reconciles overlaps automatically — clear room in each newly covered grade.
+  added.forEach(m => bumpOverlappingTiles(m, m.division));
+
+  saveDailySkeleton();
+  renderGrid();
 }
 
 // =================================================================
@@ -3593,7 +3892,7 @@ function addDragToRepositionListeners(gridEl) {
   
   gridEl.querySelectorAll('.da-event').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
-      if (e.target.classList.contains('da-resize-handle')) { e.preventDefault(); return; }
+      if (_daIsResizeTarget(e.target)) { e.preventDefault(); return; }
       
       const eventId = tile.dataset.id;
       const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
@@ -3699,10 +3998,18 @@ function addDragToRepositionListeners(gridEl) {
           if (!isNight) return; // declined → abort the move, leave the tile where it was
         }
 
-        if (divName !== event.division) {
+        const _spanMembers = event.spanGroup ? _daSpanMembers(event) : null;
+        if (_spanMembers && _spanMembers.length > 1 && _spanMembers.some(m => m.division === divName)) {
+          // Multi-grade tile dropped anywhere inside its own span: the whole
+          // group moves together in time (grades stay as they are).
+          _spanMembers.forEach(m => { m.startTime = newStart; m.endTime = newEnd; m.isNightActivity = isNight; });
+          _spanMembers.forEach(m => bumpOverlappingTiles(m, m.division));
+        } else if (divName !== event.division) {
           // Cross-grade drop. Remap league reference so the copy points
           // at a league assigned to the new grade (not the source's).
           const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd, isNightActivity: isNight };
+          // A cross-grade copy is an independent tile, not a new span member.
+          delete copy.spanGroup; delete copy.spanDivisions;
           if (typeof window._mbRemapLeagueForGrade === 'function') {
             window._mbRemapLeagueForGrade(copy, divName);
           }
@@ -4490,7 +4797,7 @@ function addRemoveListeners(gridEl) {
     tile.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
 
     tile.onclick = (e) => {
-      if (e.target.classList.contains('da-resize-handle')) return;
+      if (_daIsResizeTarget(e.target)) return;
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
@@ -4503,7 +4810,7 @@ function addRemoveListeners(gridEl) {
     tile.ondblclick = (e) => {
       e.stopPropagation();
       if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
-      if (e.target.classList.contains('da-resize-handle')) return;
+      if (_daIsResizeTarget(e.target)) return;
       e.preventDefault();
       // Auto mode keeps the old behavior (Edit/Delete). Manual mode: double-click
       // SELECTS this whole period for partial regeneration.
@@ -4559,7 +4866,11 @@ function _showTileActionBar(tileEl) {
   delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
   delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
   delBtn.onclick = () => {
-    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
+    // ★ Multi-grade span: deleting any member removes the whole span.
+    const _ev = dailyOverrideSkeleton.find(x => x.id === id);
+    const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
+    _ids.add(id);
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
     selectedTileId = null;
     bar.remove();
     saveDailySkeleton();
@@ -4908,6 +5219,10 @@ async function editTile(id) {
     try { (window.daShowAlert || window.alert)('The date changed while editing — your change was not saved. Re-open the tile on the correct date.'); } catch (_) {}
     return;
   }
+
+  // ★ Multi-grade span: an edit to any member applies to the whole span.
+  _daSyncSpanSiblings(ev);
+
   saveDailySkeleton();
   renderGrid();
 }
@@ -4932,7 +5247,10 @@ async function copyTile(id) {
     return;
   }
   result.targets.forEach(div => {
-    dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
+    const _copy = { ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div };
+    // A copy is an independent tile — never a new member of the source's span.
+    delete _copy.spanGroup; delete _copy.spanDivisions;
+    dailyOverrideSkeleton.push(_copy);
   });
   saveDailySkeleton();
   renderGrid();
@@ -8310,12 +8628,20 @@ function _daToggleTileRegenSelect(tile) {
   const startMin = parseTimeToMinutes(ev.startTime);
   const endMin = parseTimeToMinutes(ev.endTime);
   if (startMin == null) return;
+  // ★ Multi-grade span: a merged tile is one logical period across several
+  //   grades — selecting it for regen selects EVERY member's slot, so the
+  //   partial regen covers all covered grades, not just the anchor column.
+  const _members = _daSpanMembers(ev);
   if (_daRegenTiles.has(id)) {
-    _daRegenTiles.delete(id);
+    _members.forEach(m => _daRegenTiles.delete(m.id));
     tile.style.outline = ''; tile.style.outlineOffset = '';
     tile.classList.remove('da-regen-selected');
   } else {
-    _daRegenTiles.set(id, { division: ev.division, startMin, endMin });
+    _members.forEach(m => {
+      const ms = parseTimeToMinutes(m.startTime);
+      const me = parseTimeToMinutes(m.endTime);
+      if (ms != null) _daRegenTiles.set(m.id, { division: m.division, startMin: ms, endMin: me });
+    });
     tile.style.outline = '3px solid #16a34a'; tile.style.outlineOffset = '-2px';
     tile.classList.add('da-regen-selected');
   }
@@ -9265,6 +9591,18 @@ function getStyles() {
     .da-resize-top { top:-2px; }
     .da-resize-bottom { bottom:-2px; }
     .da-event:hover .da-resize-handle { opacity:1; background:rgba(59,130,246,0.3); }
+    /* ★ Multi-grade span: horizontal grips — same glow as the top/bottom handles */
+    .da-resize-h { position:absolute; top:0; bottom:0; width:10px; cursor:ew-resize; z-index:6; opacity:0; transition:opacity 0.15s; display:flex; align-items:center; justify-content:center; }
+    .da-resize-h-left { left:0; border-radius:6px 0 0 6px; }
+    .da-resize-h-right { right:0; border-radius:0 6px 6px 0; }
+    .da-event:hover .da-resize-h { opacity:1; background:rgba(59,130,246,0.3); }
+    .da-resize-h::after { content:''; width:3px; height:26px; max-height:55%; border-radius:2px; background:rgba(30,64,175,0.5); }
+    .da-resize-h:hover { background:rgba(59,130,246,0.5) !important; }
+    .da-event.da-resizing-h { box-shadow:0 0 0 2px var(--da-accent) !important; z-index:100 !important; }
+    /* merged span tile paints over neighbor columns' gridlines/disabled zones */
+    .da-event.da-span-multi { z-index:3; }
+    .da-event.da-span-multi:hover { z-index:4; }
+    .da-event.da-span-multi.selected { z-index:5; }
     
     /* Drop Preview */
     .da-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:6px; pointer-events:none; z-index:5; }
@@ -10334,7 +10672,11 @@ window.DailyAdjustmentsInternal = {
   get dailyOverrideSkeleton() { return dailyOverrideSkeleton; },
   saveDailySkeleton: typeof saveDailySkeleton === 'function' ? saveDailySkeleton : function(){},
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
-  bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
+  bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){},
+  // ★ Multi-grade span helpers (mobile touch + future validation integration)
+  spanMembers: typeof _daSpanMembers === 'function' ? _daSpanMembers : function(ev){ return ev ? [ev] : []; },
+  commitSpanResize: typeof _daCommitSpanResize === 'function' ? _daCommitSpanResize : function(){},
+  syncSpanSiblings: typeof _daSyncSpanSiblings === 'function' ? _daSyncSpanSiblings : function(){}
 };
  
 

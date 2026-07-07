@@ -4564,10 +4564,10 @@ function renderEventTile(ev, top, height, spanInfo) {
   `;
 
   if (_spanCols > 1 && spanInfo.divs) {
-    innerHtml += `<div title="These grades do this activity together" style="font-size:9px;font-weight:600;color:#065f46;background:#d1fae5;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">↔ ${spanInfo.divs.map(_mbEsc).join(' + ')}</div>`;
+    innerHtml += `<div title="These grades do this activity together" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">↔ ${spanInfo.divs.map(_mbEsc).join(' + ')}</div>`;
   } else if (spanInfo && spanInfo.linked) {
     const _others = (spanInfo.divs || []).filter(d => d !== ev.division);
-    innerHtml += `<div title="Linked with ${_mbEsc(_others.join(', '))} — these grades do this activity together (columns not adjacent, so tiles are drawn separately)" style="font-size:9px;font-weight:600;color:#065f46;background:#d1fae5;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">🔗 with ${_others.map(_mbEsc).join(', ')}</div>`;
+    innerHtml += `<div title="Linked with ${_mbEsc(_others.join(', '))} — these grades do this activity together (columns not adjacent, so tiles are drawn separately)" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">🔗 with ${_others.map(_mbEsc).join(', ')}</div>`;
   }
 
   if (ev.location) {
