@@ -335,101 +335,110 @@ function render(p){
 }
 
 // ── FAMILIES ─────────────────────────────────────────────────────
-// ── Family auto-detect: same last name + same/similar address → suggestion ──
-function detectFamilySuggestions(){
-    // Build set of campers already assigned to a family
-    var assignedCampers=new Set();
-    Object.values(families).forEach(function(f){(f.camperIds||[]).forEach(function(n){assignedCampers.add(n)})});
+// ── Family auto-detect ───────────────────────────────────────────
+// Two campers are treated as the same family when at least 3 of these
+// four details match (only non-empty values ever count as a match):
+//   last name · address · parent email · parent name
+// Campers are clustered with union-find, so a chain of matches pulls a
+// whole family together even if no single pair shares all four.
+var FAMILY_MATCH_THRESHOLD = 3;
 
-    // Group unassigned campers by last name
-    var byLastName={};
-    Object.entries(roster).forEach(function([name,c]){
-        if(assignedCampers.has(name)) return;
-        var parts=name.trim().split(/\s+/);
-        var lastName=parts.length>1?parts[parts.length-1].toLowerCase():'';
-        if(!lastName) return;
-        if(!byLastName[lastName]) byLastName[lastName]=[];
-        byLastName[lastName].push({name:name,camper:c,lastName:parts[parts.length-1]});
-    });
-
-    var suggestions=[];
-    Object.entries(byLastName).forEach(function([lnKey,group]){
-        if(group.length<2) return; // need at least 2 campers to suggest a family
-
-        // Sub-group by address similarity
-        var addressGroups={};
-        group.forEach(function(g){
-            var addr=normalizeAddr(g.camper);
-            if(!addressGroups[addr]) addressGroups[addr]=[];
-            addressGroups[addr].push(g);
-        });
-
-        Object.values(addressGroups).forEach(function(addrGroup){
-            if(addrGroup.length<2) return;
-            // Check if they also share a parent name
-            var sharedParent=null;
-            var p1=addrGroup[0].camper.parent1Name;
-            if(p1){
-                var allMatch=addrGroup.every(function(g){return g.camper.parent1Name===p1});
-                if(allMatch) sharedParent=p1;
-            }
-            suggestions.push({
-                lastName:addrGroup[0].lastName,
-                campers:addrGroup.map(function(g){return g.name}),
-                address:[addrGroup[0].camper.street,addrGroup[0].camper.city,addrGroup[0].camper.state,addrGroup[0].camper.zip].filter(Boolean).join(', '),
-                parent:sharedParent||addrGroup[0].camper.parent1Name||'',
-                parentPhone:addrGroup[0].camper.parent1Phone||'',
-                parentEmail:addrGroup[0].camper.parent1Email||'',
-                confidence:sharedParent?'high':'medium'
-            });
-        });
-
-        // Also suggest groups with same last name but NO address (still likely family)
-        var noAddr=group.filter(function(g){return!g.camper.street});
-        if(noAddr.length>=2){
-            // Check if already covered by an address group
-            var coveredNames=new Set();
-            Object.values(addressGroups).forEach(function(ag){if(ag.length>=2) ag.forEach(function(g){coveredNames.add(g.name)})});
-            var uncovered=noAddr.filter(function(g){return!coveredNames.has(g.name)});
-            if(uncovered.length>=2){
-                suggestions.push({
-                    lastName:uncovered[0].lastName,
-                    campers:uncovered.map(function(g){return g.name}),
-                    address:'',
-                    parent:uncovered[0].camper.parent1Name||'',
-                    parentPhone:uncovered[0].camper.parent1Phone||'',
-                    parentEmail:uncovered[0].camper.parent1Email||'',
-                    confidence:'low'
-                });
-            }
-        }
-    });
-
-    // Also find single unassigned campers who match an EXISTING family by last name + address
-    var singleSuggestions=[];
-    Object.entries(roster).forEach(function([name,c]){
-        if(assignedCampers.has(name)) return;
-        var parts=name.trim().split(/\s+/);
-        var lastName=parts.length>1?parts[parts.length-1].toLowerCase():'';
-        if(!lastName) return;
-        // Check existing families
-        Object.entries(families).forEach(function([fk,f]){
-            if((f.camperIds||[]).indexOf(name)>=0) return; // already in this family
-            var famLast=(f.name||'').toLowerCase().replace(/\s*family$/,'').trim();
-            if(famLast!==lastName) return;
-            // Match — suggest adding to this family
-            singleSuggestions.push({familyKey:fk,familyName:f.name,camperName:name});
-        });
-    });
-
-    return{newFamilies:suggestions,addToExisting:singleSuggestions};
+function _famAddr(street, city, state, zip){
+    return [street, city, state, zip].join(' ').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+function _famItem(name, c){
+    var parts = name.trim().split(/\s+/);
+    var lastName = parts.length > 1 ? parts[parts.length - 1] : '';
+    return {
+        name: name, camper: c, lastName: lastName,
+        last: lastName.toLowerCase(),
+        addr: _famAddr(c.street, c.city, c.state, c.zip),
+        email: (c.parent1Email || '').trim().toLowerCase(),
+        parent: (c.parent1Name || '').trim().toLowerCase()
+    };
+}
+// How many of the four fields match between two records (empty fields
+// on either side never count).
+function _famMatchCount(a, b){
+    var m = 0;
+    if(a.last   && a.last   === b.last)   m++;
+    if(a.addr   && a.addr   === b.addr)   m++;
+    if(a.email  && a.email  === b.email)  m++;
+    if(a.parent && a.parent === b.parent) m++;
+    return m;
+}
+// Comparable fields for an existing family record.
+function _famFieldsForExisting(f){
+    var hh = (f.households && f.households[0]) || {};
+    var p  = (hh.parents && hh.parents[0]) || {};
+    return {
+        last:   (f.name || '').toLowerCase().replace(/\s*family$/, '').trim(),
+        addr:   String(hh.address || '').toLowerCase().replace(/[^a-z0-9]/g, ''),
+        email:  (p.email || '').trim().toLowerCase(),
+        parent: (p.name  || '').trim().toLowerCase()
+    };
 }
 
-function normalizeAddr(c){
-    var street=(c.street||'').toLowerCase().replace(/[^a-z0-9]/g,'').trim();
-    var zip=(c.zip||'').trim();
-    if(!street&&!zip) return '__noaddr__'+Math.random(); // unique key so no-address campers don't accidentally group
-    return street+'|'+zip;
+function detectFamilySuggestions(){
+    var assignedCampers = new Set();
+    Object.values(families).forEach(function(f){ (f.camperIds || []).forEach(function(n){ assignedCampers.add(n); }); });
+
+    // Unassigned campers → comparable items
+    var items = [];
+    Object.entries(roster).forEach(function([name, c]){
+        if(assignedCampers.has(name)) return;
+        items.push(_famItem(name, c));
+    });
+
+    // Union-find: merge any two campers that match on >= threshold fields.
+    var uf = items.map(function(_, i){ return i; });
+    function find(i){ while(uf[i] !== i){ uf[i] = uf[uf[i]]; i = uf[i]; } return i; }
+    for(var i = 0; i < items.length; i++){
+        for(var j = i + 1; j < items.length; j++){
+            if(_famMatchCount(items[i], items[j]) >= FAMILY_MATCH_THRESHOLD) uf[find(i)] = find(j);
+        }
+    }
+    var groups = {};
+    items.forEach(function(it, i){ var r = find(i); (groups[r] = groups[r] || []).push(it); });
+
+    var suggestions = [];
+    Object.keys(groups).forEach(function(k){
+        var grp = groups[k];
+        if(grp.length < 2) return;
+        // Confidence = the weakest link in the group (min pairwise match).
+        var minMatch = 4;
+        for(var a = 0; a < grp.length; a++){
+            for(var b = a + 1; b < grp.length; b++){
+                var mc = _famMatchCount(grp[a], grp[b]);
+                if(mc < minMatch) minMatch = mc;
+            }
+        }
+        var rep = grp[0];
+        suggestions.push({
+            lastName: rep.lastName,
+            campers: grp.map(function(g){ return g.name; }),
+            address: [rep.camper.street, rep.camper.city, rep.camper.state, rep.camper.zip].filter(Boolean).join(', '),
+            parent: rep.camper.parent1Name || '',
+            parentPhone: rep.camper.parent1Phone || '',
+            parentEmail: rep.camper.parent1Email || '',
+            confidence: minMatch >= 4 ? 'high' : 'medium'
+        });
+    });
+
+    // Unassigned campers that match an EXISTING family on >= threshold fields.
+    var singleSuggestions = [];
+    Object.entries(roster).forEach(function([name, c]){
+        if(assignedCampers.has(name)) return;
+        var it = _famItem(name, c);
+        Object.entries(families).forEach(function([fk, f]){
+            if((f.camperIds || []).indexOf(name) >= 0) return;
+            if(_famMatchCount(it, _famFieldsForExisting(f)) >= FAMILY_MATCH_THRESHOLD){
+                singleSuggestions.push({ familyKey: fk, familyName: f.name, camperName: name });
+            }
+        });
+    });
+
+    return { newFamilies: suggestions, addToExisting: singleSuggestions };
 }
 
 function acceptFamilySuggestion(idx){
@@ -483,7 +492,7 @@ function _familyBundlesHtml(optHighlight){
     // Show suggestions banner
     if(newFams.length||addToExisting.length){
         h+='<div style="background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border:1px solid #FDE68A;border-radius:var(--r2);padding:16px;margin-bottom:18px">';
-        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Family Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Campers with the same last name and address may belong together</span></div>';
+        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Family Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Campers matching on 3+ of last name, address, email or parent name may belong together</span></div>';
 
         // New family suggestions
         newFams.forEach(function(s,i){
