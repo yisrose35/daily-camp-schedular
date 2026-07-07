@@ -1631,14 +1631,16 @@ function _syncMessagesFromCloud(){
             var store=_readLinkStore();
             if(!store.messages)store.messages=[];
             var byId={};store.messages.forEach(function(m){byId[m.id]=m;});
+            var changed=false;
             (window._cloudMessages||[]).forEach(function(cm){
                 var existing=byId[cm.id];
                 if(existing){
-                    // Refresh the parent archive flag so archives made on another
-                    // device show up here too.
-                    existing.archived=!!cm.archived;
+                    // Refresh the parent archive/read flags so changes made on
+                    // another device show up here too.
+                    if(existing.archived!==!!cm.archived){ existing.archived=!!cm.archived; changed=true; }
                     return;
                 }
+                changed=true;
                 store.messages.push({
                     id:cm.id, direction:cm.direction,
                     from: cm.direction==='in' ? (parent.name||'Parent') : 'Camp Office',
@@ -1651,9 +1653,14 @@ function _syncMessagesFromCloud(){
                     metadata:{parentEmail:parent.email}
                 });
             });
-            _writeLinkStore(store);
-            if(typeof renderMsgs==='function')renderMsgs();
-            _updateMsgBadges();
+            if(changed){
+                _writeLinkStore(store);
+                // Don't disrupt a reply-in-progress or an open message — only
+                // refresh the list when the parent is on the list view.
+                var detailOpen=(document.getElementById('msgDetailView')||{}).style && document.getElementById('msgDetailView').style.display==='block';
+                if(typeof renderMsgs==='function' && !detailOpen)renderMsgs();
+                _updateMsgBadges();
+            }
         });
     }
     if(typeof window._loadCampBroadcastsCloud==='function'){
@@ -2173,6 +2180,17 @@ window.addEventListener('storage', function(e) {
         }
         _loadMessages(); // instant local echo while the live cloud fetch below is in flight
         _syncMessagesFromCloud();
+        // Near-realtime inbox: poll every 12s while the tab is visible, and
+        // sync immediately when the tab regains focus — new camp messages show
+        // up without a manual reload. (True push would need parent SELECT RLS
+        // on link_messages; polling is reliable cross-device with no migration.)
+        if(!window._msgPollTimer){
+            window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 12000);
+        }
+        if(!window._msgVisWired){
+            window._msgVisWired=true;
+            document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') _syncMessagesFromCloud(); });
+        }
         init();
         hydratePickupRequests();
         _hideOverlay('parentAuthOverlay');

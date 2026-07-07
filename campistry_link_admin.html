@@ -3426,6 +3426,13 @@ function boot() {
         _loadCloudTips(function() {
             if (document.getElementById('page-tips').classList.contains('active')) _renderTipHistory();
         });
+        // Near-realtime inbox: poll cloud messages every 12s while visible, and
+        // on tab focus, so a parent's reply shows up without a manual reload.
+        // loadCloudMessages re-renders only when something actually changed.
+        function _pollMsgs(){ if (window.CampistryLink && window.CampistryLink.loadCloudMessages) window.CampistryLink.loadCloudMessages(200); }
+        _pollMsgs();
+        if (!window._adminMsgPoll) window._adminMsgPoll = setInterval(function(){ if (document.visibilityState !== 'hidden') _pollMsgs(); }, 12000);
+        if (!window._adminMsgVis) { window._adminMsgVis = true; document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') _pollMsgs(); }); }
     }
     if (_dbc()) _initCloudSubs();
     else window.addEventListener('campistry-db-ready', _initCloudSubs, { once: true });

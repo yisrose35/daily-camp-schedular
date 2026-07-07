@@ -511,8 +511,8 @@ body {
 @media (hover: hover) and (pointer: fine) {
     /* Only reveal after the pointer lingers ~0.45s — a quick pass-over won't
        pop the actions open. Retracts immediately when the pointer leaves. */
-    .msg-swipe:hover > .msg-item { transform: translateX(calc(-1 * var(--msg-actions-w))); transition-delay: 0.45s; }
-    .msg-swipe:hover .msg-actions { opacity: 1; pointer-events: auto; transition-delay: 0.45s; }
+    .msg-swipe:hover > .msg-item { transform: translateX(calc(-1 * var(--msg-actions-w))); transition-delay: 0.4s; }
+    .msg-swipe:hover .msg-actions { opacity: 1; pointer-events: auto; transition-delay: 0.4s; }
 }
 .msg-action-btn {
     border: none; cursor: pointer; width: 70px;

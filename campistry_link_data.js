@@ -243,7 +243,7 @@
      * the admin inbox picks up parent replies made via submit_message_reply,
      * not just messages sent from this same browser.
      */
-    function loadCloudMessages(limit) {
+    function loadCloudMessages(limit, cb) {
         var db = _db(); if (!db) return;
         limit = limit || 200;
         db.client
@@ -257,16 +257,19 @@
                 var rows = res.data || [];
                 var byId = {};
                 _store.messages.forEach(function(m) { byId[m.id] = m; });
+                var changed = false;
                 rows.forEach(function(row) {
                     var existing = byId[row.id];
                     if (existing) {
                         // Row already known locally (e.g. just sent from this browser) —
                         // still refresh archived/important/read so multi-device edits show up.
+                        if (existing.archived !== !!row.archived || existing.important !== !!row.important || existing.read !== row.read) changed = true;
                         existing.archived = !!row.archived;
                         existing.important = !!row.important;
                         existing.read = row.read;
                         return;
                     }
+                    changed = true;
                     _store.messages.push({
                         id: row.id, direction: row.direction,
                         from: row.direction === 'in' ? (row.parent_name || 'Parent') : 'Camp Admin',
@@ -281,13 +284,18 @@
                     });
                 });
                 saveStore();
-                console.log('[Link] Cloud messages loaded:', rows.length, 'records');
                 // Refresh whatever's currently on screen so a parent reply
-                // doesn't require navigating away and back to appear.
-                try {
-                    if (window.currentMsgTab === 'inbox' && typeof window.renderAdminMsgs === 'function') window.renderAdminMsgs('all');
-                    if (window.currentMsgTab === 'outbox' && typeof window.renderSentList === 'function') window.renderSentList();
-                } catch (e) {}
+                // doesn't require navigating away and back to appear — but only
+                // when something actually changed, so a poll doesn't disrupt the
+                // admin's current view/filter/scroll every cycle.
+                if (changed) {
+                    try {
+                        var f = window._inboxReadFilter || 'all';
+                        if (window.currentMsgTab === 'inbox' && typeof window.renderAdminMsgs === 'function') window.renderAdminMsgs(f);
+                        if (window.currentMsgTab === 'outbox' && typeof window.renderSentList === 'function') window.renderSentList();
+                    } catch (e) {}
+                }
+                if (typeof cb === 'function') try { cb(changed); } catch (e) {}
             });
     }
 
