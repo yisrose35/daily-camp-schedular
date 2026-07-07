@@ -2808,22 +2808,35 @@
         // Resolve the leagues config (name → league object with .divisions).
         let leaguesCfg = window.masterLeagues || window.leaguesByName ||
             window.loadGlobalSettings?.()?.app1?.leagues || [];
-        const leagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
-        if (!leagues.length) return warnings;
+        const leagues = (Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {}))
+            .filter(l => l && l.enabled !== false);
+        // Specialty leagues live in a SEPARATE store — they are a different
+        // system and must never be time-compared against a regular league.
+        const specialtyLeagues = Object.values(window.loadGlobalSettings?.()?.specialtyLeagues || {})
+            .filter(l => l && l.name && l.enabled !== false);
+        if (!leagues.length && !specialtyLeagues.length) return warnings;
 
-        // Every league tile in the skeleton, with its parsed time span. (In this
-        // app "division" IS the grade — window.divisions is grade-keyed.)
-        const leagueTiles = manualSkeleton
-            .filter(it => it && (it.type === 'league' ||
-                (typeof normalizeLeague === 'function' && normalizeLeague(it.event || ''))))
-            .map(it => ({
+        // Every league tile in the skeleton, split by system. (In this app
+        // "division" IS the grade — window.divisions is grade-keyed.) A
+        // specialty tile whose event merely contains the word "league" (e.g.
+        // "State Leagues") must not be pulled into the regular-league pool.
+        const regTiles = [], specTiles = [];
+        manualSkeleton.forEach(it => {
+            if (!it) return;
+            const isSpec = it.type === 'specialty_league';
+            const isReg = !isSpec && (it.type === 'league' ||
+                (typeof normalizeLeague === 'function' && normalizeLeague(it.event || '')));
+            if (!isSpec && !isReg) return;
+            const t = {
                 div: String(it.division),
                 leagueName: it.leagueName || null,
                 startMin: parse(it.startTime),
                 endMin: parse(it.endTime)
-            }))
-            .filter(t => t.startMin != null && t.endMin != null && t.endMin > t.startMin);
-        if (!leagueTiles.length) return warnings;
+            };
+            if (t.startMin == null || t.endMin == null || t.endMin <= t.startMin) return;
+            (isSpec ? specTiles : regTiles).push(t);
+        });
+        if (!regTiles.length && !specTiles.length) return warnings;
 
         const spanKey = (t) => `${t.startMin}-${t.endMin}`;
         const spanLabel = (k) => {
@@ -2831,37 +2844,59 @@
             return `${fmt(s)}-${fmt(e)}`;
         };
 
-        leagues.forEach(league => {
-            if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
-            const divSet = new Set(league.divisions.map(String));
-            // Tiles for THIS league: in one of its grades, and either unnamed
-            // (auto-bound) or explicitly naming this league.
-            const tiles = leagueTiles.filter(t =>
-                divSet.has(t.div) && (!t.leagueName || t.leagueName === league.name));
-
-            // Group each grade's tile time-spans.
-            const byGrade = {}; // grade → Set(spanKey)
-            tiles.forEach(t => { (byGrade[t.div] = byGrade[t.div] || new Set()).add(spanKey(t)); });
-
-            const grades = Object.keys(byGrade);
-            if (grades.length < 2) return; // need 2+ grades to be "together"
-
-            // Aligned when every grade has the identical set of time spans.
-            const refKey = [...byGrade[grades[0]]].sort().join('|');
-            const allAligned = grades.every(g => [...byGrade[g]].sort().join('|') === refKey);
-            if (allAligned) return;
-
-            // Build "Grade (10:00am-10:45am) vs Grade (10:00am-11:00am)".
-            const parts = grades
-                .sort()
-                .map(g => {
-                    const spans = [...byGrade[g]]
-                        .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
-                        .map(spanLabel);
-                    return `${g} (${spans.join(', ')})`;
+        const checkSystem = (cfgList, tiles) => {
+            // How many leagues in this system cover each grade. An UNNAMED tile
+            // can only be attributed to a league when it's the grade's ONLY
+            // league here — with 2+ leagues the tile is ambiguous, and counting
+            // it toward every league fabricates mismatches (e.g. the grade's
+            // second game window belongs to its OTHER league, not this one).
+            const leagueCountByGrade = {};
+            cfgList.forEach(l => {
+                if (!l || !Array.isArray(l.divisions)) return;
+                l.divisions.forEach(d => {
+                    const k = String(d);
+                    leagueCountByGrade[k] = (leagueCountByGrade[k] || 0) + 1;
                 });
-            warnings.push(`${league.name}: ${parts.join(' vs ')}`);
-        });
+            });
+
+            cfgList.forEach(league => {
+                if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
+                const divSet = new Set(league.divisions.map(String));
+                // Tiles for THIS league: in one of its grades, and either
+                // explicitly naming this league, or unnamed AND unambiguous.
+                const mine = tiles.filter(t => {
+                    if (!divSet.has(t.div)) return false;
+                    if (t.leagueName) return t.leagueName === league.name;
+                    return (leagueCountByGrade[t.div] || 0) <= 1;
+                });
+
+                // Group each grade's tile time-spans.
+                const byGrade = {}; // grade → Set(spanKey)
+                mine.forEach(t => { (byGrade[t.div] = byGrade[t.div] || new Set()).add(spanKey(t)); });
+
+                const grades = Object.keys(byGrade);
+                if (grades.length < 2) return; // need 2+ grades to be "together"
+
+                // Aligned when every grade has the identical set of time spans.
+                const refKey = [...byGrade[grades[0]]].sort().join('|');
+                const allAligned = grades.every(g => [...byGrade[g]].sort().join('|') === refKey);
+                if (allAligned) return;
+
+                // Build "Grade (10:00am-10:45am) vs Grade (10:00am-11:00am)".
+                const parts = grades
+                    .sort()
+                    .map(g => {
+                        const spans = [...byGrade[g]]
+                            .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
+                            .map(spanLabel);
+                        return `${g} (${spans.join(', ')})`;
+                    });
+                warnings.push(`${league.name}: ${parts.join(' vs ')}`);
+            });
+        };
+
+        checkSystem(leagues, regTiles);
+        checkSystem(specialtyLeagues, specTiles);
 
         return warnings;
     }

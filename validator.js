@@ -400,7 +400,22 @@
         // Resolve the leagues config (name → league object with .divisions).
         let leaguesCfg = window.masterLeagues || window.leaguesByName ||
             window.loadGlobalSettings?.()?.app1?.leagues || [];
-        const leagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
+        const leagues = (Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {}))
+            .filter(l => l && l.enabled !== false);
+
+        // How many leagues cover each grade. An UNNAMED block can only be
+        // attributed to a league when it's the grade's ONLY league — with 2+
+        // leagues the block is ambiguous, and counting it toward every league
+        // fabricates mismatches (the grade's second game window belongs to its
+        // OTHER league, not this one).
+        const leagueCountByGrade = {};
+        leagues.forEach(l => {
+            if (!l || !Array.isArray(l.divisions)) return;
+            l.divisions.forEach(d => {
+                const k = String(d);
+                leagueCountByGrade[k] = (leagueCountByGrade[k] || 0) + 1;
+            });
+        });
 
         leagues.forEach(league => {
             if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
@@ -414,8 +429,13 @@
                 Object.entries(slots).forEach(([slotIdxStr, entry]) => {
                     if (!entry) return;
                     // A named block that belongs to a *different* league isn't this
-                    // league's tile; unnamed blocks (auto-bound) are accepted.
-                    if (entry.leagueName && entry.leagueName !== league.name) return;
+                    // league's tile; unnamed blocks count only when this grade has
+                    // exactly one league (unambiguous auto-bind).
+                    if (entry.leagueName) {
+                        if (entry.leagueName !== league.name) return;
+                    } else if ((leagueCountByGrade[String(divName)] || 0) > 1) {
+                        return;
+                    }
                     const slot = divSlots[Number(slotIdxStr)];
                     if (!slot || slot.startMin == null || slot.endMin == null) return;
                     (byGrade[divName] = byGrade[divName] || new Set()).add(slot.startMin + '-' + slot.endMin);
