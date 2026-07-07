@@ -670,6 +670,87 @@
     // MAIN VALIDATION FUNCTION
     // =====================================================================
 
+    // ★ ELECTIVE facility reservations. An elective tile reserves its activities/
+    //   locations for its own grade's window; nothing from ANOTHER grade may sit on
+    //   those facilities at that time. Electives create NO schedule entry (they
+    //   render from the skeleton), so the field-usage index above never sees them —
+    //   this rebuilds the reservations straight from the skeleton and flags any
+    //   foreign-grade placement on them. Own grade is exempt (elective division
+    //   lock). Pins fill real entries, so they are already covered elsewhere.
+    function checkElectiveReservations(assignments, bunkGrade, divisionTimes) {
+        const errors = [];
+        const Utils = window.SchedulerCoreUtils;
+        let resv = null;
+        try {
+            const skel = (typeof window.getSkeletonFromAnySource === 'function' && window.getSkeletonFromAnySource())
+                || window.manualSkeleton || window.dailyOverrideSkeleton;
+            if (Array.isArray(skel) && Utils && Utils.getFieldReservationsFromSkeleton) {
+                resv = Utils.getFieldReservationsFromSkeleton(skel);
+            }
+        } catch (e) { /* fall through */ }
+        if (!resv || !Object.keys(resv).length) resv = window.fieldReservations || null;
+        if (!resv || !Object.keys(resv).length) return errors;
+
+        const keyLc = {};
+        let anyElective = false;
+        Object.keys(resv).forEach(k => {
+            const list = (resv[k] || []).filter(r => r && (r.type === 'elective' || r.type === 'swim_elective'));
+            if (list.length) { keyLc[String(k).toLowerCase().trim()] = { key: k, list: list }; anyElective = true; }
+        });
+        if (!anyElective) return errors;
+
+        const specLoc = {};
+        const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        (((gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [])).forEach(s => {
+            if (s && s.name && s.location) { const n = String(s.name).toLowerCase().trim(); if (!specLoc[n]) specLoc[n] = s.location; }
+        });
+        const resolveLoc = window.getLocationForActivity;
+        const IGN = { 'free': 1, 'free play': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'transition': 1, 'buffer': 1 };
+
+        const seen = new Set();
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            const grade = bunkGrade[String(bunk)];
+            const gSlots = divisionTimes[grade] || [];
+            arr.forEach((entry, idx) => {
+                if (!entry || entry.continuation || entry._pinned) return;
+                const act = entry._activity || entry.field;
+                if (!act || IGN[String(act).toLowerCase().trim()]) return;
+                if (entry._league || entry._leagueMatchups || entry.matchups) return;
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = gSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+                const cands = new Set();
+                const add = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') cands.add(f.trim()); };
+                add(entry.field); add(entry._location);
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(add);
+                add(specLoc[String(act).toLowerCase().trim()]);
+                try { add(resolveLoc && resolveLoc(act)); } catch (e) { /* ignore */ }
+                for (const cf of cands) {
+                    const rec = keyLc[String(cf).toLowerCase().trim()];
+                    if (!rec) continue;
+                    for (const r of rec.list) {
+                        if (!(r.startMin < eM && r.endMin > sM)) continue;
+                        if (r.division && String(r.division) === String(grade)) continue;
+                        if (String(act).toLowerCase().trim() === String(r.event || '').toLowerCase().trim()) continue;
+                        const sig = rec.key + '|' + bunk + '|' + sM;
+                        if (seen.has(sig)) continue;
+                        seen.add(sig);
+                        errors.push({
+                            type: 'elective_reservation',
+                            message: 'Elective Facility Conflict: ' + bunk + ' (' + grade + ') has "' + act + '" on ' +
+                                rec.key + ' at ' + formatTime(sM) + '-' + formatTime(eM) +
+                                ', but that facility is reserved by an elective for ' + r.division + ' during this time'
+                        });
+                        break;
+                    }
+                }
+            });
+        });
+        return errors;
+    }
+
     function validateAutoSchedule(opts) {
         // ★ opts.silent = true → run the validation LOGIC and return the result
         //   WITHOUT showing the modal. Used by automated post-gen consumers (the
@@ -710,13 +791,20 @@
         const fieldRepWarnings = checkSameDayFieldRepetitions(assignments, bunkGrade, divisionTimes);
         fieldRepWarnings.forEach(w => allWarnings.push(w));
 
+        // F. Elective facility reservations (foreign grade on an elective's facility)
+        let electiveErrors = [];
+        try { electiveErrors = checkElectiveReservations(assignments, bunkGrade, divisionTimes); }
+        catch (e) { console.warn('🛡️ elective-reservation check failed:', e); }
+        electiveErrors.forEach(e => allErrors.push(e));
+
         // ── Summary ──
         const summary = {
             crossDivision: crossDivErrors.length,
             capacity: capErrors.length,
             staggeredSharing: staggerErrors.length,
             sameDayRepeat: repeatErrors.length,
-            fieldReuse: fieldRepWarnings.length
+            fieldReuse: fieldRepWarnings.length,
+            electiveReservation: electiveErrors.length
         };
 
         console.log('🛡️ Auto Validator Results:');
@@ -725,6 +813,7 @@
         console.log('  Staggered sharing:', summary.staggeredSharing);
         console.log('  Same-day repeats:', summary.sameDayRepeat);
         console.log('  Field reuse warnings:', summary.fieldReuse);
+        console.log('  Elective reservations:', summary.electiveReservation);
         console.log('  TOTAL errors:', allErrors.length);
 
         // ── Per-error detail (so the offending field/grade/bunks are visible

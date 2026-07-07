@@ -73,7 +73,7 @@
     // =========================================================================
 
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.2...');
+        console.log('🛡️ Running comprehensive schedule validation v3.3...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -215,6 +215,12 @@
         // =====================================================================
         try { checkCooldownRules(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('🛡️ spacing-rule check failed:', e); }
+
+        // =====================================================================
+        // 16. ★★★ v3.3: ELECTIVE FACILITY RESERVATIONS ★★★
+        // =====================================================================
+        try { checkElectiveReservations(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ elective-reservation check failed:', e); }
 
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
@@ -1247,6 +1253,105 @@
     }
 
     /**
+     * ★ v3.3 CHECK 16: ELECTIVE facility reservations. An elective tile is a
+     * fancy custom-pinned tile — once it reserves its activities/locations for a
+     * division's window, nothing from ANOTHER division may sit on those facilities
+     * at that time. Electives are invisible to every other check because they
+     * create NO schedule entry (they render from the skeleton block and only
+     * reserve their facilities), so CHECK 1 / CHECK 12 never see them. This check
+     * rebuilds the elective reservations straight from the skeleton (the same
+     * getFieldReservationsFromSkeleton the generator uses) and flags any bunk in a
+     * DIFFERENT division whose activity occupies a reserved facility during the
+     * elective's window. The elective's OWN grade is exempt (division-lock
+     * semantics). Pinned-tile reservations are NOT re-checked here — those tiles
+     * DO fill entries (with _reservedFields) so CHECK 12 already covers them.
+     */
+    function checkElectiveReservations(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const Utils = window.SchedulerCoreUtils;
+
+        // Reservations: rebuild from the skeleton (accurate even without a fresh
+        // gen); fall back to the live window.fieldReservations.
+        let resv = null;
+        try {
+            const skel = (typeof window.getSkeletonFromAnySource === 'function' && window.getSkeletonFromAnySource())
+                || window.manualSkeleton || window.dailyOverrideSkeleton;
+            if (Array.isArray(skel) && Utils && Utils.getFieldReservationsFromSkeleton) {
+                resv = Utils.getFieldReservationsFromSkeleton(skel);
+            }
+        } catch (e) { /* fall through */ }
+        if (!resv || !Object.keys(resv).length) resv = window.fieldReservations || null;
+        if (!resv || !Object.keys(resv).length) return errors;
+
+        // Keep only ELECTIVE reservations (pins are covered by CHECK 12).
+        const keyLc = {};                       // lc facility → original key
+        let anyElective = false;
+        Object.keys(resv).forEach(k => {
+            const list = (resv[k] || []).filter(r => r && (r.type === 'elective' || r.type === 'swim_elective'));
+            if (list.length) { keyLc[String(k).toLowerCase().trim()] = { key: k, list: list }; anyElective = true; }
+        });
+        if (!anyElective) return errors;
+
+        // special name (lc) → host location (a special may sit in a room whose
+        // name differs from the special's).
+        const specLoc = {};
+        const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        (((gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [])).forEach(s => {
+            if (s && s.name && s.location) { const n = String(s.name).toLowerCase().trim(); if (!specLoc[n]) specLoc[n] = s.location; }
+        });
+        const resolveLoc = window.getLocationForActivity;
+
+        const seen = new Set();
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            if (!Array.isArray(slots)) return;
+            const div = bunkDivMap[String(bunk)];
+            const divSlots = divisionTimes[div] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                if (entry._pinned) return;
+                if (isLeagueEntry(entry)) return;
+                if (isTransitionEntry(entry)) return;
+                const act = entry._activity || entry.field;
+                if (!act || IGNORED_FIELDS.includes(String(act).toLowerCase().trim())) return;
+
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = divSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+
+                // Physical facilities this entry occupies.
+                const cands = new Set();
+                const add = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') cands.add(f.trim()); };
+                add(entry.field); add(entry._location);
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(add);
+                add(specLoc[String(act).toLowerCase().trim()]);
+                try { add(resolveLoc && resolveLoc(act)); } catch (e) { /* ignore */ }
+
+                for (const cf of cands) {
+                    const rec = keyLc[String(cf).toLowerCase().trim()];
+                    if (!rec) continue;
+                    for (const r of rec.list) {
+                        if (!(r.startMin < eM && r.endMin > sM)) continue;
+                        // Own grade is exempt (elective division-lock semantics).
+                        if (r.division && String(r.division) === String(div)) continue;
+                        // Edge: the entry IS the elective's own event label.
+                        if (String(act).toLowerCase().trim() === String(r.event || '').toLowerCase().trim()) continue;
+                        const sig = rec.key + '|' + bunk + '|' + sM;
+                        if (seen.has(sig)) continue;
+                        seen.add(sig);
+                        errors.push(
+                            `<strong>Elective Facility Conflict:</strong> <u>${bunk}</u> (${div}) has "${act}" on ` +
+                            `<u>${rec.key}</u> at ${formatTime(sM)}-${formatTime(eM)}, but that facility is reserved ` +
+                            `by an elective for <strong>${r.division}</strong> during this time`
+                        );
+                        break;
+                    }
+                }
+            });
+        });
+        return errors;
+    }
+
+    /**
      * ★ v3.1 CHECK 13 (warnings): field-quality audit against the Facilities
      * quality groups (fieldGroup + qualityRank, 1 = best).
      *  (a) a placement sat on rank N while a better-ranked group member was
@@ -1555,7 +1660,7 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
                     <h2 style="margin:0; color:#333; display:flex; align-items:center; gap:8px;">
                         🛡️ Schedule Validator
-                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.2</span>
+                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.3</span>
                     </h2>
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#888; padding:0 8px;">&times;</button>
                 </div>
@@ -1809,6 +1914,6 @@
         }
     };
 
-    console.log('🛡️ Validator v3.2 loaded — conflicts + capacity + access rules + league/event timeline + field quality + sports/spacing rules');
+    console.log('🛡️ Validator v3.3 loaded — conflicts + capacity + access rules + league/event timeline + field quality + sports/spacing rules + elective reservations');
 
 })();
