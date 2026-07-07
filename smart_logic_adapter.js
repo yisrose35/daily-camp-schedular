@@ -164,48 +164,6 @@
             }
         }
 
-        // CHECK FIELD RESERVATIONS (skeleton pins + electives) — robust wall-clock,
-        // cross-division-safe. The GlobalFieldLocks check above is keyed by
-        // per-division SLOT INDEX (slot N is a different clock-time in each grade's
-        // grid), so it can MISS a foreign division's elective. Sports already gate on
-        // window.fieldReservations via canBlockFit; a special must too, or an
-        // elective's reserved facility leaks to another division's special (the
-        // confirmed "Pizza Making handed to two divisions" bug). Division-aware: an
-        // ELECTIVE reservation exempts its OWN grade (mirrors the elective division
-        // lock); a PINNED reservation blocks everyone (the custom-pinned invariant).
-        if (window.fieldReservations && slots && slots.length > 0) {
-            const _dts = (window.divisionTimes && window.divisionTimes[divisionName]) || [];
-            let _qs = null, _qe = null;
-            for (const _si of slots) {
-                const _s = _dts[_si];
-                if (_s) {
-                    if (_qs === null || _s.startMin < _qs) _qs = _s.startMin;
-                    if (_qe === null || _s.endMin > _qe) _qe = _s.endMin;
-                }
-            }
-            if (_qs !== null && _qe !== null) {
-                const _isElectiveOwn = (r) =>
-                    (r.type === 'elective' || r.type === 'swim_elective') &&
-                    r.division && String(r.division) === String(divisionName);
-                const _checkResv = (name) => {
-                    const list = window.fieldReservations[name];
-                    if (!Array.isArray(list)) return null;
-                    return list.find(r => r && r.startMin < _qe && r.endMin > _qs && !_isElectiveOwn(r)) || null;
-                };
-                let _rz = _checkResv(specialName);
-                if (!_rz && isSwimOrPool(specialName)) {
-                    for (const alias of SWIM_POOL_ALIASES) { _rz = _checkResv(alias); if (_rz) break; }
-                }
-                // A special may be hosted in a physical room whose name differs from
-                // the special's — check that reserved facility too.
-                if (!_rz && props && props.location) _rz = _checkResv(props.location);
-                if (_rz) {
-                    log(`    [RESERVED] ${specialName} reserved for ${_rz.division} ("${_rz.event}") — blocked for ${divisionName}`);
-                    return false;
-                }
-            }
-        }
-
         // Check accessRestrictions restrictions
         if (props.accessRestrictions?.enabled) {
             const allowedDivisions = props.accessRestrictions.divisions || {};
@@ -434,6 +392,35 @@
             if (props.available === false) {
                 log(`    ❌ ${specialName}: globally disabled`);
                 return;
+            }
+
+            // 2a. FIELD RESERVATIONS (skeleton pins + electives) — robust wall-clock,
+            //     cross-division-safe. Uses the REAL block times (startMin/endMin) of
+            //     this pool query, NOT slot indices — so it never suffers the per-grade
+            //     slot-index misalignment that lets a foreign division miss an elective's
+            //     GlobalFieldLocks lock. This is the special-pool parity for what
+            //     canBlockFit does for sports (see scheduler_core_main STEP 2.45 note):
+            //     an elective reserves its facilities for its OWN grade only, a pin
+            //     reserves against everyone. Without this, an elective's reserved special
+            //     (e.g. Pizza Making) leaks to another division's SmartTile special.
+            if (window.fieldReservations && startMin != null && endMin != null) {
+                const _isElectiveOwn = (r) =>
+                    (r.type === 'elective' || r.type === 'swim_elective') &&
+                    r.division && String(r.division) === String(divisionName);
+                const _resvHit = (nm) => {
+                    const list = nm && window.fieldReservations[nm];
+                    if (!Array.isArray(list)) return null;
+                    return list.find(r => r && r.startMin < endMin && r.endMin > startMin && !_isElectiveOwn(r)) || null;
+                };
+                let _rz = _resvHit(specialName);
+                if (!_rz) _rz = _resvHit(_resolveHostLoc(specialName));
+                if (!_rz && isSwimOrPool(specialName)) {
+                    for (const _a of SWIM_POOL_ALIASES) { _rz = _resvHit(_a); if (_rz) break; }
+                }
+                if (_rz) {
+                    log(`    ❌ ${specialName}: reserved for ${_rz.division} ("${_rz.event}") — blocked for ${divisionName}`);
+                    return;
+                }
             }
 
             // 2. CHECK DIVISION RESTRICTIONS + LOCKS (UPDATED!)

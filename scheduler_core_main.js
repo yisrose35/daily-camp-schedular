@@ -7198,9 +7198,32 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (String(act || '').toLowerCase().trim() === String(hit.resv.event || '').toLowerCase().trim()) return;
                         // Per-tile regen: prefer restoring the slot's ORIGINAL pre-regen
                         //   activity (which respected pins) over leaving it Free — unless
-                        //   the original sat on the SAME reserved facility.
+                        //   the original ALSO sits on a reserved facility. Checking only
+                        //   "different field than the current conflict" is not enough: an
+                        //   elective reserves SEVERAL facilities (e.g. Gaming Center +
+                        //   Pizza Making), so a bunk whose current slot conflicts on
+                        //   "Gaming Center" could have an ORIGINAL of "Pizza Making" —
+                        //   restoring it just swaps one reserved facility for another and
+                        //   the conflict silently persists (the confirmed live symptom).
+                        //   So reject the restore whenever the original occupies ANY
+                        //   reserved facility overlapping this window, and fall to Free.
                         const _o79 = (_rss79 && _rss79[bunk] && _rss79[bunk].orig) ? _rss79[bunk].orig[idx] : null;
-                        if (_o79 && _o79.field && String(_o79.field).toLowerCase().trim() !== String(hit.field).toLowerCase().trim()) {
+                        let _origReserved = false;
+                        if (_o79) {
+                            const _oCands = new Set();
+                            const _oAdd = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') _oCands.add(f.trim()); };
+                            _oAdd(_o79.field);
+                            _oAdd(_o79._location);
+                            if (Array.isArray(_o79._reservedFields)) _o79._reservedFields.forEach(_oAdd);
+                            const _oAct = _o79._activity || _o79.field;
+                            _oAdd(_evSpecLoc[String(_oAct || '').toLowerCase().trim()]);
+                            try { _oAdd(_evResolve && _evResolve(_oAct)); } catch (_ig2) {}
+                            for (const _ocf of _oCands) {
+                                const _okey = _resvKeyLc[String(_ocf).toLowerCase().trim()];
+                                if (_okey && Utils.isFieldReserved(_okey, sM, eM, _resv)) { _origReserved = true; break; }
+                            }
+                        }
+                        if (_o79 && _o79.field && !_origReserved && String(_o79.field).toLowerCase().trim() !== String(hit.field).toLowerCase().trim()) {
                             console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
                                 ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" → restored original "' + (_o79._activity || _o79.field) + '"');
                             arr[idx] = Object.assign({}, _o79, { _fixed: true, _regenOriginalRestored: true, continuation: false });
