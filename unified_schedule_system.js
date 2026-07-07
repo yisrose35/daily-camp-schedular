@@ -228,7 +228,7 @@
                     const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
                     if (rDivs.length > 0 && gradeKey && !rDivs.includes(gradeKey)) continue;
                     if (isUnavail && rs < endMin && re > startMin) {
-                        return { ok: false, soft: false, reason: 'Field ' + location + ' is Unavailable in this time window' };
+                        return { ok: false, soft: true, reason: 'Field ' + location + ' is marked Unavailable in this time window' };
                     }
                     if (isAvail) {
                         hasGradeAvail = true;
@@ -236,7 +236,7 @@
                     }
                 }
                 if (hasGradeAvail && !insideAvail) {
-                    return { ok: false, soft: false, reason: 'Field ' + location + ' is outside its Available windows for ' + grade };
+                    return { ok: false, soft: true, reason: 'Field ' + location + ' is outside its Available windows for ' + grade };
                 }
             }
 
@@ -246,7 +246,7 @@
                 || [];
             if (location && Array.isArray(disabledFields)
                 && disabledFields.map(String).indexOf(String(location)) >= 0) {
-                return { ok: false, soft: false, reason: 'Field ' + location + ' is disabled for today' };
+                return { ok: false, soft: true, reason: 'Field ' + location + ' is disabled for today' };
             }
             const dsByField = window.dailyDisabledSportsByField || {};
             const ds = location ? dsByField[location] : null;
@@ -254,7 +254,7 @@
                 const blocked = (typeof ds.has === 'function') ? ds.has(activity)
                               : (Array.isArray(ds) ? ds.indexOf(activity) >= 0 : false);
                 if (blocked) {
-                    return { ok: false, soft: false, reason: activity + ' is disabled on ' + location + ' for today' };
+                    return { ok: false, soft: true, reason: activity + ' is disabled on ' + location + ' for today' };
                 }
             }
 
@@ -264,16 +264,15 @@
                 const want = String(activity).toLowerCase();
                 const inList = fld.activities.some(function (a) { return String(a).toLowerCase() === want; });
                 if (!inList) {
-                    return { ok: false, soft: false, reason: activity + ' is not configured for ' + location };
+                    return { ok: false, soft: true, reason: activity + ' is not configured for ' + location };
                 }
             }
 
-            // 6a. FieldCombos exclusivity — HARD. Two fields can't be
-            // physically used at once when they share space (e.g. Full
-            // Gym + Gym 1 + Gym 2). Earlier the SchedulingRules call
-            // below classified this with cooldowns under SOFT, letting
-            // the user confirm-through and double-book a physical
-            // court. Split out as a hard check.
+            // 6a. FieldCombos exclusivity — SOFT (warn only). Two fields that
+            // share physical space (e.g. Full Gym + Gym 1 + Gym 2) can't really
+            // be used at once, but per product decision a manual post-edit must
+            // never be hard-blocked — surface it as a "Place anyway?" warning so
+            // the user stays in control (they may be knowingly overriding).
             if (location && window.FieldCombos
                 && typeof window.FieldCombos.isBlockedByCombo === 'function'
                 && startMin != null && endMin != null) {
@@ -281,8 +280,8 @@
                     const _combo = window.FieldCombos.isBlockedByCombo(location, startMin, endMin, bunk);
                     if (_combo && _combo.blocked) {
                         return {
-                            ok: false, soft: false,
-                            reason: 'Field ' + location + ' conflicts with ' + (_combo.blockingField || 'a combined field') + ' (FieldCombos)'
+                            ok: false, soft: true,
+                            reason: 'Field ' + location + ' overlaps ' + (_combo.blockingField || 'a combined field') + ' (shared space)'
                         };
                     }
                 } catch (_) {}
