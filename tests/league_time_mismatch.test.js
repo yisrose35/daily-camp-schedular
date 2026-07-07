@@ -182,6 +182,43 @@ describe('detectLeagueTileTimeMismatch', () => {
         assert.match(warnings[0], /State Leagues/);
     });
 
+    it("REGRESSION: an extra non-overlapping game window in the SAME league is fine when a shared game exists", () => {
+        // Even if the second tile carries the shared league's name (e.g. a
+        // drag/copy auto-remapped it), a 5:10-6:30 window that collides with
+        // nothing is an extra game — not a broken shared game.
+        global.leaguesByName = {
+            'Junior League': { name: 'Junior League', enabled: true, divisions: ['4th Grade', '5th Grade'] }
+        };
+        const warnings = detect([
+            tile('4th Grade', 'league', 'Junior League', '1:25pm', '2:30pm'),
+            tile('5th Grade', 'league', 'Junior League', '1:25pm', '2:30pm'),
+            tile('5th Grade', 'league', 'Junior League', '5:10pm', '6:30pm')
+        ]);
+        assert.deepEqual(warnings, []);
+    });
+
+    it('still warns when windows overlap but are not identical', () => {
+        global.leaguesByName = {
+            'Junior League': { name: 'Junior League', enabled: true, divisions: ['4th Grade', '5th Grade'] }
+        };
+        const warnings = detect([
+            tile('4th Grade', 'league', 'Junior League', '1:25pm', '2:30pm'),
+            tile('5th Grade', 'league', 'Junior League', '1:25pm', '2:45pm')
+        ]);
+        assert.equal(warnings.length, 1, 'overlapping-but-unequal is a broken shared game');
+    });
+
+    it('still warns when grades share NO common game window', () => {
+        global.leaguesByName = {
+            'Junior League': { name: 'Junior League', enabled: true, divisions: ['4th Grade', '5th Grade'] }
+        };
+        const warnings = detect([
+            tile('4th Grade', 'league', 'Junior League', '10:00am', '11:00am'),
+            tile('5th Grade', 'league', 'Junior League', '3:00pm', '4:00pm')
+        ]);
+        assert.equal(warnings.length, 1, 'disjoint windows mean the grades never play together');
+    });
+
     it('disabled leagues are ignored', () => {
         global.leaguesByName = {
             'Old League': { name: 'Old League', enabled: false, divisions: ['4th Grade', '5th Grade'] }

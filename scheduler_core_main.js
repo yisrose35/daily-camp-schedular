@@ -2877,10 +2877,33 @@
                 const grades = Object.keys(byGrade);
                 if (grades.length < 2) return; // need 2+ grades to be "together"
 
-                // Aligned when every grade has the identical set of time spans.
-                const refKey = [...byGrade[grades[0]]].sort().join('|');
-                const allAligned = grades.every(g => [...byGrade[g]].sort().join('|') === refKey);
-                if (allAligned) return;
+                // The grades play together when they share an IDENTICAL game
+                // window. Two real mistakes to catch:
+                //  (1) two grades' windows overlap but aren't identical — a
+                //      broken shared game (1:25-2:30 vs 1:30-2:30);
+                //  (2) no window is present in EVERY grade — they never play
+                //      together at all.
+                // An EXTRA window in one grade that doesn't collide with any
+                // other grade's window (e.g. a second, later game) is fine —
+                // requiring identical SETS flagged that as a false mismatch.
+                const bounds = (k) => k.split('-').map(Number);
+                let broken = false;
+                for (let i = 0; i < grades.length && !broken; i++) {
+                    for (let j = i + 1; j < grades.length && !broken; j++) {
+                        for (const ka of byGrade[grades[i]]) {
+                            if (broken) break;
+                            const [as, ae] = bounds(ka);
+                            for (const kb of byGrade[grades[j]]) {
+                                if (ka === kb) continue;
+                                const [bs, be] = bounds(kb);
+                                if (as < be && ae > bs) { broken = true; break; }
+                            }
+                        }
+                    }
+                }
+                const hasCommonSpan = [...byGrade[grades[0]]]
+                    .some(k => grades.every(g => byGrade[g].has(k)));
+                if (!broken && hasCommonSpan) return;
 
                 // Build "Grade (10:00am-10:45am) vs Grade (10:00am-11:00am)".
                 const parts = grades
@@ -7425,6 +7448,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
     // ★★★ FIX v17.11: Expose core optimizer for division_times_integration.js ★★★
     window._coreRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
-    console.log('⚙️ Scheduler Core Main v17.11 loaded (RBAC + CAPACITY FIX)');
+    console.log('⚙️ Scheduler Core Main v17.12 loaded (RBAC + CAPACITY FIX + league mismatch common-window check)');
 
 })();

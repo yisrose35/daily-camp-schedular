@@ -445,9 +445,28 @@
             const grades = Object.keys(byGrade);
             if (grades.length < 2) return; // need 2+ grades to be "together"
 
-            // Aligned when every grade has the identical set of time spans.
-            const refKey = [...byGrade[grades[0]]].sort().join('|');
-            if (grades.every(g => [...byGrade[g]].sort().join('|') === refKey)) return;
+            // The grades play together when they share an IDENTICAL game window.
+            // Warn only for (1) overlapping-but-unequal windows (a broken shared
+            // game) or (2) no window common to every grade (never together).
+            // An extra non-colliding window in one grade is NOT a mismatch.
+            const bounds = (k) => k.split('-').map(Number);
+            let broken = false;
+            for (let i = 0; i < grades.length && !broken; i++) {
+                for (let j = i + 1; j < grades.length && !broken; j++) {
+                    for (const ka of byGrade[grades[i]]) {
+                        if (broken) break;
+                        const [as, ae] = bounds(ka);
+                        for (const kb of byGrade[grades[j]]) {
+                            if (ka === kb) continue;
+                            const [bs, be] = bounds(kb);
+                            if (as < be && ae > bs) { broken = true; break; }
+                        }
+                    }
+                }
+            }
+            const hasCommonSpan = [...byGrade[grades[0]]]
+                .some(k => grades.every(g => byGrade[g].has(k)));
+            if (!broken && hasCommonSpan) return;
 
             const spanLabel = (k) => {
                 const [s, e] = k.split('-').map(Number);
