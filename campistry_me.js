@@ -346,16 +346,34 @@ var FAMILY_MATCH_THRESHOLD = 3;
 function _famAddr(street, city, state, zip){
     return [street, city, state, zip].join(' ').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
-function _famItem(name, c){
-    var parts = name.trim().split(/\s+/);
+function _famItemRaw(name, street, city, state, zip, parentName, parentEmail){
+    var parts = (name || '').trim().split(/\s+/);
     var lastName = parts.length > 1 ? parts[parts.length - 1] : '';
     return {
-        name: name, camper: c, lastName: lastName,
-        last: lastName.toLowerCase(),
-        addr: _famAddr(c.street, c.city, c.state, c.zip),
-        email: (c.parent1Email || '').trim().toLowerCase(),
-        parent: (c.parent1Name || '').trim().toLowerCase()
+        name: name, lastName: lastName, last: lastName.toLowerCase(),
+        addr: _famAddr(street, city, state, zip),
+        email: (parentEmail || '').trim().toLowerCase(),
+        parent: (parentName || '').trim().toLowerCase()
     };
+}
+function _famItem(name, c){
+    c = c || {};
+    var it = _famItemRaw(name, c.street, c.city, c.state, c.zip, c.parent1Name, c.parent1Email);
+    it.camper = c;
+    return it;
+}
+// Find an existing family this camper belongs to — either it already lists
+// them, or they match it on 3+ of {last name, address, email, parent name}.
+// Returns the family key, or null (caller should start a new family).
+function _resolveFamilyKey(camperName, item){
+    var match = null;
+    Object.keys(families).forEach(function(fk){
+        if(match) return;
+        var f = families[fk];
+        if((f.camperIds || []).indexOf(camperName) >= 0){ match = fk; return; }
+        if(_famMatchCount(item, _famFieldsForExisting(f)) >= FAMILY_MATCH_THRESHOLD) match = fk;
+    });
+    return match;
 }
 // How many of the four fields match between two records (empty fields
 // on either side never count).
@@ -874,10 +892,14 @@ function saveCamper(){
     };
     // Sync address to Campistry Go format
     syncAddressToGo(full,roster[full]);
-    // Every camper always belongs to a family — create one if needed
+    // Every camper belongs to a family. Join an EXISTING family only when the
+    // camper matches it on 3+ of {last name, address, parent email, parent
+    // name} — a shared last name alone is NOT enough. Otherwise start a new,
+    // uniquely-keyed family for them.
     if(last){
-        var famKey='fam_'+last.toLowerCase().replace(/[^a-z0-9]/g,'');
-        if(!families[famKey]){
+        var famKey=_resolveFamilyKey(full,_famItem(full,roster[full]));
+        if(!famKey){
+            famKey='fam_'+last.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(existingId||Date.now());
             var p1e={name:roster[full].parent1Name||'',phone:roster[full].parent1Phone||'',email:roster[full].parent1Email||'',relation:'Parent'};
             families[famKey]={
                 name:last+' Family',
@@ -886,7 +908,7 @@ function saveCamper(){
                 balance:0,totalPaid:0,notes:'Added via camper profile'
             };
         } else {
-            // Add this camper to existing family if not already there
+            // Add this camper to the matched family if not already there
             if(families[famKey].camperIds.indexOf(full)<0)families[famKey].camperIds.push(full);
             // Backfill parent info if the primary household had none
             var hh0=families[famKey].households&&families[famKey].households[0];
@@ -3044,22 +3066,28 @@ function enrollCamper(id){
         if(!c.dietary&&e.dietary)c.dietary=e.dietary;
         toast('Enrolled — updated existing camper');
     }
-    // Auto-create family
+    // Auto-family: join an EXISTING family only on a 3-of-4 match (last name,
+    // address, parent email, parent name) — not on a shared last name alone.
     var lastName=e.camperName.split(' ').pop();
-    var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
+    var famKey=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
     var sesObj=sessions.find(function(s){return s.name===e.session});
     var tuition=e.sessionTuition||sesObj?.tuition||0;
 
-    // Apply sibling discount if applicable
-    if(sesObj&&sesObj.siblingDiscount>0&&families[famKey]&&families[famKey].camperIds.length>0){
+    // Sibling discount only when actually joining a matched family that
+    // already has campers.
+    if(sesObj&&sesObj.siblingDiscount>0&&famKey&&families[famKey]&&families[famKey].camperIds.length>0){
         var discAmt=Math.round(tuition*sesObj.siblingDiscount/100);
         tuition-=discAmt;
         e.discount={pct:sesObj.siblingDiscount,amt:discAmt};
         console.log('[Me] Sibling discount applied: '+sesObj.siblingDiscount+'% (-'+fm(discAmt)+') for '+e.camperName);
     }
 
-    if(!families[famKey]&&e.parentName){
+    if(famKey&&families[famKey]){
+        if(families[famKey].camperIds.indexOf(e.camperName)<0) families[famKey].camperIds.push(e.camperName);
+        families[famKey].balance=(families[famKey].balance||0)+tuition;
+    }else if(e.parentName){
+        famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(roster[e.camperName]?roster[e.camperName].camperId:Date.now());
         var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
         if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
         families[famKey]={
@@ -3069,9 +3097,6 @@ function enrollCamper(id){
             balance:tuition,totalPaid:0,
             notes:'Enrolled via registration — '+e.session
         };
-    }else if(families[famKey]){
-        if(families[famKey].camperIds.indexOf(e.camperName)<0) families[famKey].camperIds.push(e.camperName);
-        families[famKey].balance=(families[famKey].balance||0)+tuition;
     }
 
     // Generate payment plan / installment schedule
@@ -5213,45 +5238,43 @@ function importRows(rows){
     });
 
     // ═══ PASS 3: Auto-generate families from parent data ═══
-    // Group campers by last name + parent name to create family units
-    var familyMap={};
+    // Cluster imported campers into families with the 3-of-4 rule (last name,
+    // address, parent email, parent name) — never on a shared last name alone.
+    var impItems=[];
     rows.forEach(function(r){
         if(!r.parent1Name)return;
-        var lastName=r.name.split(' ').pop();
-        // Key by last name + parent name to handle split households
-        var famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
-        if(!familyMap[famKey]){
-            familyMap[famKey]={
-                lastName:lastName,
-                parentName:r.parent1Name,
-                parentPhone:r.parent1Phone||'',
-                parentEmail:r.parent1Email||'',
-                address:[r.street,r.city,r.state,r.zip].filter(Boolean).join(', '),
-                campers:[]
-            };
-        }
-        if(familyMap[famKey].campers.indexOf(r.name)===-1){
-            familyMap[famKey].campers.push(r.name);
-        }
+        impItems.push(_famItemRaw(r.name,r.street,r.city,r.state,r.zip,r.parent1Name,r.parent1Email));
     });
-
-    Object.entries(familyMap).forEach(function([famKey,fam]){
-        if(families[famKey]){
-            // Update existing family — add any new campers
-            fam.campers.forEach(function(cn){
-                if(families[famKey].camperIds.indexOf(cn)===-1)families[famKey].camperIds.push(cn);
-            });
+    var impUf=impItems.map(function(_,i){return i});
+    function impFind(i){while(impUf[i]!==i){impUf[i]=impUf[impUf[i]];i=impUf[i]}return i}
+    for(var ii=0;ii<impItems.length;ii++){
+        for(var jj=ii+1;jj<impItems.length;jj++){
+            if(_famMatchCount(impItems[ii],impItems[jj])>=FAMILY_MATCH_THRESHOLD)impUf[impFind(ii)]=impFind(jj);
+        }
+    }
+    var impGroups={};
+    impItems.forEach(function(it,i){var r=impFind(i);(impGroups[r]=impGroups[r]||[]).push(it)});
+    Object.keys(impGroups).forEach(function(gk){
+        var grp=impGroups[gk];
+        var rep=grp[0];
+        var camperNames=grp.map(function(g){return g.name});
+        // Match an existing family (already-listed campers, or a 3-of-4 match).
+        var famKey=null;
+        camperNames.forEach(function(cn){ if(!famKey) famKey=_resolveFamilyKey(cn,rep); });
+        if(famKey&&families[famKey]){
+            camperNames.forEach(function(cn){ if(families[famKey].camperIds.indexOf(cn)===-1)families[famKey].camperIds.push(cn); });
         }else{
-            // Create new family
+            var rc=roster[rep.name]||{};
+            famKey='fam_'+(rep.lastName||'').toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(rc.camperId||('imp'+gk));
             families[famKey]={
-                name:fam.lastName+' Family',
+                name:(rep.lastName||'Family')+' Family',
                 households:[{
                     label:'Primary',
-                    parents:[{name:fam.parentName,phone:fam.parentPhone,email:fam.parentEmail,relation:'Parent'}],
-                    address:fam.address,
+                    parents:[{name:rc.parent1Name||'',phone:rc.parent1Phone||'',email:rc.parent1Email||'',relation:'Parent'}],
+                    address:[rc.street,rc.city,rc.state,rc.zip].filter(Boolean).join(', '),
                     billingContact:true
                 }],
-                camperIds:fam.campers,
+                camperIds:camperNames.slice(),
                 balance:0,totalPaid:0,
                 notes:'Auto-created from CSV import'
             };
