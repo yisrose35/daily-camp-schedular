@@ -2604,7 +2604,7 @@ function openFillOnline(formIdx, camperName, camperId){
     _foSections = LinkForms.buildSections(fields);
     _foSecIdx = 0; _foSecStack = []; _foVisited = { 0: true };
 
-    var body = '';
+    var body = LinkForms.formHeaderHtml(formDef.settings);
     _foSections.forEach(function(sec){
         body += '<div class="fo-section" data-sec="'+sec.index+'"'+(sec.index===0?'':' style="display:none;"')+'>';
         if (sec.heading){
@@ -2618,6 +2618,7 @@ function openFillOnline(formIdx, camperName, camperId){
             body += '<div class="fo-field lkf-field" id="'+fid+'_wrap" data-fid="'+LinkForms.esc(field.id)+'">';
             body += '<label class="fo-label lkf-label" for="'+fid+'">' + LinkForms.esc(field.label||'') + req + '</label>';
             if (field.help) body += '<div class="lkf-help">' + LinkForms.esc(field.help) + '</div>';
+            body += LinkForms.fieldImageHtml(field);
             body += LinkForms.renderInput(field, { id: fid, mode: 'live' });
             body += '</div>';
         });
@@ -2654,8 +2655,13 @@ function openFillOnline(formIdx, camperName, camperId){
     _foPrefill();
     _foApplyLogic();
 
+    // Optional per-form theme accent.
+    var drawer = document.getElementById('foDrawer');
+    var theme = (formDef.settings && formDef.settings.themeColor) || '';
+    if (theme) drawer.style.setProperty('--link-color', theme); else drawer.style.removeProperty('--link-color');
+
     document.getElementById('foBackdrop').classList.add('open');
-    document.getElementById('foDrawer').classList.add('open');
+    drawer.classList.add('open');
     if (hadDraft) _foToast('Draft restored');
 }
 

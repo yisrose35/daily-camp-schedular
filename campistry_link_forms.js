@@ -47,6 +47,14 @@
     LF.isStatic  = function (t) { return t === 'heading' || t === 'paragraph'; };
     LF.hasOptions = function (t) { var m = LF.meta(t); return !!m.opts; };
 
+    // Optional imagery (stored as data URLs on the field / form settings).
+    LF.fieldImageHtml = function (field) {
+        return field && field.image ? '<img class="lkf-qimg" src="' + field.image + '" alt="">' : '';
+    };
+    LF.formHeaderHtml = function (settings) {
+        return settings && settings.headerImage ? '<img class="lkf-header-img" src="' + settings.headerImage + '" alt="">' : '';
+    };
+
     LF.esc = function (s) {
         return String(s == null ? '' : s)
             .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
