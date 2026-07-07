@@ -249,11 +249,11 @@ const bunkDivMapOf = (divisions) => {
         const juniorBetter = mkUsage({ fkey: 'c1', facility: 'C1', divName: 'B', bunk: 'b1', owner: 'Bunk b1' });
         const warns = v.checkFieldQuality([seniorWorse, juniorBetter]);
         check('T13g junior bunk on better field than senior flagged as inversion',
-            warns.some(w => w.includes('seniority inversion')), JSON.stringify(warns));
+            warns.some(w => w.includes('junior Div.') && w.includes('holds better')), JSON.stringify(warns));
         const leagueHolder = mkUsage({ fkey: 'c1', facility: 'C1', divName: 'B', owner: 'League "X" — 1 vs 2', kind: 'league' });
         const warns2 = v.checkFieldQuality([seniorWorse, leagueHolder]);
         check('T13h junior LEAGUE holding better field NOT an inversion (league priority by design)',
-            !warns2.some(w => w.includes('seniority inversion')), JSON.stringify(warns2));
+            !warns2.some(w => w.includes('junior Div.') && w.includes('holds better')), JSON.stringify(warns2));
     }
 }
 

@@ -78,6 +78,7 @@ beforeEach(() => {
     fakeStorage = {};
     global.dailyOverrideSkeleton = [];
     global.MasterSchedulerInternal = undefined;
+    delete global.loadCurrentDailyData;
     // No sharing config → getSharingRules default capacity (not sharable = 1)
     global.loadGlobalSettings = function () { return {}; };
 });
@@ -91,7 +92,8 @@ describe('checkPinnedTileConflicts (CHECK 17)', () => {
         V.annotatePinSpans(usages);
         const errors = V.checkPinnedTileConflicts(usages, {});
         assert.equal(errors.length, 1);
-        assert.match(errors[0], /Pinned Tile Conflict/);
+        assert.match(errors[0], /pinned by/);
+        assert.match(errors[0], /not linked/);
         assert.match(errors[0], /Main Hall/);
     });
 
@@ -230,14 +232,14 @@ describe('checkPinnedTileConflicts (CHECK 17)', () => {
         // v3.5 severity re-tier: pinned hits are ERRORS too (user decision).
         assert.equal(res.errors.length, 3, '1 regular + 2 pinned (deduped across bunks), all errors');
         assert.deepEqual(res.warnings, []);
-        const regular = res.errors.find(e => !/pinned/.test(e));
+        const regular = res.errors.find(e => /b3/.test(e));
         assert.ok(regular, 'regular placement on day-disabled field flags');
         assert.match(regular, /Rink/);
-        assert.match(regular, /Daily Adjustments/);
-        const rinkPin = res.errors.find(e => /pinned/.test(e) && /Rink/.test(e));
-        const lakePin = res.errors.find(e => /pinned/.test(e) && /Lake/.test(e));
+        assert.match(regular, /Resources/);
+        const rinkPin = res.errors.find(e => /Hockey Night/.test(e) && /Rink/.test(e));
+        const lakePin = res.errors.find(e => /Lake/.test(e));
         assert.ok(rinkPin, 'pinned tile reserving the day-disabled Rink flags');
-        assert.match(rinkPin, /Daily Adjustments/);
+        assert.match(rinkPin, /Resources/);
         assert.ok(lakePin, 'pinned tile on the Facilities-disabled Lake flags');
         assert.match(lakePin, /Facilities/);
 

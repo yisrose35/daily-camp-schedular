@@ -73,7 +73,7 @@
     // =========================================================================
 
     function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.5...');
+        console.log('🛡️ Running comprehensive schedule validation v3.6...');
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -159,11 +159,8 @@
                                     const key = [fn, exField, bunk, ob].sort().join('|') + '|' + slot.startMin;
                                     if (comboSeen.has(key)) return;
                                     comboSeen.add(key);
-                                    const timeLabel = formatTime(slot.startMin) + ' - ' + formatTime(slot.endMin);
                                     errors.push(
-                                        `<strong>Combined Field Conflict:</strong> <u>${fn}</u> (${bunk}) and ` +
-                                        `<u>${exField}</u> (${ob}) share the same physical space and cannot be ` +
-                                        `used simultaneously at ${timeLabel}`
+                                        `<strong>${fn}</strong> (${bunk}) + ${exField} (${ob}) ${_ctr(slot.startMin, slot.endMin)} - same physical space`
                                     );
                                 });
                             });
@@ -362,6 +359,19 @@
     }
 
     /**
+     * Compact time for the terse one-line messages: 170 → "2:50pm".
+     */
+    function _ct(minutes) {
+        return String(formatTime(minutes)).replace(/\s?(AM|PM)/i, (m) => m.trim().toLowerCase());
+    }
+    /**
+     * Compact time range: "2:50pm-4:00pm".
+     */
+    function _ctr(startMin, endMin) {
+        return _ct(startMin) + '-' + _ct(endMin);
+    }
+
+    /**
      * Format time from minutes
      */
     function formatTime(minutes) {
@@ -489,9 +499,7 @@
                 return `<u>${g}</u> (${spans.join(', ')})`;
             });
             warnings.push(
-                `<strong>League Time Mismatch:</strong> In league <u>${league.name}</u>, ` +
-                `grades that play together have different league game times: ${parts.join(' vs ')}. ` +
-                `Set them to the same start and end time so they share one game.`
+                `<strong>${league.name}</strong> - ${parts.join(' vs ')} - no shared game time`
             );
         });
 
@@ -615,51 +623,43 @@
                 // =====================================================
                 if (uniqueDivisions.length > 1) {
                     
+                    const ctLabel = _ctr(timeStart, timeEnd);
+
                     // --- not_sharable: NO sharing at all ---
                     if (sharingType === 'not_sharable') {
-                        const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                        const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                         errors.push(
-                            `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> is <strong>not sharable</strong> ` +
-                            `but used by <strong>${group.length}</strong> bunks from different divisions during ${timeLabel}<br>` +
-                            `<small style="color:#666;">Divisions: ${uniqueDivisions.join(', ')} | Bunks: ${bunkList}</small>`
+                            `<strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - not sharable across divisions`
                         );
                         return; // Don't also report capacity for this group
                     }
-                    
+
                     // --- same_division: only same div can share ---
                     if (sharingType === 'same_division') {
-                        const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                        const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                         errors.push(
-                            `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> can only be shared within ` +
-                            `the <strong>same division</strong>, but used by divisions ${uniqueDivisions.join(', ')} during ${timeLabel}<br>` +
-                            `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                            `<strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - same-division sharing only`
                         );
                         return;
                     }
-                    
+
                     // --- custom: only allowed divisions can share ---
                     if (sharingType === 'custom' && allowedDivisions.length > 0) {
                         const disallowedDivs = uniqueDivisions.filter(d => !allowedDivisions.includes(d));
                         if (disallowedDivs.length > 0) {
-                            const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
                             errors.push(
-                                `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> shared by divisions not in its allowed list during ${timeLabel}<br>` +
-                                `<small style="color:#666;">Allowed: ${allowedDivisions.join(', ')} | Found: ${uniqueDivisions.join(', ')}</small><br>` +
-                                `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                                `<strong>${fieldName}</strong> ${ctLabel} - Div. ${disallowedDivs.join(', Div. ')} - not on the field's allowed sharing list`
                             );
                             return;
                         }
                     }
-                    
+
                     // --- type='all': cross-div is OK, but still check global capacity ---
                     if (sharingType === 'all' && maxCapacity < 999) {
                         if (group.length > maxCapacity) {
-                            const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                            const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                             errors.push(
-                                `<strong>Capacity Exceeded:</strong> <u>${fieldName}</u> used by ` +
-                                `<strong>${group.length}</strong> bunks across divisions during ${timeLabel} ` +
-                                `(Max: ${maxCapacity})<br>` +
-                                `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                                `<strong>${fieldName}</strong> ${ctLabel} - ${group.length} bunks (${bunkList}) - over capacity (max ${maxCapacity})`
                             );
                         }
                         return;
@@ -678,14 +678,10 @@
                     if (divUsages.length > maxCapacity) {
                         const divTimeStart = Math.min(...divUsages.map(g => g.startMin));
                         const divTimeEnd = Math.max(...divUsages.map(g => g.endMin));
-                        const divTimeLabel = `${formatTime(divTimeStart)} - ${formatTime(divTimeEnd)}`;
                         const bunkList = divUsages.map(g => g.bunk).join(', ');
-                        
+
                         errors.push(
-                            `<strong>Capacity Exceeded:</strong> <u>${fieldName}</u> used by ` +
-                            `<strong>${divUsages.length}</strong> bunks in Division ${divName} at ${divTimeLabel} ` +
-                            `(Max Capacity: ${maxCapacity})<br>` +
-                            `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                            `<strong>${fieldName}</strong> ${_ctr(divTimeStart, divTimeEnd)} - ${divUsages.length} bunks in Div. ${divName} (${bunkList}) - over capacity (max ${maxCapacity})`
                         );
                     }
                 });
@@ -777,9 +773,7 @@
                 if (occurrences.length > 1) {
                     const timeLabels = occurrences.map(o => o.timeLabel).join(', ');
                     errors.push(
-                        `<strong>Same-Day Repetition:</strong> <u>${bunk}</u>${divName ? ` (Div ${divName})` : ''} has ` +
-                        `<strong>"${activity}"</strong> scheduled <strong>${occurrences.length} times</strong> ` +
-                        `(at: ${timeLabels})`
+                        `<strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${activity} ${occurrences.length}× today (${timeLabels})`
                     );
                 }
             });
@@ -824,12 +818,9 @@
                     // Check if the activities are different (which means different activities at same field — might be intentional)
                     const uniqueActivities = [...new Set(occurrences.map(o => o.activity?.toLowerCase()))];
                     
-                    const timeLabels = occurrences.map(o => `${o.timeLabel} (${o.activity})`).join(', ');
+                    const timeLabels = occurrences.map(o => `${o.timeLabel} ${o.activity}`).join(', ');
                     warnings.push(
-                        `<strong>Field Reuse:</strong> <u>${bunk}</u>${divName ? ` (Div ${divName})` : ''} uses ` +
-                        `field <strong>"${field}"</strong> ${occurrences.length} times today` +
-                        `${uniqueActivities.length > 1 ? ' (different activities)' : ''}<br>` +
-                        `<small style="color:#666;">At: ${timeLabels}</small>`
+                        `<strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${field} ${occurrences.length}× today (${timeLabels})`
                     );
                 }
             });
@@ -881,8 +872,7 @@
                     
                     if (!hasActivity) {
                         warnings.push(
-                            `<strong>Missing Activity:</strong> <u>${bunk}</u> (Div ${divName}) ` +
-                            `may be missing <strong>${required}</strong>`
+                            `<strong>${bunk}</strong> (Div. ${divName}) - no ${required} today`
                         );
                     }
                 });
@@ -930,12 +920,11 @@
                 // Only warn if ALL bunks are empty for this slot
                 if (emptyCount === totalBunks && totalBunks > 0) {
                     const timeLabel = (slotInfo.startMin !== undefined)
-                        ? `${formatTime(slotInfo.startMin)} - ${formatTime(slotInfo.endMin)}`
-                        : `Slot ${slotIdx}`;
-                    
+                        ? _ctr(slotInfo.startMin, slotInfo.endMin)
+                        : `slot ${slotIdx}`;
+
                     warnings.push(
-                        `<strong>Empty Slot:</strong> Division ${divName} slot ${slotIdx} ` +
-                        `(${timeLabel}) has <strong>all ${totalBunks} bunks empty</strong>`
+                        `<strong>Div. ${divName}</strong> ${timeLabel} - all ${totalBunks} bunks empty`
                     );
                 }
             });
@@ -963,8 +952,7 @@
                 // Bunk completely missing from assignments
                 if (!slots) {
                     warnings.push(
-                        `<strong>Unassigned Bunk:</strong> <u>${bunk}</u> (Div ${divName}) ` +
-                        `has <strong>no schedule data at all</strong>`
+                        `<strong>${bunk}</strong> (Div. ${divName}) - no schedule at all`
                     );
                     return;
                 }
@@ -976,8 +964,7 @@
                 
                 if (filledSlots.length === 0 && !hasAnyLeague) {
                     warnings.push(
-                        `<strong>Empty Bunk:</strong> <u>${bunk}</u> (Div ${divName}) ` +
-                        `has <strong>all ${divSlots.length} slots empty</strong>`
+                        `<strong>${bunk}</strong> (Div. ${divName}) - all ${divSlots.length} slots empty`
                     );
                 }
             });
@@ -1167,11 +1154,9 @@
                 try { allowed = window.isSpecialAvailableForBunk(actName, divName, bunk, gs) !== false; } catch (e) { /* fail open */ }
                 if (allowed) return;
                 const si = divSlots[idx];
-                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
                 errors.push(
-                    `<strong>Special Access Violation:</strong> <u>${bunk}</u> (Div ${divName}) received ` +
-                    `<strong>${actName}</strong> at ${when}, but this special is not allowed for this grade/bunk ` +
-                    `(access restriction or per-date bunk-only rule)`
+                    `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - not allowed for this grade/bunk`
                 );
             });
         });
@@ -1208,14 +1193,14 @@
 
         // Master Facilities toggles
         const offSpecials = new Map();
-        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), { name: s.name, why: 'turned OFF in Facilities' }); });
+        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), { name: s.name, why: 'turned off in Facilities' }); });
         const offFields = new Map();
-        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), { name: f.name, why: 'turned OFF in Facilities' }); });
+        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), { name: f.name, why: 'turned off in Facilities' }); });
 
         // Per-day toggles (Daily Adjustments → Resources)
         const day = getDayDisabledResources();
-        day.fields.forEach(n => { if (!offFields.has(_lc(n))) offFields.set(_lc(n), { name: n, why: 'turned OFF for today in Daily Adjustments' }); });
-        day.specials.forEach(n => { if (!offSpecials.has(_lc(n))) offSpecials.set(_lc(n), { name: n, why: 'turned OFF for today in Daily Adjustments' }); });
+        day.fields.forEach(n => { if (!offFields.has(_lc(n))) offFields.set(_lc(n), { name: n, why: 'turned off in Resources (today)' }); });
+        day.specials.forEach(n => { if (!offSpecials.has(_lc(n))) offSpecials.set(_lc(n), { name: n, why: 'turned off in Resources (today)' }); });
 
         if (!offSpecials.size && !offFields.size) return { errors, warnings };
 
@@ -1231,7 +1216,7 @@
                 const actName = entry._activity || entry.sport;
                 const fName = normalizeFieldName(entry.field);
                 const si = divSlots[idx];
-                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
 
                 // Pinned reservation surface: real facilities live in
                 // _reservedFields/_location (entry.field is the EVENT name).
@@ -1244,15 +1229,13 @@
                     if (actName && offSpecials.has(_lc(actName))) {
                         const h = offSpecials.get(_lc(actName));
                         errors.push(
-                            `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
-                            `<strong>${h.name}</strong> at ${when}, but that special is ${h.why}`
+                            `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                         );
                     }
                     if (fName && offFields.has(fName)) {
                         const h = offFields.get(fName);
                         errors.push(
-                            `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is placed on ` +
-                            `<strong>${h.name}</strong> at ${when}, but that field is ${h.why}`
+                            `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                         );
                     }
                     return;
@@ -1275,9 +1258,7 @@
                     //   a turned-off resource is a MUST-FIX, same as regular
                     //   placements.
                     errors.push(
-                        `<strong>Disabled Resource (pinned):</strong> the pinned tile <strong>${label}</strong> ` +
-                        `(Div ${divName}) at ${when} uses <u>${h.name}</u>, but it is ${h.why}. ` +
-                        `Move the tile or re-enable the resource.`
+                        `<strong>${label}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                     );
                 });
             });
@@ -1322,12 +1303,11 @@
                 try { blocked = U.isBunkRestrictedFromTarget(bunk, actName, rawField || null, divName) === true; } catch (e) { /* fail open */ }
                 if (!blocked) return;
                 const si = divSlots[idx];
-                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
                 const target = actName && rawField && _lc(actName) !== _lc(rawField)
-                    ? `${actName} on <u>${rawField}</u>` : (actName || rawField);
+                    ? `${actName} on ${rawField}` : (actName || rawField);
                 errors.push(
-                    `<strong>Bunk-Only Violation:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
-                    `<strong>${target}</strong> at ${when}, but today's Bunk-Only Access rule reserves it for other bunk(s)`
+                    `<strong>${bunk}</strong> (Div. ${divName}) ${when} - ${target} - bunk-only access reserves it for other bunks today`
                 );
             });
         });
@@ -1358,12 +1338,9 @@
                 const sig = group[0].fkey + '|' + owners.sort().join(',') + '|' + Math.min(...group.map(g => g.startMin));
                 if (seen.has(sig)) return;
                 seen.add(sig);
-                const timeLabel = formatTime(Math.min(...group.map(g => g.startMin))) + ' - ' +
-                                  formatTime(Math.max(...group.map(g => g.endMin)));
-                const occ = group.map(g => `${g.owner} [${g.kind}] ${formatTime(g.startMin)}-${formatTime(g.endMin)}`).join(' · ');
+                const timeLabel = _ctr(Math.min(...group.map(g => g.startMin)), Math.max(...group.map(g => g.endMin)));
                 errors.push(
-                    `<strong>League/Event Field Conflict:</strong> <u>${group[0].facility}</u> is double-booked during ${timeLabel}<br>` +
-                    `<small style="color:#666;">${occ}</small>`
+                    `<strong>${group[0].facility}</strong> ${timeLabel} - ${owners.join(' + ')} - double-booked`
                 );
             });
         });
@@ -1459,14 +1436,9 @@
                 if (seen.has(sig)) return;
                 seen.add(sig);
 
-                const timeLabel = formatTime(Math.min(...group.map(g => g.startMin))) + ' - ' +
-                                  formatTime(Math.max(...group.map(g => g.endMin)));
-                const occ = group.map(g => `${g.owner} ${formatTime(g.startMin)}-${formatTime(g.endMin)}`).join(' · ');
+                const timeLabel = _ctr(Math.min(...group.map(g => g.startMin)), Math.max(...group.map(g => g.endMin)));
                 errors.push(
-                    `<strong>Pinned Tile Conflict:</strong> <u>${group[0].facility}</u> is reserved by more than one pinned tile during ${timeLabel}<br>` +
-                    `<small style="color:#666;">${occ}<br>` +
-                    `If these grades do this activity <em>together</em>, stretch one tile across their grade columns ` +
-                    `(drag its left/right edge in the builder) so it counts as one shared reservation.</small>`
+                    `<strong>${group[0].facility}</strong> ${timeLabel} - pinned by ${owners.join(' + ')} - not linked (stretch one tile across the grades to share)`
                 );
             });
         });
@@ -1577,9 +1549,7 @@
                         if (seen.has(sig)) continue;
                         seen.add(sig);
                         errors.push(
-                            `<strong>Elective Facility Conflict:</strong> <u>${bunk}</u> (${div}) has "${act}" on ` +
-                            `<u>${rec.key}</u> at ${formatTime(sM)}-${formatTime(eM)}, but that facility is reserved ` +
-                            `by an elective for <strong>${r.division}</strong> during this time`
+                            `<strong>${bunk}</strong> (Div. ${div}) ${_ctr(sM, eM)} - ${act} on ${rec.key} - reserved by ${r.division}'s elective`
                         );
                         break;
                     }
@@ -1705,9 +1675,7 @@
                 if (seenMiss.has(sig)) break;
                 seenMiss.add(sig);
                 warnings.push(
-                    `<strong>Field Quality:</strong> ${u.owner} (Div ${u.divName}) is on #${info.rank} <u>${info.name}</u> at ` +
-                    `${formatTime(u.startMin)} - ${formatTime(u.endMin)} while better-ranked <u>${m.name}</u> (#${m.rank}) ` +
-                    `appears free, enabled and usable by this grade`
+                    `<strong>${u.owner}</strong> (Div. ${u.divName}) ${_ctr(u.startMin, u.endMin)} - #${info.rank} ${info.name} - better field free (#${m.rank} ${m.name})`
                 );
                 break;
             }
@@ -1732,9 +1700,7 @@
                 if (seenInv.has(sig)) continue;
                 seenInv.add(sig);
                 warnings.push(
-                    `<strong>Field Quality:</strong> seniority inversion — senior Div ${a.divName} (${a.owner}) is on ` +
-                    `#${ra} <u>${keyInfo[a.fkey].name}</u> while junior Div ${b.divName} (${b.owner}) holds better-ranked ` +
-                    `#${rb} <u>${keyInfo[b.fkey].name}</u> at the same time (${formatTime(Math.max(a.startMin, b.startMin))})`
+                    `<strong>Div. ${a.divName}</strong> (${a.owner}) ${_ct(Math.max(a.startMin, b.startMin))} - #${ra} ${keyInfo[a.fkey].name} - junior Div. ${b.divName} holds better #${rb} ${keyInfo[b.fkey].name}`
                 );
             }
         });
@@ -1802,9 +1768,7 @@
                 try { res = SR.checkCandidateDetailed(cand, template, { mode }); } catch (e2) { return; }
                 (res.violated || []).forEach(rule => {
                     errors.push(
-                        `<strong>Spacing Rule Violation:</strong> <u>${bunk}</u> (Div ${divName}) has ` +
-                        `<strong>${cand.event || cand.field}</strong> at ${formatTime(cand.startMin)} in violation of: ` +
-                        `${describe(rule)}`
+                        `<strong>${bunk}</strong> (Div. ${divName}) ${_ct(cand.startMin)} - ${cand.event || cand.field} - spacing rule: ${describe(rule)}`
                     );
                 });
             });
@@ -1862,13 +1826,11 @@
                         // ★ v3.5 severity re-tier (user decision): player-cap
                         //   overflows are a REVIEW item, not a hard error.
                         warnings.push(
-                            `<strong>Sport Player Cap:</strong> <u>${us[0].facility}</u> at ${formatTime(t0)}: ` +
-                            `<strong>${us[0].activity}</strong> has ${total} campers (${bunksLabel}) — sport max is ${max} (+2 grace)`
+                            `<strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - over sport max ${max} (+2)`
                         );
                     } else if (min > 0 && total < min) {
                         warnings.push(
-                            `<strong>Sport Under Min:</strong> <u>${us[0].facility}</u> at ${formatTime(t0)}: ` +
-                            `<strong>${us[0].activity}</strong> has only ${total} campers (${bunksLabel}) — sport min is ${min}`
+                            `<strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - under sport min ${min}`
                         );
                     }
                 });
@@ -1881,24 +1843,9 @@
     // SHOW VALIDATION MODAL (★★★ v3.0: Collapsible sections + counts ★★★)
     // =========================================================================
 
-    // ── v3.5 modal helpers ──────────────────────────────────────────────
-    // Category = the message's own <strong>Label:</strong> prefix, so new
-    // checks group themselves automatically (no hard-coded filter lists).
-    function _valCategoryOf(msg) {
-        const m = String(msg || '').match(/<strong>([^<:]+):<\/strong>/);
-        return m ? m[1].trim() : 'Other';
-    }
+    // ── v3.6 modal helpers ──────────────────────────────────────────────
     function _valPlainText(msg) {
         return String(msg || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    }
-    function _valGroupByCategory(list) {
-        const groups = new Map();
-        list.forEach(m => {
-            const c = _valCategoryOf(m);
-            if (!groups.has(c)) groups.set(c, []);
-            groups.get(c).push(m);
-        });
-        return [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
     }
 
     function showValidationModal(errors, warnings = []) {
@@ -1920,15 +1867,16 @@
         let body = '';
         if (clean) {
             body = `
-                <div style="text-align:center; padding:48px 20px; color:#166534;">
+                <div style="text-align:center; padding:48px 20px; color:#166534; width:100%;">
                     <div style="font-size:3.5em; margin-bottom:12px;">✅</div>
                     <h3 style="margin:0 0 8px 0; font-size:1.4em;">All clear!</h3>
                     <p style="color:#64748b; margin:0;">No problems found in this schedule.</p>
                 </div>
             `;
         } else {
-            if (errors.length > 0) body += buildSeveritySection('red', errors);
-            if (warnings.length > 0) body += buildSeveritySection('yellow', warnings);
+            // Two flat columns, red left / yellow right. A missing side lets
+            // the other take the full width.
+            body = buildSeverityColumn('red', errors) + buildSeverityColumn('yellow', warnings);
         }
 
         const chips = clean
@@ -1937,21 +1885,16 @@
                ${warnings.length > 0 ? `<span style="background:#fef3c7;color:#92400e;border-radius:99px;padding:3px 12px;font-size:0.8em;font-weight:700;">⚠️ ${warnings.length} review</span>` : ''}`;
 
         overlay.innerHTML = `
-            <div style="background:#fff; border-radius:14px; width:800px; max-width:94vw; max-height:88vh; display:flex; flex-direction:column; box-shadow:0 20px 50px rgba(0,0,0,0.35); font-family: system-ui, -apple-system, sans-serif; overflow:hidden;">
+            <div style="background:#fff; border-radius:14px; width:1250px; max-width:94vw; height:88vh; display:flex; flex-direction:column; box-shadow:0 20px 50px rgba(0,0,0,0.35); font-family: system-ui, -apple-system, sans-serif; overflow:hidden;">
                 <div style="padding:14px 20px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                     <h2 style="margin:0; font-size:1.1em; color:#0f172a; display:flex; align-items:center; gap:8px;">🛡️ Schedule Check</h2>
                     ${chips}
                     <div style="flex:1;"></div>
+                    ${clean ? '' : `<input id="val-search" type="text" placeholder="Filter — bunk, grade, field, activity…"
+                        style="width:280px; max-width:40vw; padding:7px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:0.88em; outline:none;">`}
                     <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#94a3b8; padding:0 6px; line-height:1;">&times;</button>
                 </div>
-                ${clean ? '' : `
-                <div style="padding:10px 20px; border-bottom:1px solid #f1f5f9; display:flex; gap:8px; align-items:center; background:#fcfcfd;">
-                    <input id="val-search" type="text" placeholder="Filter — bunk, grade, field, activity…"
-                        style="flex:1; padding:8px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:0.9em; outline:none; min-width:140px;">
-                    <button id="val-expand-all" class="val-mini-btn">Expand all</button>
-                    <button id="val-collapse-all" class="val-mini-btn">Collapse all</button>
-                </div>`}
-                <div id="val-body" style="padding:14px 20px; overflow-y:auto; flex:1;">${body}</div>
+                <div id="val-body" style="display:flex; gap:0; overflow:hidden; flex:1; align-items:stretch;">${body}</div>
                 <div style="padding:12px 20px; border-top:1px solid #e2e8f0; display:flex; gap:8px; align-items:center; background:#f8fafc;">
                     ${clean ? '' : `<button id="val-copy-btn" class="val-mini-btn">📋 Copy report</button>`}
                     <div style="flex:1;"></div>
@@ -1962,57 +1905,21 @@
         `;
         document.body.appendChild(overlay);
 
-        // ── Collapsible category cards ──
-        overlay.querySelectorAll('.val-category-header').forEach(header => {
-            header.onclick = () => {
-                const list = header.parentElement.querySelector('.val-items');
-                const arrow = header.querySelector('.val-arrow');
-                const show = list.style.display === 'none';
-                list.style.display = show ? 'block' : 'none';
-                if (arrow) arrow.textContent = show ? '▼' : '▶';
-            };
-        });
-
-        const _setAll = (show) => {
-            overlay.querySelectorAll('.val-cat').forEach(cat => {
-                const list = cat.querySelector('.val-items');
-                const arrow = cat.querySelector('.val-arrow');
-                if (list) list.style.display = show ? 'block' : 'none';
-                if (arrow) arrow.textContent = show ? '▼' : '▶';
-            });
-        };
-        const expandBtn = overlay.querySelector('#val-expand-all');
-        const collapseBtn = overlay.querySelector('#val-collapse-all');
-        if (expandBtn) expandBtn.onclick = () => _setAll(true);
-        if (collapseBtn) collapseBtn.onclick = () => _setAll(false);
-
         // ── Live filter: type a bunk / grade / field / activity ──
         const search = overlay.querySelector('#val-search');
         if (search) {
             search.oninput = () => {
                 const q = search.value.toLowerCase().trim();
-                overlay.querySelectorAll('.val-cat').forEach(cat => {
+                overlay.querySelectorAll('.val-sev').forEach(col => {
                     let visible = 0;
-                    cat.querySelectorAll('.val-item').forEach(li => {
+                    col.querySelectorAll('.val-item').forEach(li => {
                         const hit = !q || li.textContent.toLowerCase().includes(q);
                         li.style.display = hit ? '' : 'none';
                         if (hit) visible++;
                     });
-                    const total = cat.querySelectorAll('.val-item').length;
-                    const count = cat.querySelector('.val-cat-count');
+                    const total = col.querySelectorAll('.val-item').length;
+                    const count = col.querySelector('.val-sev-count');
                     if (count) count.textContent = q ? `${visible}/${total}` : String(total);
-                    cat.style.display = visible > 0 ? '' : 'none';
-                    if (q && visible > 0) {
-                        const list = cat.querySelector('.val-items');
-                        const arrow = cat.querySelector('.val-arrow');
-                        if (list) list.style.display = 'block';
-                        if (arrow) arrow.textContent = '▼';
-                    }
-                });
-                // Hide a whole severity section when everything in it is filtered out
-                overlay.querySelectorAll('.val-sev').forEach(sev => {
-                    const anyVisible = [...sev.querySelectorAll('.val-cat')].some(c => c.style.display !== 'none');
-                    sev.style.display = anyVisible ? '' : 'none';
                 });
             };
         }
@@ -2025,17 +1932,11 @@
                 lines.push('Schedule Check — ' + (window.currentScheduleDate || ''));
                 if (errors.length) {
                     lines.push('', 'MUST FIX (' + errors.length + '):');
-                    _valGroupByCategory(errors).forEach(([cat, items]) => {
-                        lines.push('  ' + cat + ' (' + items.length + ')');
-                        items.forEach(m => lines.push('    - ' + _valPlainText(m)));
-                    });
+                    errors.forEach(m => lines.push('  - ' + _valPlainText(m)));
                 }
                 if (warnings.length) {
                     lines.push('', 'REVIEW (' + warnings.length + '):');
-                    _valGroupByCategory(warnings).forEach(([cat, items]) => {
-                        lines.push('  ' + cat + ' (' + items.length + ')');
-                        items.forEach(m => lines.push('    - ' + _valPlainText(m)));
-                    });
+                    warnings.forEach(m => lines.push('  - ' + _valPlainText(m)));
                 }
                 const text = lines.join('\n');
                 const done = () => {
@@ -2079,23 +1980,34 @@
     }
 
     /**
-     * One severity block: heading + auto-grouped category cards.
+     * One severity column: sticky heading + a flat list of one-line items.
+     * Red (must fix) sits left, yellow (review) right. Empty side is skipped
+     * so the other takes the full width.
      */
-    function buildSeveritySection(kind, items) {
+    function buildSeverityColumn(kind, items) {
+        if (!items || !items.length) return '';
         const red = kind === 'red';
         const dot = red ? '#dc2626' : '#f59e0b';
         const label = red ? 'Must fix' : 'Review';
         const labelColor = red ? '#b91c1c' : '#92400e';
-        const cards = _valGroupByCategory(items).map(([title, list]) => buildCategorySection(title, list, red)).join('');
+        const bg = red ? '#fef2f2' : '#fffbeb';
+        const fg = red ? '#991b1b' : '#92400e';
+        const borderSide = red ? 'border-right:1px solid #e2e8f0;' : '';
+
         return `
-            <div class="val-sev" data-sev="${kind}" style="margin-bottom:18px;">
-                <div style="display:flex; align-items:center; gap:8px; margin:2px 0 10px 0;">
+            <div class="val-sev" data-sev="${kind}" style="flex:1; min-width:0; display:flex; flex-direction:column; ${borderSide}">
+                <div style="display:flex; align-items:center; gap:8px; padding:12px 20px 10px 20px; border-bottom:1px solid #f1f5f9; background:#fcfcfd; flex:none;">
                     <span style="width:10px; height:10px; border-radius:50%; background:${dot}; flex:none;"></span>
-                    <h3 style="margin:0; color:${labelColor}; font-size:1em;">${label}
-                        <span style="color:#94a3b8; font-weight:500;">— ${items.length}</span>
-                    </h3>
+                    <h3 style="margin:0; color:${labelColor}; font-size:0.95em;">${label}</h3>
+                    <span class="val-sev-count" style="margin-left:auto; background:${bg}; color:${fg}; border-radius:99px; padding:1px 10px; font-weight:700; font-size:0.85em;">${items.length}</span>
                 </div>
-                ${cards}
+                <ul style="list-style:none; padding:10px 14px; margin:0; overflow-y:auto; flex:1;">
+                    ${items.map(item => `
+                        <li class="val-item" style="background:${bg}; color:${fg}; padding:8px 12px; margin-bottom:4px; border-radius:8px; border-left:3px solid ${dot}; font-size:0.88em; line-height:1.45;">
+                            ${escMsg(item)}
+                        </li>
+                    `).join('')}
+                </ul>
             </div>
         `;
     }
@@ -2121,38 +2033,6 @@
         return e;
     }
 
-    /**
-     * Build a collapsible category card. Auto-collapses when more than 4
-     * items so a long report reads as a compact table of contents first.
-     */
-    function buildCategorySection(title, items, red) {
-        const collapsed = items.length > 4;
-        const border = red ? '#ef4444' : '#f59e0b';
-        const bg = red ? '#fef2f2' : '#fffbeb';
-        const fg = red ? '#991b1b' : '#92400e';
-        // The card is already titled with the category — drop each item's
-        // repeated "<strong>Label:</strong>" prefix so rows read cleanly.
-        const stripPrefix = (item) => String(item).replace(/^\s*<strong>[^<]*?:<\/strong>\s*/, '');
-
-        return `
-            <div class="val-cat" style="margin-bottom:8px; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden;">
-                <div class="val-category-header" style="cursor:pointer; display:flex; align-items:center; gap:8px; padding:9px 12px; background:#f8fafc; font-size:0.9em; font-weight:600; color:#334155; user-select:none;">
-                    <span class="val-arrow" style="font-size:0.8em; color:#94a3b8; width:12px;">${collapsed ? '▶' : '▼'}</span>
-                    <span style="width:8px; height:8px; border-radius:50%; background:${border}; flex:none;"></span>
-                    ${_valEsc(title)}
-                    <span class="val-cat-count" style="margin-left:auto; background:${bg}; color:${fg}; border-radius:99px; padding:1px 10px; font-weight:700; font-size:0.85em;">${items.length}</span>
-                </div>
-                <ul class="val-items" style="list-style:none; padding:6px; margin:0; display:${collapsed ? 'none' : 'block'}; max-height:260px; overflow-y:auto; background:#fff;">
-                    ${items.map(item => `
-                        <li class="val-item" style="background:${bg}; color:${fg}; padding:9px 12px; margin-bottom:4px; border-radius:8px; border-left:3px solid ${border}; font-size:0.88em; line-height:1.45;">
-                            ${escMsg(stripPrefix(item))}
-                        </li>
-                    `).join('')}
-                </ul>
-            </div>
-        `;
-    }
-
     // Add animation + shared button styles
     if (!document.getElementById('validator-style')) {
         const style = document.createElement('style');
@@ -2161,9 +2041,6 @@
             @keyframes fadeIn {
                 from { opacity: 0; transform: scale(0.97); }
                 to { opacity: 1; transform: scale(1); }
-            }
-            .val-category-header:hover {
-                background: #f1f5f9 !important;
             }
             .val-mini-btn {
                 padding: 7px 12px; background: #fff; color: #334155;
@@ -2208,6 +2085,6 @@
         }
     };
 
-    console.log('🛡️ Validator v3.5 loaded — grouped red/yellow results UI + severity re-tier (player cap → review, pinned disabled-resource → must-fix)');
+    console.log('🛡️ Validator v3.6 loaded — compact one-line findings, red|yellow side-by-side results');
 
 })();
