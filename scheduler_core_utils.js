@@ -220,26 +220,48 @@
         }
 
         skeleton.forEach(block => {
-            if (block.reservedFields && Array.isArray(block.reservedFields) && block.reservedFields.length > 0) {
-                const startMin = Utils.parseTimeToMinutes(block.startTime);
-                const endMin = Utils.parseTimeToMinutes(block.endTime);
-
-                if (startMin === null || endMin === null) return;
-
-                block.reservedFields.forEach(fieldName => {
-                    if (!reservations[fieldName]) {
-                        reservations[fieldName] = [];
-                    }
-
-                    reservations[fieldName].push({
-                        startMin,
-                        endMin,
-                        division: block.division,
-                        event: block.event,
-                        id: block.id
-                    });
-                });
+            // Collect every facility this block reserves for its whole window.
+            //   • Custom pinned / other tiles reserve via reservedFields[].
+            //   • Electives (and swim+elective hybrids) reserve the activities /
+            //     locations the division picked. An elective is a fancy custom-pinned
+            //     tile — its facilities must be held against EVERYTHING else exactly
+            //     like a pin. A DA-created elective sets only electiveActivities (no
+            //     reservedFields), so without this it never reaches
+            //     window.fieldReservations, and the sports solver (canBlockFit, which
+            //     gates on fieldReservations — see scheduler_core_main STEP 2.45 note)
+            //     would happily drop another division's activity onto the reserved
+            //     facility at the same time. Including electiveActivities here gives
+            //     electives the same robust wall-clock reservation that pins already
+            //     get, for BOTH the master-builder and daily-adjustments paths.
+            const fields = new Set();
+            const _add = (f) => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') fields.add(f.trim()); };
+            if (Array.isArray(block.reservedFields)) block.reservedFields.forEach(_add);
+            if (block.type === 'elective' || block.type === 'swim_elective') {
+                if (Array.isArray(block.electiveActivities)) block.electiveActivities.forEach(_add);
+                _add(block.swimLocation);
             }
+
+            if (fields.size === 0) return;
+
+            const startMin = Utils.parseTimeToMinutes(block.startTime);
+            const endMin = Utils.parseTimeToMinutes(block.endTime);
+
+            if (startMin === null || endMin === null) return;
+
+            fields.forEach(fieldName => {
+                if (!reservations[fieldName]) {
+                    reservations[fieldName] = [];
+                }
+
+                reservations[fieldName].push({
+                    startMin,
+                    endMin,
+                    division: block.division,
+                    event: block.event,
+                    id: block.id,
+                    type: block.type
+                });
+            });
         });
 
         console.log("[FieldReservations] Scanned skeleton, found reservations:", reservations);
