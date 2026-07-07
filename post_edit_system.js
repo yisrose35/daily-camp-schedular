@@ -2127,6 +2127,51 @@
         else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + escHtml(location) + ' in use by: ' + c.fieldConflicts.map(x => escHtml(x.bunk)).join(', '); }
     }
 
+    // ── Grade-usability gate for suggestions ──
+    // A Quick-Pick / Auto-fill suggestion must be BOTH currently available AND
+    // actually usable by this bunk's grade (division). These mirror the solver's
+    // own gates — canBlockFit's accessRestrictions logic (scheduler_core_utils.js)
+    // and isSpecialAvailableForBunk (scheduler_core_auto.js) — so we never offer
+    // an activity that generation itself would reject.
+    function peiAccessRestrictionsAllow(rules, divName, bunk) {
+        if (!rules || !rules.enabled) return true;
+        const divisions = rules.divisions || {};
+        // Toggle on but no grades picked = misconfig → treat as NO restriction
+        // (matches canBlockFit / auto+total solver parity).
+        if (Object.keys(divisions).length === 0) return true;
+        const divNameStr = String(divName);
+        if (!(divNameStr in divisions) && !(divName in divisions)) return false;
+        const divRule = divisions[divNameStr] || divisions[divName];
+        // Non-empty per-bunk list = only those bunks in this grade may use it.
+        if (Array.isArray(divRule) && divRule.length > 0) {
+            const bunkStr = String(bunk);
+            const bunkNum = parseInt(bunk);
+            if (!divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum)) return false;
+        }
+        return true;
+    }
+
+    function peiFieldUsableByGrade(field, sportName, divName, bunk) {
+        // Per-date "only these bunk(s) today" restriction (field- or sport-scoped).
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, sportName, field.name, divName)) return false;
+        // Per-date sport-disabled-on-this-field ("Kickball off Baseball Field 1 today").
+        const dd = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
+        const blocked = dd[field.name];
+        if (Array.isArray(blocked) && sportName && blocked.includes(sportName)) return false;
+        // Field access restrictions (division + per-bunk), read straight off the
+        // raw field config so this holds even when activityProperties isn't built.
+        return peiAccessRestrictionsAllow(field.accessRestrictions, divName, bunk);
+    }
+
+    function peiSpecialUsableByGrade(special, divName, bunk, settings) {
+        // Canonical gate: honors division access + per-bunk + per-date bunk-only.
+        if (typeof window.isSpecialAvailableForBunk === 'function') {
+            try { return window.isSpecialAvailableForBunk(special.name, divName, bunk, settings); } catch (_) { /* fall through */ }
+        }
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, special.name, null, divName)) return false;
+        return peiAccessRestrictionsAllow(special.accessRestrictions, divName, bunk);
+    }
+
     // ── Auto-fill (constraint-aware) ──
     function peiAutoFillCandidates(bunk, divName, startMin, endMin) {
         // 1) What has this bunk already done today (activities AND fields)?
@@ -2166,6 +2211,8 @@
             (f.activities || f.sports || []).forEach(sport => {
                 const sn = typeof sport === 'string' ? sport : sport.name;
                 if (!sn || todayActivities.has(sn.toLowerCase())) return;
+                // Only suggest what this bunk's grade may actually use.
+                if (!peiFieldUsableByGrade(f, sn, divName, bunk)) return;
                 const cap = f.sharableWith?.capacity ? parseInt(f.sharableWith.capacity) || 1 : 1;
                 if (window.TimeBasedFieldUsage?.checkAvailability) {
                     if (!window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available) return;
@@ -2186,6 +2233,8 @@
             if (!s.name || todayActivities.has(s.name.toLowerCase())) return;
             if (s.rainyDayOnly && !isRainyDay) return;
             if (s.outdoors && isRainyDay && !s.rainyDayOnly) return;
+            // Only suggest specials this bunk's grade may actually use.
+            if (!peiSpecialUsableByGrade(s, divName, bunk, settings)) return;
             const cap = s.sharableWith?.capacity ? parseInt(s.sharableWith.capacity) || 1 : 1;
             if (window.TimeBasedFieldUsage?.checkAvailability) {
                 if (!window.TimeBasedFieldUsage.checkAvailability(s.name, startMin, endMin, cap, bunk).available) return;
