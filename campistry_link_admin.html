@@ -1329,13 +1329,13 @@ function sendFormCompose() {
     }
     _saveLinkForms(lf);
 
-    // Personalized message to each matching parent
+    // Send exactly what the admin wrote — no auto-added greeting/boilerplate.
+    // The subject already carries the form + camper, and the parent message
+    // gets an "Open & fill" button, so no extra wrapper is needed. If nothing
+    // was typed, fall back to a single plain line.
     var sent = 0;
     targets.forEach(function(t) {
-        var body = 'Hi ' + (t.parentName || 'there') + ',\n\nPlease complete the ' + formName + ' for ' + t.camperName + '.' +
-            (message ? '\n\n' + message : '') +
-            '\n\n' + (isBuilt ? 'You can fill it out online in the parent portal — no printing needed.' : 'Download it from the parent portal, fill it out, and upload it back.') +
-            '\n\nThank you!';
+        var body = message || ('Please complete the ' + formName + ' for ' + t.camperName + '.');
         cl.msg.send({ to: t.parentName, toType: 'individual', subject: formName + ' — ' + t.camperName, body: body, channels: fsChannels, metadata: { parentEmail: t.parentEmail, camperName: t.camperName, isFormRequest: true, formId: formId, formName: formName, formMode: isBuilt ? 'digital' : 'upload' } });
         sent++;
     });
