@@ -2144,7 +2144,16 @@
                             //   every bunk whose rotation touches Pickleball floods the solver with
                             //   court requests and the same 2 get booked every day). Uncapped sports are
                             //   unaffected (_mayTakeCapped → true).
-                            if (_spFits && _mayTakeCapped(opt, optNorm, bunk)) {
+                            // ★ CAPPED sports NEVER take the solver-restricted route below: even when a
+                            //   court passes canBlockFit HERE, the 2-net cap can be consumed by another
+                            //   division between this pre-check and the solve, and the solver then DROPS
+                            //   the restriction → a GENERIC "Sports" pick (the regression: div 8/9 got
+                            //   Sports instead of falling to their Swim fallback). Capped winners are
+                            //   placed FIELD-LESS in the branch below (the cap is enforced by the queue +
+                            //   _canClaimDirectFill, so no court booking is needed); non-winners fall
+                            //   through to the next option (Swim). Only UNCAPPED named sports keep the
+                            //   solver-restricted path (they carry the _o===0 field-less fallback).
+                            if (_spFits && _mayTakeCapped(opt, optNorm, bunk) && _directFillCap(opt) === Infinity) {
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                                 _placed = true;
