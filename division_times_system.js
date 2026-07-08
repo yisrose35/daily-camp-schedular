@@ -1116,11 +1116,104 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
     // EXPORTS
     // =========================================================================
 
+    // =====================================================================
+    // RESLOT ASSIGNMENTS BY TIME
+    // The per-bunk schedule is stored in index-based arrays
+    // (scheduleAssignments[bunk][slotIndex]) while divisionTimes[div] is sorted
+    // ascending by start time. Inserting an EARLIER period (e.g. adding a morning
+    // to an afternoon-only day) shifts every later slot to a higher index, but the
+    // stored entries stay at their old indices → the afternoon renders under the
+    // wrong times. This remaps each entry from the OLD geometry to the NEW one by
+    // matching its start time, so the afternoon stays put and the new (morning)
+    // slots come up empty.
+    //
+    // SAFE BY CONSTRUCTION: a bunk's array is only rewritten when EVERY non-null
+    // entry finds an exact time match in the new geometry (tolerance ≤2 min) with
+    // no collisions. Any ambiguity → that bunk is left exactly as-is (never
+    // corrupted). Generated entries carry _startMin; manual entries don't, so the
+    // old slot's time (oldList[oldIndex].startMin) is the fallback, and the time
+    // is stamped onto the entry so future reslots are self-describing.
+    // =====================================================================
+    function _dtsSlotStart(slot) {
+        if (!slot) return null;
+        return slot.startMin != null ? slot.startMin : (slot.start != null ? slot.start : null);
+    }
+    function _dtsSlotEnd(slot) {
+        if (!slot) return null;
+        return slot.endMin != null ? slot.endMin : (slot.end != null ? slot.end : null);
+    }
+    function _dtsFindByTime(list, t) {
+        for (var i = 0; i < list.length; i++) {
+            var st = _dtsSlotStart(list[i]);
+            if (st != null && Math.abs(st - t) <= 2) return i;
+        }
+        return -1;
+    }
+    function reslotAssignmentsByTime(scheduleAssignments, oldDivisionTimes, newDivisionTimes, divisions) {
+        var result = { moved: false, bunksMoved: 0, bunksSkipped: 0 };
+        if (!scheduleAssignments || !oldDivisionTimes || !newDivisionTimes) return result;
+        divisions = divisions || {};
+
+        var bunkDiv = {};
+        Object.keys(divisions).forEach(function (dn) {
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) { bunkDiv[String(b)] = dn; });
+        });
+
+        Object.keys(scheduleAssignments).forEach(function (bunk) {
+            var arr = scheduleAssignments[bunk];
+            if (!Array.isArray(arr) || arr.length === 0) return;
+            var dn = bunkDiv[String(bunk)];
+            if (!dn) return;
+            var oldSlots = oldDivisionTimes[dn], newSlots = newDivisionTimes[dn];
+            if (!Array.isArray(oldSlots) || !Array.isArray(newSlots)) return;
+            var oldList = (oldSlots._perBunkSlots && oldSlots._perBunkSlots[bunk]) || oldSlots;
+            var newList = (newSlots._perBunkSlots && newSlots._perBunkSlots[bunk]) || newSlots;
+
+            // Pass 1: plan the remap WITHOUT mutating anything, so a mid-way bail
+            // leaves the bunk's entries byte-for-byte untouched.
+            var plan = [], ok = true, used = {};
+            for (var i = 0; i < arr.length; i++) {
+                var e = arr[i];
+                if (!e) continue;
+                var t = (e._startMin != null) ? e._startMin : _dtsSlotStart(oldList[i]);
+                if (t == null) { ok = false; break; }
+                var j = _dtsFindByTime(newList, t);
+                if (j < 0) { ok = false; break; }       // no matching slot → ambiguous, bail
+                if (used[j]) { ok = false; break; }      // collision → ambiguous, bail
+                used[j] = true;
+                plan.push({ i: i, j: j, e: e, ot: _dtsSlotStart(oldList[i]), oe: _dtsSlotEnd(oldList[i]) });
+            }
+            if (!ok) { result.bunksSkipped++; return; }  // leave this bunk untouched
+
+            // Pass 2: only now apply the moves + stamp times.
+            var newArr = new Array(newList.length).fill(null);
+            var anyMove = false;
+            plan.forEach(function (p) {
+                if (p.e._startMin == null) {
+                    if (p.ot != null) p.e._startMin = p.ot;
+                    if (p.oe != null) p.e._endMin = p.oe;
+                }
+                newArr[p.j] = p.e;
+                if (p.j !== p.i) anyMove = true;
+            });
+            if (anyMove || newList.length !== arr.length) {
+                scheduleAssignments[bunk] = newArr;
+                result.moved = true;
+                result.bunksMoved++;
+            }
+        });
+        return result;
+    }
+
     window.DivisionTimesSystem = {
         version: VERSION,
 
         // Core building
         buildFromSkeleton: buildDivisionTimesFromSkeleton,
+
+        // ★ Time-based realignment (keep the schedule aligned when periods are
+        //   inserted/removed earlier in the day — index-based storage would shift).
+        reslotAssignmentsByTime: reslotAssignmentsByTime,
         
         // ★★★ v1.2: Expose split tile expansion ★★★
         expandSplitTiles: expandSplitTiles,
