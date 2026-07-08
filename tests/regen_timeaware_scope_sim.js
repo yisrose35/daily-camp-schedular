@@ -159,5 +159,67 @@ ok(nextBase === 8, "next day's game numbered 9 (counter advanced past BOTH games
 const hist2 = { gameLog: { L: { d: [{ t1: 1, t2: 2, g: 'Game 3' }] } }, matchupHistory: { 'L:1|2': 1 }, gamesPerDate: { L: {} } };
 ok(rollbackDayRecords('L', 'd', hist2, null) === 1 && !hist2.gameLog.L['d'], 'no preserved labels -> full rollback (no regression)');
 
+// (verdict moved to end of file)
+
+
+// ---- 6. chronological renumber replica (morning added after evening) ----
+(function () {
+    function renumber(history, la, lgName, dayId, preservedCount, calcBase) {
+        if (!(preservedCount > 0)) return;
+        const recs = history.gameLog?.[lgName]?.[dayId] || [];
+        const labels = Array.from(new Set(recs.map(r => r && r.g).filter(g => /^Game \d+$/.test(g || ''))));
+        if (labels.length < 2) return;
+        const times = {};
+        Object.keys(la || {}).forEach(dv => {
+            const map = la[dv] || {};
+            Object.keys(map).forEach(k => {
+                const g = map[k];
+                if (!g || g.leagueName !== lgName || !g.gameLabel || g._startMin == null) return;
+                if (times[g.gameLabel] == null || g._startMin < times[g.gameLabel]) times[g.gameLabel] = g._startMin;
+            });
+        });
+        if (!labels.every(l => times[l] != null)) return;
+        const base = calcBase;
+        const sorted = labels.slice().sort((a, b) => times[a] - times[b]);
+        const relabel = {};
+        sorted.forEach((l, i) => { const nl = 'Game ' + (base + i + 1); if (nl !== l) relabel[l] = nl; });
+        if (!Object.keys(relabel).length) return;
+        history.gameLog[lgName][dayId] = recs.map(r => (r && r.g && relabel[r.g]) ? Object.assign({}, r, { g: relabel[r.g] }) : r);
+        Object.keys(la || {}).forEach(dv => {
+            const map = la[dv] || {};
+            Object.keys(map).forEach(k => {
+                const g = map[k];
+                if (g && g.leagueName === lgName && g.gameLabel && relabel[g.gameLabel]) g.gameLabel = relabel[g.gameLabel];
+            });
+        });
+        return relabel;
+    }
+    // Day state after the mixed regen: evening preserved = Game 7 (1030), new morning = Game 8 (740). Base = 6.
+    const hist = { gameLog: { L: { d: [
+        { t1: 1, t2: 2, sport: 'K', g: 'Game 7' },            // evening (preserved)
+        { t1: 3, t2: 4, sport: 'D', g: 'Game 7' },
+        { t1: 1, t2: 3, sport: 'K', g: 'Game 8' }             // morning (new)
+    ] } } };
+    const laR = {
+        '3': { 0: { leagueName: 'L', gameLabel: 'Game 8', _startMin: 740 }, 3: { leagueName: 'L', gameLabel: 'Game 7', _startMin: 1030 } },
+        'Day Camp > 4': { 0: { leagueName: 'L', gameLabel: 'Game 8', _startMin: 740 }, 3: { leagueName: 'L', gameLabel: 'Game 7', _startMin: 1030 } }
+    };
+    const map = renumber(hist, laR, 'L', 'd', 1, 6);
+    ok(map && map['Game 8'] === 'Game 7' && map['Game 7'] === 'Game 8', 'labels swap: morning->7, evening->8');
+    ok(hist.gameLog.L.d.filter(r => r.g === 'Game 7').length === 1 && hist.gameLog.L.d[2].g === 'Game 7',
+        'gameLog: morning record now Game 7, evening records Game 8 (one-pass swap, no cross-contamination)');
+    ok(laR['3'][0].gameLabel === 'Game 7' && laR['3'][3].gameLabel === 'Game 8', 'grid labels: 12:20 tile = Game 7, 5:10 tile = Game 8');
+    ok(laR['Day Camp > 4'][0].gameLabel === 'Game 7', 'sibling division relabeled too');
+    // normal gen (no preserved) → untouched
+    const hist2 = { gameLog: { L: { d: [{ g: 'Game 7' }, { g: 'Game 8' }] } } };
+    ok(renumber(hist2, laR, 'L', 'd', 0, 6) === undefined && hist2.gameLog.L.d[0].g === 'Game 7', 'no preserved games -> renumber no-op');
+    // unknown time → bail untouched
+    const hist3 = { gameLog: { L: { d: [{ g: 'Game 7' }, { g: 'Game 8' }] } } };
+    const laU = { '3': { 0: { leagueName: 'L', gameLabel: 'Game 8', _startMin: 740 } } }; // Game 7 time missing
+    ok(renumber(hist3, laU, 'L', 'd', 1, 6) === undefined && hist3.gameLog.L.d[0].g === 'Game 7', 'unknown game time -> bails, nothing changed');
+})();
+
+console.log('\n(chrono renumber block done)');
+
 console.log('\n' + (pass ? 'ALL PASS ✅' : 'FAILURES ❌'));
 process.exit(pass ? 0 : 1);

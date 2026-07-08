@@ -3464,6 +3464,55 @@ window._debugLeagueTimeData = timeData;
             }
         }
 
+        // ★ Per-tile regen: renumber the day's games CHRONOLOGICALLY. A new game
+        //   scheduled at an EARLIER period than a preserved one is numbered after
+        //   it (label-collision avoidance above), leaving e.g. the 12:20 game as
+        //   "Game 8" and the 5:10 game as "Game 7". Re-stamp the day's "Game N"
+        //   labels in slot-time order (times from the games' own _startMin stamps);
+        //   the FN-58 sync below rebuilds the Leagues-page entries from the
+        //   renumbered log, so everything stays consistent. Bails untouched when
+        //   any game's time is unknown. No-op for normal generations (no preserved
+        //   games) — the engine already schedules those in chronological order.
+        try {
+            _dayResetLeagues.forEach(function (lgName) {
+                if (!(_preservedTodayCounts[lgName] > 0)) return;
+                const _recs = history.gameLog?.[lgName]?.[dayId] || [];
+                const _labels = Array.from(new Set(_recs.map(r => r && r.g).filter(g => /^Game \d+$/.test(g || ''))));
+                if (_labels.length < 2) return;
+                // label → earliest start time, from the live league assignments
+                const _times = {};
+                Object.keys(window.leagueAssignments || {}).forEach(function (dv) {
+                    const _map = window.leagueAssignments[dv] || {};
+                    Object.keys(_map).forEach(function (k) {
+                        const g = _map[k];
+                        if (!g || g.leagueName !== lgName || !g.gameLabel || g._startMin == null) return;
+                        if (_times[g.gameLabel] == null || g._startMin < _times[g.gameLabel]) _times[g.gameLabel] = g._startMin;
+                    });
+                });
+                if (!_labels.every(l => _times[l] != null)) return;  // a game's time is unknown → leave as-is
+                const _base = calculateStartingGameNumber(lgName, dayId, history);
+                const _sorted = _labels.slice().sort((a, b) => _times[a] - _times[b]);
+                const _relabel = {};
+                _sorted.forEach(function (l, i) {
+                    const nl = 'Game ' + (_base + i + 1);
+                    if (nl !== l) _relabel[l] = nl;
+                });
+                if (!Object.keys(_relabel).length) return;
+                // One pass from the OLD labels (safe even when two labels swap).
+                history.gameLog[lgName][dayId] = _recs.map(r =>
+                    (r && r.g && _relabel[r.g]) ? Object.assign({}, r, { g: _relabel[r.g] }) : r);
+                Object.keys(window.leagueAssignments || {}).forEach(function (dv) {
+                    const _map = window.leagueAssignments[dv] || {};
+                    Object.keys(_map).forEach(function (k) {
+                        const g = _map[k];
+                        if (g && g.leagueName === lgName && g.gameLabel && _relabel[g.gameLabel]) g.gameLabel = _relabel[g.gameLabel];
+                    });
+                });
+                console.log('[RegularLeagues] ↔️ Renumbered "' + lgName + '" ' + dayId + ' chronologically: ' +
+                    Object.keys(_relabel).map(o => o + '→' + _relabel[o]).join(', '));
+            });
+        } catch (eRn) { console.warn('[RegularLeagues] chronological renumber skipped:', eRn); }
+
         saveLeagueHistory(history);
 
         // ★ FN-58: auto-save the day's games into the Leagues page results
