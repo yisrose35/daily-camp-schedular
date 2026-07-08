@@ -3055,7 +3055,9 @@ function _syncParentInviteSnapshot(enrollId,silent){
                 insurance:en.insurance||r.insurance||'',policyNum:en.policyNum||r.policyNum||'',
                 emergencyName:en.emergencyName||r.emergencyName||'',emergencyPhone:en.emergencyPhone||r.emergencyPhone||'',emergencyRel:en.emergencyRel||r.emergencyRel||'',
                 parent2Name:en.parent2Name||r.parent2Name||r.parent1Name||'',parent2Phone:en.parent2Phone||r.parent2Phone||r.parent1Phone||'',
-                staff:bunkStaff[r.bunk]||[]
+                staff:bunkStaff[r.bunk]||[],
+                teacher:en.teacher||r.teacher||'',
+                counselor:(function(){var st=bunkStaff[r.bunk]||[];var c=st.filter(function(s){return (s.role||'').toLowerCase()==='counselor';})[0];return c?c.name:'';})()
             };
         });
 

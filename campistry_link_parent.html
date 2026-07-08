@@ -2208,7 +2208,7 @@ window.addEventListener('storage', function(e) {
             return {
                 id:'child_'+idx, name:name, initials:initials, age:age,
                 division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
-                session:c.session||'', counselor:c.counselor||'', staff:c.staff||[],
+                session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
                 allergies:c.allergies||'None', medications:c.medications||'None',
                 dietary:c.dietary||'', doctor:c.doctor||'', doctorPhone:c.doctorPhone||'',
                 insurance:c.insurance||'', policyNum:c.policyNum||'',
@@ -2932,6 +2932,29 @@ function switchTipChild(id, btn) {
     _renderTipHistory(child);
 }
 
+// Resolve a merge tag like {child_counselor} / {child_teacher} to the actual
+// person for THIS child, using the snapshot Campistry Me sent over.
+function _resolveTipTag(tag, child) {
+    if (!tag || !child) return null;
+    var key = String(tag).replace(/[{}]/g, '').replace(/^child_/, '').replace(/_/g, ' ').toLowerCase().trim();
+    var staff = child.staff || [];
+    // Rebbi / teacher — prefer a matching staff role, then the camper's teacher field
+    if (key === 'teacher' || key === 'rebbi' || key === 'morah') {
+        var t = staff.filter(function(s){ var r=(s.role||'').toLowerCase(); return r.indexOf('rebbi')>=0||r.indexOf('teacher')>=0||r.indexOf('morah')>=0||r.indexOf('learning')>=0; })[0];
+        if (t) return { name: t.name, role: t.role };
+        if (child.teacher) return { name: child.teacher, role: 'Rebbi' };
+        return null;
+    }
+    // Otherwise match a staff member whose role equals / contains the key
+    var exact = staff.filter(function(s){ return (s.role||'').toLowerCase() === key; })[0];
+    if (exact) return { name: exact.name, role: exact.role };
+    var contains = staff.filter(function(s){ return (s.role||'').toLowerCase().indexOf(key) >= 0; })[0];
+    if (contains) return { name: contains.name, role: contains.role };
+    // Plain counselor falls back to the dedicated field
+    if (key === 'counselor' && child.counselor) return { name: child.counselor, role: 'Counselor' };
+    return null;
+}
+
 function _renderTipRecipients(child, cfg) {
     var el = document.getElementById('tipsRecipients'); if (!el) return;
     if (!child) {
@@ -2939,34 +2962,29 @@ function _renderTipRecipients(child, cfg) {
         return;
     }
 
-    // Build recipient list:
-    // - First, the child's named counselor from roster (if any)
-    // - Then, each configured category's staff members
-    // - Categories without named staff show a general "tip a [role]" entry
-
+    // Build the recipient list from the configured tip roles. Each role either
+    // resolves a merge tag (the child's actual counselor/rebbi from Me), lists
+    // specific people, or shows the role generically.
     var recipients = [];
+    var seen = {};
+    function add(r) { var k = (r.name + '|' + r.role).toLowerCase(); if (seen[k]) return; seen[k] = 1; recipients.push(r); }
 
-    // Named counselor from child profile (always show if present)
-    if (child.counselor) {
-        recipients.push({ name: child.counselor, role: 'Counselor', fromRoster: true });
-    }
-
-    // Configured categories
-    cfg.categories.forEach(function(cat) {
-        if (cat.staff && cat.staff.length) {
-            cat.staff.forEach(function(s) {
-                // Avoid duplicating the counselor already added from roster
-                if (!(cat.label === 'Counselor' && s === child.counselor)) {
-                    recipients.push({ name: s, role: cat.label });
-                }
-            });
+    (cfg.categories || []).forEach(function(cat) {
+        if (cat.tag) {
+            var hit = _resolveTipTag(cat.tag, child);
+            if (hit) add({ name: hit.name, role: cat.label, amount: cat.amount });
+            else add({ name: 'Your ' + cat.label, role: cat.label, generic: true, amount: cat.amount });
+        } else if (cat.staff && cat.staff.length) {
+            cat.staff.forEach(function(s) { add({ name: s, role: cat.label, amount: cat.amount }); });
         } else {
-            // No specific names — show "Your [role]" if not Counselor (already shown)
-            if (cat.label.toLowerCase() !== 'counselor' || !child.counselor) {
-                recipients.push({ name: 'Your ' + cat.label, role: cat.label, generic: true });
-            }
+            add({ name: 'Your ' + cat.label, role: cat.label, generic: true, amount: cat.amount });
         }
     });
+
+    // Legacy fallback: a named counselor from the child profile with no config
+    if (!recipients.length && child.counselor) {
+        add({ name: child.counselor, role: 'Counselor', fromRoster: true });
+    }
 
     if (!recipients.length) {
         el.innerHTML = '<div class="lk-empty" style="padding:28px 0;"><div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><h3>No staff configured</h3><p>Your camp hasn\'t set up tip recipients yet.</p></div>';
@@ -2976,8 +2994,9 @@ function _renderTipRecipients(child, cfg) {
     el.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;">' +
     recipients.map(function(r) {
         var initials = r.name.split(' ').map(function(w){return w[0]||''}).join('').toUpperCase().slice(0,2);
+        var amt = (r.amount != null && r.amount !== '') ? parseInt(r.amount, 10) : '';
         return '<div style="background:#fff;border:1.5px solid var(--slate-200);border-radius:var(--radius-md);padding:18px 14px;text-align:center;cursor:pointer;transition:border-color .18s,box-shadow .18s;" ' +
-            'onclick="openTipSheet(\'' + _pEsc(r.name) + '\',\'' + _pEsc(r.role) + '\')" ' +
+            'onclick="openTipSheet(\'' + _pEsc(r.name) + '\',\'' + _pEsc(r.role) + '\',' + (amt || 0) + ')" ' +
             'onmouseenter="this.style.borderColor=\'var(--link-color)\';this.style.boxShadow=\'0 2px 12px rgba(42,122,53,.12)\'" ' +
             'onmouseleave="this.style.borderColor=\'var(--slate-200)\';this.style.boxShadow=\'none\'">' +
             '<div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,var(--link-tint),#DBEAFE);display:flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:800;color:var(--product-700);margin:0 auto 10px;">' +
@@ -2987,7 +3006,7 @@ function _renderTipRecipients(child, cfg) {
             '<div style="font-size:.74rem;color:var(--text-muted);margin-top:3px;">' + _pEsc(r.role) + '</div>' +
             '<div style="margin-top:10px;display:inline-flex;align-items:center;gap:5px;background:var(--link-tint);color:var(--link-color);border-radius:999px;padding:5px 12px;font-size:.77rem;font-weight:700;">' +
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>' +
-                'Send Tip' +
+                (amt ? 'Send $' + amt : 'Send Tip') +
             '</div>' +
         '</div>';
     }).join('') + '</div>';
@@ -2999,20 +3018,24 @@ function _pEsc(s) {
     });
 }
 
-function openTipSheet(name, role) {
+function openTipSheet(name, role, suggested) {
     _tipTarget = { name: name, role: role };
     document.getElementById('tipsSheetTitle').textContent = 'Tip ' + name;
     document.getElementById('tipsSheetSub').textContent = role;
     var cfg = _loadTipsConfigP();
-    var amounts = (cfg.amounts && cfg.amounts.length) ? cfg.amounts : [5, 10, 20, 50];
+    var amounts = (cfg.amounts && cfg.amounts.length) ? cfg.amounts.slice() : [5, 10, 20, 50];
+    suggested = parseInt(suggested, 10) || 0;
+    // The role's suggested amount always gets a button, even if not in the global list
+    if (suggested && amounts.indexOf(suggested) < 0) { amounts.push(suggested); amounts.sort(function(a,b){return a-b;}); }
     var btns = document.getElementById('tipAmountBtns');
     if (btns) {
         btns.innerHTML = amounts.map(function(a) {
-            return '<button class="tip-amt-btn" onclick="pickTipAmt(' + a + ',this)" style="padding:10px 18px;border:2px solid var(--slate-200);border-radius:var(--radius-sm);background:#fff;font-size:.95rem;font-weight:700;cursor:pointer;color:var(--slate-700);transition:all .15s;min-width:64px;">$' + a + '</button>';
+            var on = (a === suggested);
+            return '<button class="tip-amt-btn" onclick="pickTipAmt(' + a + ',this)" style="padding:10px 18px;border:2px solid ' + (on?'var(--link-color)':'var(--slate-200)') + ';border-radius:var(--radius-sm);background:' + (on?'var(--link-tint)':'#fff') + ';font-size:.95rem;font-weight:700;cursor:pointer;color:' + (on?'var(--link-color)':'var(--slate-700)') + ';transition:all .15s;min-width:64px;">$' + a + '</button>';
         }).join('');
     }
     var custom = document.getElementById('tipCustomAmt');
-    if (custom) custom.value = '';
+    if (custom) custom.value = suggested ? suggested : '';
     document.getElementById('tipsAmountSheet').style.display = '';
     document.getElementById('tipsAmountSheet').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }

@@ -677,15 +677,15 @@
     <!-- Recipient categories -->
     <div class="lk-card" style="margin-top:18px;">
         <div class="lk-card-head">
-            <h2>Recipient Categories</h2>
-            <button class="btn btn-secondary btn-sm" onclick="openAddTipsCategory()">+ Add Category</button>
+            <h2>Tip Roles</h2>
+            <button class="btn btn-secondary btn-sm" onclick="openAddTipsCategory()">+ Add Role</button>
         </div>
-        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Define staff roles that can receive tips. Add specific names to each role — or leave blank to auto-match from the camp roster.</p>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Define tip roles like <strong>Counselor — ({child_counselor}) — $25</strong>. The system fills in each camper's actual counselor, rebbi, etc. from Campistry Me.</p>
         <div id="tipsCategoriesList"></div>
         <div id="tipsCategoriesEmpty" class="lk-empty" style="display:none;padding:24px 0;">
             <div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
-            <h3>No categories yet</h3>
-            <p>Add a category like "Counselor" or "Teacher" to get started.</p>
+            <h3>No tip roles yet</h3>
+            <p>Add a role like Counselor — ({child_counselor}) — $25 to get started.</p>
         </div>
     </div>
 
@@ -717,18 +717,37 @@
 <div id="tipsCatBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeTipsCatModal()"></div>
 <div id="tipsCatModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.18);z-index:951;width:420px;max-width:calc(100vw - 32px);padding:28px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
-        <h2 style="font-size:1rem;font-weight:700;margin:0;">Add Recipient Category</h2>
+        <h2 style="font-size:1rem;font-weight:700;margin:0;">Add Tip Role</h2>
         <button onclick="closeTipsCatModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem;">✕</button>
     </div>
     <div class="lk-field">
-        <label>Category name</label>
-        <input type="text" class="lk-input" id="tipsCatName" placeholder='e.g. Counselor, Junior Counselor, Teacher'>
+        <label>Role name <span style="font-weight:400;color:var(--text-muted);">— what parents see, e.g. Counselor, Rebbi</span></label>
+        <input type="text" class="lk-input" id="tipsCatName" placeholder='e.g. Counselor, Rebbi, Head Counselor' oninput="_renderTipsCatPreview()">
     </div>
     <div class="lk-field" style="margin-top:12px;">
-        <label>Staff members <span style="font-weight:400;color:var(--text-muted);">(optional — one per line)</span></label>
-        <textarea class="lk-textarea" id="tipsCatStaff" rows="4" placeholder="Sarah M.&#10;Jake T.&#10;Emma S."></textarea>
-        <p style="font-size:.74rem;color:var(--text-muted);margin-top:5px;">Leave blank to show all staff from camp roster under this role.</p>
+        <label>Who receives it</label>
+        <select class="lk-input" id="tipsCatTag" onchange="onTipsCatTagChange()">
+            <option value="{child_counselor}">The camper's Counselor</option>
+            <option value="{child_teacher}">The camper's Rebbi / Teacher</option>
+            <option value="{child_head_counselor}">The camper's Head Counselor</option>
+            <option value="{child_junior_counselor}">The camper's Junior Counselor</option>
+            <option value="__names__">Specific people (type names)</option>
+            <option value="__generic__">Show the role without a name</option>
+        </select>
+        <p style="font-size:.74rem;color:var(--text-muted);margin-top:5px;">The actual name is filled in per camper automatically from Campistry Me.</p>
     </div>
+    <div class="lk-field" id="tipsCatStaffWrap" style="margin-top:12px;display:none;">
+        <label>Staff members <span style="font-weight:400;color:var(--text-muted);">(one per line)</span></label>
+        <textarea class="lk-textarea" id="tipsCatStaff" rows="4" placeholder="Sarah M.&#10;Jake T.&#10;Emma S."></textarea>
+    </div>
+    <div class="lk-field" style="margin-top:12px;">
+        <label>Suggested amount <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+        <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:.95rem;font-weight:700;color:var(--slate-500);">$</span>
+            <input type="number" class="lk-input" id="tipsCatAmount" min="1" max="500" step="1" placeholder="25" style="max-width:120px;" oninput="_renderTipsCatPreview()">
+        </div>
+    </div>
+    <div id="tipsCatPreview" style="margin-top:16px;padding:11px 14px;background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);font-size:.85rem;color:var(--slate-700);"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">
         <button class="btn btn-ghost btn-sm" onclick="closeTipsCatModal()">Cancel</button>
         <button class="btn btn-primary btn-sm" onclick="saveTipsCategory()">Add Category</button>
@@ -3049,33 +3068,70 @@ function _renderTipCategories(cfg) {
     }
     if (em) em.style.display = 'none';
     el.innerHTML = cats.map(function(cat, ci) {
-        var staffHtml = (cat.staff && cat.staff.length)
-            ? cat.staff.map(function(s, si) {
+        var sourceHtml;
+        if (cat.tag) {
+            sourceHtml = '<span style="display:inline-flex;align-items:center;background:var(--link-tint);color:var(--link-color);border-radius:999px;padding:3px 11px;font-size:.76rem;font-weight:600;font-family:monospace;">' + esc(cat.tag) + '</span>' +
+                '<span style="font-size:.76rem;color:var(--text-muted);">filled in from Campistry Me</span>';
+        } else if (cat.staff && cat.staff.length) {
+            sourceHtml = cat.staff.map(function(s, si) {
                 return '<div style="display:inline-flex;align-items:center;gap:3px;background:var(--slate-50);border:1px solid var(--slate-200);border-radius:999px;padding:3px 10px;font-size:.77rem;color:var(--slate-700);">' +
                     esc(s) +
                     '<button onclick="removeTipStaff(' + ci + ',' + si + ')" style="background:none;border:none;cursor:pointer;color:var(--slate-400);padding:0 2px;font-size:.82rem;" title="Remove">×</button></div>';
-            }).join('')
-            : '<span style="font-size:.78rem;color:var(--text-muted);">Auto-matched from roster</span>';
+            }).join('');
+        } else {
+            sourceHtml = '<span style="font-size:.78rem;color:var(--text-muted);">Shown without a specific name</span>';
+        }
+        var amtBadge = (cat.amount != null)
+            ? '<span style="font-size:.8rem;font-weight:700;color:var(--green-600);background:var(--green-50,#F0FDF4);border:1px solid var(--green-200,#BBF7D0);border-radius:999px;padding:3px 11px;">$' + esc(cat.amount) + '</span>'
+            : '';
         return '<div style="padding:14px 0;border-bottom:1px solid var(--slate-100);">' +
             '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">' +
-                '<div>' +
-                    '<div style="font-size:.88rem;font-weight:700;color:var(--slate-900);">' + esc(cat.label) + '</div>' +
-                    '<div style="font-size:.74rem;color:var(--text-muted);margin-top:2px;">' + (cat.staff && cat.staff.length ? cat.staff.length + ' staff member' + (cat.staff.length===1?'':'s') : 'Roster auto-match') + '</div>' +
+                '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+                    '<span style="font-size:.88rem;font-weight:700;color:var(--slate-900);">' + esc(cat.label) + '</span>' + amtBadge +
                 '</div>' +
-                '<div style="display:flex;gap:6px;">' +
+                '<div style="display:flex;gap:6px;flex-shrink:0;">' +
                     '<button class="btn btn-ghost btn-sm" onclick="openEditTipsCategory(' + ci + ')">Edit</button>' +
                     '<button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="deleteTipsCategory(' + ci + ')">Delete</button>' +
                 '</div>' +
             '</div>' +
-            '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' + staffHtml + '</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' + sourceHtml + '</div>' +
         '</div>';
     }).join('');
+}
+
+// Show/hide the "specific names" textarea depending on the source dropdown
+function onTipsCatTagChange() {
+    var mode = (document.getElementById('tipsCatTag') || {}).value || '';
+    var wrap = document.getElementById('tipsCatStaffWrap');
+    if (wrap) wrap.style.display = (mode === '__names__') ? '' : 'none';
+    _renderTipsCatPreview();
+}
+
+// Live "Counselor — ({child_counselor}) — $25" preview line
+function _renderTipsCatPreview() {
+    var el = document.getElementById('tipsCatPreview'); if (!el) return;
+    var name = (document.getElementById('tipsCatName').value || '').trim() || 'Role';
+    var mode = (document.getElementById('tipsCatTag') || {}).value || '';
+    var amt  = (document.getElementById('tipsCatAmount').value || '').trim();
+    var src;
+    if (mode === '__names__') {
+        var n = (document.getElementById('tipsCatStaff').value || '').split('\n').map(function(s){return s.trim();}).filter(Boolean).length;
+        src = n ? (n + ' specific ' + (n === 1 ? 'person' : 'people')) : 'specific people';
+    } else if (mode === '__generic__') {
+        src = 'no name shown';
+    } else {
+        src = mode; // the merge tag, e.g. {child_counselor}
+    }
+    el.innerHTML = 'Parents will see: <strong>' + esc(name) + '</strong> <span style="color:var(--text-muted);">— (' + esc(src) + ')' + (amt ? ' — $' + esc(amt) : '') + '</span>';
 }
 
 function openAddTipsCategory() {
     document.getElementById('tipsCatName').value = '';
     document.getElementById('tipsCatStaff').value = '';
+    document.getElementById('tipsCatTag').value = '{child_counselor}';
+    document.getElementById('tipsCatAmount').value = '';
     document.getElementById('tipsCatModal')._editIndex = -1;
+    onTipsCatTagChange();
     document.getElementById('tipsCatModal').style.display = 'block';
     document.getElementById('tipsCatBackdrop').style.display = 'block';
     document.getElementById('tipsCatName').focus();
@@ -3086,7 +3142,24 @@ function openEditTipsCategory(ci) {
     var cat = cfg.categories[ci]; if (!cat) return;
     document.getElementById('tipsCatName').value = cat.label || '';
     document.getElementById('tipsCatStaff').value = (cat.staff || []).join('\n');
+    document.getElementById('tipsCatAmount').value = (cat.amount != null ? cat.amount : '');
+    // Restore the source: an explicit tag, else specific names, else generic
+    var tagSel = document.getElementById('tipsCatTag');
+    var mode;
+    if (cat.tag) {
+        mode = cat.tag;
+        // If it's a custom tag not in the dropdown, add it as an option
+        if (!Array.prototype.some.call(tagSel.options, function(o){ return o.value === cat.tag; })) {
+            var opt = document.createElement('option'); opt.value = cat.tag; opt.textContent = cat.tag; tagSel.appendChild(opt);
+        }
+    } else if (cat.staff && cat.staff.length) {
+        mode = '__names__';
+    } else {
+        mode = '__generic__';
+    }
+    tagSel.value = mode;
     document.getElementById('tipsCatModal')._editIndex = ci;
+    onTipsCatTagChange();
     document.getElementById('tipsCatModal').style.display = 'block';
     document.getElementById('tipsCatBackdrop').style.display = 'block';
 }
@@ -3098,12 +3171,24 @@ function closeTipsCatModal() {
 
 function saveTipsCategory() {
     var name = (document.getElementById('tipsCatName').value || '').trim();
-    if (!name) { toast('Enter a category name'); return; }
-    var staffRaw = (document.getElementById('tipsCatStaff').value || '').trim();
-    var staff = staffRaw ? staffRaw.split('\n').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+    if (!name) { toast('Enter a role name'); return; }
+    var mode = (document.getElementById('tipsCatTag') || {}).value || '';
+    var amtRaw = (document.getElementById('tipsCatAmount').value || '').trim();
+    var amount = amtRaw ? parseInt(amtRaw, 10) : null;
+    if (amount != null && (isNaN(amount) || amount < 1 || amount > 500)) { toast('Amount must be $1–$500'); return; }
+
+    var staff = [], tag = '';
+    if (mode === '__names__') {
+        var staffRaw = (document.getElementById('tipsCatStaff').value || '').trim();
+        staff = staffRaw ? staffRaw.split('\n').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+        if (!staff.length) { toast('Add at least one name, or pick a different source'); return; }
+    } else if (mode !== '__generic__') {
+        tag = mode; // a merge tag like {child_counselor}
+    }
+
     var cfg = _loadTipsConfig();
     var editIdx = document.getElementById('tipsCatModal')._editIndex;
-    var cat = { id: name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now(), label: name, staff: staff };
+    var cat = { id: name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now(), label: name, tag: tag, amount: amount, staff: staff };
     if (editIdx >= 0 && editIdx < cfg.categories.length) {
         cat.id = cfg.categories[editIdx].id;
         cfg.categories[editIdx] = cat;
@@ -3113,7 +3198,7 @@ function saveTipsCategory() {
     _saveTipsConfig(cfg);
     closeTipsCatModal();
     _renderTipCategories(cfg);
-    toast(editIdx >= 0 ? 'Category updated' : 'Category added');
+    toast(editIdx >= 0 ? 'Role updated' : 'Role added');
 }
 
 function deleteTipsCategory(ci) {
