@@ -54,8 +54,8 @@
         .compose-backdrop.open { display:block; }
         .compose-drawer {
             position:fixed; z-index:901; top:50%; left:50%;
-            width:clamp(320px, 92vw, 840px);
-            max-height:92vh;
+            width:clamp(320px, 94vw, 1080px);
+            max-height:94vh;
             background:#fff; border-radius:18px;
             box-shadow:0 24px 70px rgba(0,0,0,.28);
             overflow-y:auto; padding:0;
@@ -124,6 +124,35 @@
 
         /* Photo stats grid */
         .lk-photo-stat-icon { font-size:0; display:inline-flex; align-items:center; justify-content:center; }
+
+        /* Scope multi-select pills (the "To" filter) */
+        .scope-chips { display:flex; flex-wrap:wrap; gap:6px; align-content:flex-start; }
+        .scope-chip { display:inline-flex; align-items:center; gap:5px; padding:6px 13px; font-size:.8rem; font-weight:600; border:1.5px solid var(--slate-200); border-radius:var(--radius-full); background:#fff; color:var(--slate-600); cursor:pointer; transition:border-color .15s,background .15s,color .15s; user-select:none; }
+        .scope-chip:hover { border-color:var(--link-color); }
+        .scope-chip.selected { border-color:var(--link-color); background:var(--link-tint); color:var(--link-color); }
+        .scope-chip .sc-check { width:13px; height:13px; opacity:0; transition:opacity .15s; }
+        .scope-chip.selected .sc-check { opacity:1; }
+        .scope-allbar { display:flex; gap:14px; margin-bottom:8px; align-items:center; }
+        .scope-mini-link { font-size:.75rem; font-weight:600; color:var(--link-color); cursor:pointer; background:none; border:none; padding:0; font-family:var(--font-body); }
+        .scope-mini-link:hover { text-decoration:underline; }
+
+        /* Attach (Gmail-style paperclip + attachment chips) */
+        .attach-wrap { position:relative; display:inline-block; }
+        .attach-btn { display:inline-flex; align-items:center; gap:8px; padding:8px 15px; font-size:.82rem; font-weight:600; border:1.5px solid var(--slate-200); border-radius:var(--radius-full); background:#fff; color:var(--slate-600); cursor:pointer; font-family:var(--font-body); transition:border-color .15s,background .15s,color .15s; }
+        .attach-btn:hover { border-color:var(--link-color); color:var(--link-color); background:var(--link-tint); }
+        .attach-menu { position:absolute; bottom:calc(100% + 8px); left:0; width:290px; max-height:340px; overflow-y:auto; background:#fff; border:1px solid var(--border-light); border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.16); z-index:20; padding:6px; display:none; }
+        .attach-menu.open { display:block; }
+        .attach-sec-label { font-size:.67rem; font-weight:800; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); padding:9px 10px 4px; }
+        .attach-opt { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:.83rem; color:var(--slate-700); }
+        .attach-opt:hover { background:var(--slate-50); }
+        .attach-opt.picked { background:var(--link-tint); color:var(--link-color); font-weight:600; }
+        .attach-opt svg { flex-shrink:0; color:var(--link-color); }
+        .attach-empty { padding:6px 10px 10px; font-size:.77rem; color:var(--text-muted); }
+        .attach-chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+        .attach-chip { display:inline-flex; align-items:center; gap:8px; padding:7px 12px; background:var(--slate-50); border:1px solid var(--border-light); border-radius:10px; font-size:.8rem; font-weight:600; color:var(--slate-700); }
+        .attach-chip svg { color:var(--link-color); flex-shrink:0; }
+        .attach-chip .ac-x { cursor:pointer; color:var(--text-muted); font-size:1.05rem; line-height:1; margin-left:2px; }
+        .attach-chip .ac-x:hover { color:var(--red-500); }
 
         /* Channel buttons */
         .channel-btns { display:flex; gap:6px; flex-wrap:wrap; }
@@ -413,22 +442,28 @@
         <!-- To -->
         <div class="lk-field">
             <label>To</label>
-            <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
-                <select class="lk-input" id="cScope" style="max-width:175px;flex-shrink:0;" onchange="onScopeChange()">
+            <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <select class="lk-input" id="cScope" style="max-width:190px;flex-shrink:0;" onchange="onScopeChange()">
                     <option value="all">Everyone</option>
                     <option value="division">By Division</option>
                     <option value="grade">By Grade</option>
                     <option value="bunk">By Bunk</option>
                     <option value="individual">Specific Parent</option>
                 </select>
-                <select class="lk-input" id="cScopeVal" multiple size="4" style="max-width:195px;display:none;" onchange="onScopeValChange()" title="Hold Ctrl (⌘ on Mac) to pick more than one"></select>
-                <div id="cIndivWrap" style="display:none;flex:1;min-width:170px;position:relative;">
+                <div id="cScopeValWrap" style="flex:1;min-width:240px;display:none;">
+                    <div class="scope-allbar">
+                        <button type="button" class="scope-mini-link" onclick="scopeSelectAll(true)">Select all</button>
+                        <button type="button" class="scope-mini-link" style="color:var(--text-muted);" onclick="scopeSelectAll(false)">Clear</button>
+                    </div>
+                    <div id="cScopeVal" class="scope-chips"></div>
+                </div>
+                <div id="cIndivWrap" style="display:none;flex:1;min-width:220px;position:relative;">
                     <input type="text" class="lk-input" id="cIndivSearch" placeholder="Type camper or parent name, add as many as needed" oninput="onIndivSearch(this.value)" autocomplete="off">
                     <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
                 </div>
             </div>
             <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:6px;"></div>
-            <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:4px;min-height:16px;"></div>
+            <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:8px;min-height:16px;"></div>
         </div>
 
         <!-- Merge tags -->
@@ -456,13 +491,22 @@
             <textarea class="lk-textarea" id="cBody" placeholder="Type your message here…" style="min-height:120px;" oninput="updateComposePreview()"></textarea>
         </div>
 
-        <!-- Attach a form / list template -->
+        <!-- Attach a form / list template (Gmail-style paperclip) -->
         <div class="lk-field">
             <label>Attach <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">— parents get a button to open it right in the message</span></label>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <select class="lk-input" id="cAttachForm" style="flex:1;min-width:150px;"><option value="">No form</option></select>
-                <select class="lk-input" id="cAttachList" style="flex:1;min-width:150px;"><option value="">No list</option></select>
+            <div class="attach-wrap">
+                <button type="button" class="attach-btn" onclick="toggleAttachMenu(event)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                    Attach form or list
+                </button>
+                <div class="attach-menu" id="cAttachMenu">
+                    <div class="attach-sec-label">Forms</div>
+                    <div id="cAttachFormOpts"></div>
+                    <div class="attach-sec-label">Lists</div>
+                    <div id="cAttachListOpts"></div>
+                </div>
             </div>
+            <div class="attach-chips" id="cAttachChips"></div>
         </div>
 
         <!-- Live preview -->
@@ -965,20 +1009,72 @@ function openComposeDrawer(presetName) {
     }
 }
 
-// Fill the compose "Attach" dropdowns from the saved form + list templates.
+// Current message attachments — at most one form + one list, Gmail-style.
+var _composeAttach = { form: null, list: null };
+var _FORM_ICO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+var _LIST_ICO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>';
+
+// Rebuild the paperclip menu from saved templates and set any preselection.
 function _populateComposeAttach(preForm, preList) {
+    _composeAttach = { form: null, list: null };
     var lf = _loadLinkForms();
     var forms = (lf.digital || []).concat(lf.printReturn || []);
-    var fSel = document.getElementById('cAttachForm');
-    if (fSel) fSel.innerHTML = '<option value="">No form</option>' + forms.map(function(f) {
-        return '<option value="' + esc(f.id) + '"' + (preForm === f.id ? ' selected' : '') + '>' + esc(f.name || 'Untitled form') + '</option>';
-    }).join('');
+    var fOpts = document.getElementById('cAttachFormOpts');
+    if (fOpts) fOpts.innerHTML = forms.length ? forms.map(function(f) {
+        return '<div class="attach-opt" data-fid="' + esc(f.id) + '" onclick="_attachPick(\'form\',\'' + String(f.id).replace(/'/g,'') + '\')">' + _FORM_ICO + esc(f.name || 'Untitled form') + '</div>';
+    }).join('') : '<div class="attach-empty">No forms yet — create one in the Forms tab.</div>';
     var lists = _loadLinkListsStore();
-    var lSel = document.getElementById('cAttachList');
-    if (lSel) lSel.innerHTML = '<option value="">No list</option>' + lists.map(function(l) {
-        return '<option value="' + esc(l.id) + '"' + (preList === l.id ? ' selected' : '') + '>' + esc(l.name || 'Untitled list') + '</option>';
-    }).join('');
+    var lOpts = document.getElementById('cAttachListOpts');
+    if (lOpts) lOpts.innerHTML = lists.length ? lists.map(function(l) {
+        return '<div class="attach-opt" data-lid="' + esc(l.id) + '" onclick="_attachPick(\'list\',\'' + String(l.id).replace(/'/g,'') + '\')">' + _LIST_ICO + esc(l.name || 'Untitled list') + '</div>';
+    }).join('') : '<div class="attach-empty">No lists yet — create one in the Lists tab.</div>';
+
+    if (preForm) { var pf = forms.find(function(f){return f.id===preForm;}); if (pf) _composeAttach.form = { id: pf.id, name: pf.name }; }
+    if (preList) { var pl = lists.find(function(l){return l.id===preList;}); if (pl) _composeAttach.list = { id: pl.id, name: pl.name }; }
+    _renderAttachChips();
 }
+
+function toggleAttachMenu(ev) {
+    if (ev) ev.stopPropagation();
+    var m = document.getElementById('cAttachMenu');
+    if (m) m.classList.toggle('open');
+}
+
+function _attachPick(kind, id) {
+    var lf = _loadLinkForms();
+    if (kind === 'form') {
+        var f = (lf.digital || []).concat(lf.printReturn || []).find(function(x){return String(x.id)===String(id);});
+        _composeAttach.form = f ? { id: f.id, name: f.name } : null;
+    } else {
+        var l = _loadLinkListsStore().find(function(x){return String(x.id)===String(id);});
+        _composeAttach.list = l ? { id: l.id, name: l.name } : null;
+    }
+    var m = document.getElementById('cAttachMenu'); if (m) m.classList.remove('open');
+    _renderAttachChips();
+}
+
+function _attachRemove(kind) {
+    _composeAttach[kind] = null;
+    _renderAttachChips();
+}
+
+function _renderAttachChips() {
+    var wrap = document.getElementById('cAttachChips'); if (!wrap) return;
+    var html = '';
+    if (_composeAttach.form) html += '<span class="attach-chip">' + _FORM_ICO + esc(_composeAttach.form.name || 'Form') + '<span class="ac-x" onclick="_attachRemove(\'form\')" title="Remove">&times;</span></span>';
+    if (_composeAttach.list) html += '<span class="attach-chip">' + _LIST_ICO + esc(_composeAttach.list.name || 'List') + '<span class="ac-x" onclick="_attachRemove(\'list\')" title="Remove">&times;</span></span>';
+    wrap.innerHTML = html;
+    // Reflect current picks in the menu
+    document.querySelectorAll('#cAttachFormOpts .attach-opt').forEach(function(el){ el.classList.toggle('picked', !!(_composeAttach.form && el.dataset.fid===_composeAttach.form.id)); });
+    document.querySelectorAll('#cAttachListOpts .attach-opt').forEach(function(el){ el.classList.toggle('picked', !!(_composeAttach.list && el.dataset.lid===_composeAttach.list.id)); });
+}
+
+// Close the paperclip menu on any outside click
+document.addEventListener('click', function(e) {
+    var m = document.getElementById('cAttachMenu');
+    if (!m || !m.classList.contains('open')) return;
+    if (!e.target.closest('.attach-wrap')) m.classList.remove('open');
+});
 function closeComposeDrawer() {
     document.getElementById('composeDrawer').classList.remove('open');
     document.getElementById('composeBackdrop').classList.remove('open');
@@ -1406,10 +1502,11 @@ function loadTemplate(type) {
     body.focus();
 }
 
-// Scope change — show/hide the secondary filter or individual search
+// Scope change — show/hide the secondary filter (as toggle pills) or the search
 function onScopeChange() {
     var scope    = (document.getElementById('cScope')    || {}).value || 'all';
     var scopeVal = document.getElementById('cScopeVal');
+    var valWrap  = document.getElementById('cScopeValWrap');
     var indivWrap= document.getElementById('cIndivWrap');
     var chips    = document.getElementById('cIndivChips');
     if (!scopeVal || !indivWrap) return;
@@ -1418,29 +1515,54 @@ function onScopeChange() {
     indivWrap.style.display  = isIndiv ? '' : 'none';
     chips.innerHTML          = '';
 
-    if (isIndiv) {
-        scopeVal.style.display = 'none';
-    } else if (scope === 'all') {
-        scopeVal.style.display = 'none';
+    if (isIndiv || scope === 'all') {
+        if (valWrap) valWrap.style.display = 'none';
+        scopeVal.innerHTML = '';
     } else {
-        scopeVal.style.display = '';
+        if (valWrap) valWrap.style.display = '';
         var cl = CL();
         var struct = cl ? cl.data.getStructure() : {};
-        var opts = [];
+        var vals = [];
         if (scope === 'division') {
-            Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+            Object.keys(struct).sort().forEach(function(d) { vals.push(d); });
         } else if (scope === 'grade') {
             var grades = {};
             Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
-            Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+            vals = Object.keys(grades).sort();
         } else if (scope === 'bunk') {
             var bunks = {};
             Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
-            Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+            vals = Object.keys(bunks).sort();
         }
-        scopeVal.innerHTML = opts.join('');
+        var check = '<svg class="sc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5"><polyline points="20 6 9 17 4 12"/></svg>';
+        scopeVal.innerHTML = vals.map(function(v) {
+            return '<button type="button" class="scope-chip" data-val="' + esc(v) + '" onclick="_toggleScopePill(this)">' + check + esc(v) + '</button>';
+        }).join('') || '<span style="font-size:.78rem;color:var(--text-muted);">Nothing set up yet</span>';
     }
     onScopeValChange();
+}
+
+// Toggle one "To" pill on/off
+function _toggleScopePill(el) {
+    el.classList.toggle('selected');
+    onScopeValChange();
+}
+
+// Select or clear every visible "To" pill at once
+function scopeSelectAll(select) {
+    document.querySelectorAll('#cScopeVal .scope-chip').forEach(function(el) {
+        el.classList.toggle('selected', !!select);
+    });
+    onScopeValChange();
+}
+
+// Read the selected "To" pill values
+function _getSelectedScopeVals() {
+    var out = [];
+    document.querySelectorAll('#cScopeVal .scope-chip.selected').forEach(function(el) {
+        if (el.dataset.val) out.push(el.dataset.val);
+    });
+    return out;
 }
 
 function onScopeValChange() {
@@ -1509,7 +1631,7 @@ function msgParent(name) {
 function _getComposeTargets() {
     var cl = CL(); if (!cl) return [];
     var scope = (document.getElementById('cScope') || {}).value || 'all';
-    var values = _selectedScopeVals(document.getElementById('cScopeVal'));
+    var values = _getSelectedScopeVals();
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
 
     if (scope === 'individual') {
@@ -1675,8 +1797,8 @@ function sendCompose() {
     var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
     var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
     var body = ((document.getElementById('cBody') || {}).value || '').trim();
-    var attachFormId = (document.getElementById('cAttachForm') || {}).value || '';
-    var attachListId = (document.getElementById('cAttachList') || {}).value || '';
+    var attachFormId = (_composeAttach.form && _composeAttach.form.id) || '';
+    var attachListId = (_composeAttach.list && _composeAttach.list.id) || '';
     if (!subj) { toast('Subject is required'); return; }
     if (!body && !attachFormId && !attachListId) { toast('Write a message or attach a form/list'); return; }
     var targets = _getComposeTargets();
