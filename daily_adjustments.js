@@ -5563,60 +5563,9 @@ function saveDailySkeleton() {
   } catch (e) {
     console.error('[DailyAdj] Failed to save to cloud:', e);
   }
-
-  // ★ EXTEND-DAY-EARLIER: if this skeleton edit changed the period structure of a
-  //   day that already has a generated schedule (e.g. a morning was inserted before
-  //   an existing afternoon), realign the per-bunk schedule from the OLD slot
-  //   geometry to the NEW one BY TIME — so the afternoon stays put instead of
-  //   shifting with the slot indices, and the new (earlier) periods come up empty
-  //   and ready to fill (post-edit / bunk override). Safe by construction: it only
-  //   moves a bunk's entries when every one finds an exact time match; otherwise
-  //   that bunk is left exactly as it was.
-  try { _daReslotScheduleForSkeletonChange(); } catch (e) { console.warn('[DailyAdj] reslot after skeleton change failed (non-fatal):', e); }
-
+  
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
   window.forceSyncToCloud?.();
-}
-
-function _daHasRealScheduleForReslot(sa) {
-  for (var b in sa) {
-    var arr = sa[b];
-    if (!Array.isArray(arr)) continue;
-    for (var i = 0; i < arr.length; i++) {
-      var e = arr[i];
-      if (e && !e.continuation && e._activity && String(e._activity).toLowerCase() !== 'free') return true;
-    }
-  }
-  return false;
-}
-
-function _daReslotScheduleForSkeletonChange() {
-  if (window._generationInProgress) return;          // never mid-generation
-  if (window._daBuilderMode === 'auto') return;       // manual-builder feature
-  var sa = window.scheduleAssignments;
-  if (!sa || !_daHasRealScheduleForReslot(sa)) return; // nothing generated to realign
-  var DTS = window.DivisionTimesSystem;
-  if (!DTS || !DTS.reslotAssignmentsByTime || !DTS.buildFromSkeleton) return;
-  var oldDT = window.divisionTimes;
-  if (!oldDT || !Object.keys(oldDT).length) return;   // no baseline geometry to map FROM
-  var divs = window.divisions || masterSettings.app1?.divisions || {};
-  var newDT = DTS.buildFromSkeleton(dailyOverrideSkeleton, divs);
-  if (!newDT || !Object.keys(newDT).length) return;
-
-  var res = DTS.reslotAssignmentsByTime(sa, oldDT, newDT, divs);
-  if (res && res.moved) {
-    // Only adopt the new geometry when we actually realigned — keeps
-    // scheduleAssignments and divisionTimes consistent. (Ambiguous restructures
-    // that reslot declined to touch fall through to the normal render rebuild.)
-    window.divisionTimes = newDT;
-    try {
-      window.saveCurrentDailyData && window.saveCurrentDailyData('scheduleAssignments', sa);
-      var ser = (DTS.serialize && DTS.serialize(newDT)) || newDT;
-      window.saveCurrentDailyData && window.saveCurrentDailyData('divisionTimes', ser);
-    } catch (_e) {}
-    console.log('[DailyAdj] Extend-earlier: realigned ' + res.bunksMoved + ' bunk(s) by time (afternoon kept in place); ' + res.bunksSkipped + ' left as-is.');
-    try { window.updateTable && window.updateTable(); } catch (_) {}
-  }
 }
 
 function daGetConflictingFacilities(startTime, endTime, excludeId) {
