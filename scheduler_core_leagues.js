@@ -510,10 +510,17 @@
         history.gameLog[leagueName][date].push({ t1: team1, t2: team2, sport: sport || null, g: gameLabel || null });
     }
 
-    function rollbackDayRecords(leagueName, date, history) {
+    function rollbackDayRecords(leagueName, date, history, preservedLabels) {
         const entries = history.gameLog?.[leagueName]?.[date];
         if (!entries || !entries.length) return 0;
-        entries.forEach(function (e) {
+        // ★ Per-tile regen: games whose period is NOT being re-rolled keep their
+        //   log records (else the day's game count drops and the Leagues results
+        //   page loses the game). preservedLabels = Set of gameLabels to keep.
+        const _keep = (preservedLabels && preservedLabels.size)
+            ? entries.filter(function (e) { return e && e.g && preservedLabels.has(e.g); })
+            : [];
+        const _roll = (_keep.length) ? entries.filter(function (e) { return _keep.indexOf(e) < 0; }) : entries;
+        _roll.forEach(function (e) {
             if (e.sport) {
                 [e.t1, e.t2].forEach(function (team) {
                     if (!team) return;
@@ -529,9 +536,11 @@
                 else delete history.matchupHistory[mk];
             }
         });
-        const n = entries.length;
-        delete history.gameLog[leagueName][date];
-        console.log(`[RegularLeagues] ↩️ Rolled back ${n} logged game record(s) for "${leagueName}" on ${date}`);
+        const n = _roll.length;
+        if (_keep.length) history.gameLog[leagueName][date] = _keep;
+        else delete history.gameLog[leagueName][date];
+        console.log(`[RegularLeagues] ↩️ Rolled back ${n} logged game record(s) for "${leagueName}" on ${date}` +
+            (_keep.length ? ` (kept ${_keep.length} preserved record(s))` : ''));
         return n;
     }
 
@@ -2231,6 +2240,10 @@
         // leaves other leagues' day records untouched. Without this, every
         // regen re-appended the day's games into the flat aggregates.
         const _dayResetLeagues = new Set();   // ★ FN-58: leagues whose day was replaced this run
+        // ★ Per-tile regen: distinct preserved games kept on this date per league
+        //   (their records survived the rollback). Feeds game numbering + the
+        //   games-per-date total so a preserved game still counts as played.
+        const _preservedTodayCounts = {};
         (function () {
             const _genDivs = new Set(context.generatedDivisions || []);
             const _allLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
@@ -2243,8 +2256,21 @@
                 }) || (league.divisions || []).some(function (d) { return _genDivs.has(d); });
                 if (!inPlay) return;
                 _dayResetLeagues.add(league.name);
-                rollbackDayRecords(league.name, dayId, history);
-                if (history.gamesPerDate?.[league.name]?.[dayId] !== undefined) {
+                // Per-tile regen: keep the log records of this league's games whose
+                // periods are NOT being re-rolled (labels published by the regen UI).
+                let _plbl = null;
+                try {
+                    const _raw = window.__regenPreservedLeagueLabels && window.__regenPreservedLeagueLabels[league.name];
+                    if (_raw && _raw.length) _plbl = new Set(_raw);
+                } catch (_e) {}
+                rollbackDayRecords(league.name, dayId, history, _plbl);
+                const _keptRecs = history.gameLog?.[league.name]?.[dayId] || [];
+                const _keptGames = new Set(_keptRecs.map(function (r) { return r && r.g; }).filter(Boolean)).size;
+                _preservedTodayCounts[league.name] = _keptGames;
+                if (_keptGames > 0) {
+                    if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
+                    history.gamesPerDate[league.name][dayId] = _keptGames;
+                } else if (history.gamesPerDate?.[league.name]?.[dayId] !== undefined) {
                     delete history.gamesPerDate[league.name][dayId];
                 }
             });
@@ -2851,10 +2877,12 @@
                     leagueGameCounters[league.name] = 0;
                 }
                 
-                // Get the starting game number based on chronological date order
+                // Get the starting game number based on chronological date order.
+                // ★ Per-tile regen: number AFTER any preserved (not re-rolled) games
+                //   already kept on this date, so labels never collide with them.
                 const baseGameNumber = calculateStartingGameNumber(league.name, dayId, history);
                 const todayGameIndex = leagueGameCounters[league.name];
-                const gameNumber = baseGameNumber + todayGameIndex + 1;
+                const gameNumber = baseGameNumber + (_preservedTodayCounts[league.name] || 0) + todayGameIndex + 1;
                 
                 const leagueSports = league.sports || ["General Sport"];
                 // ★ Away (off-campus) league tile: resolve the chosen zone + mode BEFORE
@@ -3426,9 +3454,13 @@ window._debugLeagueTimeData = timeData;
         }
 
         // ★★★ SAVE GAMES PER DATE FOR EACH LEAGUE ★★★
+        // ★ Per-tile regen: the day's total = games scheduled THIS run + preserved
+        //   (not re-rolled) games kept through the rollback — so adding a morning
+        //   game to a day that already had an evening game counts as 2, and the
+        //   next day's game number advances correctly.
         for (const [leagueName, count] of Object.entries(leagueGameCounters)) {
             if (count > 0) {
-                recordGamesOnDate(leagueName, dayId, count, history);
+                recordGamesOnDate(leagueName, dayId, count + (_preservedTodayCounts[leagueName] || 0), history);
             }
         }
 

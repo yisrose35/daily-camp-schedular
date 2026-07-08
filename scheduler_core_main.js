@@ -5490,20 +5490,35 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
         }
 
-        // ★ Partial (per-tile) regen: restore league matchups for the divisions whose
-        //   league period the user did NOT select (block was skipped above). Belt-and-
-        //   suspenders on top of the skip — guarantees the pre-run matchups/fields carry
-        //   through the save untouched.
+        // ★ Partial (per-tile) regen: restore league matchups for the league periods
+        //   the user did NOT select (their blocks were skipped above).
+        //   MERGE per slot — never replace the whole division: a division can have a
+        //   SELECTED league period (the engine just wrote its fresh game this run) AND
+        //   a non-selected one (preserved). The old wholesale restore clobbered the
+        //   fresh game with the pre-run snapshot (the "morning league at slot 0
+        //   disappears" bug). Each preserved game is re-keyed to the CURRENT geometry
+        //   by its own _startMin, so it also lands correctly after earlier periods
+        //   were added to the day.
         if (window.__regenLeaguePreservedDivs && _preservedLeagueAssignments) {
             if (!window.leagueAssignments || typeof window.leagueAssignments !== 'object') window.leagueAssignments = {};
             let _rlp = 0;
+            const _mergeLg = window.DivisionTimesSystem && window.DivisionTimesSystem.mergePreservedLeagueDivision;
             window.__regenLeaguePreservedDivs.forEach(dv => {
-                if (_preservedLeagueAssignments[dv] !== undefined) {
+                if (_preservedLeagueAssignments[dv] === undefined) return;
+                if (_mergeLg) {
+                    window.leagueAssignments[dv] = _mergeLg(
+                        window.leagueAssignments[dv],
+                        _preservedLeagueAssignments[dv],
+                        (window.divisionTimes && window.divisionTimes[dv]) || []
+                    );
+                } else if (window.leagueAssignments[dv] === undefined) {
+                    // Helper unavailable → old behavior, but only when the engine wrote
+                    // nothing for the division (never clobber a fresh game).
                     window.leagueAssignments[dv] = _preservedLeagueAssignments[dv];
-                    _rlp++;
                 }
+                _rlp++;
             });
-            if (_rlp > 0) console.log(`[STEP 5] ★ Per-tile regen: preserved league matchups for ${_rlp} non-selected division(s)`);
+            if (_rlp > 0) console.log(`[STEP 5] ★ Per-tile regen: preserved league matchups for ${_rlp} non-selected division(s) (per-slot merge)`);
         }
 
         // ★★★ CHINUCH (manual mode) — matchup-display level, NOT per-bunk ★★★

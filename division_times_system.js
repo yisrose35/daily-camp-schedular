@@ -1113,6 +1113,223 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
     }
 
     // =========================================================================
+    // TIME-BASED PARTIAL-REGEN SCOPE (extend-day-earlier)
+    //
+    // The per-bunk schedule and league assignments are stored by SLOT INDEX,
+    // while divisionTimes is sorted by start time — so adding an EARLIER period
+    // shifts every later slot's index. These pure helpers let the per-tile
+    // regeneration work by TIME instead:
+    //   • buildTimeRegenScope: maps the user's selected tiles + the existing
+    //     schedule onto the CURRENT skeleton's geometry (so newly-added tiles
+    //     map, and preserved entries land at their correct new indices).
+    //   • mergePreservedLeagueDivision: restores a division's non-selected
+    //     league games per-slot (re-keyed by each game's own _startMin) WITHOUT
+    //     clobbering games the engine just wrote (the slot-0 league eater).
+    // Pure functions: no window access, no mutation of inputs (clones out).
+    // =========================================================================
+    function _trSlotStart(s) { return s ? (s.startMin != null ? s.startMin : (s.start != null ? s.start : null)) : null; }
+    function _trSlotEnd(s) { return s ? (s.endMin != null ? s.endMin : (s.end != null ? s.end : null)) : null; }
+    function _trFindByTime(list, t, tol) {
+        if (t == null) return -1;
+        tol = tol == null ? 2 : tol;
+        for (var i = 0; i < list.length; i++) {
+            var st = _trSlotStart(list[i]);
+            if (st != null && Math.abs(st - t) <= tol) return i;
+        }
+        return -1;
+    }
+
+    function buildTimeRegenScope(args) {
+        var selections = args.selections || [];
+        var divisions = args.divisions || {};
+        var sa = args.scheduleAssignments || {};
+        var la = args.leagueAssignments || {};
+        var newDT = buildDivisionTimesFromSkeleton(args.skeleton || [], divisions) || {};
+
+        var bunkToDiv = {};
+        Object.keys(divisions).forEach(function (dn) {
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) { bunkToDiv[String(b)] = dn; });
+        });
+
+        // ---- 1. Map selections → NEW slot indices by time --------------------
+        var regenByBunk = {};          // bunk -> Set(newIdx)
+        var selectedTimesByDiv = {};   // div  -> Set(slotStartMin)
+        var affectedDivs = new Set();
+        var unmapped = 0;
+        selections.forEach(function (sel) {
+            var bunk = String(sel.bunk);
+            var dn = bunkToDiv[bunk];
+            var slots = dn && newDT[dn];
+            if (!dn || !Array.isArray(slots)) { unmapped++; return; }
+            var idx = _trFindByTime(slots, sel.startMin, 2);
+            if (idx < 0) {
+                // nearest-start fallback (≤30 min) — mirrors the legacy mapper's tolerance
+                var best = Infinity, bi = -1;
+                for (var i = 0; i < slots.length; i++) {
+                    var st = _trSlotStart(slots[i]);
+                    if (st == null) continue;
+                    var d = Math.abs(st - sel.startMin);
+                    if (d < best) { best = d; bi = i; }
+                }
+                idx = best <= 30 ? bi : -1;
+            }
+            if (idx < 0) { unmapped++; return; }
+            if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
+            regenByBunk[bunk].add(idx);
+            affectedDivs.add(dn);
+            if (!selectedTimesByDiv[dn]) selectedTimesByDiv[dn] = new Set();
+            selectedTimesByDiv[dn].add(_trSlotStart(slots[idx]));
+
+            // Multi-period guard: a spanned activity regenerates as a whole block.
+            var arr = sa[bunk] || [];
+            var selT = _trSlotStart(slots[idx]);
+            var anchor = null;
+            for (var k = 0; k < arr.length; k++) {
+                var e = arr[k];
+                if (e && e._startMin != null && Math.abs(e._startMin - selT) <= 2) { anchor = e; break; }
+            }
+            var bs = anchor && (anchor._blockStart != null ? anchor._blockStart : null);
+            if (bs != null) {
+                arr.forEach(function (e2) {
+                    if (!e2) return;
+                    var ebs = (e2._blockStart != null) ? e2._blockStart : null;
+                    if (ebs === bs && e2._startMin != null) {
+                        var j2 = _trFindByTime(slots, e2._startMin, 2);
+                        if (j2 >= 0) {
+                            regenByBunk[bunk].add(j2);
+                            selectedTimesByDiv[dn].add(_trSlotStart(slots[j2]));
+                        }
+                    }
+                });
+            }
+        });
+
+        var selectedSlotCount = 0;
+        Object.keys(regenByBunk).forEach(function (b) { selectedSlotCount += regenByBunk[b].size; });
+        if (affectedDivs.size === 0 || selectedSlotCount === 0) {
+            return { ok: false, reason: 'none-mapped', unmapped: unmapped, selectedSlotCount: 0 };
+        }
+
+        // ---- 2. Pre-check: another division's structure changed too? ---------
+        // A division whose stored entries no longer sit at the indices its NEW
+        // geometry implies — but which is NOT being regenerated — would be
+        // preserved index-based and misalign. Refuse with guidance instead.
+        var misaligned = [];
+        Object.keys(divisions).forEach(function (dn) {
+            if (affectedDivs.has(dn)) return;
+            var slots = newDT[dn];
+            if (!Array.isArray(slots) || !slots.length) return;
+            var bunks = (divisions[dn] && divisions[dn].bunks) || [];
+            for (var bi2 = 0; bi2 < bunks.length; bi2++) {
+                var arr2 = sa[String(bunks[bi2])];
+                if (!Array.isArray(arr2)) continue;
+                for (var i2 = 0; i2 < arr2.length; i2++) {
+                    var e3 = arr2[i2];
+                    if (!e3 || e3.continuation || e3._startMin == null) continue;
+                    var st3 = _trSlotStart(slots[i2]);
+                    if (st3 == null || Math.abs(st3 - e3._startMin) > 2) {
+                        if (misaligned.indexOf(dn) < 0) misaligned.push(dn);
+                        i2 = arr2.length; bi2 = bunks.length; // break out
+                    }
+                }
+            }
+        });
+        if (misaligned.length) {
+            return { ok: false, reason: 'misaligned-divisions', misalignedDivs: misaligned, unmapped: unmapped, selectedSlotCount: selectedSlotCount };
+        }
+
+        // ---- 3. Build the regen scope, re-keyed to NEW indices by time -------
+        var regenScope = {};
+        var scopeBunks = [];
+        var fullRerollBunks = [];
+        var droppedEntries = 0;
+        affectedDivs.forEach(function (dn) {
+            var slots = newDT[dn] || [];
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) {
+                var bunk = String(b);
+                scopeBunks.push(bunk);
+                var regen = regenByBunk[bunk] || new Set();
+                var arr = sa[bunk] || [];
+                var keep = {}, orig = {}, safe = true, seen = {};
+                for (var i = 0; i < arr.length; i++) {
+                    var e = arr[i];
+                    if (!e) continue;
+                    if (e._startMin == null) { safe = false; break; }       // un-addressable → full re-roll
+                    var j = _trFindByTime(slots, e._startMin, 2);
+                    if (j < 0) { droppedEntries++; continue; }              // its period no longer exists
+                    if (seen[j]) { safe = false; break; }                    // two entries, one slot → ambiguous
+                    seen[j] = true;
+                    if (regen.has(j)) orig[j] = JSON.parse(JSON.stringify(e));
+                    else keep[j] = JSON.parse(JSON.stringify(e));
+                }
+                if (!safe) {
+                    // Whole-bunk regeneration: valid schedule guaranteed (pinned tiles
+                    // refill from the skeleton) — never a partial index shift.
+                    var all = new Set();
+                    for (var s2 = 0; s2 < slots.length; s2++) all.add(s2);
+                    regenScope[bunk] = { regen: all, keep: {}, orig: {} };
+                    fullRerollBunks.push(bunk);
+                } else {
+                    regenScope[bunk] = { regen: regen, keep: keep, orig: orig };
+                }
+            });
+        });
+
+        // ---- 4. League games in affected divisions that are NOT selected -----
+        // Their log records must survive the engine's day-rollback (else the game
+        // counter drops and the Leagues results page loses the game).
+        var preservedLeagueLabels = {};
+        affectedDivs.forEach(function (dn) {
+            var map = la[dn];
+            if (!map || typeof map !== 'object') return;
+            var selT2 = selectedTimesByDiv[dn] || new Set();
+            Object.keys(map).forEach(function (k) {
+                var g = map[k];
+                if (!g || !g.leagueName || !g.gameLabel) return;
+                var t = (g._startMin != null) ? g._startMin : null;
+                var isSelected = false;
+                if (t != null) {
+                    selT2.forEach(function (st) { if (Math.abs(st - t) <= 2) isSelected = true; });
+                }
+                if (!isSelected) {
+                    (preservedLeagueLabels[g.leagueName] = preservedLeagueLabels[g.leagueName] || []).push(g.gameLabel);
+                }
+            });
+        });
+
+        return {
+            ok: true,
+            newDT: newDT,
+            regenScope: regenScope,
+            scopeBunks: scopeBunks,
+            affectedDivs: Array.from(affectedDivs),
+            selectedSlotCount: selectedSlotCount,
+            unmapped: unmapped,
+            fullRerollBunks: fullRerollBunks,
+            droppedEntries: droppedEntries,
+            preservedLeagueLabels: preservedLeagueLabels
+        };
+    }
+
+    // Per-slot, time-aware restore of a division's preserved league games.
+    // freshMap (what the engine wrote THIS run) wins per slot; each snapshot game
+    // is re-keyed by its own _startMin against the division's CURRENT slots.
+    function mergePreservedLeagueDivision(freshMap, snapshotMap, divSlots) {
+        var merged = {};
+        Object.keys(freshMap || {}).forEach(function (k) { merged[k] = freshMap[k]; });
+        Object.keys(snapshotMap || {}).forEach(function (k) {
+            var g = snapshotMap[k];
+            if (!g) return;
+            var idx = (g._startMin != null && Array.isArray(divSlots)) ? _trFindByTime(divSlots, g._startMin, 2) : -1;
+            if (idx < 0) idx = parseInt(k, 10);            // legacy game with no stamp → original key
+            if (isNaN(idx) || idx < 0) return;
+            if (merged[idx] != null) return;               // engine's fresh game wins
+            merged[idx] = g;
+        });
+        return merged;
+    }
+
+    // =========================================================================
     // EXPORTS
     // =========================================================================
 
@@ -1121,6 +1338,10 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
 
         // Core building
         buildFromSkeleton: buildDivisionTimesFromSkeleton,
+
+        // ★ Time-based partial-regen scope (extend-day-earlier)
+        buildTimeRegenScope: buildTimeRegenScope,
+        mergePreservedLeagueDivision: mergePreservedLeagueDivision,
         
         // ★★★ v1.2: Expose split tile expansion ★★★
         expandSplitTiles: expandSplitTiles,

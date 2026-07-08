@@ -8470,95 +8470,63 @@ async function _daPartialRegenerate(selections, opts = {}) {
   }
 
   const divisions = window.divisions || masterSettings.app1?.divisions || {};
-  const bunkToDiv = {};
-  Object.entries(divisions).forEach(([dn, di]) =>
-    ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
 
-  // Map a tile's time window to its division slot index (small tolerance).
-  function _mapTileToSlot(divName, startMin, endMin) {
-    const slots = window.divisionTimes?.[divName] || [];
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i] || {};
-      const ss = (s.startMin != null) ? s.startMin : s.start;
-      const se = (s.endMin != null) ? s.endMin : s.end;
-      if (ss != null && Math.abs(ss - startMin) <= 2 &&
-          (se == null || endMin == null || Math.abs(se - endMin) <= 2)) return i;
-    }
-    let best = Infinity, bestIdx = -1;
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i] || {};
-      const ss = (s.startMin != null) ? s.startMin : s.start;
-      if (ss == null) continue;
-      const d = Math.abs(ss - startMin);
-      if (d < best) { best = d; bestIdx = i; }
-    }
-    return best <= 30 ? bestIdx : -1;
-  }
-
-  // 1. Resolve selections → per-bunk regen index sets.
-  const regenByBunk = {};
-  const affectedDivs = new Set();
-  let unmapped = 0;
-  selections.forEach(sel => {
-    const bunk = String(sel.bunk);
-    const divName = bunkToDiv[bunk];
-    if (!divName) { unmapped++; return; }
-    const idx = _mapTileToSlot(divName, sel.startMin, sel.endMin);
-    if (idx < 0) { unmapped++; return; }
-    if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
-    regenByBunk[bunk].add(idx);
-    affectedDivs.add(divName);
-
-    // Multi-period guard: spanned activity → regenerate the whole block.
-    const arr = window.scheduleAssignments?.[bunk] || [];
-    const entry = arr[idx];
-    const bs = entry && (entry._blockStart != null ? entry._blockStart
-                         : (entry._startMin != null ? entry._startMin : null));
-    if (entry && bs != null) {
-      for (let j = 0; j < arr.length; j++) {
-        const e = arr[j];
-        if (!e) continue;
-        const ebs = (e._blockStart != null ? e._blockStart
-                     : (e._startMin != null ? e._startMin : null));
-        if (ebs === bs) regenByBunk[bunk].add(j);
-      }
-    }
-  });
-
-  const selectedSlotCount = Object.values(regenByBunk).reduce((n, s) => n + s.size, 0);
-  if (affectedDivs.size === 0 || selectedSlotCount === 0) {
-    await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
+  // 1+2. TIME-BASED scope build (extend-day-earlier). The schedule + league
+  //   stores are index-keyed while the skeleton's geometry is time-sorted, so a
+  //   newly-added EARLIER tile shifts every later index. buildTimeRegenScope maps
+  //   the selected tiles against the CURRENT skeleton's geometry (so brand-new
+  //   tiles map) and re-keys every preserved entry to its new index by the
+  //   entry's own _startMin — a bunk that can't be re-keyed safely re-rolls in
+  //   full rather than ever shifting partially. It also lists the league games
+  //   whose day-log must survive the engine's rollback (non-selected games).
+  const DTS = window.DivisionTimesSystem;
+  if (!DTS || !DTS.buildTimeRegenScope) {
+    await daShowAlert('Error: the schedule system is not fully loaded.');
     return false;
   }
-
-  // 2. Snapshot covering EVERY bunk of the affected divisions.
-  const regenScope = {};
-  const scopeBunks = new Set();
-  affectedDivs.forEach(dn => {
-    (divisions[dn]?.bunks || []).forEach(b => {
-      const bunk = String(b);
-      scopeBunks.add(bunk);
-      const regen = regenByBunk[bunk] || new Set();
-      const arr = window.scheduleAssignments?.[bunk] || [];
-      const keep = {};
-      const orig = {};   // pre-regen activity of each SELECTED slot — no-blank fallback
-      for (let i = 0; i < arr.length; i++) {
-        if (regen.has(i)) { if (arr[i]) orig[i] = JSON.parse(JSON.stringify(arr[i])); continue; }
-        if (arr[i]) keep[i] = JSON.parse(JSON.stringify(arr[i]));
-      }
-      regenScope[bunk] = { regen, keep, orig };
-    });
+  const scope = DTS.buildTimeRegenScope({
+    selections,
+    skeleton: dailyOverrideSkeleton,
+    divisions,
+    scheduleAssignments: window.scheduleAssignments || {},
+    leagueAssignments: window.leagueAssignments || {}
   });
+  if (!scope.ok) {
+    if (scope.reason === 'misaligned-divisions') {
+      await daShowAlert('The period structure of ' + scope.misalignedDivs.join(', ') +
+        ' changed too, but no tiles were selected there.<br><br>Select the new tiles in ' +
+        (scope.misalignedDivs.length === 1 ? 'that grade' : 'those grades') +
+        ' as well (or regenerate them), so their schedules stay aligned.');
+    } else {
+      await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
+    }
+    return false;
+  }
+  const regenScope = scope.regenScope;
+  const scopeBunks = new Set(scope.scopeBunks);
+  const affectedDivs = new Set(scope.affectedDivs);
+  const selectedSlotCount = scope.selectedSlotCount;
+  const unmapped = scope.unmapped;
 
   // 3. Confirm.
-  const affectedBunkCount = Object.values(regenByBunk).filter(s => s.size > 0).length;
+  const affectedBunkCount = Object.values(regenScope).filter(s => s.regen && s.regen.size > 0).length;
   let msg = opts.confirmMessage ||
             ('Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
             ' across ' + affectedBunkCount + (affectedBunkCount === 1 ? ' bunk' : ' bunks') +
             '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.');
+  if (scope.fullRerollBunks && scope.fullRerollBunks.length) {
+    msg += '<br><br><span style="color:#b45309;">' + scope.fullRerollBunks.length +
+      ' bunk(s) (' + scope.fullRerollBunks.join(', ') + ') will re-roll their whole day — their existing activities could not be safely matched to the new period structure.</span>';
+  }
   if (unmapped > 0) msg += '<br><br><span style="color:#b45309;">(' + unmapped + ' selected tile(s) could not be mapped and will be skipped.)</span>';
   const ok = await daShowConfirm(msg, { confirmText: 'Regenerate', cancelText: 'Cancel' });
   if (!ok) return false;
+
+  // Adopt the skeleton's geometry NOW (post-confirm) so every pre-optimizer
+  // consumer sees the same slot structure the regen scope is keyed to. The
+  // optimizer's own STEP 1 rebuilds the identical geometry from the skeleton.
+  window.divisionTimes = scope.newDT;
+  window.__regenPreservedLeagueLabels = scope.preservedLeagueLabels || {};
 
   // 4. Drive generation through the existing scope plumbing; always restore the
   //    user's prior generation scope afterward.
@@ -8612,6 +8580,7 @@ async function _daPartialRegenerate(selections, opts = {}) {
   } finally {
     delete window.__regenSlotScope;
     delete window.__regenLeaguePreservedDivs;
+    delete window.__regenPreservedLeagueLabels;
     _generationScope = _savedScope;
     _generationBunkScope = _savedBunkScope;
   }
