@@ -960,9 +960,25 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     };
 
     /**
+     * ★ GenTrace helper: record WHY an activity was hard-blocked for a bunk.
+     *   Stores the reason on RotationEngine._lastBlockReason (read by
+     *   calculateRotationScore for its score-breakdown trace) and feeds the
+     *   generation brain trace when one is recording. Always returns Infinity
+     *   so call sites read `return _blk(...)`.
+     */
+    function _blk(bunkName, activityName, reason, detail) {
+        RotationEngine._lastBlockReason = reason;
+        if (window.GenTrace && window.GenTrace.active) {
+            window.GenTrace.block(bunkName, activityName, reason, detail);
+        }
+        return Infinity;
+    }
+
+    /**
      * Calculate LIMIT score - for activities with usage limits
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
+        RotationEngine._lastBlockReason = null;
         var props = (activityProperties && activityProperties[activityName]) || {};
         // ★ available=false hard gate: a globally-disabled special must never be
         //   scheduled. canBlockFit also rejects available===false, but some manual
@@ -971,11 +987,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   written. Block it here (the shared rotation-scoring choke point) so a
         //   disabled special is never picked. activityProperties carries `available`
         //   for every special (buildActivityProperties copies it), so props is reliable.
-        if (props.available === false) return Infinity;
+        if (props.available === false) return _blk(bunkName, activityName, 'special-disabled');
         // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
         //   Auto rotation gate for special/sport targets (matches by activity name).
         //   Facility targets are enforced in the field gate (isFieldAvailable).
-        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return Infinity;
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return _blk(bunkName, activityName, 'per-date-bunk-restriction');
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
@@ -998,7 +1014,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             //   block a special the bunk has never done and force it to the Swim fallback.
             if (typeof _daysSinceCD === 'number' && _daysSinceCD > 0 && _daysSinceCD < _cdForEsc
                 && RotationEngine.getActivityCount(bunkName, activityName) > 0) {
-                return Infinity;
+                return _blk(bunkName, activityName, 'frequencyDays-cooldown', { daysSince: _daysSinceCD, cooldownDays: _cdForEsc });
             }
         }
 
@@ -1026,12 +1042,12 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             var _mpPrior = (typeof RotationEngine.getActivityCount === 'function')
                 ? (RotationEngine.getActivityCount(bunkName, activityName) || 0) : 0;
             // All parts already placed → never schedule this special again.
-            if (_mpTotal > 0 && _mpPrior >= _mpTotal) return Infinity;
+            if (_mpTotal > 0 && _mpPrior >= _mpTotal) return _blk(bunkName, activityName, 'multiPart-complete', { partsDone: _mpPrior, totalParts: _mpTotal });
             // daysBetween: minimum gap since the previous part must elapse.
             var _mpGap = parseInt(_mp.daysBetween) || 0;
             if (_mpGap > 0) {
                 var _mpSince = RotationEngine.getDaysSinceActivity(bunkName, activityName);
-                if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return Infinity;
+                if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return _blk(bunkName, activityName, 'multiPart-daysBetween', { daysSince: _mpSince, daysBetween: _mpGap });
             }
         }
 
@@ -1055,7 +1071,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                         var _avFull = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][_avDow];
                         var _avAllowed = props.availableDays.map(function (d) { return String(d).toLowerCase(); });
                         if (_avAllowed.indexOf(_avAbbr) < 0 && _avAllowed.indexOf(_avFull) < 0) {
-                            return Infinity;
+                            return _blk(bunkName, activityName, 'availableDays-weekday', { today: _avFull, allowed: props.availableDays });
                         }
                     }
                 }
@@ -1104,7 +1120,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                         var _cc = RotationEngine.getActivityCount(_cohortBunks[_rci], activityName);
                         if (_cc < _cohortMin) _cohortMin = _cc;
                     }
-                    if (_myCohortCount > _cohortMin) return Infinity;
+                    if (_myCohortCount > _cohortMin) return _blk(bunkName, activityName, 'rotationCohort-waiting', { myCount: _myCohortCount, cohortMin: _cohortMin });
                 }
             }
         }
@@ -1122,7 +1138,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
         // Hard ceiling
         if (maxUsage > 0) {
-            if (maxCount >= maxUsage) return Infinity;
+            if (maxCount >= maxUsage) return _blk(bunkName, activityName, 'maxUsage-cap', { count: maxCount, maxUsage: maxUsage, period: maxPeriod });
             if (maxCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
             if (maxCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
         }
@@ -1135,7 +1151,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (exactFreq > 0) {
             var exactPeriod = props.exactFrequencyPeriod || '1week';
             var exactCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, exactPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
-            if (exactCount >= exactFreq) return Infinity;
+            if (exactCount >= exactFreq) return _blk(bunkName, activityName, 'exactFrequency-reached', { count: exactCount, exactFrequency: exactFreq, period: exactPeriod });
             if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
             var exactShortage = exactFreq - exactCount;
             if (exactShortage > 0) {
@@ -1171,7 +1187,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var _fsFloor = RotationEngine.getFairShareFloor(activityName);
         if (_fsFloor !== null) {
             var _fsGap = (typeof window.__fairShareGap === 'number' && window.__fairShareGap > 0) ? window.__fairShareGap : 2;
-            if (RotationEngine.getActivityCount(bunkName, activityName) >= _fsFloor + _fsGap) return Infinity;
+            var _fsMyCount = RotationEngine.getActivityCount(bunkName, activityName);
+            if (_fsMyCount >= _fsFloor + _fsGap) return _blk(bunkName, activityName, 'fairShare-cap', { myCount: _fsMyCount, floor: _fsFloor, gap: _fsGap });
         }
 
         return 0;
@@ -1210,10 +1227,16 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var actLower = (activityName || '').toLowerCase().trim();
         if (actLower === 'free' || actLower === 'free play' || actLower === 'no field') return 0;
 
+        // ★ GenTrace: capture the full component breakdown (or block cause) for
+        //   the brain trace. Deduped per bunk|activity|slot inside GenTrace, so
+        //   repeated scoring calls are cheap and the trace holds the latest view.
+        var _gt = (window.GenTrace && window.GenTrace.active) ? window.GenTrace : null;
+
         // RECENCY - primary factor
         var recencyScore = RotationEngine.calculateRecencyScore(bunkName, activityName, beforeSlotIndex);
 
         if (recencyScore === Infinity) {
+            if (_gt) _gt.score({ bunk: bunkName, activity: activityName, slot: beforeSlotIndex, blocked: true, blockReason: 'already-done-today' });
             return Infinity;
         }
 
@@ -1221,6 +1244,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var varietyScore = RotationEngine.calculateVarietyScore(bunkName, activityName, beforeSlotIndex);
 
         if (varietyScore === Infinity) {
+            if (_gt) _gt.score({ bunk: bunkName, activity: activityName, slot: beforeSlotIndex, blocked: true, blockReason: 'already-done-today' });
             return Infinity;
         }
 
@@ -1240,6 +1264,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties, divisionName);
 
         if (limitScore === Infinity) {
+            if (_gt) _gt.score({ bunk: bunkName, activity: activityName, slot: beforeSlotIndex, blocked: true, blockReason: RotationEngine._lastBlockReason || 'limit' });
             return Infinity;
         }
 
@@ -1253,6 +1278,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             coverageScore * CONFIG.WEIGHTS.coverage +
             limitScore
         );
+
+        if (_gt) {
+            _gt.score({
+                bunk: bunkName, activity: activityName, slot: beforeSlotIndex, division: divisionName,
+                recency: recencyScore, streak: streakScore, frequency: frequencyScore,
+                variety: varietyScore, distribution: distributionScore, coverage: coverageScore,
+                limit: limitScore, total: Math.round(totalScore)
+            });
+        }
 
         return totalScore;
     };
@@ -1345,6 +1379,21 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                     scored.unshift(tieGroup[tieGroup.length - 1 - i]);
                 }
             }
+        }
+
+        // ★ GenTrace: record the ranked list the engine handed back — this is
+        //   the "what did it think was best for this bunk at this slot" record.
+        if (window.GenTrace && window.GenTrace.active) {
+            var _allowed = [], _blocked = [];
+            for (var _gi = 0; _gi < scored.length; _gi++) {
+                var _p = scored[_gi];
+                if (_p.allowed) _allowed.push({ name: _p.activityName, score: Math.round(_p.score) });
+                else if (_blocked.length < 20) _blocked.push(_p.activityName);
+            }
+            window.GenTrace.rank({
+                bunk: bunkName, division: divisionName, slot: beforeSlotIndex,
+                ranked: _allowed, blocked: _blocked
+            });
         }
 
         return scored;
