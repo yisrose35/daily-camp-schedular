@@ -8521,28 +8521,6 @@ async function _daPartialRegenerate(selections, opts = {}) {
   }
 
   const divisions = window.divisions || masterSettings.app1?.divisions || {};
-
-  // ★ Self-heal before mapping: make window.divisionTimes reflect the CURRENT
-  //   skeleton. Periods added since the last generation (e.g. a morning inserted
-  //   before an existing afternoon) aren't in a stale divisionTimes, so their tiles
-  //   fail to map ("Could not map the selected tiles"). Rebuild from the skeleton
-  //   and realign the existing schedule by time. requireEntryTime keeps it safe: it
-  //   uses each entry's own _startMin (generated entries carry it) — the afternoon
-  //   lands on its real slots regardless of what divisionTimes currently holds, and
-  //   anything without a known time is left untouched rather than mismapped.
-  //   Idempotent when divisionTimes already matches the skeleton.
-  try {
-    const _DTS = window.DivisionTimesSystem;
-    const _skel = (typeof dailyOverrideSkeleton !== 'undefined' && dailyOverrideSkeleton) || window.dailyOverrideSkeleton;
-    if (_DTS && _DTS.buildFromSkeleton && _DTS.reslotAssignmentsByTime && Array.isArray(_skel) && _skel.length) {
-      const _newDT = _DTS.buildFromSkeleton(_skel, divisions);
-      if (_newDT && Object.keys(_newDT).length) {
-        _DTS.reslotAssignmentsByTime(window.scheduleAssignments || {}, window.divisionTimes || {}, _newDT, divisions, { requireEntryTime: true });
-        window.divisionTimes = _newDT;
-      }
-    }
-  } catch (e) { console.warn('[PartialRegen] divisionTimes self-heal before mapping failed:', e); }
-
   const bunkToDiv = {};
   Object.entries(divisions).forEach(([dn, di]) =>
     ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
