@@ -696,40 +696,28 @@
                 <h2>Staff Payment Info</h2>
                 <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Add each staff member's Zelle / Venmo / PayPal so parents can send tips directly. Parents see these next to the matching role.</p>
             </div>
-            <button class="btn btn-secondary btn-sm" onclick="openAddStaffPay()" style="flex-shrink:0;">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Add person
-            </button>
+            <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;">
+                <button class="btn btn-ghost btn-sm" onclick="downloadStaffPayTemplate()" title="Download a spreadsheet pre-filled with your staff and their bunks">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Template
+                </button>
+                <button class="btn btn-ghost btn-sm" onclick="document.getElementById('staffPayUpload').click()" title="Upload the filled-in spreadsheet">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    Upload
+                </button>
+                <input type="file" id="staffPayUpload" accept=".csv,text/csv" style="display:none;" onchange="uploadStaffPayTemplate(this)">
+                <button class="btn btn-secondary btn-sm" onclick="openAddStaffPay()">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Add person
+                </button>
+            </div>
         </div>
         <div id="staffPayList"></div>
         <div id="staffPayEmpty" class="lk-empty" style="display:none;padding:24px 0;">
             <div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div>
             <h3>No payment info yet</h3>
-            <p>Add a staff member and their Zelle / Venmo / PayPal handle.</p>
+            <p>Download the template, fill in Zelle/Venmo, and upload it — or add people one at a time.</p>
         </div>
-    </div>
-
-    <!-- Staff accounts — legacy balance ledger (kept for reference) -->
-    <div class="lk-card" style="margin-top:18px;">
-        <div class="lk-card-head">
-            <div>
-                <h2>Staff Accounts</h2>
-                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Optional balance tracking — give each person their access code so they can watch their tip total.</p>
-            </div>
-            <button class="btn btn-secondary btn-sm" onclick="openAddStaffAccount()" style="flex-shrink:0;">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Add staff
-            </button>
-        </div>
-        <div id="staffAccountsList"><div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">Accounts appear automatically the first time someone is tipped — run migration 017 to enable.</div></div>
-    </div>
-
-    <!-- Tip history -->
-    <div class="lk-card" style="margin-top:18px;">
-        <div class="lk-card-head">
-            <h2>Tip History</h2>
-        </div>
-        <div id="tipsHistoryList"><div class="lk-empty" style="padding:24px 0;"><div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/></svg></div><h3>No tips yet</h3><p>Parent tips will appear here.</p></div></div>
     </div>
 </div>
 
@@ -782,13 +770,17 @@
         <button onclick="closeStaffPayModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem;">✕</button>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
-        <div class="lk-field" style="flex:1;min-width:160px;">
+        <div class="lk-field" style="flex:1;min-width:150px;">
             <label>Name</label>
             <input type="text" class="lk-input" id="spName" placeholder="e.g. Sarah M.">
         </div>
-        <div class="lk-field" style="flex:1;min-width:140px;">
+        <div class="lk-field" style="flex:1;min-width:120px;">
             <label>Role <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
             <input type="text" class="lk-input" id="spRole" placeholder="e.g. Counselor">
+        </div>
+        <div class="lk-field" style="flex:1;min-width:110px;">
+            <label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+            <input type="text" class="lk-input" id="spBunk" placeholder="e.g. Bunk 4">
         </div>
     </div>
     <p style="font-size:.76rem;color:var(--text-muted);margin:4px 0 12px;">Add at least one payment handle — parents will see whichever you fill in.</p>
@@ -2952,11 +2944,6 @@ function renderTipsAdmin() {
     _renderTipAmounts(cfg);
     _renderTipCategories(cfg);
     _renderStaffPay(cfg);
-    _renderTipHistory();
-    _renderStaffAccounts();
-    // Refresh from the cloud, then re-render with the latest tips + balances
-    _loadCloudTips(_renderTipHistory);
-    _loadStaffAccounts(_renderStaffAccounts);
 }
 
 // ─── STAFF TIP ACCOUNTS (link_staff_accounts, migration 017) ─────────────────
@@ -3296,11 +3283,12 @@ function _renderStaffPay(cfg) {
             return '<span style="display:inline-flex;align-items:center;gap:4px;background:var(--slate-50);border:1px solid var(--slate-200);border-radius:999px;padding:3px 10px;font-size:.75rem;color:var(--slate-700);"><strong style="font-weight:700;">' + esc(m.label) + '</strong> ' + esc(p[m.key]) + '</span>';
         }).join('');
         if (!chips) chips = '<span style="font-size:.76rem;color:var(--amber-600,#B45309);">No handle yet — parents can\'t pay this person</span>';
+        var meta = [p.role, p.bunk].filter(Boolean).join(' · ');
         return '<div style="padding:14px 0;border-bottom:1px solid var(--slate-100);">' +
             '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">' +
                 '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
                     '<span style="font-size:.88rem;font-weight:700;color:var(--slate-900);">' + esc(p.name) + '</span>' +
-                    (p.role ? '<span style="font-size:.74rem;color:var(--text-muted);">· ' + esc(p.role) + '</span>' : '') +
+                    (meta ? '<span style="font-size:.74rem;color:var(--text-muted);">· ' + esc(meta) + '</span>' : '') +
                 '</div>' +
                 '<div style="display:flex;gap:6px;flex-shrink:0;">' +
                     '<button class="btn btn-ghost btn-sm" onclick="openEditStaffPay(' + i + ')">Edit</button>' +
@@ -3314,7 +3302,7 @@ function _renderStaffPay(cfg) {
 
 function openAddStaffPay() {
     document.getElementById('staffPayTitle').textContent = 'Add Staff Payment Info';
-    ['spName','spRole','spZelle','spVenmo','spPaypal','spCashapp'].forEach(function(id){ document.getElementById(id).value = ''; });
+    ['spName','spRole','spBunk','spZelle','spVenmo','spPaypal','spCashapp'].forEach(function(id){ document.getElementById(id).value = ''; });
     document.getElementById('staffPayModal')._editIndex = -1;
     document.getElementById('staffPayModal').style.display = 'block';
     document.getElementById('staffPayBackdrop').style.display = 'block';
@@ -3327,6 +3315,7 @@ function openEditStaffPay(i) {
     document.getElementById('staffPayTitle').textContent = 'Edit Staff Payment Info';
     document.getElementById('spName').value    = p.name    || '';
     document.getElementById('spRole').value    = p.role    || '';
+    document.getElementById('spBunk').value    = p.bunk    || '';
     document.getElementById('spZelle').value   = p.zelle   || '';
     document.getElementById('spVenmo').value   = p.venmo   || '';
     document.getElementById('spPaypal').value  = p.paypal  || '';
@@ -3347,6 +3336,7 @@ function saveStaffPay() {
     var entry = {
         name:    name,
         role:    (document.getElementById('spRole').value    || '').trim(),
+        bunk:    (document.getElementById('spBunk').value    || '').trim(),
         zelle:   (document.getElementById('spZelle').value   || '').trim(),
         venmo:   (document.getElementById('spVenmo').value   || '').trim(),
         paypal:  (document.getElementById('spPaypal').value  || '').trim(),
@@ -3371,6 +3361,124 @@ function deleteStaffPay(i) {
     _saveTipsConfig(cfg);
     _renderStaffPay(cfg);
     toast('Removed');
+}
+
+// ─── STAFF PAYMENT TEMPLATE (download pre-filled from Me, upload to import) ───
+var STAFF_PAY_COLS = ['Name', 'Role', 'Bunk', 'Zelle', 'Venmo', 'PayPal', 'Cash App'];
+
+// Pull every staff member the camp already assigned in Campistry Me, so the
+// template arrives pre-filled with names + bunks and the admin only adds handles.
+function _allBunkStaff() {
+    var s = {};
+    if (typeof window.loadGlobalSettings === 'function') { try { s = window.loadGlobalSettings() || {}; } catch(e) { s = {}; } }
+    if (!s || typeof s !== 'object' || !s.campistryMe) {
+        try { s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e) { s = {}; }
+    }
+    var bunkStaff = (s.campistryMe && s.campistryMe.bunkStaff) || {};
+    var out = [];
+    Object.keys(bunkStaff).forEach(function(bunk) {
+        (bunkStaff[bunk] || []).forEach(function(m) {
+            if (m && m.name) out.push({ name: m.name, role: m.role || '', bunk: bunk });
+        });
+    });
+    return out;
+}
+
+function _csvCell(v) {
+    v = (v == null) ? '' : String(v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+
+function downloadStaffPayTemplate() {
+    var cfg = _loadTipsConfig();
+    var existing = cfg.staffPay || [];
+    var byName = {}; existing.forEach(function(p){ byName[String(p.name).trim().toLowerCase()] = p; });
+
+    // Start from the camp's assigned staff, merged with anything already entered
+    var rows = _allBunkStaff();
+    var seen = {}; rows.forEach(function(r){ seen[r.name.trim().toLowerCase()] = 1; });
+    existing.forEach(function(p){ if (!seen[String(p.name).trim().toLowerCase()]) { rows.push({ name: p.name, role: p.role || '', bunk: p.bunk || '' }); seen[String(p.name).trim().toLowerCase()] = 1; } });
+    if (!rows.length) rows = [{ name: '', role: 'Counselor', bunk: '' }, { name: '', role: 'Rebbi', bunk: '' }];
+
+    var lines = [STAFF_PAY_COLS.map(_csvCell).join(',')];
+    rows.forEach(function(r) {
+        var e = byName[String(r.name).trim().toLowerCase()] || {};
+        lines.push([r.name, r.role, r.bunk, e.zelle || '', e.venmo || '', e.paypal || '', e.cashapp || ''].map(_csvCell).join(','));
+    });
+    var csv = lines.join('\r\n');
+    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'staff-payment-info.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    toast(rows.length + ' staff exported — fill in Zelle/Venmo and upload it back');
+}
+
+// Minimal RFC-4180 CSV parser (handles quotes, commas, newlines in fields)
+function _parseCsv(text) {
+    var rows = [], row = [], field = '', i = 0, inQ = false, c;
+    text = String(text).replace(/^﻿/, ''); // strip BOM
+    while (i < text.length) {
+        c = text[i];
+        if (inQ) {
+            if (c === '"') { if (text[i+1] === '"') { field += '"'; i++; } else inQ = false; }
+            else field += c;
+        } else {
+            if (c === '"') inQ = true;
+            else if (c === ',') { row.push(field); field = ''; }
+            else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+            else if (c === '\r') { /* skip */ }
+            else field += c;
+        }
+        i++;
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    return rows;
+}
+
+function uploadStaffPayTemplate(input) {
+    var file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function() {
+        try {
+            var rows = _parseCsv(reader.result).filter(function(r){ return r.some(function(c){ return String(c).trim(); }); });
+            if (rows.length < 2) { toast('That file has no rows to import'); return; }
+            // Map header names to column indexes (order-independent)
+            var head = rows[0].map(function(h){ return String(h).trim().toLowerCase(); });
+            function col(names) { for (var k = 0; k < names.length; k++) { var idx = head.indexOf(names[k]); if (idx >= 0) return idx; } return -1; }
+            var iName = col(['name']), iRole = col(['role']), iBunk = col(['bunk']),
+                iZelle = col(['zelle']), iVenmo = col(['venmo']), iPaypal = col(['paypal','pay pal']), iCash = col(['cash app','cashapp','cash']);
+            if (iName < 0) { toast('Missing a "Name" column — use the downloaded template'); return; }
+
+            var cfg = _loadTipsConfig();
+            if (!cfg.staffPay) cfg.staffPay = [];
+            var byName = {}; cfg.staffPay.forEach(function(p, idx){ byName[String(p.name).trim().toLowerCase()] = idx; });
+            var get = function(r, idx){ return idx >= 0 ? String(r[idx] || '').trim() : ''; };
+            var added = 0, updated = 0;
+            for (var r = 1; r < rows.length; r++) {
+                var name = get(rows[r], iName);
+                if (!name) continue;
+                var entry = {
+                    name: name, role: get(rows[r], iRole), bunk: get(rows[r], iBunk),
+                    zelle: get(rows[r], iZelle), venmo: get(rows[r], iVenmo),
+                    paypal: get(rows[r], iPaypal), cashapp: get(rows[r], iCash)
+                };
+                var key = name.toLowerCase();
+                if (byName[key] != null) { cfg.staffPay[byName[key]] = entry; updated++; }
+                else { byName[key] = cfg.staffPay.length; cfg.staffPay.push(entry); added++; }
+            }
+            _saveTipsConfig(cfg);
+            _renderStaffPay(cfg);
+            toast('Imported — ' + added + ' added, ' + updated + ' updated');
+        } catch (e) {
+            console.warn('[Tips] CSV import failed:', e);
+            toast('Could not read that file — make sure it\'s the CSV template');
+        }
+    };
+    reader.readAsText(file);
 }
 
 // Cloud tips (link_tips table, migration 016) merged with the local ledger
