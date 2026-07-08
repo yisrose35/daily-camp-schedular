@@ -1391,6 +1391,8 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
     }
 
     var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
+    // Chinuch / Bye lines live in the same array — keep them so they print too.
+    var infoLines = (raw || []).map(pcInfoLineText).filter(Boolean);
     // Backfill sport/field from the slot record when the matchup lacks them.
     parsed.forEach(function (p) {
         if (!p.sport && slotSport) p.sport = slotSport;
@@ -1404,9 +1406,17 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
                    String(p.b).replace(/^bunk\s*/i, '').trim() === bn;
         });
         if (mine.length) parsed = mine;
+        // Narrow the bye/chinuch lines the same way: show this bunk's own line
+        // when it has one; if the bunk had its own game, drop others' info lines;
+        // otherwise (league teams are separate entities) keep all of them.
+        var mineInfo = infoLines.filter(function (l) {
+            return pcInfoLineTeam(l).replace(/^bunk\s*/i, '').trim() === bn;
+        });
+        if (mineInfo.length) infoLines = mineInfo;
+        else if (mine.length) infoLines = [];
     }
 
-    return parsed.map(pcFormatMatchupLine);
+    return parsed.map(pcFormatMatchupLine).concat(infoLines);
 }
 
 // Parse one matchup (object or string) into { a, b, sport, field }.
@@ -1453,6 +1463,29 @@ function pcFormatMatchupLine(p) {
     var a = /^\d+$/.test(String(p.a).trim()) ? 'Team ' + p.a : p.a;
     var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
     return [a + ' vs ' + b, sport, p.field].filter(Boolean).join(' - ');
+}
+
+// Chinuch / Bye lines ride in the SAME matchups array as real games
+// (e.g. "Team A — Chinuch (Court)" or "Team A — Bye" — see the writeback in
+// scheduler_core_leagues.js). They are not "X vs Y" games, so the
+// pcParseMatchup + `p.a && p.b` filter silently dropped them and they never
+// printed. These two helpers recognize such lines so byes and chinuch
+// assignments still show up on the printed schedule.
+function pcInfoLineText(m) {
+    var s = (m && typeof m === 'object')
+        ? String(m.display || m.matchup || m.text || '').trim()
+        : String(m == null ? '' : m).trim();
+    if (!s) return '';
+    if (/\s+vs\.?\s+/i.test(s)) return '';        // a real matchup — not an info line
+    if (/\b(chinuch|bye)\b/i.test(s)) return s;   // preserve verbatim (already nicely formatted)
+    return '';
+}
+// Team/bunk name at the front of an info line ("Team A — Bye" → "Team A"),
+// used to keep a bunk's own bye/chinuch in its per-bunk cell.
+function pcInfoLineTeam(s) {
+    var str = String(s == null ? '' : s);
+    var idx = str.search(/\s+[–—-]\s+/);          // en/em dash or hyphen separator
+    return (idx >= 0 ? str.slice(0, idx) : str).trim();
 }
 
 // Build a league/specialty-league cell for the live view: the game/league label
@@ -1504,6 +1537,8 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
     if (!sport && rec && rec.sport) sport = String(rec.sport).trim();
     if (!field && rec && rec.field) field = String(rec.field).trim();
     var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
+    // Chinuch / Bye lines share the array — keep them so they print too.
+    var infoLines = (raw || []).map(pcInfoLineText).filter(Boolean);
 
     var mine = null;
     if (bunk != null) {
@@ -1513,6 +1548,12 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
             var nb = String(p.b).replace(/^bunk\s*/i, '').trim();
             return na === bn || nb === bn;
         });
+        // Narrow bye/chinuch lines to this bunk the same way matchups are.
+        var mineInfo = infoLines.filter(function (l) {
+            return pcInfoLineTeam(l).replace(/^bunk\s*/i, '').trim() === bn;
+        });
+        if (mineInfo.length) infoLines = mineInfo;
+        else if (mine.length) infoLines = [];
     }
     var chosen = (mine && mine.length) ? mine : parsed;
 
@@ -1522,7 +1563,7 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
         var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
         return a + ' vs ' + b;
     };
-    var matchStrs = chosen.map(fmtPair);
+    var matchStrs = chosen.map(fmtPair).concat(infoLines);
 
     if (chosen.length === 1) {
         if (chosen[0].sport) sport = chosen[0].sport;
