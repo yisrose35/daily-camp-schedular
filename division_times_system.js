@@ -1149,10 +1149,17 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
         }
         return -1;
     }
-    function reslotAssignmentsByTime(scheduleAssignments, oldDivisionTimes, newDivisionTimes, divisions) {
+    function reslotAssignmentsByTime(scheduleAssignments, oldDivisionTimes, newDivisionTimes, divisions, opts) {
         var result = { moved: false, bunksMoved: 0, bunksSkipped: 0 };
         if (!scheduleAssignments || !oldDivisionTimes || !newDivisionTimes) return result;
         divisions = divisions || {};
+        // requireEntryTime: when true, an entry WITHOUT its own _startMin bails the
+        // bunk instead of falling back to the old slot's time. Use this when the
+        // caller isn't sure oldDivisionTimes still matches what scheduleAssignments
+        // is aligned to (e.g. a render may have already rebuilt it) — generated
+        // entries carry _startMin, so they realign correctly; anything ambiguous is
+        // left untouched rather than risk a mismap.
+        var _requireEntryTime = !!(opts && opts.requireEntryTime);
 
         var bunkDiv = {};
         Object.keys(divisions).forEach(function (dn) {
@@ -1175,7 +1182,7 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
             for (var i = 0; i < arr.length; i++) {
                 var e = arr[i];
                 if (!e) continue;
-                var t = (e._startMin != null) ? e._startMin : _dtsSlotStart(oldList[i]);
+                var t = (e._startMin != null) ? e._startMin : (_requireEntryTime ? null : _dtsSlotStart(oldList[i]));
                 if (t == null) { ok = false; break; }
                 var j = _dtsFindByTime(newList, t);
                 if (j < 0) { ok = false; break; }       // no matching slot → ambiguous, bail
