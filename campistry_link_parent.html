@@ -1184,21 +1184,47 @@ function openMsg(id){
 // If a message is a form request ("<Form name> — <Camper>"), let the parent
 // open and fill the form right from the message. Matches the subject against
 // the camp's published fill-online forms.
+var _FILE_SVG='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:5px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+var _LIST_SVG='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:5px;"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>';
 function _msgFormActionHtml(m){
     if(!m || m.type==='announcement' || m.type==='sent') return '';
+    var btns=[];
+    var forms=(typeof _currentDigitalForms!=='undefined')?(_currentDigitalForms||[]):[];
+    var refs=m._refs;
+    // Preferred path: explicit template tokens the composer attached.
+    if(refs && (refs.forms.length || refs.lists.length)){
+        refs.forms.forEach(function(fr){
+            var idx=-1;
+            for(var i=0;i<forms.length;i++){ if(String(forms[i].id)===String(fr.id)){ idx=i; break; } }
+            if(idx<0) return;
+            btns.push('<button class="btn btn-primary" style="margin:4px 8px 4px 0;" onclick="_openFormFromMsg('+idx+',\''+encodeURIComponent(fr.camper||'')+'\')">'+_FILE_SVG+'Open &amp; fill '+_foEsc(forms[idx].name||'form')+'</button>');
+        });
+        (refs.lists||[]).forEach(function(lr){
+            var lists=window._campLists||[];
+            var found=null; for(var j=0;j<lists.length;j++){ if(String(lists[j].id)===String(lr.id)){ found=lists[j]; break; } }
+            var lbl=found?(found.name||'list'):'list';
+            btns.push('<button class="btn btn-secondary" style="margin:4px 8px 4px 0;" onclick="_openListFromMsg()">'+_LIST_SVG+'View '+_foEsc(lbl)+'</button>');
+        });
+        if(btns.length) return '<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-light);">'+btns.join('')+'</div>';
+        return '';
+    }
+    // Legacy fallback: parse "FormName — Camper" out of the subject.
     var subj=String(m.subject||'');
     var dash=subj.indexOf(' — ');
     if(dash<0) return '';
     var fname=subj.slice(0,dash).trim();
     var camperName=subj.slice(dash+3).trim();
     if(!fname) return '';
-    var forms=(typeof _currentDigitalForms!=='undefined')?(_currentDigitalForms||[]):[];
-    for(var i=0;i<forms.length;i++){
-        if(String(forms[i].name||'').trim()===fname){
-            return '<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-light);"><button class="btn btn-primary" onclick="_openFormFromMsg('+i+',\''+encodeURIComponent(camperName)+'\')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:5px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Open &amp; fill '+_foEsc(fname)+'</button></div>';
+    for(var k=0;k<forms.length;k++){
+        if(String(forms[k].name||'').trim()===fname){
+            return '<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border-light);"><button class="btn btn-primary" onclick="_openFormFromMsg('+k+',\''+encodeURIComponent(camperName)+'\')">'+_FILE_SVG+'Open &amp; fill '+_foEsc(fname)+'</button></div>';
         }
     }
     return '';
+}
+function _openListFromMsg(){
+    closeMsgDetail();
+    if(typeof nav==='function') nav('lists');
 }
 function _openFormFromMsg(idx, encCamper){
     var camper=''; try{ camper=decodeURIComponent(encCamper||''); }catch(e){ camper=encCamper||''; }
@@ -1691,6 +1717,22 @@ function _formatMsgDate(d){
     return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 }
 
+// Pull machine-readable form/list references out of a message body. The admin
+// composer appends invisible tokens ([[form:id:camper]] / [[list:id]]) so a
+// single message can "call" a saved template; we strip them from the visible
+// text and surface them as action buttons.
+function _parseMsgRefs(rawBody){
+    var refs={forms:[],lists:[]};
+    var clean=String(rawBody||'');
+    clean=clean.replace(/\[\[form:([^:\]]+):([^\]]*)\]\]/g,function(_,fid,camper){
+        refs.forms.push({id:fid,camper:camper||''}); return '';
+    });
+    clean=clean.replace(/\[\[list:([^\]]+)\]\]/g,function(_,lid){
+        refs.lists.push({id:lid}); return '';
+    });
+    clean=clean.replace(/\n{3,}/g,'\n\n').replace(/^\s+|\s+$/g,'');
+    return {clean:clean,refs:refs};
+}
 function _loadMessages(){
     var store=_readLinkStore();
     var storeMsgs=store.messages||[], broadcasts=store.broadcasts||[], notifs=store.notifications||[];
@@ -1706,12 +1748,14 @@ function _loadMessages(){
         var forMe=m.direction==='out'&&( emailMatch || (!mEmail&&(m.to===parent.name||m.to===parent.email)) );
         var byMe =m.direction==='in' &&( emailMatch || (!mEmail&&(m.from===parent.name)) );
         if(!forMe&&!byMe)return;
+        var _parsed=_parseMsgRefs(m.body);
         messages.push({
             id:m.id,type:byMe?'sent':'direct',
             from:byMe?('You → '+m.to):'Camp Office',
             subject:m.subject||'(No subject)',
-            preview:(m.body||'').slice(0,80),
-            body:'<p>'+(m.body||'').replace(/\n/g,'</p><p>')+'</p>',
+            preview:_parsed.clean.slice(0,80),
+            body:'<p>'+_parsed.clean.replace(/\n/g,'</p><p>')+'</p>',
+            _refs:_parsed.refs,
             date:_formatMsgDate(m.date),_rawDate:m.date,
             read:m.read||byMe,_storeId:m.id,_archived:!!m.archived
         });
