@@ -219,10 +219,6 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             Photos
         </button>
-        <button class="lk-nav-item" data-page="lists" onclick="nav('lists')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
-            Lists
-        </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Financial</div>
         <button class="lk-nav-item" data-page="tips" onclick="nav('tips')">
@@ -291,6 +287,7 @@
         <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
         <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Sent</button>
         <button class="lk-tab" data-msgtab="forms" onclick="switchMsgTab('forms',this)">Forms</button>
+        <button class="lk-tab" data-msgtab="lists" onclick="switchMsgTab('lists',this)">Lists</button>
     </div>
 
     <!-- ── INBOX ─────────────────────────────────────── -->
@@ -379,6 +376,18 @@
             </div>
             <div id="recvList"></div>
         </div>
+    </div>
+
+    <!-- ── LISTS (packing lists / checklists parents check off) ── -->
+    <div id="msgTabLists" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
+            <p style="font-size:.82rem;color:var(--text-muted);margin:0;">Packing lists &amp; checklists parents can check off in the portal.</p>
+            <button class="btn btn-primary btn-sm" onclick="openListEditor()" style="flex-shrink:0;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New List
+            </button>
+        </div>
+        <div id="adminListsWrap"></div>
     </div>
 
 </div>
@@ -635,25 +644,6 @@
     </div>
 </div>
 
-<!-- LISTS (packing lists / checklists for parents) -->
-<div class="lk-page" id="page-lists">
-    <div class="lk-page-hero">
-        <div class="lk-page-hero-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
-        </div>
-        <div>
-            <h1>Lists</h1>
-            <p>Packing lists and checklists parents can check off in the portal</p>
-        </div>
-    </div>
-    <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
-        <button class="btn btn-primary btn-sm" onclick="openListEditor()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            New List
-        </button>
-    </div>
-    <div id="adminListsWrap"></div>
-</div>
 
 <!-- List editor modal -->
 <div id="listEditorBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeListEditor()"></div>
@@ -955,7 +945,6 @@ function nav(p) {
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
     if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
     if (p === 'tips') renderTipsAdmin();
-    if (p === 'lists') renderAdminLists();
 }
 
 function switchMsgTab(tab, btn) {
@@ -966,6 +955,7 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
+    var lists = document.getElementById('msgTabLists'); if (lists) lists.style.display = tab === 'lists' ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
     if (tab === 'forms')  {
@@ -977,6 +967,7 @@ function switchMsgTab(tab, btn) {
             switchFormsTab(_currentFormsTab || 'sent');
         });
     }
+    if (tab === 'lists') { renderAdminLists(); }
 }
 
 // ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
