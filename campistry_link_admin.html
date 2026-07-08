@@ -242,6 +242,14 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             Messages
         </button>
+        <button class="lk-nav-item" data-page="forms" onclick="nav('forms')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            Forms
+        </button>
+        <button class="lk-nav-item" data-page="lists" onclick="nav('lists')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+            Lists
+        </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Content</div>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
@@ -266,6 +274,14 @@
     <button class="lk-bnav-item" data-page="messages" onclick="nav('messages')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Messages
+    </button>
+    <button class="lk-bnav-item" data-page="forms" onclick="nav('forms')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Forms
+    </button>
+    <button class="lk-bnav-item" data-page="lists" onclick="nav('lists')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+        Lists
     </button>
     <button class="lk-bnav-item" data-page="photos" onclick="nav('photos')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -307,7 +323,7 @@
         </div>
         <div>
             <h1>Messages</h1>
-            <p>Inbox, outbox, and submitted forms</p>
+            <p>Your inbox and everything you've sent to parents</p>
         </div>
     </div>
 
@@ -315,8 +331,6 @@
     <div class="lk-tabs" id="msgTopTabs" style="margin-bottom:18px;">
         <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
         <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Sent</button>
-        <button class="lk-tab" data-msgtab="forms" onclick="switchMsgTab('forms',this)">Forms</button>
-        <button class="lk-tab" data-msgtab="lists" onclick="switchMsgTab('lists',this)">Lists</button>
     </div>
 
     <!-- ── INBOX ─────────────────────────────────────── -->
@@ -377,48 +391,72 @@
         </div>
     </div>
 
-    <!-- ── FORMS ──────────────────────────────────────── -->
-    <div id="msgTabForms" style="display:none;">
-        <!-- Forms subtabs -->
-        <div class="lk-tabs" style="margin-bottom:16px;">
-            <button class="lk-tab active" data-formtab="sent" onclick="switchFormsTab('sent',this)">Forms</button>
-            <button class="lk-tab" data-formtab="received" onclick="switchFormsTab('received',this)">Responses</button>
-        </div>
+</div>
 
-        <!-- FORM TEMPLATES -->
-        <div id="formsTabSent">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;">
-                <p style="font-size:.82rem;color:var(--text-muted);margin:0;">Build reusable forms here, then attach one to a message to send it to parents.</p>
-                <button class="btn btn-primary btn-sm" onclick="openFormCompose()" style="flex-shrink:0;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    New Form
-                </button>
-            </div>
-            <div id="sentFormsList"></div>
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  FORMS                                              -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-forms">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         </div>
-
-        <!-- RECEIVED -->
-        <div id="formsTabReceived" style="display:none;">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
-                <div id="recvBreadcrumbs" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:.8rem;"></div>
-                <input type="text" class="lk-input" placeholder="Search submissions..." id="recvSearch" oninput="renderReceivedTree()" style="max-width:200px;font-size:.8rem;padding:5px 10px;height:auto;">
-            </div>
-            <div id="recvList"></div>
+        <div>
+            <h1>Forms</h1>
+            <p>Build reusable forms and view the responses parents send back</p>
         </div>
     </div>
 
-    <!-- ── LISTS (packing lists / checklists parents check off) ── -->
-    <div id="msgTabLists" style="display:none;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
-            <p style="font-size:.82rem;color:var(--text-muted);margin:0;">Packing lists &amp; checklists parents can check off in the portal.</p>
-            <button class="btn btn-primary btn-sm" onclick="openListEditor()" style="flex-shrink:0;">
+    <!-- Forms subtabs -->
+    <div class="lk-tabs" style="margin-bottom:16px;">
+        <button class="lk-tab active" data-formtab="sent" onclick="switchFormsTab('sent',this)">Forms</button>
+        <button class="lk-tab" data-formtab="received" onclick="switchFormsTab('received',this)">Responses</button>
+    </div>
+
+    <!-- FORM TEMPLATES -->
+    <div id="formsTabSent">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;">
+            <p style="font-size:.82rem;color:var(--text-muted);margin:0;">Build reusable forms here, then attach one to a message to send it to parents.</p>
+            <button class="btn btn-primary btn-sm" onclick="openFormCompose()" style="flex-shrink:0;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                New List
+                New Form
             </button>
         </div>
-        <div id="adminListsWrap"></div>
+        <div id="sentFormsList"></div>
     </div>
 
+    <!-- RESPONSES -->
+    <div id="formsTabReceived" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+            <div id="recvBreadcrumbs" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:.8rem;"></div>
+            <input type="text" class="lk-input" placeholder="Search submissions..." id="recvSearch" oninput="renderReceivedTree()" style="max-width:200px;font-size:.8rem;padding:5px 10px;height:auto;">
+        </div>
+        <div id="recvList"></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  LISTS (packing lists / checklists parents check off) -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-lists">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+        </div>
+        <div>
+            <h1>Lists</h1>
+            <p>Packing lists &amp; checklists parents can check off in the portal</p>
+        </div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
+        <p style="font-size:.82rem;color:var(--text-muted);margin:0;">Create a checklist here, then attach it to a message so parents see it.</p>
+        <button class="btn btn-primary btn-sm" onclick="openListEditor()" style="flex-shrink:0;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New List
+        </button>
+    </div>
+    <div id="adminListsWrap"></div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════ -->
@@ -970,6 +1008,16 @@ function nav(p) {
     if (p === 'dashboard') renderDash();
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
     if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
+    if (p === 'forms') {
+        _loadFormSubmissions();
+        switchFormsTab(_currentFormsTab || 'sent');
+        // Pull the latest parent responses from the cloud, then re-render
+        _loadCloudSubmissions(function() {
+            _loadFormSubmissions();
+            switchFormsTab(_currentFormsTab || 'sent');
+        });
+    }
+    if (p === 'lists') renderAdminLists();
     if (p === 'tips') renderTipsAdmin();
 }
 
@@ -980,20 +1028,8 @@ function switchMsgTab(tab, btn) {
     });
     document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
-    document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
-    var lists = document.getElementById('msgTabLists'); if (lists) lists.style.display = tab === 'lists' ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
-    if (tab === 'forms')  {
-        _loadFormSubmissions();
-        switchFormsTab(_currentFormsTab || 'sent');
-        // Pull the latest parent responses from the cloud, then re-render
-        _loadCloudSubmissions(function() {
-            _loadFormSubmissions();
-            switchFormsTab(_currentFormsTab || 'sent');
-        });
-    }
-    if (tab === 'lists') { renderAdminLists(); }
 }
 
 // ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
@@ -3204,7 +3240,7 @@ function boot() {
     function _initCloudSubs() {
         _loadCloudSubmissions(function() {
             _loadFormSubmissions();
-            if (currentMsgTab === 'forms') { renderReceivedTree(); renderSentForms(); }
+            if (document.getElementById('page-forms').classList.contains('active')) { renderReceivedTree(); renderSentForms(); }
         });
         _loadCloudTips(function() {
             if (document.getElementById('page-tips').classList.contains('active')) _renderTipHistory();
@@ -3264,7 +3300,7 @@ function boot() {
         // Parent submitted a form — refresh submissions
         if (e.key === FORM_SUB_KEY) {
             _loadFormSubmissions();
-            if (currentMsgTab === 'forms') { renderReceivedTree(); renderSentForms(); }
+            if (document.getElementById('page-forms').classList.contains('active')) { renderReceivedTree(); renderSentForms(); }
         }
     });
 }
