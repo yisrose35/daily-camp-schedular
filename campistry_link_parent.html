@@ -670,15 +670,9 @@
                 </div>
                 <button class="btn btn-ghost btn-sm" onclick="closeTipSheet()">✕</button>
             </div>
-            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Choose an amount — charged to canteen balance.</p>
-            <div id="tipAmountBtns" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">
-                <div style="display:flex;align-items:center;gap:4px;border:1.5px solid var(--slate-200);border-radius:var(--radius-sm);padding:6px 10px;background:#fff;">
-                    <span style="font-size:.9rem;color:var(--text-muted);font-weight:600;">$</span>
-                    <input type="number" id="tipCustomAmt" class="lk-input" min="1" max="500" placeholder="Custom" style="border:none;padding:0;width:80px;font-size:.9rem;font-weight:700;box-shadow:none;outline:none;">
-                </div>
-            </div>
-            <button class="btn btn-primary" style="width:100%;" onclick="confirmTip()">Send Tip</button>
+            <div id="tipSuggested" style="margin-bottom:14px;"></div>
+            <div id="tipPayInfo"></div>
+            <p id="tipPayHint" style="font-size:.76rem;color:var(--text-muted);margin-top:14px;">Send your tip directly through any option above — the camp doesn't process the payment here.</p>
         </div>
     </div>
 
@@ -3018,24 +3012,66 @@ function _pEsc(s) {
     });
 }
 
+// Find a staff member's payment handles by name (from the tips config directory)
+function _tipHandlesFor(name) {
+    var cfg = _loadTipsConfigP();
+    var list = cfg.staffPay || [];
+    var n = String(name || '').trim().toLowerCase();
+    return list.filter(function(p){ return String(p.name || '').trim().toLowerCase() === n; })[0] || null;
+}
+
+// Web deep-links (best-effort; Zelle has none, so it's copy-only)
+function _venmoUrl(v)      { var u = String(v).replace(/^@/, '').trim(); return u ? 'https://venmo.com/u/' + encodeURIComponent(u) : ''; }
+function _paypalUrl(v, amt){ var s = String(v).trim(); if (s.indexOf('@') >= 0) return ''; s = s.replace(/^https?:\/\//i, '').replace(/^paypal\.me\//i, ''); return s ? 'https://paypal.me/' + s + (amt ? '/' + amt : '') : ''; }
+function _cashUrl(v, amt)  { var u = String(v).replace(/^\$/, '').trim(); return u ? 'https://cash.app/$' + u + (amt ? '/' + amt : '') : ''; }
+
+function _tipPayRow(label, handle, url) {
+    var open = url
+        ? '<a href="' + url + '" target="_blank" rel="noopener" class="btn btn-primary btn-sm" style="text-decoration:none;">Open</a>'
+        : '';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--border-light);border-radius:var(--radius-md);margin-bottom:8px;">' +
+        '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;">' + _pEsc(label) + '</div>' +
+            '<div style="font-size:.9rem;font-weight:700;color:var(--slate-900);word-break:break-all;">' + _pEsc(handle) + '</div>' +
+        '</div>' +
+        '<button class="btn btn-secondary btn-sm" onclick="_copyTip(\'' + _pEsc(handle) + '\')">Copy</button>' + open +
+    '</div>';
+}
+
+function _copyTip(text) {
+    var done = function(){ toast('Copied'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
+    else { try { window.prompt('Copy:', text); } catch(e){} }
+}
+
 function openTipSheet(name, role, suggested) {
     _tipTarget = { name: name, role: role };
     document.getElementById('tipsSheetTitle').textContent = 'Tip ' + name;
     document.getElementById('tipsSheetSub').textContent = role;
-    var cfg = _loadTipsConfigP();
-    var amounts = (cfg.amounts && cfg.amounts.length) ? cfg.amounts.slice() : [5, 10, 20, 50];
     suggested = parseInt(suggested, 10) || 0;
-    // The role's suggested amount always gets a button, even if not in the global list
-    if (suggested && amounts.indexOf(suggested) < 0) { amounts.push(suggested); amounts.sort(function(a,b){return a-b;}); }
-    var btns = document.getElementById('tipAmountBtns');
-    if (btns) {
-        btns.innerHTML = amounts.map(function(a) {
-            var on = (a === suggested);
-            return '<button class="tip-amt-btn" onclick="pickTipAmt(' + a + ',this)" style="padding:10px 18px;border:2px solid ' + (on?'var(--link-color)':'var(--slate-200)') + ';border-radius:var(--radius-sm);background:' + (on?'var(--link-tint)':'#fff') + ';font-size:.95rem;font-weight:700;cursor:pointer;color:' + (on?'var(--link-color)':'var(--slate-700)') + ';transition:all .15s;min-width:64px;">$' + a + '</button>';
-        }).join('');
+
+    var sug = document.getElementById('tipSuggested');
+    if (sug) sug.innerHTML = suggested
+        ? '<div style="display:inline-flex;align-items:center;gap:6px;background:var(--link-tint);color:var(--link-color);border-radius:999px;padding:7px 15px;font-size:.9rem;font-weight:800;">Suggested tip: $' + suggested + '</div>'
+        : '';
+
+    var info = document.getElementById('tipPayInfo');
+    var hint = document.getElementById('tipPayHint');
+    var h = _tipHandlesFor(name);
+    var rows = [];
+    if (h) {
+        if (h.zelle)   rows.push(_tipPayRow('Zelle',    h.zelle,   ''));
+        if (h.venmo)   rows.push(_tipPayRow('Venmo',    h.venmo,   _venmoUrl(h.venmo)));
+        if (h.paypal)  rows.push(_tipPayRow('PayPal',   h.paypal,  _paypalUrl(h.paypal, suggested)));
+        if (h.cashapp) rows.push(_tipPayRow('Cash App', h.cashapp, _cashUrl(h.cashapp, suggested)));
     }
-    var custom = document.getElementById('tipCustomAmt');
-    if (custom) custom.value = suggested ? suggested : '';
+    if (info) {
+        if (rows.length) { info.innerHTML = rows.join(''); if (hint) hint.style.display = ''; }
+        else {
+            info.innerHTML = '<div class="lk-empty" style="padding:22px 0;"><div class="lk-empty-icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><h3>No payment info yet</h3><p>' + _pEsc(name) + ' hasn\'t added a Zelle/Venmo yet — ask the camp office.</p></div>';
+            if (hint) hint.style.display = 'none';
+        }
+    }
     document.getElementById('tipsAmountSheet').style.display = '';
     document.getElementById('tipsAmountSheet').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }

@@ -689,12 +689,32 @@
         </div>
     </div>
 
-    <!-- Staff accounts — tips land here automatically -->
+    <!-- Staff payment info — the handles parents pay directly to -->
+    <div class="lk-card" style="margin-top:18px;">
+        <div class="lk-card-head">
+            <div>
+                <h2>Staff Payment Info</h2>
+                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Add each staff member's Zelle / Venmo / PayPal so parents can send tips directly. Parents see these next to the matching role.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="openAddStaffPay()" style="flex-shrink:0;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add person
+            </button>
+        </div>
+        <div id="staffPayList"></div>
+        <div id="staffPayEmpty" class="lk-empty" style="display:none;padding:24px 0;">
+            <div class="lk-empty-icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div>
+            <h3>No payment info yet</h3>
+            <p>Add a staff member and their Zelle / Venmo / PayPal handle.</p>
+        </div>
+    </div>
+
+    <!-- Staff accounts — legacy balance ledger (kept for reference) -->
     <div class="lk-card" style="margin-top:18px;">
         <div class="lk-card-head">
             <div>
                 <h2>Staff Accounts</h2>
-                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Every tip credits the staff member's account instantly. Give each person their access code so they can watch their balance.</p>
+                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Optional balance tracking — give each person their access code so they can watch their tip total.</p>
             </div>
             <button class="btn btn-secondary btn-sm" onclick="openAddStaffAccount()" style="flex-shrink:0;">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -751,6 +771,46 @@
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">
         <button class="btn btn-ghost btn-sm" onclick="closeTipsCatModal()">Cancel</button>
         <button class="btn btn-primary btn-sm" onclick="saveTipsCategory()">Add Category</button>
+    </div>
+</div>
+
+<!-- Staff payment info modal -->
+<div id="staffPayBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeStaffPayModal()"></div>
+<div id="staffPayModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.18);z-index:951;width:440px;max-width:calc(100vw - 32px);max-height:90vh;overflow-y:auto;padding:28px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;">
+        <h2 id="staffPayTitle" style="font-size:1rem;font-weight:700;margin:0;">Add Staff Payment Info</h2>
+        <button onclick="closeStaffPayModal()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1.1rem;">✕</button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div class="lk-field" style="flex:1;min-width:160px;">
+            <label>Name</label>
+            <input type="text" class="lk-input" id="spName" placeholder="e.g. Sarah M.">
+        </div>
+        <div class="lk-field" style="flex:1;min-width:140px;">
+            <label>Role <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+            <input type="text" class="lk-input" id="spRole" placeholder="e.g. Counselor">
+        </div>
+    </div>
+    <p style="font-size:.76rem;color:var(--text-muted);margin:4px 0 12px;">Add at least one payment handle — parents will see whichever you fill in.</p>
+    <div class="lk-field">
+        <label>Zelle <span style="font-weight:400;color:var(--text-muted);">— phone or email</span></label>
+        <input type="text" class="lk-input" id="spZelle" placeholder="555-123-4567 or name@email.com">
+    </div>
+    <div class="lk-field" style="margin-top:10px;">
+        <label>Venmo <span style="font-weight:400;color:var(--text-muted);">— username</span></label>
+        <input type="text" class="lk-input" id="spVenmo" placeholder="@sarah-m">
+    </div>
+    <div class="lk-field" style="margin-top:10px;">
+        <label>PayPal <span style="font-weight:400;color:var(--text-muted);">— paypal.me link or email</span></label>
+        <input type="text" class="lk-input" id="spPaypal" placeholder="paypal.me/sarahm or name@email.com">
+    </div>
+    <div class="lk-field" style="margin-top:10px;">
+        <label>Cash App <span style="font-weight:400;color:var(--text-muted);">— $cashtag</span></label>
+        <input type="text" class="lk-input" id="spCashapp" placeholder="$sarahm">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">
+        <button class="btn btn-ghost btn-sm" onclick="closeStaffPayModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="saveStaffPay()">Save</button>
     </div>
 </div>
 
@@ -2891,6 +2951,7 @@ function renderTipsAdmin() {
     var cfg = _loadTipsConfig();
     _renderTipAmounts(cfg);
     _renderTipCategories(cfg);
+    _renderStaffPay(cfg);
     _renderTipHistory();
     _renderStaffAccounts();
     // Refresh from the cloud, then re-render with the latest tips + balances
@@ -3214,6 +3275,102 @@ function removeTipStaff(ci, si) {
     cfg.categories[ci].staff.splice(si, 1);
     _saveTipsConfig(cfg);
     _renderTipCategories(cfg);
+}
+
+// ─── STAFF PAYMENT INFO (Zelle/Venmo/PayPal handles relayed to parents) ──────
+var TIP_PAY_METHODS = [
+    { key: 'zelle',   label: 'Zelle'    },
+    { key: 'venmo',   label: 'Venmo'    },
+    { key: 'paypal',  label: 'PayPal'   },
+    { key: 'cashapp', label: 'Cash App' }
+];
+
+function _renderStaffPay(cfg) {
+    var el = document.getElementById('staffPayList'); if (!el) return;
+    var em = document.getElementById('staffPayEmpty');
+    var people = cfg.staffPay || [];
+    if (!people.length) { el.innerHTML = ''; if (em) em.style.display = ''; return; }
+    if (em) em.style.display = 'none';
+    el.innerHTML = people.map(function(p, i) {
+        var chips = TIP_PAY_METHODS.filter(function(m){ return p[m.key]; }).map(function(m) {
+            return '<span style="display:inline-flex;align-items:center;gap:4px;background:var(--slate-50);border:1px solid var(--slate-200);border-radius:999px;padding:3px 10px;font-size:.75rem;color:var(--slate-700);"><strong style="font-weight:700;">' + esc(m.label) + '</strong> ' + esc(p[m.key]) + '</span>';
+        }).join('');
+        if (!chips) chips = '<span style="font-size:.76rem;color:var(--amber-600,#B45309);">No handle yet — parents can\'t pay this person</span>';
+        return '<div style="padding:14px 0;border-bottom:1px solid var(--slate-100);">' +
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px;">' +
+                '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                    '<span style="font-size:.88rem;font-weight:700;color:var(--slate-900);">' + esc(p.name) + '</span>' +
+                    (p.role ? '<span style="font-size:.74rem;color:var(--text-muted);">· ' + esc(p.role) + '</span>' : '') +
+                '</div>' +
+                '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+                    '<button class="btn btn-ghost btn-sm" onclick="openEditStaffPay(' + i + ')">Edit</button>' +
+                    '<button class="btn btn-ghost btn-sm" style="color:var(--red-500);" onclick="deleteStaffPay(' + i + ')">Delete</button>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' + chips + '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function openAddStaffPay() {
+    document.getElementById('staffPayTitle').textContent = 'Add Staff Payment Info';
+    ['spName','spRole','spZelle','spVenmo','spPaypal','spCashapp'].forEach(function(id){ document.getElementById(id).value = ''; });
+    document.getElementById('staffPayModal')._editIndex = -1;
+    document.getElementById('staffPayModal').style.display = 'block';
+    document.getElementById('staffPayBackdrop').style.display = 'block';
+    document.getElementById('spName').focus();
+}
+
+function openEditStaffPay(i) {
+    var cfg = _loadTipsConfig();
+    var p = (cfg.staffPay || [])[i]; if (!p) return;
+    document.getElementById('staffPayTitle').textContent = 'Edit Staff Payment Info';
+    document.getElementById('spName').value    = p.name    || '';
+    document.getElementById('spRole').value    = p.role    || '';
+    document.getElementById('spZelle').value   = p.zelle   || '';
+    document.getElementById('spVenmo').value   = p.venmo   || '';
+    document.getElementById('spPaypal').value  = p.paypal  || '';
+    document.getElementById('spCashapp').value = p.cashapp || '';
+    document.getElementById('staffPayModal')._editIndex = i;
+    document.getElementById('staffPayModal').style.display = 'block';
+    document.getElementById('staffPayBackdrop').style.display = 'block';
+}
+
+function closeStaffPayModal() {
+    document.getElementById('staffPayModal').style.display = 'none';
+    document.getElementById('staffPayBackdrop').style.display = 'none';
+}
+
+function saveStaffPay() {
+    var name = (document.getElementById('spName').value || '').trim();
+    if (!name) { toast('Enter the person\'s name'); return; }
+    var entry = {
+        name:    name,
+        role:    (document.getElementById('spRole').value    || '').trim(),
+        zelle:   (document.getElementById('spZelle').value   || '').trim(),
+        venmo:   (document.getElementById('spVenmo').value   || '').trim(),
+        paypal:  (document.getElementById('spPaypal').value  || '').trim(),
+        cashapp: (document.getElementById('spCashapp').value || '').trim()
+    };
+    var cfg = _loadTipsConfig();
+    if (!cfg.staffPay) cfg.staffPay = [];
+    var editIdx = document.getElementById('staffPayModal')._editIndex;
+    if (editIdx >= 0 && editIdx < cfg.staffPay.length) cfg.staffPay[editIdx] = entry;
+    else cfg.staffPay.push(entry);
+    _saveTipsConfig(cfg);
+    closeStaffPayModal();
+    _renderStaffPay(cfg);
+    toast(editIdx >= 0 ? 'Payment info updated' : name + ' added');
+}
+
+function deleteStaffPay(i) {
+    var cfg = _loadTipsConfig();
+    var p = (cfg.staffPay || [])[i]; if (!p) return;
+    if (!confirm('Remove payment info for ' + p.name + '?')) return;
+    cfg.staffPay.splice(i, 1);
+    _saveTipsConfig(cfg);
+    _renderStaffPay(cfg);
+    toast('Removed');
 }
 
 // Cloud tips (link_tips table, migration 016) merged with the local ledger
