@@ -5564,8 +5564,80 @@ function saveDailySkeleton() {
     console.error('[DailyAdj] Failed to save to cloud:', e);
   }
   
+  // ★ EXTEND-DAY-EARLIER (all-or-nothing): if this skeleton edit changed the period
+  //   structure of a day that already has a schedule (e.g. a morning inserted before
+  //   an existing afternoon), realign the per-bunk schedule AND the league games from
+  //   the OLD slot geometry to the NEW one BY TIME — so the afternoon stays put and
+  //   the new periods come up empty and fillable. It first stamps every entry's start
+  //   time from the current geometry (so nothing is un-realignable), then realigns
+  //   under snapshot/restore: it commits ONLY if EVERY bunk and league division lines
+  //   up cleanly; otherwise it restores and changes nothing. It can fully-apply or
+  //   no-op, never corrupt (the bug that made the same activity show up twice).
+  try { _daReslotScheduleForSkeletonChange(); } catch (e) { console.warn('[DailyAdj] extend-earlier reslot failed (non-fatal):', e); }
+
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
   window.forceSyncToCloud?.();
+}
+
+function _daHasRealScheduleForReslot(sa) {
+  for (var b in sa) {
+    var arr = sa[b]; if (!Array.isArray(arr)) continue;
+    for (var i = 0; i < arr.length; i++) {
+      var e = arr[i];
+      if (e && !e.continuation && e._activity && String(e._activity).toLowerCase() !== 'free') return true;
+    }
+  }
+  return false;
+}
+
+function _daReslotScheduleForSkeletonChange() {
+  if (window._generationInProgress) return;        // never mid-generation
+  if (window._daBuilderMode === 'auto') return;     // manual-builder feature
+  var sa = window.scheduleAssignments;
+  if (!sa || !_daHasRealScheduleForReslot(sa)) return; // nothing generated to realign
+  var DTS = window.DivisionTimesSystem;
+  if (!DTS || !DTS.buildFromSkeleton || !DTS.reslotAssignmentsByTime || !DTS.stampScheduleTimes || !DTS.reslotLeagueAssignmentsByTime) return;
+  var oldDT = window.divisionTimes;
+  if (!oldDT || !Object.keys(oldDT).length) return; // no baseline geometry to map FROM
+  var divs = window.divisions || masterSettings.app1?.divisions || {};
+
+  // 1) Stamp times from the CURRENT geometry so every entry is time-addressable.
+  DTS.stampScheduleTimes(sa, oldDT, divs);
+  var la = window.leagueAssignments || {};
+  if (DTS.stampLeagueTimes) DTS.stampLeagueTimes(la, oldDT, divs);
+
+  // 2) Build the geometry the edited skeleton implies.
+  var newDT = DTS.buildFromSkeleton(dailyOverrideSkeleton, divs);
+  if (!newDT || !Object.keys(newDT).length) return;
+
+  // 3) ALL-OR-NOTHING: snapshot, realign schedule + leagues by time, commit only if
+  //    EVERYTHING lined up cleanly; otherwise restore and change nothing.
+  var saSnap = JSON.parse(JSON.stringify(sa));
+  var laSnap = JSON.parse(JSON.stringify(la));
+  var res = DTS.reslotAssignmentsByTime(sa, oldDT, newDT, divs, { requireEntryTime: true });
+  var resL = DTS.reslotLeagueAssignmentsByTime(la, oldDT, newDT, divs, { requireEntryTime: true });
+
+  if ((res && res.bunksSkipped > 0) || (resL && resL.skipped > 0)) {
+    window.scheduleAssignments = saSnap;
+    window.leagueAssignments = laSnap;
+    console.warn('[DailyAdj] Extend-earlier: could not safely realign ' +
+      (res ? res.bunksSkipped : 0) + ' bunk(s) / ' + (resL ? resL.skipped : 0) +
+      ' league division(s) by time — no change made. (Build the full day before generating, or use a full regenerate.)');
+    return;
+  }
+
+  if ((res && res.moved) || (resL && resL.moved)) {
+    window.divisionTimes = newDT;
+    try {
+      window.saveCurrentDailyData && window.saveCurrentDailyData('scheduleAssignments', sa);
+      window.saveCurrentDailyData && window.saveCurrentDailyData('leagueAssignments', la);
+      var ser = (DTS.serialize && DTS.serialize(newDT)) || newDT;
+      window.saveCurrentDailyData && window.saveCurrentDailyData('divisionTimes', ser);
+    } catch (_e) {}
+    console.log('[DailyAdj] Extend-earlier: realigned ' + (res ? res.bunksMoved : 0) +
+      ' bunk(s) + ' + (resL ? resL.divsMoved : 0) + ' league division(s) by time (afternoon kept in place).');
+    try { window.updateTable && window.updateTable(); } catch (_) {}
+  }
 }
 
 function daGetConflictingFacilities(startTime, endTime, excludeId) {

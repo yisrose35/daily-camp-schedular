@@ -1112,6 +1112,132 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
         log('✅ Division Times System initialized');
     }
 
+    // =====================================================================
+    // TIME-BASED REALIGNMENT (extend-day-earlier)
+    // The per-bunk schedule + league assignments are stored INDEX-based
+    // (scheduleAssignments[bunk][slotIndex], leagueAssignments[div][slotIndex])
+    // while divisionTimes[div] is sorted ascending by start time. Inserting an
+    // EARLIER period shifts every later slot to a higher index, so the stored
+    // entries end up under the wrong times. These helpers realign entries from an
+    // OLD geometry to a NEW one BY TIME. The caller uses them ALL-OR-NOTHING:
+    // realign everything cleanly or change nothing (see daily_adjustments), so a
+    // partial shift can never corrupt a schedule.
+    // =====================================================================
+    function _dtsSlotStart(s) { return s ? (s.startMin != null ? s.startMin : (s.start != null ? s.start : null)) : null; }
+    function _dtsSlotEnd(s) { return s ? (s.endMin != null ? s.endMin : (s.end != null ? s.end : null)) : null; }
+    function _dtsFindByTime(list, t) {
+        for (var i = 0; i < list.length; i++) { var st = _dtsSlotStart(list[i]); if (st != null && Math.abs(st - t) <= 2) return i; }
+        return -1;
+    }
+    function _dtsBunkDivMap(divisions) {
+        var m = {};
+        Object.keys(divisions || {}).forEach(function (dn) { ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) { m[String(b)] = dn; }); });
+        return m;
+    }
+
+    // Stamp _startMin/_endMin onto every entry that lacks it, FROM the current
+    // geometry — call this BEFORE divisionTimes is rebuilt (while it still matches
+    // scheduleAssignments) so every entry becomes time-addressable and can be
+    // realigned when the structure changes. Generated entries already carry the
+    // stamp; this covers restored/background/manual entries that don't.
+    function stampScheduleTimes(scheduleAssignments, divisionTimes, divisions) {
+        if (!scheduleAssignments || !divisionTimes) return;
+        var bd = _dtsBunkDivMap(divisions);
+        Object.keys(scheduleAssignments).forEach(function (bunk) {
+            var arr = scheduleAssignments[bunk]; if (!Array.isArray(arr)) return;
+            var dn = bd[String(bunk)]; if (!dn) return;
+            var slots = divisionTimes[dn]; if (!Array.isArray(slots)) return;
+            var list = (slots._perBunkSlots && slots._perBunkSlots[bunk]) || slots;
+            for (var i = 0; i < arr.length; i++) {
+                var e = arr[i]; if (!e || e._startMin != null) continue;
+                var s = _dtsSlotStart(list[i]), en = _dtsSlotEnd(list[i]);
+                if (s != null) e._startMin = s; if (en != null) e._endMin = en;
+            }
+        });
+    }
+
+    // Same idea for league assignments: stamp _startMin/_endMin on each league game
+    // from the current geometry before the structure changes, so they can be
+    // realigned by time even if they didn't carry a stamp.
+    function stampLeagueTimes(leagueAssignments, divisionTimes, divisions) {
+        if (!leagueAssignments || !divisionTimes) return;
+        Object.keys(leagueAssignments).forEach(function (dn) {
+            var map = leagueAssignments[dn]; if (!map || typeof map !== 'object') return;
+            var slots = divisionTimes[dn]; if (!Array.isArray(slots)) return;
+            Object.keys(map).forEach(function (k) {
+                var idx = parseInt(k, 10); if (isNaN(idx)) return;
+                var entry = map[k]; if (!entry || entry._startMin != null) return;
+                var s = _dtsSlotStart(slots[idx]), en = _dtsSlotEnd(slots[idx]);
+                if (s != null) entry._startMin = s; if (en != null) entry._endMin = en;
+            });
+        });
+    }
+
+    function reslotAssignmentsByTime(scheduleAssignments, oldDivisionTimes, newDivisionTimes, divisions, opts) {
+        var result = { moved: false, bunksMoved: 0, bunksSkipped: 0 };
+        if (!scheduleAssignments || !oldDivisionTimes || !newDivisionTimes) return result;
+        divisions = divisions || {};
+        var req = !!(opts && opts.requireEntryTime);
+        var bd = _dtsBunkDivMap(divisions);
+        Object.keys(scheduleAssignments).forEach(function (bunk) {
+            var arr = scheduleAssignments[bunk]; if (!Array.isArray(arr) || arr.length === 0) return;
+            var dn = bd[String(bunk)]; if (!dn) return;
+            var os = oldDivisionTimes[dn], ns = newDivisionTimes[dn]; if (!Array.isArray(os) || !Array.isArray(ns)) return;
+            var ol = (os._perBunkSlots && os._perBunkSlots[bunk]) || os, nl = (ns._perBunkSlots && ns._perBunkSlots[bunk]) || ns;
+            // Pass 1: plan without mutating (a bail leaves the bunk byte-for-byte intact).
+            var plan = [], ok = true, used = {};
+            for (var i = 0; i < arr.length; i++) {
+                var e = arr[i]; if (!e) continue;
+                var t = (e._startMin != null) ? e._startMin : (req ? null : _dtsSlotStart(ol[i]));
+                if (t == null) { ok = false; break; }
+                var j = _dtsFindByTime(nl, t); if (j < 0) { ok = false; break; }
+                if (used[j]) { ok = false; break; } used[j] = true;
+                plan.push({ i: i, j: j, e: e, ot: _dtsSlotStart(ol[i]), oe: _dtsSlotEnd(ol[i]) });
+            }
+            if (!ok) { result.bunksSkipped++; return; }
+            // Pass 2: apply.
+            var na = new Array(nl.length).fill(null), mv = false;
+            plan.forEach(function (p) {
+                if (p.e._startMin == null) { if (p.ot != null) p.e._startMin = p.ot; if (p.oe != null) p.e._endMin = p.oe; }
+                na[p.j] = p.e; if (p.j !== p.i) mv = true;
+            });
+            if (mv || nl.length !== arr.length) { scheduleAssignments[bunk] = na; result.moved = true; result.bunksMoved++; }
+        });
+        return result;
+    }
+
+    // Realign per-division league assignments (leagueAssignments[div][slotIdx]) by
+    // time. All-or-nothing PER DIVISION: if any game can't be time-matched, that
+    // division's league map is left untouched and counted in `skipped`.
+    function reslotLeagueAssignmentsByTime(leagueAssignments, oldDivisionTimes, newDivisionTimes, divisions, opts) {
+        var result = { moved: false, divsMoved: 0, skipped: 0 };
+        if (!leagueAssignments || !oldDivisionTimes || !newDivisionTimes) return result;
+        var req = !!(opts && opts.requireEntryTime);
+        Object.keys(leagueAssignments).forEach(function (dn) {
+            var map = leagueAssignments[dn]; if (!map || typeof map !== 'object') return;
+            var os = oldDivisionTimes[dn], ns = newDivisionTimes[dn]; if (!Array.isArray(os) || !Array.isArray(ns)) return;
+            var plan = [], ok = true, used = {}, any = false;
+            Object.keys(map).forEach(function (k) {
+                if (!ok) return;
+                var idx = parseInt(k, 10); if (isNaN(idx)) return;
+                var entry = map[k]; if (entry == null) return;
+                var t = (entry._startMin != null) ? entry._startMin : (req ? null : _dtsSlotStart(os[idx]));
+                if (t == null) { ok = false; return; }
+                var j = _dtsFindByTime(ns, t); if (j < 0) { ok = false; return; }
+                if (used[j]) { ok = false; return; } used[j] = true;
+                plan.push({ j: j, entry: entry, ot: _dtsSlotStart(os[idx]) });
+                if (j !== idx) any = true;
+            });
+            if (!ok) { result.skipped++; return; }
+            if (any) {
+                var nm = {};
+                plan.forEach(function (p) { if (p.entry._startMin == null && p.ot != null) p.entry._startMin = p.ot; nm[p.j] = p.entry; });
+                leagueAssignments[dn] = nm; result.moved = true; result.divsMoved++;
+            }
+        });
+        return result;
+    }
+
     // =========================================================================
     // EXPORTS
     // =========================================================================
@@ -1121,6 +1247,12 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
 
         // Core building
         buildFromSkeleton: buildDivisionTimesFromSkeleton,
+
+        // ★ Time-based realignment (extend-day-earlier) — all-or-nothing safe.
+        stampScheduleTimes: stampScheduleTimes,
+        stampLeagueTimes: stampLeagueTimes,
+        reslotAssignmentsByTime: reslotAssignmentsByTime,
+        reslotLeagueAssignmentsByTime: reslotLeagueAssignmentsByTime,
         
         // ★★★ v1.2: Expose split tile expansion ★★★
         expandSplitTiles: expandSplitTiles,
