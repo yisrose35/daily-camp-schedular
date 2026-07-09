@@ -1931,7 +1931,9 @@
                 log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_swEff.allowedPairs || {}).length) + ' [source=' + (_swimGASW ? ('swim-activity ' + _swimGASrc) : 'pool-field') + ']');
             } else {
                 const _legacy = (window.globalSettings?.app1?.poolLaneCapacity);
-                log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
+                const _capLbl = (typeof _legacy === 'number' && _legacy > 0) ? ('legacy poolLaneCapacity=' + _legacy)
+                    : (window.__swimNoFacilityUnlimited !== false ? 'UNLIMITED (no facility assigned to swim → no cap)' : '12 (kill-switch legacy default)');
+                log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → ' + _capLbl + ' (counts BUNKS, type="all")');
             }
         } catch (_epc) {}
 
@@ -2444,9 +2446,10 @@
             // New rule: pool is shared across grades up to LANE CAPACITY.
             // The human camp scheduler clearly does this — same-day PDF shows
             // Trios bunks swimming concurrently with Majors, Quartet, Quints,
-            // and Minors throughout the day, never all together. Default
-            // capacity 12 lanes matches a typical camp pool; configurable
-            // via globalSettings.app1.poolLaneCapacity.
+            // and Minors throughout the day, never all together. Capacity is
+            // configurable on the Swim activity / Pool field (or the legacy
+            // globalSettings.app1.poolLaneCapacity); with NO facility assigned
+            // to swim at all, swim is UNLIMITED (no cap — see below).
             //
             // TODO (future): per-grade-pair sharing config. The user should
             // be able to say "Trios may share pool with Quartet" or "Majors
@@ -2511,12 +2514,20 @@
                         if (_cap > 0) _poolCap = _cap;
                         else if (_poolShareType === 'all') _poolCap = 999;
                     }
-                }
-                // Fallback: legacy poolLaneCapacity setting (only if no field config)
-                if (_poolCap === 12 && _poolShareType === 'all' && window.globalSettings && window.globalSettings.app1 &&
+                } else if (window.globalSettings && window.globalSettings.app1 &&
                     typeof window.globalSettings.app1.poolLaneCapacity === 'number' &&
                     window.globalSettings.app1.poolLaneCapacity > 0) {
+                    // Legacy explicit cap (only consulted when no field/activity config).
                     _poolCap = window.globalSettings.app1.poolLaneCapacity;
+                } else if (window.__swimNoFacilityUnlimited !== false) {
+                    // ★ NO FACILITY ASSIGNED TO SWIM (no Swim general-activity
+                    //   sharing, no Pool field, no legacy poolLaneCapacity):
+                    //   swim is UNLIMITED. The old default silently capped a
+                    //   facility-less swim at 12 bunks, starving every bunk past
+                    //   the 12th concurrent swimmer in camps that never modeled a
+                    //   Pool. Matches poolSwimPairFreeAt (no config → unrestricted).
+                    //   Kill-switch: window.__swimNoFacilityUnlimited=false → 12.
+                    _poolCap = 999999;
                 }
             } catch (_e) {}
 
@@ -3655,8 +3666,9 @@
 
                     // Mirror canUsePoolAtTime (L1431) EXACTLY so the plan and the
                     //   placer never disagree: capture shareType + allowedPairs too,
-                    //   default cap 12, honor not_sharable/all/cross_division + the
-                    //   legacy poolLaneCapacity fallback.
+                    //   honor not_sharable/all/cross_division + the legacy
+                    //   poolLaneCapacity fallback; NO facility assigned to swim →
+                    //   UNLIMITED (no cap; kill-switch __swimNoFacilityUnlimited).
                     var _poolCap = 12, _poolShareType = 'all', _poolAllowedPairs = {};
                     try {
                         var _gs = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
@@ -3675,9 +3687,10 @@
                             _poolAllowedPairs = _sw.allowedPairs || {};
                             if (_poolShareType === 'not_sharable') _poolCap = 1;
                             else { var _c = parseInt(_sw.capacity); if (_c > 0) _poolCap = _c; else if (_poolShareType === 'all') _poolCap = 999; }
-                        }
-                        if (_poolCap === 12 && _poolShareType === 'all' && _gs.app1 && typeof _gs.app1.poolLaneCapacity === 'number' && _gs.app1.poolLaneCapacity > 0) {
+                        } else if (_gs.app1 && typeof _gs.app1.poolLaneCapacity === 'number' && _gs.app1.poolLaneCapacity > 0) {
                             _poolCap = _gs.app1.poolLaneCapacity;
+                        } else if (window.__swimNoFacilityUnlimited !== false) {
+                            _poolCap = 999999;   // no facility assigned to swim → no cap
                         }
                     } catch (_eP) {}
 
