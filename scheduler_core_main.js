@@ -2926,6 +2926,91 @@
     window._detectLeagueTileTimeMismatch = detectLeagueTileTimeMismatch;
 
     // =========================================================================
+    // ★ CROSS-DAY REPEAT HEAL (STEP 7.95 body — exposed for tests)
+    // The solver's yesterday policy is SOFT (finite YESTERDAY_PENALTY, best-of-3
+    // passes + RECENCY-SWAP), so a did-it-yesterday placement can survive when
+    // the winning pass carried it and no swap partner existed — observed live
+    // 2026-07-09: single-bunk division לב got Dodgeball @740-805 two days
+    // running; RECENCY-SWAP had no same-window peer to trade with. Every FILLER
+    // is already yesterday-gated; this sweep closes the last path (main solver
+    // commits) by re-running each repeat through the gated fallback filler.
+    // IMPROVE-ONLY: the filler can only return a non-repeat (its yesterday gate
+    // excludes the current activity) — if it returns nothing, the original is
+    // restored, so a repeat is never traded for a Free.
+    // Must run BEFORE STEP 8 (history update), so recency still measures
+    // yesterday. Killswitch: window.__repeatHealSweep = false.
+    // =========================================================================
+    function healCrossDayRepeats() {
+        if (window.__repeatHealSweep === false) return null;
+        const RE = window.RotationEngine;
+        if (!RE || typeof RE.calculateRecencyScore !== 'function') return null;
+        if (!window.AutoFillSlot || typeof window.AutoFillSlot.autoFillSlotSilent !== 'function') return null;
+        const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+        const sa = window.scheduleAssignments || {};
+        const rss = window.__regenSlotScope || null; // per-tile regen: only touch regenerated slots
+        const skip = { 'free': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1,
+            'change': 1, 'cleanup': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1,
+            'mincha': 1, 'main activity': 1, 'sports slot': 1, 'special activity': 1 };
+        let healed = 0, kept = 0;
+        Object.keys(sa).forEach(bunk => {
+            const arr = sa[bunk];
+            if (!Array.isArray(arr)) return;
+            if (rss && !rss[bunk]) return;
+            const scRegen = rss && rss[bunk] ? rss[bunk].regen : null;
+            arr.forEach((e, idx) => {
+                if (rss && (!scRegen || !scRegen.has(idx))) return;
+                if (!e || e.continuation || e._pinned || e._bunkOverride || e._postEdit) return;
+                if (e._isLeague || e._leagueMatchups || e.matchups || e._leagueName || e._h2h || e._isSpecialtyLeague) return;
+                if (e._isTransition || e._isTrip) return;
+                // Multi-slot spans and structured specials: replacing just the lead
+                // slot would orphan continuations / part+prep metadata — skip.
+                if (arr[idx + 1] && arr[idx + 1].continuation) return;
+                if (e._partLabel || e._prepDuration || e._durationBestFit) return;
+                const act = e._activity || e.sport || e.field;
+                if (!act || skip[String(act).toLowerCase().trim()]) return;
+                let rec;
+                try { rec = RE.calculateRecencyScore(bunk, act, idx); } catch (_x) { return; }
+                // Finite ≥ YESTERDAY = did it yesterday (or an active streak). An
+                // Infinity here would be a SAME-DAY duplicate — that's the
+                // validator's domain, leave it visible rather than mask it.
+                if (!(rec >= yp) || !isFinite(rec)) return;
+                // Keep the tile's intent: a sport is only replaced by a sport,
+                // a configured special only by a special.
+                let kind;
+                if (e.sport && e.sport !== 'Free') kind = 'sport';
+                else {
+                    try {
+                        const sp = (typeof window.getSpecialActivities === 'function') ? window.getSpecialActivities() : [];
+                        if (Array.isArray(sp) && sp.some(s => s && String(s.name) === String(act))) kind = 'special';
+                    } catch (_x3) {}
+                }
+                const orig = e;
+                arr[idx] = null; // release the slot (and its field) for the filler's scan
+                let ok = false;
+                try { ok = window.AutoFillSlot.autoFillSlotSilent(bunk, idx, kind); } catch (_x2) { ok = false; }
+                if (ok) {
+                    healed++;
+                    const chosen = arr[idx] && arr[idx]._activity;
+                    console.log('[STEP 7.95] repeat-heal: ' + bunk + ' "' + act + '" (done yesterday) → "' + chosen + '" @slot ' + idx);
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'repeat-heal', bunk: bunk,
+                            window: (orig._startMin != null ? orig._startMin + '-' + orig._endMin : 'slot:' + idx),
+                            chosen: { name: chosen || null, field: (arr[idx] && arr[idx]._location) || null },
+                            from: act
+                        });
+                    }
+                } else {
+                    arr[idx] = orig; // no legal non-repeat — repeat beats Free
+                    kept++;
+                }
+            });
+        });
+        return { healed: healed, kept: kept };
+    }
+    window._healCrossDayRepeats = healCrossDayRepeats;
+
+    // =========================================================================
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
@@ -7406,6 +7491,31 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
         } catch (_e79) {
             console.warn('[STEP 7.9] pinned-facility exclusion sweep failed:', _e79);
+        }
+
+        // =========================================================================
+        // STEP 7.95: CROSS-DAY REPEAT HEAL (improve-only)
+        // The solver's yesterday policy is SOFT (finite YESTERDAY_PENALTY, best-of-3
+        // passes + RECENCY-SWAP), so a did-it-yesterday placement can survive when
+        // the winning pass carried it and no swap partner existed — observed live
+        // 2026-07-09: single-bunk division לב got Dodgeball @740-805 two days
+        // running; RECENCY-SWAP had no same-window peer to trade with. Every FILLER
+        // is already yesterday-gated; this sweep closes the last path (main solver
+        // commits) by re-running each repeat through the gated fallback filler.
+        // IMPROVE-ONLY: the filler can only return a non-repeat (its yesterday gate
+        // excludes the current activity) — if it returns nothing, the original is
+        // restored, so a repeat is never traded for a Free.
+        // Runs BEFORE STEP 8 (history update), so recency still measures yesterday.
+        // Killswitch: window.__repeatHealSweep = false.
+        // =========================================================================
+        try {
+            const _res95 = (typeof window._healCrossDayRepeats === 'function') ? window._healCrossDayRepeats() : null;
+            if (_res95) {
+                if (_res95.healed + _res95.kept === 0) console.log('[STEP 7.95] cross-day repeat heal: ✅ no solver repeats');
+                else console.log('[STEP 7.95] cross-day repeat heal: ' + _res95.healed + ' healed, ' + _res95.kept + ' kept (no legal alternative)');
+            }
+        } catch (_e95) {
+            console.warn('[STEP 7.95] cross-day repeat heal failed:', _e95);
         }
 
         // =========================================================================
