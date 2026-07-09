@@ -538,11 +538,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return actHistory.daysSinceLast;
         }
         
-        // Fallback to SchedulerCoreUtils
+        // Fallback to SchedulerCoreUtils — but do NOT trust its null verbatim:
+        // it only checks exact-key historicalCounts, so counts living under a
+        // different key casing or in manualUsageOffsets read as "never done".
+        // Keep walking our own fallbacks when it comes back empty.
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDaysSinceActivity) {
-            return window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            var utilsDays = window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            if (utilsDays !== null && utilsDays !== undefined) return utilsDays;
         }
-        
+
         // Final fallback - check rotation history timestamps
         var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
         var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
@@ -552,14 +556,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             var daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
             return Math.max(1, daysSince);
         }
-        
-        // Check historical counts
-        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-        var historicalCounts = globalSettings.historicalCounts || {};
-        if (historicalCounts[bunkName] && historicalCounts[bunkName][activityName] > 0) {
+
+        // Check counts (getActivityCount is case-insensitive and includes
+        // manualUsageOffsets — wider than the exact-key check above)
+        if (RotationEngine.getActivityCount(bunkName, activityName) > 0) {
             return 14; // Assume 2 weeks if count exists but no timestamp
         }
-        
+
         return null; // Never done
     };
 
@@ -846,7 +849,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
     if (deviation <= -3) return CONFIG.UNDER_UTILIZED_BONUS;
     if (deviation <= -1) return CONFIG.SLIGHTLY_UNDER_BONUS;
-    if (deviation === 0) return 0;
+    // ★ FLOAT-GAP FIX (2026-07-08 brain trace): deviation is a float (count −
+    //   mean). The old `=== 0` check only caught exact zero, so a NEVER-DONE
+    //   activity on a bunk whose average was fractional (e.g. count 0, avg 0.3
+    //   → deviation −0.3) fell through to the `<= 1` branch and ate the +1500
+    //   "slightly above average" PENALTY. Observed live: every zero-count
+    //   activity in a sparse-history camp scored +1500 — an anti-rotation
+    //   signal punishing exactly the activities the bunk needed most. Anything
+    //   at or below the average is now neutral; only genuinely-above pays.
+    if (deviation <= 0) return 0;
     if (deviation <= 1) return CONFIG.SLIGHTLY_ABOVE_PENALTY;
     if (deviation <= 2) return CONFIG.ABOVE_AVERAGE_PENALTY;
 

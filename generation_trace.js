@@ -48,6 +48,63 @@
 
     function now() { return Date.now(); }
 
+    // Census of every rotation-memory store the engine scores from — answers
+    // "which memory is empty?" without needing device access. Sizes only, no
+    // schedule content.
+    function collectDataHealth() {
+        const h = {};
+        try {
+            const daily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
+            const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+            const dates = Object.keys(daily).filter(function (d) { return dateRe.test(d); }).sort();
+            h.localDates = dates;
+            h.localDayBunkCounts = {};
+            dates.forEach(function (d) {
+                const sa = daily[d] && daily[d].scheduleAssignments;
+                h.localDayBunkCounts[d] = sa ? Object.keys(sa).length : 0;
+            });
+        } catch (e) { h.localDates = 'error: ' + e.message; }
+        try {
+            const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+            const hc = gs.historicalCounts || {};
+            let recs = 0, total = 0;
+            Object.keys(hc).forEach(function (b) {
+                const acts = hc[b] || {};
+                Object.keys(acts).forEach(function (a) { recs++; total += (acts[a] || 0); });
+            });
+            h.historicalCounts = { bunks: Object.keys(hc).length, records: recs, totalCount: total };
+            const mo = gs.manualUsageOffsets || {};
+            let mrecs = 0;
+            Object.keys(mo).forEach(function (b) { mrecs += Object.keys(mo[b] || {}).length; });
+            h.manualUsageOffsets = { bunks: Object.keys(mo).length, records: mrecs };
+        } catch (e) { h.historicalCounts = 'error: ' + e.message; }
+        try {
+            const rh = (window.loadRotationHistory && window.loadRotationHistory()) || {};
+            const rb = rh.bunks || {};
+            let trecs = 0;
+            Object.keys(rb).forEach(function (b) { trecs += Object.keys(rb[b] || {}).length; });
+            h.rotationTimestamps = { bunks: Object.keys(rb).length, records: trecs };
+        } catch (e) { h.rotationTimestamps = 'error: ' + e.message; }
+        try {
+            const cloud = (window.RotationCloud && window.RotationCloud.getCachedData && window.RotationCloud.getCachedData()) || null;
+            if (cloud) {
+                const cc = cloud.counts || {};
+                let crecs = 0, ctotal = 0;
+                Object.keys(cc).forEach(function (b) {
+                    const acts = cc[b] || {};
+                    Object.keys(acts).forEach(function (a) { crecs++; ctotal += (acts[a] || 0); });
+                });
+                h.cloudCounts = {
+                    bunks: Object.keys(cc).length, records: crecs, totalCount: ctotal,
+                    dates: Object.keys(cloud.countsByDate || {}).sort()
+                };
+            } else {
+                h.cloudCounts = null; // not loaded (yet)
+            }
+        } catch (e) { h.cloudCounts = 'error: ' + e.message; }
+        return h;
+    }
+
     // ------------------------------------------------------------------ begin
     GenTrace.begin = function (meta) {
         if (!GenTrace.enabled) return;
@@ -57,7 +114,8 @@
             meta: Object.assign({
                 startedAt: new Date().toISOString(),
                 date: (typeof window !== 'undefined' && window.currentScheduleDate) || null,
-                url: (typeof location !== 'undefined' && location.pathname) || null
+                url: (typeof location !== 'undefined' && location.pathname) || null,
+                dataHealthAtStart: collectDataHealth()
             }, meta || {}),
             _t0: now(),
             result: null,
@@ -79,6 +137,9 @@
             endedAt: new Date().toISOString(),
             durationMs: now() - tr._t0
         }, result || {});
+        // Post-run census — by now the preamble has loaded RotationCloud, so
+        // cloudCounts is populated here even when it was null at start.
+        tr.dataHealthAtEnd = collectDataHealth();
         // Snapshot what was ACTUALLY written — the ground truth to compare the
         // scores/decisions against. Compact: one entry per lead slot.
         try {

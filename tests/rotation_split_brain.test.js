@@ -100,6 +100,46 @@ describe('split-brain guard — recency vs count store', () => {
     });
 });
 
+describe('frequency float-gap fix — zero-count activities are not penalized', () => {
+    it('deviation in (-1, 0) scores 0, not the slightly-above penalty', () => {
+        // Bunk 1 did Soccer once; Basketball/Hockey never. avg = 1/3 ≈ 0.33.
+        // Basketball deviation = 0 − 0.33 = −0.33 → must be neutral (0), not +1500.
+        const sb = setup({ 'Bunk 1': { Soccer: 1 } });
+        const RE = sb.window.RotationEngine;
+        const all = ['Soccer', 'Basketball', 'Hockey'];
+        const fBasketball = RE.calculateFrequencyScore('Bunk 1', 'Basketball', all);
+        assert.equal(fBasketball, 0,
+            'never-done activity on a fractional-average bunk must be neutral, got ' + fBasketball);
+    });
+
+    it('genuinely above-average activities still pay the penalty', () => {
+        // Soccer:2, others 0 → avg 2/3. Soccer deviation = 2 − 0.67 = 1.33 → above bands.
+        // absoluteGap = 2 − 0 = 2 → hard escalation branch fires (count 2 vs min 0).
+        const sb = setup({ 'Bunk 1': { Soccer: 2 } });
+        const RE = sb.window.RotationEngine;
+        const f = RE.calculateFrequencyScore('Bunk 1', 'Soccer', ['Soccer', 'Basketball', 'Hockey']);
+        assert.ok(f >= RE.CONFIG.SLIGHTLY_ABOVE_PENALTY,
+            'over-played activity must still be penalized, got ' + f);
+    });
+});
+
+describe('getDaysSinceActivity — resilient fallback chain', () => {
+    it('does not trust a null from SchedulerCoreUtils when counts exist elsewhere', () => {
+        const sb = setup({});
+        const win = sb.window;
+        // Utils present but blind (returns null); counts live in manualUsageOffsets
+        win.SchedulerCoreUtils = { getDaysSinceActivity: () => null };
+        win.loadGlobalSettings = () => ({
+            app1: { fields: [{ name: 'Field A', activities: ['Soccer'] }], specialActivities: [] },
+            historicalCounts: {},
+            manualUsageOffsets: { 'Bunk 1': { Soccer: 2 } }
+        });
+        const RE = win.RotationEngine;
+        const days = RE.getDaysSinceActivity('Bunk 1', 'Soccer', 0);
+        assert.equal(days, 14, 'offset-only counts must map to the 14-day assumption, got ' + days);
+    });
+});
+
 describe('reoverlayCloudCache — cloud overlay survives a cache wipe', () => {
     it('re-merges RotationCloud cached data after clearHistoryCache', () => {
         const sb = setup({});
