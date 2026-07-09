@@ -79,6 +79,24 @@
             endedAt: new Date().toISOString(),
             durationMs: now() - tr._t0
         }, result || {});
+        // Snapshot what was ACTUALLY written — the ground truth to compare the
+        // scores/decisions against. Compact: one entry per lead slot.
+        try {
+            const sa = (typeof window !== 'undefined' && window.scheduleAssignments) || null;
+            if (sa) {
+                const snap = {};
+                Object.keys(sa).forEach(function (b) {
+                    const arr = sa[b];
+                    if (!Array.isArray(arr)) return;
+                    snap[b] = arr.map(function (e) {
+                        if (!e) return null;
+                        if (e.continuation) return 'cont';
+                        return { a: e._activity || e.sport || e.field || null, f: e.field || null, s: e._startMin, e: e._endMin };
+                    });
+                });
+                tr.finalSchedule = snap;
+            }
+        } catch (e) { /* snapshot is best-effort */ }
         tr.counts = {
             events: tr.events.length,
             scores: tr._scoreCount,

@@ -3038,6 +3038,11 @@
 
             if (window.RotationEngine?.clearHistoryCache) {
                 window.RotationEngine.clearHistoryCache();
+                // ★ Restore the cloud rotation overlay the clear just wiped —
+                //   if a hydrate lands mid-generation, recency scoring must not
+                //   silently fall back to local-only history (see
+                //   RotationEngine.reoverlayCloudCache).
+                if (window.RotationEngine.reoverlayCloudCache) window.RotationEngine.reoverlayCloudCache();
                 console.log('📊 [Hydrate] Cleared rotation cache for fresh history');
             }
 

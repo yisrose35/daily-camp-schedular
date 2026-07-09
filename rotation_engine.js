@@ -333,6 +333,36 @@ RotationEngine.invalidateBunkTodayCache = function(bunkName) {
     }
 };
 
+    /**
+     * ★ Re-apply the cloud rotation overlay after a cache wipe.
+     *
+     * The generation preamble (scheduler_core_main.js / scheduler_core_auto.js)
+     * loads RotationCloud and merges counts+lastDone into the history cache via
+     * mergeCloudData — that is what makes recency scoring work on devices whose
+     * localStorage allDailyData is incomplete. Any clearHistoryCache() call
+     * AFTER that merge (e.g. TotalSolver.solveSchedule's fresh-start clear)
+     * silently destroys the overlay, and every activity the local scan can't
+     * see scores as "never done" (-5000) — observed live 2026-07-08: 259/400
+     * scored pairs claimed never-done while the count store had them done.
+     * This helper re-merges from RotationCloud's in-memory cache (sync, no
+     * network). Call it immediately after any mid-pipeline cache clear.
+     *
+     * @returns {boolean} true if cached cloud data existed and was merged
+     */
+    RotationEngine.reoverlayCloudCache = function() {
+        try {
+            var data = window.RotationCloud && window.RotationCloud.getCachedData
+                ? window.RotationCloud.getCachedData() : null;
+            if (data && (data.counts || data.lastDone)) {
+                RotationEngine.mergeCloudData(data);
+                return true;
+            }
+        } catch (e) {
+            console.warn('[RotationEngine] reoverlayCloudCache failed:', e);
+        }
+        return false;
+    };
+
     // ★★★ EXPOSE buildBunkActivityHistory on RotationEngine object ★★★
     RotationEngine.buildBunkActivityHistory = buildBunkActivityHistory;
 
@@ -678,7 +708,19 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var actHistory = history.byActivity[actLower];
 
         // Never done at all - HUGE bonus! (no recency conflict possible)
+        // ★ SPLIT-BRAIN GUARD: "absent from the history scan" is NOT proof of
+        //   "never done" — the scan only sees local allDailyData (+ whatever
+        //   cloud overlay survived), while the count store (historicalCounts /
+        //   rotation_counts) is cumulative. Live trace 2026-07-08: 65% of scored
+        //   pairs got this -5000 bonus while their own frequency component
+        //   proved count > 0 — recency was rewarding activities done days ago.
+        //   Before granting the novelty bonus, check the count store; if it says
+        //   the bunk HAS done this, score recency via the fallback chain
+        //   (rotation timestamps → counts ⇒ assume 14d) instead.
         if (!actHistory || actHistory.count === 0) {
+            if (RotationEngine.getActivityCount(bunkName, activityName) > 0) {
+                return RotationEngine.calculateRecencyScoreFallback(bunkName, activityName, beforeSlotIndex);
+            }
             return CONFIG.NEVER_DONE_BONUS;
         }
         
@@ -940,7 +982,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var coverageRatio = triedActivities / allActivities.length;
 
         // Has this bunk ever tried this activity? (keys are normalized)
-        var hasTriedThis = history.byActivity[actLower] && history.byActivity[actLower].count > 0;
+        // ★ SPLIT-BRAIN GUARD (same as calculateRecencyScore): the history scan
+        //   missing an activity is not proof it was never tried — consult the
+        //   cumulative count store before granting the missing-activity bonus.
+        var hasTriedThis = (history.byActivity[actLower] && history.byActivity[actLower].count > 0)
+            || RotationEngine.getActivityCount(bunkName, activityName) > 0;
 
         if (!hasTriedThis) {
             var needRatio = 1 - coverageRatio;
@@ -1629,6 +1675,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
         if (merged > 0) {
             console.log('[RotationEngine] Merged ' + merged + ' cloud-only activity records into history cache');
+        }
+        // ★ GenTrace: make the overlay visible in the brain trace so a future
+        //   trace proves whether recency scoring had cloud history available.
+        if (window.GenTrace && window.GenTrace.active) {
+            window.GenTrace.event('rotation', 'cloud rotation overlay merged into history cache', { bunks: allBunks.size, newRecords: merged });
         }
     };
 

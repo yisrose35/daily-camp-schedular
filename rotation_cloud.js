@@ -490,6 +490,14 @@
         return (_cache && _cache.countsByDate) ? _cache.countsByDate : null;
     }
 
+    // ★ Synchronous read of the WHOLE cached payload ({counts, lastDone,
+    //   countsByDate}) for RotationEngine.reoverlayCloudCache — lets a solver
+    //   that just wiped the rotation history cache re-apply the cloud overlay
+    //   without an async load. Returns null if nothing is cached.
+    function getCachedData() {
+        return _cache || null;
+    }
+
     // =====================================================================
     // EXPOSE
     // =====================================================================
@@ -503,7 +511,8 @@
         clearAll: clearAllRotationCounts,
         clearForBunks: clearForBunks,
         invalidateCache: invalidateCache,
-        getCachedCountsByDate: getCachedCountsByDate // ★ CB-66: sync per-date counts for period-cap enforcement
+        getCachedCountsByDate: getCachedCountsByDate, // ★ CB-66: sync per-date counts for period-cap enforcement
+        getCachedData: getCachedData // ★ sync full payload for RotationEngine.reoverlayCloudCache
     };
 
     console.log('[RotationCloud] Module ready');
