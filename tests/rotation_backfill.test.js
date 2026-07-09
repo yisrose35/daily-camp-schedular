@@ -157,4 +157,61 @@ describe('backfillRotationMemory', () => {
         assert.match(report.dates['2026-06-23'], /NEEDS HEAL/);
         assert.notEqual(sb.window.__rebuilt, true, 'no rebuild in dry run');
     });
+
+    it('pastOnly skips today and future dates (never touches a day being built)', async () => {
+        const allDaily = {
+            '2026-06-23': day(['Basketball']),  // past → heal
+            '2099-01-01': day(['Soccer'])       // future → must be ignored
+        };
+        const sb = setup(allDaily, {});
+        const report = await sb.window.backfillRotationMemory({ pastOnly: true });
+        assert.deepEqual(norm(sb.window.__savedDates), ['2026-06-23']);
+        assert.equal(report.dates['2099-01-01'], undefined, 'future date must not be reconciled');
+    });
+});
+
+describe('autoReconcileRotationMemory — no-console daily self-heal', () => {
+    function withApp(sb, ready) {
+        sb.window.CampistryDB = ready
+            ? { getClient: () => ({}), getCampId: () => 'camp-1' }
+            : { getClient: () => null, getCampId: () => null };
+        const store = {};
+        sb.localStorage = sb.window.localStorage = {
+            getItem: (k) => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = String(v); },
+            _store: store
+        };
+        // vm sandbox needs localStorage as a global too (module references it bare)
+        sb.global.localStorage = sb.localStorage;
+        return store;
+    }
+
+    it('returns null when the app is not ready (logged out / booting)', async () => {
+        const sb = setup({ '2026-06-23': { scheduleAssignments: { 'Bunk 1': [entry('Basketball')] } } }, {});
+        withApp(sb, false);
+        const rep = await sb.window.autoReconcileRotationMemory();
+        assert.equal(rep, null);
+        assert.deepEqual(norm(sb.window.__savedDates), [], 'no writes when not ready');
+    });
+
+    it('runs pastOnly once per day, then throttles', async () => {
+        const sb = setup({ '2026-06-23': { scheduleAssignments: { 'Bunk 1': [entry('Basketball')] } } }, {});
+        const store = withApp(sb, true);
+        const rep1 = await sb.window.autoReconcileRotationMemory();
+        assert.ok(rep1, 'first run executes');
+        assert.deepEqual(norm(rep1.healed), ['2026-06-23']);
+        assert.ok(store['campistry_rotation_reconcile_last'], 'throttle stamp written');
+        const rep2 = await sb.window.autoReconcileRotationMemory();
+        assert.equal(rep2, null, 'second run same day is throttled');
+        const rep3 = await sb.window.autoReconcileRotationMemory(true);
+        assert.ok(rep3, 'force bypasses the throttle');
+    });
+
+    it('never runs while a generation is in progress', async () => {
+        const sb = setup({ '2026-06-23': { scheduleAssignments: { 'Bunk 1': [entry('Basketball')] } } }, {});
+        withApp(sb, true);
+        sb.window._generationInProgress = true;
+        assert.equal(await sb.window.autoReconcileRotationMemory(), null);
+        assert.deepEqual(norm(sb.window.__savedDates), []);
+    });
 });

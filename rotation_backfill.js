@@ -46,13 +46,25 @@
         return true;
     }
 
+    // Local-timezone YYYY-MM-DD (toISOString would roll to the next day in
+    // the evening for US camps — wrong boundary for "past dates").
+    function localToday() {
+        var d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
     window.backfillRotationMemory = async function (opts) {
         opts = opts || {};
         var dryRun = !!opts.dryRun;
+        // pastOnly: only reconcile dates strictly BEFORE today (local). Used by
+        // the automatic run so it never touches a day that is actively being
+        // generated or edited (today / tomorrow-being-built-tonight).
+        var pastOnly = !!opts.pastOnly;
+        var silent = !!opts.silent;
         var report = { hydrated: false, dates: {}, healed: [], skippedDegraded: [], ok: [], errors: [] };
         var t0 = Date.now();
 
-        console.log('%c🔧 [Backfill] Rotation memory reconcile ' + (dryRun ? '(DRY RUN — no writes)' : '(live)') + ' starting…', 'color:#f59e0b;font-weight:bold;');
+        console.log('%c🔧 [Backfill] Rotation memory reconcile ' + (dryRun ? '(DRY RUN — no writes)' : '(live)') + (pastOnly ? ' [past dates only]' : '') + ' starting…', 'color:#f59e0b;font-weight:bold;');
 
         if (!window.RotationCloud || !window.RotationCloud.load || !window.RotationCloud.deriveCounts) {
             console.error('[Backfill] RotationCloud not available — open this from flow.html after login.');
@@ -76,6 +88,10 @@
         var allDaily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
         var dateRe = /^\d{4}-\d{2}-\d{2}$/;
         var dates = Object.keys(allDaily).filter(function (d) { return dateRe.test(d); }).sort();
+        if (pastOnly) {
+            var _cut = localToday();
+            dates = dates.filter(function (d) { return d < _cut; });
+        }
         if (dates.length === 0) {
             console.error('[Backfill] No local day-data found even after hydrate — nothing to reconcile.');
             return report;
@@ -106,7 +122,9 @@
                 toHeal.push(dateKey);
             }
             report.dates[dateKey] = status;
-            console.log('[Backfill] ' + dateKey + ': ' + status);
+            if (!silent || status.indexOf('NEEDS HEAL') === 0 || status.indexOf('SKIP') === 0) {
+                console.log('[Backfill] ' + dateKey + ': ' + status);
+            }
         });
 
         // ---- 3. Heal divergent/missing dates (sequential, idempotent)
@@ -157,5 +175,52 @@
         return report;
     };
 
-    console.log('[RotationBackfill] Ready — run backfillRotationMemory() (or {dryRun:true}) in the console');
+    // =====================================================================
+    // ★ AUTOMATIC RECONCILE — no console needed.
+    // Once per day per device (localStorage throttle), shortly after the app
+    // boots, verify past dates' rotation_counts against the saved schedules
+    // and silently heal any drift. Guards:
+    //   • kill switch: window.__autoRotationReconcile = false
+    //   • waits for Supabase client + camp id (retries a few times, then
+    //     gives up until next page load)
+    //   • never runs while a generation is in progress or a trace is active
+    //   • pastOnly — never touches today / a day being built tonight
+    // =====================================================================
+    var AUTO_KEY = 'campistry_rotation_reconcile_last';
+    var _autoAttempts = 0;
+
+    window.autoReconcileRotationMemory = async function (force) {
+        if (window.__autoRotationReconcile === false) return null;
+        if (window._generationInProgress || (window.GenTrace && window.GenTrace.active)) return null;
+        if (!window.CampistryDB || !window.CampistryDB.getClient || !window.CampistryDB.getClient()
+            || !window.CampistryDB.getCampId || !window.CampistryDB.getCampId()) {
+            return null; // app not ready (logged out / booting)
+        }
+        if (!force) {
+            try {
+                if (localStorage.getItem(AUTO_KEY) === localToday()) return null; // already ran today
+            } catch (e) { /* no localStorage — run anyway */ }
+        }
+        var rep = await window.backfillRotationMemory({ pastOnly: true, silent: true });
+        try { localStorage.setItem(AUTO_KEY, localToday()); } catch (e) {}
+        if (rep && rep.healed && rep.healed.length) {
+            console.log('%c[Backfill] Auto-reconcile repaired rotation memory for: ' + rep.healed.join(', '), 'color:#10b981;font-weight:bold;');
+        }
+        return rep;
+    };
+
+    function _armAutoReconcile() {
+        _autoAttempts++;
+        window.autoReconcileRotationMemory().then(function (rep) {
+            // null with attempts left = app not ready yet — retry in 60s
+            if (rep === null && _autoAttempts < 5) setTimeout(_armAutoReconcile, 60000);
+        }).catch(function () { /* never block boot on reconcile */ });
+    }
+    // Browser only (document guard keeps node test runs timer-free); wait 25s
+    // past load so login, cloud sync, and first render settle first.
+    if (typeof document !== 'undefined') {
+        setTimeout(_armAutoReconcile, 25000);
+    }
+
+    console.log('[RotationBackfill] Ready — auto-verifies daily; manual: backfillRotationMemory() or the 🔧 Verify Memory button in Reports');
 })();
