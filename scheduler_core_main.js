@@ -4260,6 +4260,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
+            // ★ GenTrace: bunk overrides bypass the solver (user's explicit choice),
+            //   so without this record the trace shows their placements with no
+            //   explaining decision. Recorded at resolution; the finalSchedule
+            //   snapshot's o:'override' flag marks the surviving entry.
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'override-fill', bunk: bunk, division: divName || undefined,
+                    window: startMin + '-' + endMin,
+                    chosen: { name: activityName, type: overrideType || 'sport' }
+                });
+            }
 
             if (overrideType === 'trip') {
                 slots.forEach((slotIndex, i) => {

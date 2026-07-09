@@ -188,3 +188,47 @@ describe('generation_trace — rotation engine instrumentation', () => {
         assert.equal(ev[1].lv, 'warn');
     });
 });
+
+describe('generation_trace — finalSchedule origin flags', () => {
+    // Live case 2026-07-09: bunk לב's daily Basketball was a user bunk-override
+    // preserved through the pre-gen wipe. Nothing placed it during generation,
+    // so no decision explained it and the trace read as a rotation leak. The
+    // snapshot now tags each entry's origin so preserved/pinned/league content
+    // is self-explanatory.
+    it('tags override / league / pinned / autoFill entries; plain fills untagged', () => {
+        const sb = setup();
+        const win = sb.window;
+        win.scheduleAssignments = {
+            'לב': [
+                { _activity: 'Basketball', field: 'Abbl Arena', _startMin: 805, _endMin: 870, _fixed: true, _bunkOverride: true },
+                { _activity: 'League: ABBL', field: 'League: ABBL', _h2h: true, _leagueName: 'ABBL', _startMin: 890, _endMin: 970 },
+                { _activity: 'Swim', field: 'Swim', _pinned: true, _fixed: true, _startMin: 930, _endMin: 1110 },
+                { _activity: 'Baseball', field: 'Strike Zone', _autoFilled: true, _fixed: true, _startMin: 740, _endMin: 805 },
+                { _activity: 'Soccer', field: 'Soccer Field', _startMin: 600, _endMin: 660 },
+                { _activity: 'Soccer', field: 'Soccer Field', continuation: true },
+                null
+            ]
+        };
+        win.GenTrace.begin({ entry: 'test' });
+        win.GenTrace.end({ success: true });
+        const snap = win.GenTrace.traces[0].finalSchedule['לב'];
+        assert.equal(snap[0].o, 'override', 'bunk-override entry tagged');
+        assert.equal(snap[1].o, 'league', 'league entry tagged');
+        assert.equal(snap[2].o, 'pinned', 'pinned entry tagged');
+        assert.equal(snap[3].o, 'autoFill', 'silent fallback fill tagged');
+        assert.equal(snap[4].o, undefined, 'plain solver fill carries no tag');
+        assert.equal(snap[5], 'cont', 'continuations unchanged');
+        assert.equal(snap[6], null, 'null slots unchanged');
+    });
+
+    it('override outranks league flags on the same entry', () => {
+        const sb = setup();
+        const win = sb.window;
+        win.scheduleAssignments = {
+            'Bunk 1': [{ _activity: 'Hockey', field: 'Rink', _bunkOverride: true, _h2h: true, _startMin: 0, _endMin: 40 }]
+        };
+        win.GenTrace.begin({ entry: 'test' });
+        win.GenTrace.end({ success: true });
+        assert.equal(win.GenTrace.traces[0].finalSchedule['Bunk 1'][0].o, 'override');
+    });
+});

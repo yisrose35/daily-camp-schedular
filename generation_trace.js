@@ -152,7 +152,25 @@
                     snap[b] = arr.map(function (e) {
                         if (!e) return null;
                         if (e.continuation) return 'cont';
-                        return { a: e._activity || e.sport || e.field || null, f: e.field || null, s: e._startMin, e: e._endMin };
+                        const row = { a: e._activity || e.sport || e.field || null, f: e.field || null, s: e._startMin, e: e._endMin };
+                        // ★ Origin flag — entries the GENERATOR didn't place carry no
+                        //   decision record, so without this the trace can't explain
+                        //   them (live case 2026-07-09: bunk לב's daily 805-870
+                        //   Basketball was a user bunk-override preserved through the
+                        //   pre-gen wipe; the trace showed an activity no decision
+                        //   explained and it read as a rotation leak). One short tag
+                        //   makes preserved/pinned/league content self-explanatory.
+                        const o = e._bunkOverride ? 'override'
+                            : e._postEdit ? 'postEdit'
+                            : e._isTrip ? 'trip'
+                            : e._pinned ? 'pinned'
+                            : (e._h2h || e._leagueName || e._isSpecialtyLeague || e._league) ? 'league'
+                            : e._isTransition ? 'transition'
+                            : e._autoFilled ? 'autoFill'
+                            : e._freeFilled ? 'freeFill'
+                            : null;
+                        if (o) row.o = o;
+                        return row;
                     });
                 });
                 tr.finalSchedule = snap;
