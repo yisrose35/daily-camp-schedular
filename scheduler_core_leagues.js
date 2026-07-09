@@ -2289,6 +2289,48 @@
                 blocksByTime[key].allBlocks.push(block);
             });
 
+        // ★ SPANNED TILE = ONE GAME: a league tile spread across grade columns is
+        // stored as one skeleton event per grade, linked by a shared spanGroup.
+        // The members normally share a start time (same bucket → same matchups),
+        // but if their times drift apart each lands in its own bucket and gets an
+        // independent matchup computation + its own game number — two different
+        // results for what the user drew as a single game. Re-bucket every league
+        // block sharing a spanGroup into the group's earliest time so one period
+        // covers them all; _spanTimeKey lets the writeback guards below match the
+        // moved blocks back to the merged period.
+        (function () {
+            const byGroup = {};
+            Object.keys(blocksByTime).forEach(key => {
+                blocksByTime[key].allBlocks.forEach(b => {
+                    if (!b.spanGroup) return;
+                    (byGroup[b.spanGroup] = byGroup[b.spanGroup] || []).push({ key, block: b });
+                });
+            });
+            Object.entries(byGroup).forEach(([groupId, entries]) => {
+                const keys = [...new Set(entries.map(e => String(e.key)))];
+                if (keys.length < 2) return;
+                const allNumeric = keys.every(k => !isNaN(Number(k)));
+                const canonical = allNumeric
+                    ? String(Math.min(...keys.map(Number)))
+                    : keys[0];
+                console.log(`[RegularLeagues] ★ Span group ${groupId}: merging times [${keys.join(', ')}] → ${canonical} (one tile = one game)`);
+                entries.forEach(({ key, block }) => {
+                    if (String(key) === canonical) return;
+                    const old = blocksByTime[key];
+                    old.allBlocks = old.allBlocks.filter(b => b !== block);
+                    const divRest = (old.byDivision[block.divName] || []).filter(b => b !== block);
+                    if (divRest.length) old.byDivision[block.divName] = divRest;
+                    else delete old.byDivision[block.divName];
+                    if (old.allBlocks.length === 0) delete blocksByTime[key];
+                    if (!blocksByTime[canonical]) blocksByTime[canonical] = { byDivision: {}, allBlocks: [] };
+                    if (!blocksByTime[canonical].byDivision[block.divName]) blocksByTime[canonical].byDivision[block.divName] = [];
+                    blocksByTime[canonical].byDivision[block.divName].push(block);
+                    blocksByTime[canonical].allBlocks.push(block);
+                    block._spanTimeKey = canonical;
+                });
+            });
+        })();
+
         // Sort time slots to ensure consistent ordering
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
@@ -2919,7 +2961,8 @@
                             const blocksForDiv = timeData.byDivision[divName];
                             if (!blocksForDiv) return;
                             blocksForDiv.filter(b => !b.leagueName || b.leagueName === league.name).forEach(block => {
-                                const _bk = (typeof block.startTime === 'number')
+                                const _bk = (block._spanTimeKey != null) ? block._spanTimeKey
+                                    : (typeof block.startTime === 'number')
                                     ? block.startTime
                                     : (_UtilsCh?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
                                 if (Number(_bk) !== Number(timeKey)) return;
@@ -2974,7 +3017,8 @@
                     (timeData.byDivision[divName] || []).forEach(function (b) {
                         if (!b || b._isAway !== true || !b._awayZone) return;
                         if (b.leagueName && b.leagueName !== league.name) return;
-                        var _bk = (typeof b.startTime === 'number')
+                        var _bk = (b._spanTimeKey != null) ? b._spanTimeKey
+                            : (typeof b.startTime === 'number')
                             ? b.startTime
                             : (window.SchedulerCoreUtils?.parseTimeToMinutes?.(b.startTime) ?? b.startTime);
                         if (Number(_bk) !== Number(timeKey)) return;
@@ -2994,7 +3038,8 @@
                 Object.keys(timeData.byDivision || {}).forEach(function (divName) {
                     (timeData.byDivision[divName] || []).forEach(function (b) {
                         if (!b || b._isAway !== true || !b._awayZone) return;
-                        var _bk = (typeof b.startTime === 'number')
+                        var _bk = (b._spanTimeKey != null) ? b._spanTimeKey
+                            : (typeof b.startTime === 'number')
                             ? b.startTime
                             : (window.SchedulerCoreUtils?.parseTimeToMinutes?.(b.startTime) ?? b.startTime);
                         if (Number(_bk) !== Number(timeKey)) return;
@@ -3215,7 +3260,8 @@
                         if (!blocksForDiv) return;
                         blocksForDiv.forEach(function (block) {
                             const _Utils = window.SchedulerCoreUtils;
-                            const _blockKey = (typeof block.startTime === 'number')
+                            const _blockKey = (block._spanTimeKey != null) ? block._spanTimeKey
+                                : (typeof block.startTime === 'number')
                                 ? block.startTime
                                 : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
                             if (Number(_blockKey) !== Number(timeKey)) return;
@@ -3465,7 +3511,10 @@ window._debugLeagueTimeData = timeData;
         // never reached fillBlock, leagueAssignments stayed empty, and the renderer
         // fell back to generic "1 vs 2, 3 vs 4" pairings.
         const _Utils = window.SchedulerCoreUtils;
-        const _blockKey = (typeof block.startTime === 'number')
+        // ★ Span-merged blocks were re-bucketed to the group's earliest time;
+        //   match them on the merged key, not their own start time.
+        const _blockKey = (block._spanTimeKey != null) ? block._spanTimeKey
+            : (typeof block.startTime === 'number')
             ? block.startTime
             : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
         if (Number(_blockKey) !== Number(timeKey)) return;

@@ -113,6 +113,17 @@ describe('detectLeagueTileTimeMismatch', () => {
         assert.match(warnings[0], /Junior League/);
     });
 
+    it('span-linked tiles with drifted times are NOT a mismatch (engine merges them into one game)', () => {
+        global.leaguesByName = {
+            'Junior League': { name: 'Junior League', enabled: true, divisions: ['4th Grade', '5th Grade'] }
+        };
+        const a = tile('4th Grade', 'league', 'Junior League', '1:25pm', '2:30pm');
+        const b = tile('5th Grade', 'league', 'Junior League', '1:30pm', '2:30pm');
+        a.spanGroup = 'sg1'; b.spanGroup = 'sg1';
+        a.spanDivisions = b.spanDivisions = ['4th Grade', '5th Grade'];
+        assert.deepEqual(detect([a, b]), []);
+    });
+
     it("REGRESSION: a grade's second game in a DIFFERENT regular league is not a mismatch", () => {
         global.leaguesByName = {
             'Junior League': { name: 'Junior League', enabled: true, divisions: ['4th Grade', '5th Grade'] },

@@ -168,6 +168,75 @@ describe('commitSpanResize — drag right to cover a neighbor grade', () => {
 });
 
 // =====================================================================
+describe('league remap on span/copy — shared league stays shared', () => {
+    const restore = global.loadGlobalSettings;
+
+    it('keeps the shared league when the new grade also plays in it (multi-league grade)', () => {
+        // 5th Grade plays in TWO leagues; its "first" league is NOT the shared
+        // one. Spanning a Junior League tile from 4th into 5th must keep
+        // Junior League — remapping to 5th's first league would split one
+        // spanned game into two different leagues with different matchups.
+        global.loadGlobalSettings = () => ({
+            leaguesByName: {
+                'Fifth Grade League': { enabled: true, divisions: ['5th Grade'] },
+                'Junior League': { enabled: true, divisions: ['4th Grade', '5th Grade', '6th Grade'] }
+            }
+        });
+        try {
+            const src = leagueTile('4th Grade');
+            MSI.setSkeleton([src]);
+            MSI.commitSpanResize(src, ['4th Grade', '5th Grade']);
+
+            const fifth = MSI.dailySkeleton.find(e => e.division === '5th Grade');
+            assert.equal(fifth.leagueName, 'Junior League', 'shared league kept on the mirror');
+        } finally {
+            global.loadGlobalSettings = restore;
+        }
+    });
+
+    it('falls back to the new grade\'s own league when the tile\'s league does not cover it', () => {
+        global.loadGlobalSettings = () => ({
+            leaguesByName: {
+                'Third Grade League': { enabled: true, divisions: ['3rd Grade'] },
+                'Junior League': { enabled: true, divisions: ['4th Grade', '5th Grade', '6th Grade'] }
+            }
+        });
+        try {
+            const src = leagueTile('4th Grade');
+            MSI.setSkeleton([src]);
+            MSI.commitSpanResize(src, ['3rd Grade', '4th Grade']);
+
+            const third = MSI.dailySkeleton.find(e => e.division === '3rd Grade');
+            assert.equal(third.leagueName, 'Third Grade League', 'remapped to the grade\'s own league');
+        } finally {
+            global.loadGlobalSettings = restore;
+        }
+    });
+
+    it('specialty tiles remap against the specialty store, keeping a shared specialty league', () => {
+        global.loadGlobalSettings = () => ({
+            leaguesByName: {
+                'Fifth Grade League': { enabled: true, divisions: ['5th Grade'] }
+            },
+            specialtyLeagues: {
+                sl1: { name: 'Hockey Masters', enabled: true, divisions: ['4th Grade', '5th Grade'] }
+            }
+        });
+        try {
+            const ev = {
+                type: 'specialty_league', event: 'Hockey Masters',
+                leagueName: 'Hockey Masters', division: '4th Grade'
+            };
+            global._mbRemapLeagueForGrade(ev, '5th Grade');
+            assert.equal(ev.leagueName, 'Hockey Masters',
+                'specialty league covering the new grade is kept (not swapped for a regular league)');
+        } finally {
+            global.loadGlobalSettings = restore;
+        }
+    });
+});
+
+// =====================================================================
 describe('spanMembers', () => {
     it('returns just the event itself when there is no span', () => {
         const src = leagueTile('4th Grade');

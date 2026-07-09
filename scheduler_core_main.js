@@ -2821,17 +2821,31 @@
         // specialty tile whose event merely contains the word "league" (e.g.
         // "State Leagues") must not be pulled into the regular-league pool.
         const regTiles = [], specTiles = [];
+        // ★ Span-linked tiles (one tile spread across grade columns) are
+        // processed by the league engine as ONE game period anchored at the
+        // group's earliest time — normalize every member to that window so a
+        // member whose time drifted isn't flagged as a mismatch the engine
+        // already heals.
+        const spanCanon = {};
+        manualSkeleton.forEach(it => {
+            if (!it || !it.spanGroup) return;
+            const s = parse(it.startTime), e = parse(it.endTime);
+            if (s == null || e == null || e <= s) return;
+            const cur = spanCanon[it.spanGroup];
+            if (!cur || s < cur.startMin) spanCanon[it.spanGroup] = { startMin: s, endMin: e };
+        });
         manualSkeleton.forEach(it => {
             if (!it) return;
             const isSpec = it.type === 'specialty_league';
             const isReg = !isSpec && (it.type === 'league' ||
                 (typeof normalizeLeague === 'function' && normalizeLeague(it.event || '')));
             if (!isSpec && !isReg) return;
+            const canon = it.spanGroup ? spanCanon[it.spanGroup] : null;
             const t = {
                 div: String(it.division),
                 leagueName: it.leagueName || null,
-                startMin: parse(it.startTime),
-                endMin: parse(it.endTime)
+                startMin: canon ? canon.startMin : parse(it.startTime),
+                endMin: canon ? canon.endMin : parse(it.endTime)
             };
             if (t.startMin == null || t.endMin == null || t.endMin <= t.startMin) return;
             (isSpec ? specTiles : regTiles).push(t);
@@ -5376,6 +5390,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     bunks: bunkList,
                     type: 'league',
                     leagueName: item.leagueName || null,
+                    // ★ Multi-grade tile spanning: members of one spanned tile carry a
+                    //   shared spanGroup — the league engine uses it to process them as
+                    //   ONE game period (same matchups, same game number) even when the
+                    //   per-grade copies' times drift apart.
+                    spanGroup: item.spanGroup || null,
                     _doubleHeaderPairId: item._doubleHeaderPairId || null,
                     _isAway: item.isAway === true,
                     _awayZone: item.isAway === true ? (item.awayZone || null) : null,

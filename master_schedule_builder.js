@@ -92,7 +92,15 @@ try { window._mbLeaguesForGradeByType = _mbLeaguesForGradeByType; } catch (_) {}
 // leagueName + reverts event label so the schedule remains valid.
 function _mbRemapLeagueForGrade(ev, newGrade) {
   if (!ev || (ev.type !== 'league' && ev.type !== 'specialty_league')) return ev;
-  const newLeague = _mbFirstLeagueForGrade(newGrade);
+  // Leagues valid for the new grade, from the store matching the tile type
+  // (specialty tiles must check gs.specialtyLeagues, not leaguesByName).
+  const gradeLeagues = _mbLeaguesForGradeByType(newGrade, ev.type);
+  // If the tile's current league ALSO covers the new grade, keep it. A tile
+  // spanned/copied across two grades of one league is a single shared game —
+  // remapping to the grade's "first" league would split the span into two
+  // different leagues, giving each grade different matchups and game numbers.
+  if (ev.leagueName && gradeLeagues.includes(ev.leagueName)) return ev;
+  const newLeague = gradeLeagues[0] || null;
   if (newLeague) {
     if (ev.leagueName && ev.event === ev.leagueName) ev.event = newLeague;
     ev.leagueName = newLeague;
