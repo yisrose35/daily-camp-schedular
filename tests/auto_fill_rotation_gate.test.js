@@ -141,3 +141,104 @@ describe('fallback filler — back-to-back (yesterday) gate', () => {
         assert.equal(pick && pick.activity, 'Baseball', 'no recency API → old behavior');
     });
 });
+
+// ★ Last-resort fair-share relax (2026-07-08/09 live finding): bunk לב's WHOLE
+//   pool was fair-share-capped + cooldown-blocked, so the strict gates left the
+//   slot Free two days running. Policy: no-back-to-back > no-Free > fair-share
+//   bookkeeping — when the strict pass yields nothing, re-score once with
+//   __fairShareHardCap=false. Only fair-share blocks lift; same-day, yesterday,
+//   and every other hard cap still hold.
+//
+// Stub: fsBlocked activities return Infinity ONLY while __fairShareHardCap is on
+// (mirroring the real engine, whose fair-share block lives behind that switch);
+// hardBlocked activities return Infinity unconditionally (maxUsage/cooldown/etc.).
+function setupRelax({ fsBlocked = [], hardBlocked = [], recencyScores = null } = {}) {
+    const sb = makeSandbox();
+    const win = sb.window;
+    win.loadAllDailyData = () => ({});
+    win.loadRotationHistory = () => ({ bunks: {} });
+    win.scheduleAssignments = {};
+    win.activityProperties = {};
+    win.RotationEngine = {
+        CONFIG: { YESTERDAY_PENALTY: 50000 },
+        calculateRotationScore: ({ activityName }) => {
+            if (hardBlocked.includes(activityName)) return Infinity;
+            if (fsBlocked.includes(activityName) && win.__fairShareHardCap !== false) return Infinity;
+            return 0;
+        }
+    };
+    if (recencyScores) {
+        win.RotationEngine.calculateRecencyScore = (bunk, act) =>
+            (act in recencyScores ? recencyScores[act] : -5000);
+    }
+    loadInto('auto_fill_slot.js', sb);
+    return sb;
+}
+
+describe('fallback filler — last-resort fair-share relax', () => {
+    it('fills a slot whose pool is entirely fair-share-capped (instead of Free)', () => {
+        const sb = setupRelax({ fsBlocked: ['Basketball', 'Dodgeball'] });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball'), cand('Dodgeball')], '2026-07-09', 'לב', 1);
+        assert.ok(pick, 'relaxed pass must produce a pick');
+        assert.equal(pick._fairShareRelaxed, true, 'pick must be flagged as relaxed');
+        assert.notEqual(sb.window.__fairShareHardCap, false, 'cap switch must be restored after the pass');
+    });
+
+    it('does NOT relax when the strict pass already has a legal candidate', () => {
+        const sb = setupRelax({ fsBlocked: ['Basketball'] });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball'), cand('Hockey')], '2026-07-09', 'לב', 1);
+        assert.equal(pick.activity, 'Hockey', 'strict pick wins');
+        assert.ok(!pick._fairShareRelaxed, 'no relax flag on a strict pick');
+    });
+
+    it('relaxed pass still refuses a did-it-yesterday candidate', () => {
+        const sb = setupRelax({ fsBlocked: ['Basketball', 'Baseball'],
+                                recencyScores: { Baseball: 50000 } });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball'), cand('Baseball')], '2026-07-09', 'לב', 0);
+        assert.equal(pick && pick.activity, 'Basketball', 'yesterday candidate skipped even relaxed');
+    });
+
+    it('stays Free when the only relaxed candidate was done yesterday', () => {
+        const sb = setupRelax({ fsBlocked: ['Baseball'],
+                                recencyScores: { Baseball: 50000 } });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Baseball')], '2026-07-09', 'לב', 0);
+        assert.equal(pick, null, 'no-back-to-back outranks no-Free');
+    });
+
+    it('a non-fair-share hard block (maxUsage/cooldown) never relaxes', () => {
+        const sb = setupRelax({ hardBlocked: ['Basketball'] });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball')], '2026-07-09', 'לב', 1);
+        assert.equal(pick, null, 'unconditional engine block survives the relax pass');
+    });
+
+    it('relaxed pass still enforces the same-day duplicate block', () => {
+        const sb = setupRelax({ fsBlocked: ['Baseball'] });
+        sb.window.scheduleAssignments = { 'לב': [{ _activity: 'Baseball' }] };
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Baseball')], '2026-07-09', 'לב', 1);
+        assert.equal(pick, null, 'already doing it today → no relax fill');
+    });
+
+    it('kill switch __fallbackFairShareRelax=false keeps the strict Free behavior', () => {
+        const sb = setupRelax({ fsBlocked: ['Basketball'] });
+        sb.window.__fallbackFairShareRelax = false;
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball')], '2026-07-09', 'לב', 1);
+        assert.equal(pick, null, 'relax disabled → slot stays Free');
+    });
+
+    it('user-set global __fairShareHardCap=false is left untouched (no double toggle)', () => {
+        const sb = setupRelax({ fsBlocked: ['Basketball'] });
+        sb.window.__fairShareHardCap = false;   // user already disabled the cap globally
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball')], '2026-07-09', 'לב', 1);
+        assert.equal(pick && pick.activity, 'Basketball', 'strict pass already unblocked');
+        assert.ok(!pick._fairShareRelaxed, 'not a relax pick — cap was globally off');
+        assert.equal(sb.window.__fairShareHardCap, false, 'global switch preserved');
+    });
+});

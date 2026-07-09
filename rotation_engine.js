@@ -630,16 +630,30 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      *   the existing NEVER_DONE bonus. Returns null when fewer than 2 bunks have done
      *   it (no real distribution yet) or when disabled. Cached per generation.
      *   Kill switch: window.__fairShareHardCap = false.
+     *
+     * ★ Scope: when divisionName is given, the pool is ONLY that division's bunks.
+     *   Division-mates share a skeleton, so they have comparable opportunity counts —
+     *   the camp-wide pool compared apples to oranges: one light-skeleton bunk
+     *   anywhere holding count 1 pinned the floor at 1 for the WHOLE camp (observed
+     *   live 2026-07-08/09: every blocked activity had floor=1, capping all 19
+     *   Basketball doers at 3 and emptying one bunk's entire candidate pool → Free
+     *   slots). <2 doers within the division → null (no peer group, no cap).
+     *   Camp-wide pool only when the caller has no division (legacy callers).
+     *   Kill switch back to camp-wide: window.__fairShareDivisionScope = false.
      */
-    RotationEngine.getFairShareFloor = function(activityName) {
+    RotationEngine.getFairShareFloor = function(activityName, divisionName) {
         if (window.__fairShareHardCap === false) return null;
         var key = (activityName || '').toLowerCase().trim();
         if (!key) return null;
-        if (_fairShareFloorCache.has(key)) return _fairShareFloorCache.get(key);
         var divisions = window.divisions || {};
+        var scopeDiv = (window.__fairShareDivisionScope !== false &&
+                        divisionName != null && divisions[divisionName]) ? String(divisionName) : null;
+        var cacheKey = (scopeDiv || '*') + '||' + key;
+        if (_fairShareFloorCache.has(cacheKey)) return _fairShareFloorCache.get(cacheKey);
         var min = Infinity, doers = 0;
         for (var dn in divisions) {
             if (!Object.prototype.hasOwnProperty.call(divisions, dn)) continue;
+            if (scopeDiv && dn !== scopeDiv) continue;
             var dv = divisions[dn];
             var bunks = (dv && dv.bunks) || [];
             for (var i = 0; i < bunks.length; i++) {
@@ -648,7 +662,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             }
         }
         var floor = (doers >= 2 && min !== Infinity) ? min : null;
-        _fairShareFloorCache.set(key, floor);
+        _fairShareFloorCache.set(cacheKey, floor);
         return floor;
     };
 
@@ -1238,10 +1252,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   contention. Placed LAST so an explicit maxUsage/exactFrequency ceiling or
         //   a below-floor min-frequency pull always wins; this only governs activities
         //   no per-bunk limit rule already decided. Counts are from saved history
-        //   (stable within a gen). Trade-off: a capped bunk with no other feasible
-        //   option gets a Free slot. Kill switch: window.__fairShareHardCap = false;
+        //   (stable within a gen). Floor is division-scoped (see getFairShareFloor).
+        //   Trade-off: a capped bunk with no other feasible option gets a Free slot —
+        //   softened by the last-resort relax pass in auto_fill_slot.js scoreAndPick,
+        //   which may re-admit ONLY fair-share-capped candidates before leaving a
+        //   slot Free. Kill switch: window.__fairShareHardCap = false;
         //   gap override: window.__fairShareGap (default 2).
-        var _fsFloor = RotationEngine.getFairShareFloor(activityName);
+        var _fsFloor = RotationEngine.getFairShareFloor(activityName, divisionName);
         if (_fsFloor !== null) {
             var _fsGap = (typeof window.__fairShareGap === 'number' && window.__fairShareGap > 0) ? window.__fairShareGap : 2;
             var _fsMyCount = RotationEngine.getActivityCount(bunkName, activityName);

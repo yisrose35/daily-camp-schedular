@@ -520,7 +520,7 @@
     function scoreAndPick(bunk, candidates, today, divName, slotIdx) {
         const { countsByAct, lastDoneByAct, todayActs } = buildHistory(bunk, today);
 
-        const scored = candidates.map(c => {
+        const scorePass = () => candidates.map(c => {
             const act = c.activity;
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
@@ -530,10 +530,11 @@
             //   This filler's local scorer knows recency and per-period caps but
             //   NOT the engine's hard blocks — observed live 2026-07-09: bunk
             //   לב's leftover Free slot was filled with fair-share-BLOCKED
-            //   Basketball. Design intent (rotation_engine.js fair-share cap):
-            //   a capped bunk with no other feasible option stays Free rather
-            //   than lapping the field. Gate here so the last-resort fill obeys
-            //   the same rules as every other placement path.
+            //   Basketball. Gate here so the last-resort fill obeys the same
+            //   rules as every other placement path. When this strict pass
+            //   empties the pool, the relax pass below may re-admit ONLY
+            //   fair-share-capped candidates (never yesterday-repeats or real
+            //   caps) so the slot fills instead of going Free.
             if (window.RotationEngine?.calculateRotationScore) {
                 const rot = window.RotationEngine.calculateRotationScore({
                     bunkName: bunk, activityName: act,
@@ -608,9 +609,36 @@
             return { ...c, score, count, last };
         }).filter(Boolean);
 
+        let scored = scorePass();
+
+        // ★ LAST-RESORT FAIR-SHARE RELAX (observed live 2026-07-08/09: bunk לב's
+        //   entire pool was fair-share-capped + cooldown-blocked, so the gates
+        //   above left the slot Free two days running). Policy order is
+        //   no-back-to-back > no-Free > fair-share bookkeeping: when the strict
+        //   pass yields NOTHING, re-score once with the fair-share cap switched
+        //   off. Everything else stays hard — same-day dupes, the yesterday
+        //   gate, maxUsage/exactFrequency ceilings, frequencyDays cooldowns,
+        //   cohort waits and availableDays all still block (they live outside
+        //   the __fairShareHardCap switch), so only "you're ahead of the
+        //   laggards" candidates come back. A slot whose sole relaxed candidate
+        //   was done yesterday STILL stays Free.
+        //   Kill switch: window.__fallbackFairShareRelax = false.
+        let relaxed = false;
+        if (!scored.length &&
+            window.__fallbackFairShareRelax !== false &&
+            window.__fairShareHardCap !== false &&
+            window.RotationEngine?.calculateRotationScore) {
+            const _prevCap = window.__fairShareHardCap;
+            window.__fairShareHardCap = false;
+            try { scored = scorePass(); } finally { window.__fairShareHardCap = _prevCap; }
+            relaxed = scored.length > 0;
+        }
+
         if (!scored.length) return null;
         scored.sort((a, b) => a.score - b.score);
-        return scored[0];
+        const best = scored[0];
+        if (relaxed) best._fairShareRelaxed = true;
+        return best;
     }
 
     // ========================================================================
@@ -685,7 +713,8 @@
         window.updateTable?.();
 
         const where = best.field ? ` @ ${best.field}` : '';
-        toast(`✓ Auto-filled: ${best.activity}${where}`, 'success');
+        const note = best._fairShareRelaxed ? ' (fair-share relaxed)' : '';
+        toast(`✓ Auto-filled: ${best.activity}${where}${note}`, 'success');
     }
 
     // ========================================================================
@@ -842,11 +871,13 @@
         //   without this record they are invisible in the brain trace — the
         //   final schedule showed activities no decision explained.
         if (window.GenTrace && window.GenTrace.active) {
-            window.GenTrace.decision({
+            const _dec = {
                 kind: 'fallback-fill', bunk: bunk, division: divName || undefined,
                 window: slotStart + '-' + slotEnd,
                 chosen: { name: best.activity, field: best.field || null }
-            });
+            };
+            if (best._fairShareRelaxed) _dec.relaxed = 'fairShare';
+            window.GenTrace.decision(_dec);
         }
         return true;
     }
