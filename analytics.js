@@ -1236,7 +1236,6 @@
                     </div>
                     <div style="display:flex;align-items:flex-end;gap:8px;">
                         <button id="rotation-refresh-btn" title="Re-read schedule data" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">↻ Refresh</button>
-                        <button id="rotation-trace-btn" title="Download the latest generation brain trace (records why every activity was given or blocked)" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">🧠 Brain Trace</button>
                         <button id="rotation-heal-btn" title="Verify rotation memory against every saved schedule and repair any gaps" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">🔧 Verify Memory</button>
                     </div>
                 </div>
@@ -1261,14 +1260,8 @@
             if (cur) renderRotationTable(cur, true); // ★ force cloud refresh
         };
 
-        // ★ Brain trace download — no-console access to the generation trace
-        const rotTrace = document.getElementById('rotation-trace-btn');
-        if (rotTrace) rotTrace.onclick = () => {
-            const ok = window.downloadGenTrace ? window.downloadGenTrace() : false;
-            if (!ok) alert('No generation trace captured yet in this session.\n\nGenerate a schedule first, then click this button — the trace records the full decision process (scores, blocks, picks) for that run.');
-        };
-
         // ★ Rotation memory verify/heal — no-console access to the reconciler
+        // (Brain trace download stays console-only: downloadGenTrace())
         const rotHeal = document.getElementById('rotation-heal-btn');
         if (rotHeal) rotHeal.onclick = async () => {
             if (!window.backfillRotationMemory) { alert('Memory verify is unavailable on this page.'); return; }
