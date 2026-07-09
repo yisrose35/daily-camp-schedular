@@ -2253,7 +2253,18 @@
         const history = loadLeagueHistory();
 
         // ★★★ GET CURRENT DAY IDENTIFIER ★★★
-        const dayId = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // ★ FN-14: prefer the authoritative gen-date snapshotted at generation
+        //   entry. window.currentScheduleDate is the global PICKER, which can
+        //   transiently revert to the PREVIOUSLY loaded date mid-gen (the
+        //   accumulated-async race CB-23 documents). Keying the day-reset +
+        //   gameLog off the picker rolled back the WRONG day's records and
+        //   logged today's games under the prior date — the regenerated
+        //   schedule (saved under the authoritative date) then disagreed with
+        //   Play History (observed live: history showed a sport for a date
+        //   whose real schedule played a different one). Final fallback is the
+        //   LOCAL calendar date — toISOString() is UTC and flips to tomorrow
+        //   during evening sessions.
+        const dayId = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         console.log(`[RegularLeagues] Current day: "${dayId}"`);
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★

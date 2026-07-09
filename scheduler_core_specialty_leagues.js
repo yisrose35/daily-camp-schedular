@@ -969,7 +969,12 @@
         const history = loadSpecialtyHistory();
         
         // ★★★ GET CURRENT DAY IDENTIFIER ★★★
-        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // ★ FN-14: prefer the authoritative gen-date over the global picker —
+        //   the picker can transiently revert to the PREVIOUS date mid-gen,
+        //   which keyed the day-reset + gameLog to the wrong day (see the
+        //   matching note in processRegularLeagues). Local-date fallback:
+        //   toISOString() is UTC and flips to tomorrow during evening sessions.
+        const currentDate = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         console.log(`[SpecialtyLeagues] Current day: "${currentDate}"`);
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
@@ -1394,7 +1399,8 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
         if (!league) return null;
 
         const history = loadSpecialtyHistory();
-        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // ★ FN-14: same date-authority order as the engine entry point above.
+        const currentDate = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         const gameNumber = calculateStartingGameNumber(leagueId, currentDate, history) + 1;
         
         const matchups = getLeagueMatchupsForToday(league, history, gameNumber);
