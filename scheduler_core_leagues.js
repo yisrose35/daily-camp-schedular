@@ -1375,6 +1375,48 @@
         return pool;
     }
 
+    // ★ SAME-DAY SPORT REPEAT GUARD: with 2+ league games on one day, a team
+    // must not play the same sport twice THAT DAY unless there is truly no
+    // other option. The day-history helpers exclude today by design
+    // (getTeamSportHistoryByDate is strictly-before-dayId), so the recent-sport
+    // penalty and cycle needs are BLIND to a game played earlier today — only
+    // the pair caveat saw it, and only when the SAME two teams met again.
+    // A team facing a different opponent in game 2 could freely repeat its
+    // game-1 sport. This reads today's already-logged games straight from the
+    // date-keyed gameLog and hard-filters the pool, degrading gracefully:
+    //   1. options neither team has played today          (preferred)
+    //   2. options at most ONE team has played today      (lesser evil)
+    //   3. the full pool                                  (truly unavoidable)
+    // Per-matchup — it only looks at THIS pair's two teams — so it cannot
+    // re-create the league-wide pool collapse that forced byes (the deleted
+    // multi-game pre-filter). A matchup is never dropped by this guard.
+    // Killswitch: window.__leagueSameDayRepeatGuard = false.
+    function _getTeamSportsToday(leagueName, team, history, dayId) {
+        const out = new Set();
+        if (!dayId) return out;
+        const todays = (history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [];
+        todays.forEach(function (e) {
+            if (e && e.sport && (e.t1 === team || e.t2 === team)) out.add(e.sport);
+        });
+        return out;
+    }
+    function _applySameDayRepeatFilter(pool, t1, t2, leagueName, history, dayId) {
+        if (window.__leagueSameDayRepeatGuard === false) return pool;
+        if (!pool.length) return pool;
+        const today1 = _getTeamSportsToday(leagueName, t1, history, dayId);
+        const today2 = _getTeamSportsToday(leagueName, t2, history, dayId);
+        if (!today1.size && !today2.size) return pool;
+        const clean = pool.filter(function (o) { return !today1.has(o.sport) && !today2.has(o.sport); });
+        if (clean.length) return clean;
+        const oneRepeat = pool.filter(function (o) { return !(today1.has(o.sport) && today2.has(o.sport)); });
+        if (oneRepeat.length) {
+            console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
+            return oneRepeat;
+        }
+        console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
+        return pool;
+    }
+
     // ★ CYCLE RESCUE: a team stuck ≥2 plays behind on a sport (its count for
     // that sport trails its most-played available sport by ≥2) gets that
     // sport as a HARD preference for its matchup. Without this, a team can be
@@ -1526,6 +1568,13 @@
                 });
                 if (_underCap.length > 0) _pool = _underCap;
             }
+
+            // ★ SAME-DAY REPEAT GUARD: on a 2+-game day, neither team plays the
+            // same sport twice today unless nothing else is open (see helper).
+            // After the fair-share cap (another league's dropped game costs more
+            // than a repeat), before cycle rescue (a rescue must not resurrect
+            // a same-day repeat).
+            _pool = _applySameDayRepeatFilter(_pool, t1, t2, leagueName, history, dayId);
 
             // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
             // as a hard preference (see _applyCycleRescueFilter).
@@ -1702,6 +1751,13 @@
                 if (_underCap.length > 0) _pool = _underCap;
             }
 
+            // ★ SAME-DAY REPEAT GUARD: on a 2+-game day, neither team plays the
+            // same sport twice today unless nothing else is open (see helper).
+            // After the fair-share cap (another league's dropped game costs more
+            // than a repeat), before cycle rescue (a rescue must not resurrect
+            // a same-day repeat).
+            _pool = _applySameDayRepeatFilter(_pool, t1, t2, leagueName, history, dayId);
+
             // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
             // as a hard preference (see _applyCycleRescueFilter).
             const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
@@ -1808,6 +1864,12 @@
             const cycles = makeSportCycles(leagueName, teams, sportsInPlay, history, dayId);
             const hists = {};
             teams.forEach(function (t) { hists[t] = getTeamSportHistoryByDate(leagueName, t, history, dayId); });
+            // ★ SAME-DAY REPEAT GUARD: sports each team already played in an
+            // earlier game TODAY (the day-history above is strictly-before-today).
+            // A swap must never hand a team a same-day repeat the greedy pass
+            // avoided; swapping AWAY from a forced repeat stays allowed.
+            const _todaySports = {};
+            teams.forEach(function (t) { _todaySports[t] = _getTeamSportsToday(leagueName, t, history, dayId); });
             function teamScore(t, s) {
                 const g = cycles.gap(t, s);
                 let sc = g <= 0 ? 1000 : Math.max(0, 100 - g * 20);
@@ -1815,9 +1877,11 @@
                 if (h.length && h[h.length - 1] === s) sc -= 1500;
                 return sc;
             }
-            function illegal(t, s) {   // would create a 3-days-in-a-row streak
+            function illegal(t, s) {   // 3-days-in-a-row streak, or a same-day repeat
                 const h = hists[t];
-                return h.length >= 2 && h[h.length - 1] === s && h[h.length - 2] === s;
+                if (h.length >= 2 && h[h.length - 1] === s && h[h.length - 2] === s) return true;
+                if (window.__leagueSameDayRepeatGuard !== false && _todaySports[t] && _todaySports[t].has(s)) return true;
+                return false;
             }
             function assnScore(a, s) {
                 const pairC = getPairSports(leagueName, a.team1, a.team2, history)
@@ -2476,12 +2540,23 @@
                 _byeCtx = { time: timeKey1, game: gameNum };       // stamp bye records with this period
                 var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
                 var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
+                var g1All = g1Off.concat(g1On);
+                var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
+                // ★ Record game 1 BEFORE assigning game 2 (mirrors the main path,
+                // which logs each period as it goes) — the same-day repeat guard
+                // and the pair-sport caveat read today's games from the gameLog,
+                // so game 2's sport picks must see what game 1 just played.
+                g1All.forEach(function(a) {
+                    if (a.sport) { recordTeamSport(league.name, a.team1||a.teamA, a.sport, history); recordTeamSport(league.name, a.team2||a.teamB, a.sport, history); }
+                    recordMatchup(league.name, a.team1||a.teamA, a.team2||a.teamB, history);
+                    // ★ FN-54: date-keyed log so regen/delete can subtract this game
+                    logGameRecord(league.name, dayId, a.team1||a.teamA, a.team2||a.teamB, a.sport, history, lbl1);
+                });
                 _byeCtx = { time: timeKey2, game: gameNum + 1 };
                 var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
                 var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
                 _byeCtx = null;
-                var g1All = g1Off.concat(g1On), g2All = g2Off.concat(g2On);
-                var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
+                var g2All = g2Off.concat(g2On);
 
               if (g1All.length > 0 && fillBlock) {
                     ocDivs.forEach(function(d) {
@@ -2531,12 +2606,13 @@
                     }
                 }
 
-                [[g1All, lbl1], [g2All, lbl2]].forEach(function(set) { var aa = set[0], lbl = set[1]; aa.forEach(function(a) {
+                // (game 1 was recorded above, before game 2's assignment)
+                g2All.forEach(function(a) {
                     if (a.sport) { recordTeamSport(league.name, a.team1||a.teamA, a.sport, history); recordTeamSport(league.name, a.team2||a.teamB, a.sport, history); }
                     recordMatchup(league.name, a.team1||a.teamA, a.team2||a.teamB, history);
                     // ★ FN-54: date-keyed log so regen/delete can subtract this game
-                    logGameRecord(league.name, dayId, a.team1||a.teamA, a.team2||a.teamB, a.sport, history, lbl);
-                }); });
+                    logGameRecord(league.name, dayId, a.team1||a.teamA, a.team2||a.teamB, a.sport, history, lbl2);
+                });
 
                 leagueGameCounters[league.name] += 2;
                 if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
