@@ -6530,6 +6530,41 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (hasAvail && !insideAvail) return false;
                 return true;
             };
+            // ★ ROTATION GATE for the last-resort free-fills (7.6 / 7.62 / 7.67).
+            //   These pickers only know "not done TODAY" — observed live 2026-07-09
+            //   via the trace origin tags: bunk לב's leftover slot got Basketball
+            //   from STEP 7.6 three days running (fair-share capped by the engine,
+            //   once back-to-back), because 7.6 runs AFTER the gated STEP 7.5
+            //   fallback and re-fills what 7.5 correctly left Free. Same policy as
+            //   auto_fill_slot.js scoreAndPick: skip a candidate the engine
+            //   hard-blocks (fair-share cap, frequencyDays cooldown, cohort,
+            //   availableDays, per-grade caps) or that the bunk did YESTERDAY —
+            //   the slot stays Free rather than lapping the field or repeating
+            //   back-to-back. Fail-open when the engine is absent.
+            //   Killswitch: window.__freeFillRotationGate = false.
+            const _rotOk76 = (bunk, act, slotIdx) => {
+                if (window.__freeFillRotationGate === false) return true;
+                const RE = window.RotationEngine;
+                if (!RE) return true;
+                try {
+                    if (typeof RE.calculateRotationScore === 'function') {
+                        const rot = RE.calculateRotationScore({
+                            bunkName: bunk, activityName: act,
+                            divisionName: _b2g76[String(bunk)] || null,
+                            beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                            allActivities: null,
+                            activityProperties: window.activityProperties || {}
+                        });
+                        if (rot === Infinity) return false;
+                    }
+                    if (typeof RE.calculateRecencyScore === 'function') {
+                        const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+                        if (RE.calculateRecencyScore(bunk, act,
+                            (typeof slotIdx === 'number' ? slotIdx : 0)) >= yp) return false;
+                    }
+                } catch (_) { /* fail-open */ }
+                return true;
+            };
             let _filled76 = 0;
             Object.keys(_sa76).forEach(b => {
                 if (_allowed76 && !_allowed76.has(String(b))) return;
@@ -6549,11 +6584,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                         let act = null;
                         const _blockedOnField76 = _disSportsByField76[f.name] || null;
-                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1)) { act = c; break; } }
+                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1) && _rotOk76(b, c, idx)) { act = c; break; } }
                         if (!act) continue;
                         _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                         (_occ76[fl] = _occ76[fl] || []).push({ s: t.s, e: t.e });
                         _done76[b][String(act).toLowerCase()] = 1; _filled76++;
+                        if (window.GenTrace && window.GenTrace.active) {
+                            window.GenTrace.decision({ kind: 'free-fill', bunk: b, division: g, window: t.s + '-' + t.e, chosen: { name: act, field: f.name } });
+                        }
                         break;
                     }
                 });
@@ -6617,7 +6655,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (blocked && blocked.indexOf(act) !== -1) continue;
                             const req = _reqOf62(act);
                             if (!req.min) continue; // only sports with a real min require forced pairing
-                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]));
+                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]) && _rotOk76(p.bunk, act, p.idx));
                             if (elig.length < 2) continue;
                             elig.sort((a, b2) => b2.size - a.size); // largest first to reach min fast
                             let chosen = [], sum = 0;
@@ -7152,11 +7190,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (_skip76[fl] || !_free67(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                             const blocked = _disSportsByField76[f.name] || null;
                             let act = null;
-                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1)) { act = c; break; } }
+                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1) && _rotOk76(b, c, idx)) { act = c; break; } }
                             if (!act) continue;
                             _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                             (_occ67[fl] = _occ67[fl] || []).push({ s: t.s, e: t.e });
                             (_done76[b] = _done76[b] || {})[String(act).toLowerCase()] = 1; _filled67++;
+                            if (window.GenTrace && window.GenTrace.active) {
+                                window.GenTrace.decision({ kind: 'free-fill', bunk: b, division: g, window: t.s + '-' + t.e, chosen: { name: act, field: f.name } });
+                            }
                             break;
                         }
                     });
