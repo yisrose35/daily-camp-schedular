@@ -517,7 +517,7 @@
     // SCORE & PICK — lower score = better candidate
     // ========================================================================
 
-    function scoreAndPick(bunk, candidates, today) {
+    function scoreAndPick(bunk, candidates, today, divName, slotIdx) {
         const { countsByAct, lastDoneByAct, todayActs } = buildHistory(bunk, today);
 
         const scored = candidates.map(c => {
@@ -525,6 +525,25 @@
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
             if (todayActs.has(act)) return null;     // already doing it today
+            // ★ Rotation-engine hard gates (fair-share cap, frequencyDays
+            //   cooldown, rotation cohort, per-grade caps, availableDays).
+            //   This filler's local scorer knows recency and per-period caps but
+            //   NOT the engine's hard blocks — observed live 2026-07-09: bunk
+            //   לב's leftover Free slot was filled with fair-share-BLOCKED
+            //   Basketball. Design intent (rotation_engine.js fair-share cap):
+            //   a capped bunk with no other feasible option stays Free rather
+            //   than lapping the field. Gate here so the last-resort fill obeys
+            //   the same rules as every other placement path.
+            if (window.RotationEngine?.calculateRotationScore) {
+                const rot = window.RotationEngine.calculateRotationScore({
+                    bunkName: bunk, activityName: act,
+                    divisionName: divName || null,
+                    beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                    allActivities: null,
+                    activityProperties: window.activityProperties || {}
+                });
+                if (rot === Infinity) return null;   // hard-blocked by the engine
+            }
             // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
             //   against a period-windowed count, NOT the lifetime countsByAct — else
             //   the cap silently degrades into a lifetime cap and permanently blocks
@@ -634,7 +653,7 @@
 
         // 4. Score and pick
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
-        const best = scoreAndPick(bunk, candidates, today);
+        const best = scoreAndPick(bunk, candidates, today, divName, slotIdx);
         if (!best) { toast('All candidates disqualified by constraints — nothing to fill', 'warning'); return; }
 
         // 5. Write + save + refresh
@@ -766,7 +785,7 @@
         if (!candidates.length) return false;
 
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
-        const best = scoreAndPick(bunk, candidates, today);
+        const best = scoreAndPick(bunk, candidates, today, divName, slotIdx);
         if (!best) return false;
 
         // Write straight to memory — no save, no toast, no updateTable.
@@ -802,15 +821,29 @@
             if (_afFeat._endMin) { _afEntry._startMin = slotStart; _afEntry._endMin = _afFeat._endMin; _afEntry._durationBestFit = _afFeat._durationBestFit; }
         }
         window.scheduleAssignments[bunk][slotIdx] = _afEntry;
+        // ★ GenTrace: fallback fills happen AFTER the solver's commits, so
+        //   without this record they are invisible in the brain trace — the
+        //   final schedule showed activities no decision explained.
+        if (window.GenTrace && window.GenTrace.active) {
+            window.GenTrace.decision({
+                kind: 'fallback-fill', bunk: bunk, division: divName || undefined,
+                window: slotStart + '-' + slotEnd,
+                chosen: { name: best.activity, field: best.field || null }
+            });
+        }
         return true;
     }
 
-    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons };
+    // _scoreAndPick exposed for headless tests (rotation hard-gate coverage)
+    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons, _scoreAndPick: scoreAndPick };
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupInjection);
-    } else {
-        setupInjection();
+    // Browser-only UI wiring (headless test loads have no document)
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupInjection);
+        } else {
+            setupInjection();
+        }
     }
 
 })();
