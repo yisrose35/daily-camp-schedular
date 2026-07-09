@@ -2926,6 +2926,91 @@
     window._detectLeagueTileTimeMismatch = detectLeagueTileTimeMismatch;
 
     // =========================================================================
+    // ★ CROSS-DAY REPEAT HEAL (STEP 7.95 body — exposed for tests)
+    // The solver's yesterday policy is SOFT (finite YESTERDAY_PENALTY, best-of-3
+    // passes + RECENCY-SWAP), so a did-it-yesterday placement can survive when
+    // the winning pass carried it and no swap partner existed — observed live
+    // 2026-07-09: single-bunk division לב got Dodgeball @740-805 two days
+    // running; RECENCY-SWAP had no same-window peer to trade with. Every FILLER
+    // is already yesterday-gated; this sweep closes the last path (main solver
+    // commits) by re-running each repeat through the gated fallback filler.
+    // IMPROVE-ONLY: the filler can only return a non-repeat (its yesterday gate
+    // excludes the current activity) — if it returns nothing, the original is
+    // restored, so a repeat is never traded for a Free.
+    // Must run BEFORE STEP 8 (history update), so recency still measures
+    // yesterday. Killswitch: window.__repeatHealSweep = false.
+    // =========================================================================
+    function healCrossDayRepeats() {
+        if (window.__repeatHealSweep === false) return null;
+        const RE = window.RotationEngine;
+        if (!RE || typeof RE.calculateRecencyScore !== 'function') return null;
+        if (!window.AutoFillSlot || typeof window.AutoFillSlot.autoFillSlotSilent !== 'function') return null;
+        const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+        const sa = window.scheduleAssignments || {};
+        const rss = window.__regenSlotScope || null; // per-tile regen: only touch regenerated slots
+        const skip = { 'free': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1,
+            'change': 1, 'cleanup': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1,
+            'mincha': 1, 'main activity': 1, 'sports slot': 1, 'special activity': 1 };
+        let healed = 0, kept = 0;
+        Object.keys(sa).forEach(bunk => {
+            const arr = sa[bunk];
+            if (!Array.isArray(arr)) return;
+            if (rss && !rss[bunk]) return;
+            const scRegen = rss && rss[bunk] ? rss[bunk].regen : null;
+            arr.forEach((e, idx) => {
+                if (rss && (!scRegen || !scRegen.has(idx))) return;
+                if (!e || e.continuation || e._pinned || e._bunkOverride || e._postEdit) return;
+                if (e._isLeague || e._leagueMatchups || e.matchups || e._leagueName || e._h2h || e._isSpecialtyLeague) return;
+                if (e._isTransition || e._isTrip) return;
+                // Multi-slot spans and structured specials: replacing just the lead
+                // slot would orphan continuations / part+prep metadata — skip.
+                if (arr[idx + 1] && arr[idx + 1].continuation) return;
+                if (e._partLabel || e._prepDuration || e._durationBestFit) return;
+                const act = e._activity || e.sport || e.field;
+                if (!act || skip[String(act).toLowerCase().trim()]) return;
+                let rec;
+                try { rec = RE.calculateRecencyScore(bunk, act, idx); } catch (_x) { return; }
+                // Finite ≥ YESTERDAY = did it yesterday (or an active streak). An
+                // Infinity here would be a SAME-DAY duplicate — that's the
+                // validator's domain, leave it visible rather than mask it.
+                if (!(rec >= yp) || !isFinite(rec)) return;
+                // Keep the tile's intent: a sport is only replaced by a sport,
+                // a configured special only by a special.
+                let kind;
+                if (e.sport && e.sport !== 'Free') kind = 'sport';
+                else {
+                    try {
+                        const sp = (typeof window.getSpecialActivities === 'function') ? window.getSpecialActivities() : [];
+                        if (Array.isArray(sp) && sp.some(s => s && String(s.name) === String(act))) kind = 'special';
+                    } catch (_x3) {}
+                }
+                const orig = e;
+                arr[idx] = null; // release the slot (and its field) for the filler's scan
+                let ok = false;
+                try { ok = window.AutoFillSlot.autoFillSlotSilent(bunk, idx, kind); } catch (_x2) { ok = false; }
+                if (ok) {
+                    healed++;
+                    const chosen = arr[idx] && arr[idx]._activity;
+                    console.log('[STEP 7.95] repeat-heal: ' + bunk + ' "' + act + '" (done yesterday) → "' + chosen + '" @slot ' + idx);
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'repeat-heal', bunk: bunk,
+                            window: (orig._startMin != null ? orig._startMin + '-' + orig._endMin : 'slot:' + idx),
+                            chosen: { name: chosen || null, field: (arr[idx] && arr[idx]._location) || null },
+                            from: act
+                        });
+                    }
+                } else {
+                    arr[idx] = orig; // no legal non-repeat — repeat beats Free
+                    kept++;
+                }
+            });
+        });
+        return { healed: healed, kept: kept };
+    }
+    window._healCrossDayRepeats = healCrossDayRepeats;
+
+    // =========================================================================
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
@@ -4260,6 +4345,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
+            // ★ GenTrace: bunk overrides bypass the solver (user's explicit choice),
+            //   so without this record the trace shows their placements with no
+            //   explaining decision. Recorded at resolution; the finalSchedule
+            //   snapshot's o:'override' flag marks the surviving entry.
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'override-fill', bunk: bunk, division: divName || undefined,
+                    window: startMin + '-' + endMin,
+                    chosen: { name: activityName, type: overrideType || 'sport' }
+                });
+            }
 
             if (overrideType === 'trip') {
                 slots.forEach((slotIndex, i) => {
@@ -6519,6 +6615,41 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (hasAvail && !insideAvail) return false;
                 return true;
             };
+            // ★ ROTATION GATE for the last-resort free-fills (7.6 / 7.62 / 7.67).
+            //   These pickers only know "not done TODAY" — observed live 2026-07-09
+            //   via the trace origin tags: bunk לב's leftover slot got Basketball
+            //   from STEP 7.6 three days running (fair-share capped by the engine,
+            //   once back-to-back), because 7.6 runs AFTER the gated STEP 7.5
+            //   fallback and re-fills what 7.5 correctly left Free. Same policy as
+            //   auto_fill_slot.js scoreAndPick: skip a candidate the engine
+            //   hard-blocks (fair-share cap, frequencyDays cooldown, cohort,
+            //   availableDays, per-grade caps) or that the bunk did YESTERDAY —
+            //   the slot stays Free rather than lapping the field or repeating
+            //   back-to-back. Fail-open when the engine is absent.
+            //   Killswitch: window.__freeFillRotationGate = false.
+            const _rotOk76 = (bunk, act, slotIdx) => {
+                if (window.__freeFillRotationGate === false) return true;
+                const RE = window.RotationEngine;
+                if (!RE) return true;
+                try {
+                    if (typeof RE.calculateRotationScore === 'function') {
+                        const rot = RE.calculateRotationScore({
+                            bunkName: bunk, activityName: act,
+                            divisionName: _b2g76[String(bunk)] || null,
+                            beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                            allActivities: null,
+                            activityProperties: window.activityProperties || {}
+                        });
+                        if (rot === Infinity) return false;
+                    }
+                    if (typeof RE.calculateRecencyScore === 'function') {
+                        const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+                        if (RE.calculateRecencyScore(bunk, act,
+                            (typeof slotIdx === 'number' ? slotIdx : 0)) >= yp) return false;
+                    }
+                } catch (_) { /* fail-open */ }
+                return true;
+            };
             let _filled76 = 0;
             Object.keys(_sa76).forEach(b => {
                 if (_allowed76 && !_allowed76.has(String(b))) return;
@@ -6538,11 +6669,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                         let act = null;
                         const _blockedOnField76 = _disSportsByField76[f.name] || null;
-                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1)) { act = c; break; } }
+                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1) && _rotOk76(b, c, idx)) { act = c; break; } }
                         if (!act) continue;
                         _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                         (_occ76[fl] = _occ76[fl] || []).push({ s: t.s, e: t.e });
                         _done76[b][String(act).toLowerCase()] = 1; _filled76++;
+                        if (window.GenTrace && window.GenTrace.active) {
+                            window.GenTrace.decision({ kind: 'free-fill', bunk: b, division: g, window: t.s + '-' + t.e, chosen: { name: act, field: f.name } });
+                        }
                         break;
                     }
                 });
@@ -6606,7 +6740,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (blocked && blocked.indexOf(act) !== -1) continue;
                             const req = _reqOf62(act);
                             if (!req.min) continue; // only sports with a real min require forced pairing
-                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]));
+                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]) && _rotOk76(p.bunk, act, p.idx));
                             if (elig.length < 2) continue;
                             elig.sort((a, b2) => b2.size - a.size); // largest first to reach min fast
                             let chosen = [], sum = 0;
@@ -7141,11 +7275,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (_skip76[fl] || !_free67(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                             const blocked = _disSportsByField76[f.name] || null;
                             let act = null;
-                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1)) { act = c; break; } }
+                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1) && _rotOk76(b, c, idx)) { act = c; break; } }
                             if (!act) continue;
                             _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                             (_occ67[fl] = _occ67[fl] || []).push({ s: t.s, e: t.e });
                             (_done76[b] = _done76[b] || {})[String(act).toLowerCase()] = 1; _filled67++;
+                            if (window.GenTrace && window.GenTrace.active) {
+                                window.GenTrace.decision({ kind: 'free-fill', bunk: b, division: g, window: t.s + '-' + t.e, chosen: { name: act, field: f.name } });
+                            }
                             break;
                         }
                     });
@@ -7354,6 +7491,31 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
         } catch (_e79) {
             console.warn('[STEP 7.9] pinned-facility exclusion sweep failed:', _e79);
+        }
+
+        // =========================================================================
+        // STEP 7.95: CROSS-DAY REPEAT HEAL (improve-only)
+        // The solver's yesterday policy is SOFT (finite YESTERDAY_PENALTY, best-of-3
+        // passes + RECENCY-SWAP), so a did-it-yesterday placement can survive when
+        // the winning pass carried it and no swap partner existed — observed live
+        // 2026-07-09: single-bunk division לב got Dodgeball @740-805 two days
+        // running; RECENCY-SWAP had no same-window peer to trade with. Every FILLER
+        // is already yesterday-gated; this sweep closes the last path (main solver
+        // commits) by re-running each repeat through the gated fallback filler.
+        // IMPROVE-ONLY: the filler can only return a non-repeat (its yesterday gate
+        // excludes the current activity) — if it returns nothing, the original is
+        // restored, so a repeat is never traded for a Free.
+        // Runs BEFORE STEP 8 (history update), so recency still measures yesterday.
+        // Killswitch: window.__repeatHealSweep = false.
+        // =========================================================================
+        try {
+            const _res95 = (typeof window._healCrossDayRepeats === 'function') ? window._healCrossDayRepeats() : null;
+            if (_res95) {
+                if (_res95.healed + _res95.kept === 0) console.log('[STEP 7.95] cross-day repeat heal: ✅ no solver repeats');
+                else console.log('[STEP 7.95] cross-day repeat heal: ' + _res95.healed + ' healed, ' + _res95.kept + ' kept (no legal alternative)');
+            }
+        } catch (_e95) {
+            console.warn('[STEP 7.95] cross-day repeat heal failed:', _e95);
         }
 
         // =========================================================================

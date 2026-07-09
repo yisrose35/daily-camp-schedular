@@ -1803,6 +1803,7 @@
     var bunk = block.bunk, slots = block.slots || [];
     if (!window.scheduleAssignments[bunk]) return;
     var fName = pick.field;
+    var _gtWhy = null; // GenTrace: which commit gate downgraded this pick to Free (if any)
 
     // ★★★ FIX v15.7: Hard capacity gate — last line of defense ★★★
     if (fName && fName !== 'Free' && block.startTime !== undefined && block.endTime !== undefined) {
@@ -1825,6 +1826,7 @@
                 //   by the time the 2nd bunk commits, the 1st is already in the time index.
                 if (checkCrossDivisionTimeConflict(fName, block.divName, block.startTime, block.endTime, bunk)) {
                     if (typeof console !== 'undefined' && console.warn) console.warn('[XDIV-GATE] ' + bunk + ' (' + block.divName + ') blocked from same_division field "' + fName + '" @' + block.startTime + '-' + block.endTime + ' — another division already holds it; downgrading.');
+                    _gtWhy = 'cross-division-gate';
                     _capUse = _capCap; // force downgrade — cross-division share not allowed on a same_division field
                 } else {
                     _capUse = countSameDivisionUsage(fName, block.divName, block.startTime, block.endTime, bunk);
@@ -1838,6 +1840,7 @@
                 pick.field = 'Free';
                 pick.sport = null;
                 pick._activity = 'Free';
+                if (!_gtWhy) _gtWhy = 'field-capacity-gate';
 
         }
     }
@@ -1850,6 +1853,7 @@
         //   commits can race it through, so enforce it at the commit gate too.
         if (fName && fName !== 'Free' && checkSameFieldActivityMismatch(fName, block.startTime, block.endTime, (pick._activity || pick.activityName || pick.sport || fName), bunk)) {
             fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free';
+            _gtWhy = 'same-field-activity-mismatch';
         }
     }    var _actName = pick._activity || pick.activityName || pick.sport || fName;
     // ★ Safety net: enforce a special's OWN access restriction at the single
@@ -1861,6 +1865,19 @@
         && typeof window.isSpecialAvailableForBunk === 'function'
         && !window.isSpecialAvailableForBunk(_actName, block.divName, bunk, window.globalSettings || null)) {
         fName = 'Free'; pick.field = 'Free'; pick.sport = null; pick._activity = 'Free'; _actName = 'Free';
+        _gtWhy = 'special-access-gate';
+    }
+    // ★ GenTrace: record what the manual solver ACTUALLY committed for this
+    //   block — after every commit gate had its say. Repair passes re-commit
+    //   blocks, so the trace shows churn too; the last record per bunk+window
+    //   matches the final schedule.
+    if (window.GenTrace && window.GenTrace.active) {
+        window.GenTrace.decision({
+            kind: 'manual-commit', bunk: bunk, division: block.divName || undefined,
+            window: (block.startTime != null ? block.startTime + '-' + block.endTime : 'slots:' + slots.join(',')),
+            chosen: { name: _actName, field: fName },
+            note: _gtWhy ? ('downgraded to Free by ' + _gtWhy) : undefined
+        });
     }
     // ★ Day-19 special features (durations[] best-fit / multiPart part labels /
     //   prep lead-in) for the manual solver's MAIN write path. This is where
@@ -3385,6 +3402,18 @@
         if (!S.globalConfig.rotationHistory) S.globalConfig.rotationHistory = {};
         if (!S.globalConfig.rotationHistory.leagues) S.globalConfig.rotationHistory.leagues = {};
         if (window.RotationEngine?.clearHistoryCache) window.RotationEngine.clearHistoryCache();
+        // ★ Re-apply the cloud rotation overlay the clear above just wiped.
+        //   runSkeletonOptimizer merges RotationCloud counts+lastDone into the
+        //   history cache BEFORE handing blocks to this solver; without this
+        //   re-merge, recency scoring rebuilds from local allDailyData only and
+        //   every activity missing locally scores "never done" (-5000) — the
+        //   2026-07-08 brain trace showed 259/400 pairs hit that, killing the
+        //   rotation signal on devices with incomplete local history. Sync,
+        //   no network (reads RotationCloud's in-memory cache); no-op offline.
+        if (window.RotationEngine?.reoverlayCloudCache) {
+            var _reoverlaid = window.RotationEngine.reoverlayCloudCache();
+            if (window.GenTrace?.active) window.GenTrace.event('total-solver', 'solveSchedule start: ' + activityBlocks.length + ' blocks; history cache cleared, cloud overlay ' + (_reoverlaid ? 're-applied' : 'unavailable'));
+        }
 
         // ★★★ v15.0: DETECT RAINY DAY AND CACHE OVERRIDES ★★★
         S.detectRainyDayMode(config);

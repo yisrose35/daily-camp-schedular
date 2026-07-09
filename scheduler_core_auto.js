@@ -47,9 +47,13 @@
     const VERSION = '4.0.0';
     const TAG = '[AutoCore]';
 
-    function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
-    function warn(msg, ...args) { console.warn(TAG + ' ⚠️ ' + msg, ...args); }
-    function err(msg, ...args) { console.error(TAG + ' ❌ ' + msg, ...args); }
+    // ★ GenTrace: every narrative line also lands in the generation brain
+    //   trace (when one is recording) so the full run can be exported and
+    //   analyzed offline via downloadGenTrace().
+    function _gtLog(lv, msg) { if (window.GenTrace && window.GenTrace.active) window.GenTrace.solverLog(TAG, lv, msg); }
+    function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); _gtLog('log', msg); }
+    function warn(msg, ...args) { console.warn(TAG + ' ⚠️ ' + msg, ...args); _gtLog('warn', msg); }
+    function err(msg, ...args) { console.error(TAG + ' ❌ ' + msg, ...args); _gtLog('error', msg); }
 
     // =========================================================================
     // UTILITIES
@@ -5357,6 +5361,14 @@
                 if (a.rotationScore !== b.rotationScore) return a.rotationScore - b.rotationScore;
                 return (a.fields?.length || 0) - (b.fields?.length || 0);
             });
+            // ★ GenTrace: record this bunk's sport shopping list — the rotation-
+            //   ordered menu the placement phases pick from.
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'sport-priority-list', bunk: bunk, division: grade,
+                    candidates: sportPriorityList.map(s => ({ name: s.name, score: Math.round(s.rotationScore) }))
+                });
+            }
             // Slice 3 audit fix (Deferred-1): expose a re-rank closure on the
             // list itself so iterating consumers can refresh rotation scores
             // before each slot pick. Earlier the list was built with
@@ -5658,6 +5670,16 @@
            //   tier, the escalating floor-deficit score (strong negative) sorts the most
            //   urgent first. Scarce specials stay in the tier (not starved).
            specialPriorityList.sort((a, b) => { const aU = a.isScarce || a._belowFloor, bU = b.isScarce || b._belowFloor; if (aU !== bU) return aU ? -1 : 1; return a.rotationScore - b.rotationScore; });
+            // ★ GenTrace: record this bunk's special shopping list (urgent tier first).
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'special-priority-list', bunk: bunk, division: grade,
+                    candidates: specialPriorityList.map(s => ({
+                        name: s.name, score: Math.round(s.rotationScore),
+                        urgent: !!(s.isScarce || s._belowFloor) || undefined
+                    }))
+                });
+            }
             specialPriorityList._rerank = function() {
                 if (!window.RotationEngine?.calculateRotationScore) return;
                 for (let _i = 0; _i < specialPriorityList.length; _i++) {
@@ -10300,7 +10322,21 @@
                     }
                 }
 
-                if (candidates.length === 0) return null;
+                // ★ GenTrace: record this sport-pick decision — the candidates the
+                //   engine weighed (score = rotation-dominant composite computed
+                //   above) and which one won. `note` explains no-pick outcomes.
+                var _gtPick = function (chosen, note) {
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'sport-pick', bunk: bunk, division: grade,
+                            window: startMin + '-' + endMin,
+                            candidates: candidates.map(function (c) { return { name: c.name, field: c.field, score: Math.round(c.score) }; }),
+                            chosen: chosen, note: note
+                        });
+                    }
+                    return chosen;
+                };
+                if (candidates.length === 0) return _gtPick(null, 'no-feasible-sport-field-combo');
                 // Pick the highest-scoring candidate
                 candidates.sort(function(a, b) { return b.score - a.score; });
                 // ★ Variety guard: if any unused sport is available, skip already-used
@@ -10316,7 +10352,7 @@
                             { startMin: startMin, endMin: endMin, type: 'sport',
                               event: cand.name, field: cand.field },
                             meta.template, { mode: "auto" });
-                        if (ok) return { name: cand.name, field: cand.field };
+                        if (ok) return _gtPick({ name: cand.name, field: cand.field }, ci > 0 ? (ci + ' higher-scored candidates blocked by cooldown rules') : undefined);
                     }
                     // All unused candidates blocked by cooldown — try used as last resort
                     if (unusedCandidates.length > 0) {
@@ -10326,12 +10362,12 @@
                                 { startMin: startMin, endMin: endMin, type: 'sport',
                                   event: cand2.name, field: cand2.field },
                                 meta.template, { mode: "auto" });
-                            if (ok2) return { name: cand2.name, field: cand2.field };
+                            if (ok2) return _gtPick({ name: cand2.name, field: cand2.field }, 'reused sport — all unused candidates blocked by cooldown rules');
                         }
                     }
-                    return null; // all candidates blocked by cooldown
+                    return _gtPick(null, 'all candidates blocked by cooldown rules');
                 }
-                return { name: candidatePool[0].name, field: candidatePool[0].field };
+                return _gtPick({ name: candidatePool[0].name, field: candidatePool[0].field });
             }
 
             // Compute optimal split plan for a gap — returns array of {start, end}

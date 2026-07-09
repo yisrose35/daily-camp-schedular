@@ -43,16 +43,13 @@
     }
 
     // =====================================================================
-    // SAVE: Extract counts from scheduleAssignments and upsert to cloud
+    // DERIVE: Extract rotation counts from a day's scheduleAssignments.
+    // Single source of truth for what "counts" as a rotation activity —
+    // used by saveRotationCounts AND the backfill/reconcile utility, so a
+    // comparison between derived and stored counts can never drift.
+    // Returns { 'bunk|activity': count }.
     // =====================================================================
-    function saveRotationCounts(dateKey, scheduleAssignments) {
-        var client = getClient();
-        var campId = getCampId();
-        if (!client || !campId || !dateKey) {
-            console.warn('[RotationCloud] Missing client/campId/dateKey — skipping save');
-            return Promise.resolve(false);
-        }
-
+    function deriveCounts(scheduleAssignments) {
         var sched = scheduleAssignments || {};
         var validActivities = getValidActivityNames();
         var counts = {};
@@ -83,6 +80,22 @@
                 counts[key] = (counts[key] || 0) + 1;
             });
         });
+
+        return counts;
+    }
+
+    // =====================================================================
+    // SAVE: Extract counts from scheduleAssignments and upsert to cloud
+    // =====================================================================
+    function saveRotationCounts(dateKey, scheduleAssignments) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !dateKey) {
+            console.warn('[RotationCloud] Missing client/campId/dateKey — skipping save');
+            return Promise.resolve(false);
+        }
+
+        var counts = deriveCounts(scheduleAssignments);
 
         var rows = [];
         Object.keys(counts).forEach(function(key) {
@@ -490,6 +503,14 @@
         return (_cache && _cache.countsByDate) ? _cache.countsByDate : null;
     }
 
+    // ★ Synchronous read of the WHOLE cached payload ({counts, lastDone,
+    //   countsByDate}) for RotationEngine.reoverlayCloudCache — lets a solver
+    //   that just wiped the rotation history cache re-apply the cloud overlay
+    //   without an async load. Returns null if nothing is cached.
+    function getCachedData() {
+        return _cache || null;
+    }
+
     // =====================================================================
     // EXPOSE
     // =====================================================================
@@ -503,7 +524,9 @@
         clearAll: clearAllRotationCounts,
         clearForBunks: clearForBunks,
         invalidateCache: invalidateCache,
-        getCachedCountsByDate: getCachedCountsByDate // ★ CB-66: sync per-date counts for period-cap enforcement
+        getCachedCountsByDate: getCachedCountsByDate, // ★ CB-66: sync per-date counts for period-cap enforcement
+        getCachedData: getCachedData, // ★ sync full payload for RotationEngine.reoverlayCloudCache
+        deriveCounts: deriveCounts // ★ shared counting rules for the backfill/reconcile utility
     };
 
     console.log('[RotationCloud] Module ready');

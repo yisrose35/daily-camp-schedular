@@ -1234,8 +1234,9 @@
                         <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Activity</label>
                         <input id="rotation-activity-filter" type="text" placeholder="e.g. Basketball" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;box-sizing:border-box;" />
                     </div>
-                    <div style="display:flex;align-items:flex-end;">
+                    <div style="display:flex;align-items:flex-end;gap:8px;">
                         <button id="rotation-refresh-btn" title="Re-read schedule data" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">↻ Refresh</button>
+                        <button id="rotation-heal-btn" title="Verify rotation memory against every saved schedule and repair any gaps" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">🔧 Verify Memory</button>
                     </div>
                 </div>
             </div>
@@ -1257,6 +1258,39 @@
             if (window.RotationCloud?.invalidateCache) window.RotationCloud.invalidateCache();
             const cur = divSelect.value;
             if (cur) renderRotationTable(cur, true); // ★ force cloud refresh
+        };
+
+        // ★ Rotation memory verify/heal — no-console access to the reconciler
+        // (Brain trace download stays console-only: downloadGenTrace())
+        const rotHeal = document.getElementById('rotation-heal-btn');
+        if (rotHeal) rotHeal.onclick = async () => {
+            if (!window.backfillRotationMemory) { alert('Memory verify is unavailable on this page.'); return; }
+            rotHeal.disabled = true;
+            const origLabel = rotHeal.textContent;
+            rotHeal.textContent = '🔧 Verifying…';
+            try {
+                const rep = await window.backfillRotationMemory();
+                if (rep) {
+                    const healed = (rep.healed || []).length;
+                    const skipped = (rep.skippedDegraded || []).length;
+                    const errs = (rep.errors || []).length;
+                    alert('Rotation memory verified.\n\n' +
+                        '• Dates in sync: ' + (rep.ok || []).length + '\n' +
+                        '• Dates repaired: ' + healed + (healed ? ' (' + rep.healed.join(', ') + ')' : '') + '\n' +
+                        (skipped ? '• Skipped (degraded local copy): ' + skipped + '\n' : '') +
+                        (errs ? '• Errors: ' + errs + ' — see console\n' : ''));
+                    if (window.RotationCloud?.invalidateCache) window.RotationCloud.invalidateCache();
+                    const cur2 = divSelect.value;
+                    if (cur2) renderRotationTable(cur2, true);
+                } else {
+                    alert('Memory verify could not run (not signed in, or cloud unavailable).');
+                }
+            } catch (e) {
+                alert('Memory verify failed: ' + (e.message || e));
+            } finally {
+                rotHeal.disabled = false;
+                rotHeal.textContent = origLabel;
+            }
         };
 
         // Show the "Select a division" placeholder so the report area isn't

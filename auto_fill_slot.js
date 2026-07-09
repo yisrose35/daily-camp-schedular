@@ -517,14 +517,51 @@
     // SCORE & PICK — lower score = better candidate
     // ========================================================================
 
-    function scoreAndPick(bunk, candidates, today) {
+    function scoreAndPick(bunk, candidates, today, divName, slotIdx) {
         const { countsByAct, lastDoneByAct, todayActs } = buildHistory(bunk, today);
 
-        const scored = candidates.map(c => {
+        const scorePass = () => candidates.map(c => {
             const act = c.activity;
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
             if (todayActs.has(act)) return null;     // already doing it today
+            // ★ Rotation-engine hard gates (fair-share cap, frequencyDays
+            //   cooldown, rotation cohort, per-grade caps, availableDays).
+            //   This filler's local scorer knows recency and per-period caps but
+            //   NOT the engine's hard blocks — observed live 2026-07-09: bunk
+            //   לב's leftover Free slot was filled with fair-share-BLOCKED
+            //   Basketball. Gate here so the last-resort fill obeys the same
+            //   rules as every other placement path. When this strict pass
+            //   empties the pool, the relax pass below may re-admit ONLY
+            //   fair-share-capped candidates (never yesterday-repeats or real
+            //   caps) so the slot fills instead of going Free.
+            if (window.RotationEngine?.calculateRotationScore) {
+                const rot = window.RotationEngine.calculateRotationScore({
+                    bunkName: bunk, activityName: act,
+                    divisionName: divName || null,
+                    beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                    allActivities: null,
+                    activityProperties: window.activityProperties || {}
+                });
+                if (rot === Infinity) return null;   // hard-blocked by the engine
+            }
+            // ★ Back-to-back gate (kill switch: window.__fallbackYesterdayGate = false).
+            //   YESTERDAY_PENALTY (50000, "MUST NOT REPEAT") is finite, so the
+            //   Infinity gate above lets a did-it-yesterday candidate through when
+            //   it's the only legal one left — observed live 2026-07-09: bunk לב's
+            //   accessible pool was {Basketball, Hockey, Dodgeball: fair-share
+            //   capped; Baseball: done yesterday} and the fill repeated Baseball
+            //   two days running. Same policy as the fair-share gate: the
+            //   last-resort fill leaves the slot Free rather than hand a bunk the
+            //   same activity on consecutive days. Recency >= YESTERDAY_PENALTY
+            //   also covers same-day (Infinity) and active streaks.
+            if (window.__fallbackYesterdayGate !== false &&
+                window.RotationEngine?.calculateRecencyScore) {
+                const _yp = window.RotationEngine.CONFIG?.YESTERDAY_PENALTY || 50000;
+                const rec = window.RotationEngine.calculateRecencyScore(
+                    bunk, act, (typeof slotIdx === 'number' ? slotIdx : 0));
+                if (rec >= _yp) return null;         // did it yesterday — stay Free
+            }
             // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
             //   against a period-windowed count, NOT the lifetime countsByAct — else
             //   the cap silently degrades into a lifetime cap and permanently blocks
@@ -572,9 +609,36 @@
             return { ...c, score, count, last };
         }).filter(Boolean);
 
+        let scored = scorePass();
+
+        // ★ LAST-RESORT FAIR-SHARE RELAX (observed live 2026-07-08/09: bunk לב's
+        //   entire pool was fair-share-capped + cooldown-blocked, so the gates
+        //   above left the slot Free two days running). Policy order is
+        //   no-back-to-back > no-Free > fair-share bookkeeping: when the strict
+        //   pass yields NOTHING, re-score once with the fair-share cap switched
+        //   off. Everything else stays hard — same-day dupes, the yesterday
+        //   gate, maxUsage/exactFrequency ceilings, frequencyDays cooldowns,
+        //   cohort waits and availableDays all still block (they live outside
+        //   the __fairShareHardCap switch), so only "you're ahead of the
+        //   laggards" candidates come back. A slot whose sole relaxed candidate
+        //   was done yesterday STILL stays Free.
+        //   Kill switch: window.__fallbackFairShareRelax = false.
+        let relaxed = false;
+        if (!scored.length &&
+            window.__fallbackFairShareRelax !== false &&
+            window.__fairShareHardCap !== false &&
+            window.RotationEngine?.calculateRotationScore) {
+            const _prevCap = window.__fairShareHardCap;
+            window.__fairShareHardCap = false;
+            try { scored = scorePass(); } finally { window.__fairShareHardCap = _prevCap; }
+            relaxed = scored.length > 0;
+        }
+
         if (!scored.length) return null;
         scored.sort((a, b) => a.score - b.score);
-        return scored[0];
+        const best = scored[0];
+        if (relaxed) best._fairShareRelaxed = true;
+        return best;
     }
 
     // ========================================================================
@@ -634,7 +698,7 @@
 
         // 4. Score and pick
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
-        const best = scoreAndPick(bunk, candidates, today);
+        const best = scoreAndPick(bunk, candidates, today, divName, slotIdx);
         if (!best) { toast('All candidates disqualified by constraints — nothing to fill', 'warning'); return; }
 
         // 5. Write + save + refresh
@@ -649,7 +713,8 @@
         window.updateTable?.();
 
         const where = best.field ? ` @ ${best.field}` : '';
-        toast(`✓ Auto-filled: ${best.activity}${where}`, 'success');
+        const note = best._fairShareRelaxed ? ' (fair-share relaxed)' : '';
+        toast(`✓ Auto-filled: ${best.activity}${where}${note}`, 'success');
     }
 
     // ========================================================================
@@ -766,7 +831,7 @@
         if (!candidates.length) return false;
 
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
-        const best = scoreAndPick(bunk, candidates, today);
+        const best = scoreAndPick(bunk, candidates, today, divName, slotIdx);
         if (!best) return false;
 
         // Write straight to memory — no save, no toast, no updateTable.
@@ -802,15 +867,31 @@
             if (_afFeat._endMin) { _afEntry._startMin = slotStart; _afEntry._endMin = _afFeat._endMin; _afEntry._durationBestFit = _afFeat._durationBestFit; }
         }
         window.scheduleAssignments[bunk][slotIdx] = _afEntry;
+        // ★ GenTrace: fallback fills happen AFTER the solver's commits, so
+        //   without this record they are invisible in the brain trace — the
+        //   final schedule showed activities no decision explained.
+        if (window.GenTrace && window.GenTrace.active) {
+            const _dec = {
+                kind: 'fallback-fill', bunk: bunk, division: divName || undefined,
+                window: slotStart + '-' + slotEnd,
+                chosen: { name: best.activity, field: best.field || null }
+            };
+            if (best._fairShareRelaxed) _dec.relaxed = 'fairShare';
+            window.GenTrace.decision(_dec);
+        }
         return true;
     }
 
-    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons };
+    // _scoreAndPick exposed for headless tests (rotation hard-gate coverage)
+    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons, _scoreAndPick: scoreAndPick };
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupInjection);
-    } else {
-        setupInjection();
+    // Browser-only UI wiring (headless test loads have no document)
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupInjection);
+        } else {
+            setupInjection();
+        }
     }
 
 })();
