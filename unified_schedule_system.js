@@ -1376,18 +1376,76 @@ function shouldHighlightBunk(bunkName) {
     //   Kill-switch: window.__postEditUncappedLabels = false restores capacity 1.
     const _UNCAPPED_LABELS = new Set(['swim', 'pool', 'swimming', 'swimming pool',
         'lunch', 'snack', 'snacks', 'dinner', 'dismissal']);
-    function isUncappedFacilitylessLabel(name, activityProps) {
-        if (!name) return false;
-        if (window.__postEditUncappedLabels === false) return false;
+    const _SWIM_LABELS = new Set(['swim', 'pool', 'swimming', 'swimming pool']);
+    // Resolve what governs a direct-fill LABEL's capacity:
+    //   null           → not a label, or the exact name IS configured (a real
+    //                    field/special under that name) — normal rules apply.
+    //   {sharableWith} → a facility is assigned OFF the exact name, so ITS
+    //                    limits govern the label. For the swim family this
+    //                    mirrors the engine's canUsePoolAtTime chain exactly:
+    //                    Swim GENERAL ACTIVITY sharing (preferred) → pool-named
+    //                    field's sharing → legacy app1.poolLaneCapacity.
+    //   'unlimited'    → a label with NO facility assigned anywhere → no cap.
+    function resolveLabelSharing(name, activityProps) {
+        if (!name) return null;
+        if (window.__postEditUncappedLabels === false) return null;
         const n = String(name).toLowerCase().trim();
-        if (!_UNCAPPED_LABELS.has(n)) return false;
+        if (!_UNCAPPED_LABELS.has(n)) return null;
         let props = activityProps;
         if (!props) { try { props = getActivityProperties(); } catch (_e) { props = {}; } }
-        // Configured under this name (any casing) → a real facility governs.
-        if (props && Object.keys(props).some(k => String(k).toLowerCase().trim() === n)) return false;
-        return true;
+        // Configured under this exact name (any casing) → that config governs.
+        if (props && Object.keys(props).some(k => String(k).toLowerCase().trim() === n)) return null;
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            const app1 = gs.app1 || {};
+            // (1) A general activity of this name on a facility — for the swim
+            //     family also quickType:'swim' (the shape the engine prefers).
+            for (const fac of (gs.facilities || [])) {
+                for (const ga of ((fac && fac.generalActivities) || [])) {
+                    if (!ga || !ga.sharableWith) continue;
+                    const gaN = String(ga.name || '').toLowerCase().trim();
+                    const gaQt = String(ga.quickType || '').toLowerCase().trim();
+                    if (gaN === n || (_SWIM_LABELS.has(n) && (gaQt === 'swim' || gaN === 'swim'))) {
+                        return { sharableWith: ga.sharableWith };
+                    }
+                }
+            }
+            // (2) A field hosting the label as an activity — for the swim family
+            //     also any pool-named field (engine parity) — with sharing config.
+            const fields = app1.fields || gs.fields || [];
+            for (const f of fields) {
+                if (!f || !f.name || !f.sharableWith) continue;
+                const fn = String(f.name).toLowerCase();
+                const hosts = (f.activities || []).some(a => {
+                    const aN = String(a).toLowerCase().trim();
+                    return aN === n || (_SWIM_LABELS.has(n) && _SWIM_LABELS.has(aN));
+                });
+                if (hosts || (_SWIM_LABELS.has(n) && fn.indexOf('pool') !== -1)) {
+                    return { sharableWith: f.sharableWith };
+                }
+            }
+            // (3) Legacy explicit pool cap.
+            if (_SWIM_LABELS.has(n) && typeof app1.poolLaneCapacity === 'number' && app1.poolLaneCapacity > 0) {
+                return { sharableWith: { type: 'all', capacity: app1.poolLaneCapacity } };
+            }
+        } catch (_e) {}
+        return 'unlimited';
     }
+    function isUncappedFacilitylessLabel(name, activityProps) {
+        return resolveLabelSharing(name, activityProps) === 'unlimited';
+    }
+    // Shared capacity math for a resolved label sharing config (engine parity:
+    // not_sharable → 1; explicit capacity; type 'all' w/o capacity → unlimited).
+    function labelSharingCapacity(sharableWith, fallback) {
+        const t = String(sharableWith.type || sharableWith.shareType || 'all').toLowerCase();
+        if (t === 'not_sharable') return 1;
+        const c = parseInt(sharableWith.capacity);
+        if (c > 0) return c;
+        return t === 'all' ? 999999 : fallback;
+    }
+    window.resolveLabelSharing = resolveLabelSharing;
     window.isUncappedFacilitylessLabel = isUncappedFacilitylessLabel;
+    window.labelSharingCapacity = labelSharingCapacity;
 
     // True iff `name` exactly matches a configured league (regular or specialty).
     // Used to distinguish a real league slot from a custom pin whose name merely
@@ -1520,10 +1578,14 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
     let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
-    // ★ Facility-less uncapped label (Swim etc.): no configured facility →
-    //   unlimited. Usage is still reported (the picker can show "shared"),
-    //   but co-holding bunks are never conflicts.
-    if (isUncappedFacilitylessLabel(locationName, activityProps)) maxCapacity = Infinity;
+    // ★ Direct-fill label resolution (Swim & friends): NO facility assigned
+    //   anywhere → unlimited (usage still reported, co-holding bunks are never
+    //   conflicts). Facility assigned OFF the exact name (Swim general
+    //   activity / pool-named field / legacy poolLaneCapacity) → THAT
+    //   facility's limits govern the label.
+    const _lblShare = resolveLabelSharing(locationName, activityProps);
+    if (_lblShare === 'unlimited') maxCapacity = Infinity;
+    else if (_lblShare && _lblShare.sharableWith) maxCapacity = labelSharingCapacity(_lblShare.sharableWith, maxCapacity);
    // ★ MS-4b: for CONFLICT CLASSIFICATION, "mine" = bunks in my GENERATION
    // scope (assigned divisions). v3.13 gave schedulers edit access to ALL
    // bunks, so every cross-user conflict looked "editable" and other users'
@@ -2467,13 +2529,18 @@ function _resolveSlotWindow(bunk, divName, slots) {
 function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
     if (startMin === null || endMin === null) return true;
 
-    // ★ Facility-less uncapped label (Swim etc.): unlimited — other bunks
-    //   holding the same label never make it "unavailable". Pre-fix, an
-    //   unconfigured name fell to not_sharable/capacity-1 below, so Swim
-    //   read busy whenever any other bunk was swimming.
-    if (isUncappedFacilitylessLabel(fieldName, activityProperties)) return true;
+    // ★ Direct-fill label resolution (Swim etc.): NO facility assigned
+    //   anywhere → unlimited, other bunks holding the same label never make
+    //   it "unavailable" (pre-fix, an unconfigured name fell to the
+    //   not_sharable/capacity-1 default below). A facility assigned OFF the
+    //   exact name (Swim general activity / pool-named field / legacy
+    //   poolLaneCapacity) → the label follows THAT facility's sharing rules.
+    const _lblShare = resolveLabelSharing(fieldName, activityProperties);
+    if (_lblShare === 'unlimited') return true;
 
-    const props = activityProperties?.[fieldName] || {};
+    const props = (_lblShare && _lblShare.sharableWith)
+        ? { sharableWith: _lblShare.sharableWith }
+        : (activityProperties?.[fieldName] || {});
     const sharableWith = props.sharableWith || {};
     const sharingType = sharableWith.type || (props.sharable ? 'same_division' : 'not_sharable');
     let maxCapacity = 1;

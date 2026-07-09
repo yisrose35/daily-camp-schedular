@@ -285,10 +285,16 @@
         } else if (locationInfo.sharable) {
             maxCapacity = 2;
         }
-        // ★ Facility-less uncapped label (Swim etc. — no configured facility
-        //   under the name): unlimited, co-holding bunks are never conflicts.
-        //   Shared helper lives in unified_schedule_system.js.
-        if (window.isUncappedFacilitylessLabel?.(locationName, activityProperties)) maxCapacity = Infinity;
+        // ★ Direct-fill label resolution (Swim etc.) — shared helpers live in
+        //   unified_schedule_system.js: NO facility assigned anywhere →
+        //   unlimited; facility assigned off the exact name (Swim general
+        //   activity / pool-named field / legacy poolLaneCapacity) → that
+        //   facility's limits govern the label.
+        const _lblShare = window.resolveLabelSharing?.(locationName, activityProperties);
+        if (_lblShare === 'unlimited') maxCapacity = Infinity;
+        else if (_lblShare && _lblShare.sharableWith && window.labelSharingCapacity) {
+            maxCapacity = window.labelSharingCapacity(_lblShare.sharableWith, maxCapacity);
+        }
         
         // ★ MS-4b: conflict classification uses GENERATION scope — see
         // unified_schedule_system.checkLocationConflict for the rationale
@@ -1665,11 +1671,12 @@
             if (fieldName && fieldName !== 'Free' && fieldName.toLowerCase() !== 'free') {
                 let fieldOnly = fieldName;
                 if (fieldName.includes(' – ')) fieldOnly = fieldName.split(' – ')[0].trim();
-                if (window.TimeBasedFieldUsage?.checkAvailability
-                    // ★ Facility-less uncapped label (Swim etc.) → unlimited, skip
-                    //   the capacity check entirely (shared helper in
-                    //   unified_schedule_system.js).
-                    && !window.isUncappedFacilitylessLabel?.(fieldOnly, window.activityProperties)) {
+                // ★ Direct-fill label resolution (Swim etc., shared helper in
+                //   unified_schedule_system.js): no facility anywhere →
+                //   unlimited (skip the capacity check); facility assigned off
+                //   the exact name → use THAT facility's capacity.
+                const _lblAv = window.resolveLabelSharing?.(fieldOnly, window.activityProperties);
+                if (window.TimeBasedFieldUsage?.checkAvailability && _lblAv !== 'unlimited') {
                     const allProps = window.activityProperties || {};
                     let actProps = allProps[fieldOnly];
                     if (!actProps) {
@@ -1679,7 +1686,10 @@
                         }
                     }
                     actProps = actProps || {};
-                    const capacity = actProps.sharableWith?.capacity ? parseInt(actProps.sharableWith.capacity) || 1 : (actProps.sharable ? 2 : 1);
+                    let capacity = actProps.sharableWith?.capacity ? parseInt(actProps.sharableWith.capacity) || 1 : (actProps.sharable ? 2 : 1);
+                    if (_lblAv && _lblAv.sharableWith && window.labelSharingCapacity) {
+                        capacity = window.labelSharingCapacity(_lblAv.sharableWith, capacity);
+                    }
                     const avail = window.TimeBasedFieldUsage.checkAvailability(fieldOnly, proposedStart, proposedEnd, capacity, bunk);
                     if (!avail.available) { result.fieldConflicts = avail.conflicts || []; result.hasConflict = true; }
                 }

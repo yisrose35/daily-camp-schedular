@@ -160,6 +160,67 @@ test('a REAL configured pool keeps its capacity (facility assigned -> cap enforc
     assert.equal(check.hasConflict, true, 'configured pool at capacity still conflicts');
 });
 
+test('Swim GENERAL ACTIVITY on a facility -> the label follows ITS capacity', () => {
+    const w = buildSandbox();
+    installFacilitylessCamp(w);
+    // Facility assigned the engine-preferred way: Swim GA with sharing rules.
+    // Nothing under the literal name "Swim" in activityProperties.
+    w.loadGlobalSettings = () => ({
+        app1: { fields: [], specialActivities: [] },
+        facilities: [{ name: 'Aquatics Center', generalActivities: [
+            { name: 'Swim', quickType: 'swim', sharableWith: { type: 'all', capacity: 3 } },
+        ] }],
+    });
+    const resolved = w.resolveLabelSharing('Swim', w.activityProperties);
+    assert.notEqual(resolved, 'unlimited', 'GA-assigned swim is NOT facility-less');
+    assert.equal(resolved.sharableWith.capacity, 3);
+    // 4 co-swimmers > cap 3 -> conflict; the facility limit governs.
+    const over = w.checkLocationConflict('Swim', [0], 'A1');
+    assert.equal(over.hasConflict, true, '4 swimmers exceed the GA capacity of 3');
+    assert.equal(over.maxCapacity, 3);
+    assert.equal(w.checkFieldAvailableByTime('Swim', 600, 645, 'A1', w.activityProperties), false);
+    // Under the cap: 2 co-swimmers -> fine.
+    delete w.scheduleAssignments.B1;
+    delete w.scheduleAssignments.B2;
+    const under = w.checkLocationConflict('Swim', [0], 'A1');
+    assert.equal(under.hasConflict, false, '2 swimmers fit the GA capacity of 3');
+});
+
+test('pool-named FIELD with sharing rules -> the label follows ITS capacity', () => {
+    const w = buildSandbox();
+    installFacilitylessCamp(w);
+    w.loadGlobalSettings = () => ({ app1: {
+        fields: [{ name: 'Pool', activities: [], sharableWith: { type: 'all', capacity: 2 } }],
+        specialActivities: [],
+    } });
+    const resolved = w.resolveLabelSharing('Swim', w.activityProperties);
+    assert.equal(resolved.sharableWith.capacity, 2, 'pool-named field sharing governs the Swim label');
+    assert.equal(w.checkFieldAvailableByTime('Swim', 600, 645, 'A1', w.activityProperties), false,
+        '4 swimmers exceed the pool field capacity of 2');
+    assert.equal(w.checkLocationConflict('Swim', [0], 'A1').hasConflict, true);
+});
+
+test('legacy poolLaneCapacity is honored as an assigned cap', () => {
+    const w = buildSandbox();
+    installFacilitylessCamp(w);
+    w.loadGlobalSettings = () => ({ app1: { fields: [], specialActivities: [], poolLaneCapacity: 2 } });
+    const resolved = w.resolveLabelSharing('Swim', w.activityProperties);
+    assert.equal(resolved.sharableWith.capacity, 2);
+    assert.equal(w.checkLocationConflict('Swim', [0], 'A1').hasConflict, true, '4 swimmers exceed legacy cap 2');
+});
+
+test('pool-named field WITHOUT sharing config stays unlimited (engine parity)', () => {
+    const w = buildSandbox();
+    installFacilitylessCamp(w);
+    // canUsePoolAtTime treats a pool field with no sharableWith as no config;
+    // post-edit must agree.
+    w.loadGlobalSettings = () => ({ app1: {
+        fields: [{ name: 'Pool', activities: [] }], specialActivities: [],
+    } });
+    assert.equal(w.resolveLabelSharing('Swim', w.activityProperties), 'unlimited');
+    assert.equal(w.checkLocationConflict('Swim', [0], 'A1').hasConflict, false);
+});
+
 test('unconfigured NON-label names keep the conservative capacity-1 default', () => {
     const w = buildSandbox();
     installFacilitylessCamp(w);
