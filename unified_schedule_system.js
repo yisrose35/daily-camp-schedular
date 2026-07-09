@@ -1041,6 +1041,8 @@ function shouldHighlightBunk(bunkName) {
         
         // Get capacity
         const activityProps = getActivityProperties();
+        // ★ Facility-less uncapped label (Swim etc.): nothing to cap → no conflict.
+        if (isUncappedFacilitylessLabel(fieldName, activityProps)) return { conflict: false, conflicts: [] };
         const fieldInfo = activityProps[fieldName] || {};
         let maxCapacity = 1;
         if (fieldInfo.sharableWith?.capacity) {
@@ -1355,9 +1357,37 @@ function shouldHighlightBunk(bunkName) {
     function isFixedBlockType(eventName) {
         if (!eventName) return false;
         const lower = eventName.toLowerCase();
-        return lower.includes('lunch') || lower.includes('snack') || lower.includes('swim') || 
+        return lower.includes('lunch') || lower.includes('snack') || lower.includes('swim') ||
                lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
     }
+
+    // ★ UNCAPPED FACILITY-LESS LABELS (Swim & friends) ————————————————————————
+    //   Swim / Lunch / Snacks / Dinner / Dismissal are division-wide LABELS,
+    //   not bookable facilities: the generator direct-fills them with no field
+    //   and EVERY bunk can hold them at once. When the camp has NOT configured
+    //   a real facility under the name there is nothing physical to cap — the
+    //   rule is "no facility assigned to swim → swim is unlimited". Without
+    //   this, every post-edit capacity gate fell through to its capacity-1
+    //   default (unconfigured name → not_sharable), so the moment ONE other
+    //   bunk was swimming, an edit to Swim read "in use / conflict".
+    //   A camp that DOES configure the name (a real Pool field, a Swim special)
+    //   keeps its real sharing rules — this only fires when the name resolves
+    //   to no activity-properties config at all.
+    //   Kill-switch: window.__postEditUncappedLabels = false restores capacity 1.
+    const _UNCAPPED_LABELS = new Set(['swim', 'pool', 'swimming', 'swimming pool',
+        'lunch', 'snack', 'snacks', 'dinner', 'dismissal']);
+    function isUncappedFacilitylessLabel(name, activityProps) {
+        if (!name) return false;
+        if (window.__postEditUncappedLabels === false) return false;
+        const n = String(name).toLowerCase().trim();
+        if (!_UNCAPPED_LABELS.has(n)) return false;
+        let props = activityProps;
+        if (!props) { try { props = getActivityProperties(); } catch (_e) { props = {}; } }
+        // Configured under this name (any casing) → a real facility governs.
+        if (props && Object.keys(props).some(k => String(k).toLowerCase().trim() === n)) return false;
+        return true;
+    }
+    window.isUncappedFacilitylessLabel = isUncappedFacilitylessLabel;
 
     // True iff `name` exactly matches a configured league (regular or specialty).
     // Used to distinguish a real league slot from a custom pin whose name merely
@@ -1490,6 +1520,10 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
     let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
+    // ★ Facility-less uncapped label (Swim etc.): no configured facility →
+    //   unlimited. Usage is still reported (the picker can show "shared"),
+    //   but co-holding bunks are never conflicts.
+    if (isUncappedFacilitylessLabel(locationName, activityProps)) maxCapacity = Infinity;
    // ★ MS-4b: for CONFLICT CLASSIFICATION, "mine" = bunks in my GENERATION
    // scope (assigned divisions). v3.13 gave schedulers edit access to ALL
    // bunks, so every cross-user conflict looked "editable" and other users'
@@ -1744,6 +1778,9 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
     }
 
     function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps, timeWindow = null) {
+        // ★ Facility-less uncapped label (Swim etc.): always available — there
+        //   is no physical facility to fill up.
+        if (isUncappedFacilitylessLabel(fName, activityProps)) return true;
         const divName = getDivisionForBunk(bunk);
         if (!divName || slots.length === 0) return false;
 
@@ -2429,7 +2466,13 @@ function _resolveSlotWindow(bunk, divName, slots) {
 // =========================================================================
 function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
     if (startMin === null || endMin === null) return true;
-    
+
+    // ★ Facility-less uncapped label (Swim etc.): unlimited — other bunks
+    //   holding the same label never make it "unavailable". Pre-fix, an
+    //   unconfigured name fell to not_sharable/capacity-1 below, so Swim
+    //   read busy whenever any other bunk was swimming.
+    if (isUncappedFacilitylessLabel(fieldName, activityProperties)) return true;
+
     const props = activityProperties?.[fieldName] || {};
     const sharableWith = props.sharableWith || {};
     const sharingType = sharableWith.type || (props.sharable ? 'same_division' : 'not_sharable');
@@ -6213,6 +6256,8 @@ if (bypassStatus.highlight) {
 
         // Check if a field is available considering capacity AND sharing rules
         function _isFieldAvailableForBunk(fName) {
+            // ★ Facility-less uncapped label (Swim etc.) → always has room.
+            if (isUncappedFacilitylessLabel(fName, activityProps)) return true;
             const props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
             const shareType = props.sharableWith?.type || (props.sharable ? 'all' : 'not_sharable');
@@ -6443,6 +6488,8 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
     function checkIfMoveCreatesConflict(bunk, slot, newField, simulatedUsage, alreadyProcessed) {
         const newConflicts = [];
         const activityProps = getActivityProperties();
+        // ★ Facility-less uncapped label (Swim etc.) → a move there never conflicts.
+        if (isUncappedFacilitylessLabel(newField, activityProps)) return [];
         const props = activityProps[newField] || {};
         const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
@@ -7450,6 +7497,8 @@ if (softBlocks.length > 0) {
     function autoModeRebalanceCheck(divName, editedBunks, location, activity, timeStartMin, timeEndMin) {
         if (!location) return;
         const activityProps = getActivityProperties();
+        // ★ Facility-less uncapped label (Swim etc.) → nothing to rebalance.
+        if (isUncappedFacilitylessLabel(location, activityProps)) return;
         const locProps = activityProps[location] || {};
         const fieldCap = locProps.sharableWith?.capacity ? parseInt(locProps.sharableWith.capacity) || 1 : (locProps.sharable ? 2 : 1);
 

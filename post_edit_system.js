@@ -278,13 +278,17 @@
         const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() ||
                                    window.activityProperties || {};
         const locationInfo = activityProperties[locationName] || {};
-        
+
         let maxCapacity = 1;
         if (locationInfo.sharableWith?.capacity) {
             maxCapacity = parseInt(locationInfo.sharableWith.capacity) || 1;
         } else if (locationInfo.sharable) {
             maxCapacity = 2;
         }
+        // ★ Facility-less uncapped label (Swim etc. — no configured facility
+        //   under the name): unlimited, co-holding bunks are never conflicts.
+        //   Shared helper lives in unified_schedule_system.js.
+        if (window.isUncappedFacilitylessLabel?.(locationName, activityProperties)) maxCapacity = Infinity;
         
         // ★ MS-4b: conflict classification uses GENERATION scope — see
         // unified_schedule_system.checkLocationConflict for the rationale
@@ -1661,7 +1665,11 @@
             if (fieldName && fieldName !== 'Free' && fieldName.toLowerCase() !== 'free') {
                 let fieldOnly = fieldName;
                 if (fieldName.includes(' – ')) fieldOnly = fieldName.split(' – ')[0].trim();
-                if (window.TimeBasedFieldUsage?.checkAvailability) {
+                if (window.TimeBasedFieldUsage?.checkAvailability
+                    // ★ Facility-less uncapped label (Swim etc.) → unlimited, skip
+                    //   the capacity check entirely (shared helper in
+                    //   unified_schedule_system.js).
+                    && !window.isUncappedFacilitylessLabel?.(fieldOnly, window.activityProperties)) {
                     const allProps = window.activityProperties || {};
                     let actProps = allProps[fieldOnly];
                     if (!actProps) {
