@@ -2307,6 +2307,26 @@
                 });
             });
             Object.entries(byGroup).forEach(([groupId, entries]) => {
+                // (a) One span = one league. Mirrors saved BEFORE the shared-league
+                // remap fix were remapped to their own grade's first league, so one
+                // spanned tile can still reference two different leagues — each
+                // grade then generates an unrelated game. If any named league
+                // covers EVERY spanned division, the whole group adopts it so a
+                // single league period processes all of them.
+                const blocks = entries.map(e => e.block);
+                const _ml = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
+                const names = [...new Set(blocks.map(b => b.leagueName).filter(Boolean))];
+                const divsInGroup = [...new Set(blocks.map(b => b.divName))];
+                const shared = names.find(n => {
+                    const lg = _ml.find(l => l && l.name === n);
+                    return lg && Array.isArray(lg.divisions) && divsInGroup.every(d => lg.divisions.includes(d));
+                });
+                if (shared && blocks.some(b => b.leagueName !== shared)) {
+                    console.log(`[RegularLeagues] ★ Span group ${groupId}: unifying league → "${shared}" (members named [${names.join(', ')}])`);
+                    blocks.forEach(b => { b.leagueName = shared; });
+                }
+
+                // (b) One span = one time period.
                 const keys = [...new Set(entries.map(e => String(e.key)))];
                 if (keys.length < 2) return;
                 const allNumeric = keys.every(k => !isNaN(Number(k)));

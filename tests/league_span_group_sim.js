@@ -52,17 +52,17 @@ assert.ok(Leagues && typeof Leagues.processRegularLeagues === 'function', 'modul
 
 const DAY = '2026-07-06';
 
-function makeContext(blocks) {
+function makeContext(blocks, extraLeagues) {
     return {
         schedulableSlotBlocks: blocks,
-        masterLeagues: {
+        masterLeagues: Object.assign({
             'Test League': {
                 name: 'Test League', enabled: true,
                 divisions: ['4th Grade', '5th Grade'],
                 teams: ['A1', 'A2', 'B1', 'B2'], sports: ['Basketball'],
                 schedulingPriority: 'sport_variety',
             },
-        },
+        }, extraLeagues || {}),
         disabledLeagues: [],
         divisions: {
             '4th Grade': { bunks: ['A1', 'A2'], startTime: '10:00 AM', endTime: '4:00 PM' },
@@ -88,10 +88,10 @@ function leagueBlock(divName, startTime, spanGroup) {
     };
 }
 
-function run(blocks) {
+function run(blocks, extraLeagues) {
     cloud.leagueHistory = undefined;           // fresh history each run
     global.localStorage._m = {};
-    Leagues.processRegularLeagues(makeContext(blocks));
+    Leagues.processRegularLeagues(makeContext(blocks, extraLeagues));
     return blocks;
 }
 
@@ -148,6 +148,39 @@ function gamesRecorded() {
         'TEST3: identical matchups');
     assert.strictEqual(gamesRecorded(), 1, 'TEST3: one game recorded');
     console.log('✅ TEST 3 — same-time span shares one game (unchanged behavior)');
+}
+
+// =============================================================================
+// TEST 4 — STALE MIRROR LEAGUE: a span saved before the shared-league remap
+//          fix has its mirror still naming the mirror grade's own league.
+//          The engine must unify the group onto the league covering ALL
+//          spanned divisions and produce one shared game; the stale league
+//          must not run a game of its own.
+// =============================================================================
+{
+    const b4 = leagueBlock('4th Grade', 780, 'span_test4');
+    const b5 = leagueBlock('5th Grade', 780, 'span_test4');
+    b5.leagueName = 'Other League';           // ← stale remap from before the fix
+    run([b4, b5], {
+        'Other League': {
+            name: 'Other League', enabled: true, divisions: ['5th Grade'],
+            teams: ['B1', 'B2'], sports: ['Basketball'],
+            schedulingPriority: 'sport_variety',
+        },
+    });
+
+    assert.ok(b4._filled && b5._filled, 'TEST4: both blocks filled');
+    assert.strictEqual(b4._filled._leagueName, 'Test League', 'TEST4: 4th plays Test League');
+    assert.strictEqual(b5._filled._leagueName, 'Test League',
+        'TEST4: stale mirror healed onto the shared league');
+    assert.strictEqual(b4._filled._gameLabel, 'Game 1', 'TEST4: 4th labeled Game 1');
+    assert.strictEqual(b5._filled._gameLabel, 'Game 1', 'TEST4: 5th labeled Game 1');
+    assert.deepStrictEqual(b5._filled._allMatchups, b4._filled._allMatchups,
+        'TEST4: identical matchups');
+    assert.strictEqual(gamesRecorded(), 1, 'TEST4: one Test League game recorded');
+    assert.strictEqual(cloud.leagueHistory?.gamesPerDate?.['Other League']?.[DAY] || 0, 0,
+        'TEST4: the stale league did not run its own game');
+    console.log('✅ TEST 4 — stale mirror league unified onto the shared league (one game)');
 }
 
 console.log('\n🎉 league_span_group_sim: ALL TESTS PASSED');

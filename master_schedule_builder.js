@@ -202,6 +202,23 @@ function _mbRepairSpans(skeleton) {
       const divs = [...new Set(members.map(m => m.division))]
         .sort((a, b) => order.indexOf(a) - order.indexOf(b));
       members.forEach(m => { m.spanDivisions = divs.slice(); });
+      // ★ Heal mirrors created before the shared-league remap fix: they were
+      // remapped to their own grade's FIRST league, so one spanned tile could
+      // reference two different leagues (→ two different games at generation).
+      // If any member's league covers EVERY spanned grade, the whole span
+      // adopts it.
+      const t0 = members[0].type;
+      if (t0 === 'league' || t0 === 'specialty_league') {
+        const names = [...new Set(members.map(m => m.leagueName).filter(Boolean))];
+        const shared = names.find(n => divs.every(d => _mbLeaguesForGradeByType(d, t0).includes(n)));
+        if (shared) {
+          members.forEach(m => {
+            if (m.leagueName === shared) return;
+            if (m.leagueName && m.event === m.leagueName) m.event = shared;
+            m.leagueName = shared;
+          });
+        }
+      }
     }
   });
   return skeleton;
@@ -1106,7 +1123,7 @@ function init(targetElement = null){
     const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
     if (savedDraft) {
       try {
-        dailySkeleton = JSON.parse(savedDraft);
+        dailySkeleton = _mbRepairSpans(JSON.parse(savedDraft));
         if(savedDraftName) currentLoadedTemplate = savedDraftName;
         // Draft means there might be unsaved changes
         hasUnsavedChanges = true;
@@ -5740,13 +5757,13 @@ function loadDailySkeleton() {
       currentLoadedTemplate = tmpl;
   }
   
-  dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
+  dailySkeleton = (tmpl && skeletons[tmpl]) ? _mbRepairSpans(JSON.parse(JSON.stringify(skeletons[tmpl]))) : [];
 }
 
 function loadSkeletonToBuilder(name) {
   const all = window.getSavedSkeletons?.() || {};
   if (all[name]) {
-    dailySkeleton = JSON.parse(JSON.stringify(all[name]));
+    dailySkeleton = _mbRepairSpans(JSON.parse(JSON.stringify(all[name])));
     currentLoadedTemplate = name;
     hasUnsavedChanges = false;
     const savedOrders = (window.loadGlobalSettings?.() || {})?.app1?.skeletonColumnOrders || {};

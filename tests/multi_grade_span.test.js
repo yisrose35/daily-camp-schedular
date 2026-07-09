@@ -309,4 +309,30 @@ describe('repairSpans — heals groups after external add/remove', () => {
         assert.deepEqual(b.spanDivisions, ['4th Grade', '6th Grade']);
         assert.equal(a.spanGroup, 'g1');
     });
+
+    it('heals a stale mirror whose league differs from the span\'s shared league', () => {
+        // Span saved BEFORE the shared-league remap fix: the 5th Grade mirror
+        // was remapped to 5th's own league. Repair must unify the span onto
+        // the league that covers every spanned grade.
+        const restore = global.loadGlobalSettings;
+        global.loadGlobalSettings = () => ({
+            leaguesByName: {
+                'Fifth Grade League': { enabled: true, divisions: ['5th Grade'] },
+                'Junior League': { enabled: true, divisions: ['4th Grade', '5th Grade'] }
+            }
+        });
+        try {
+            const a = leagueTile('4th Grade', { spanGroup: 'g1', spanDivisions: ['4th Grade', '5th Grade'] });
+            const b = leagueTile('5th Grade', {
+                spanGroup: 'g1', spanDivisions: ['4th Grade', '5th Grade'],
+                leagueName: 'Fifth Grade League', event: 'Fifth Grade League'
+            });
+            MSI.repairSpans([a, b]);
+            assert.equal(b.leagueName, 'Junior League', 'stale mirror adopts the shared league');
+            assert.equal(b.event, 'Junior League', 'event label follows the league');
+            assert.equal(a.leagueName, 'Junior League', 'anchor unchanged');
+        } finally {
+            global.loadGlobalSettings = restore;
+        }
+    });
 });
