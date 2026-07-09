@@ -544,6 +544,23 @@
                 });
                 if (rot === Infinity) return null;   // hard-blocked by the engine
             }
+            // ★ Back-to-back gate (kill switch: window.__fallbackYesterdayGate = false).
+            //   YESTERDAY_PENALTY (50000, "MUST NOT REPEAT") is finite, so the
+            //   Infinity gate above lets a did-it-yesterday candidate through when
+            //   it's the only legal one left — observed live 2026-07-09: bunk לב's
+            //   accessible pool was {Basketball, Hockey, Dodgeball: fair-share
+            //   capped; Baseball: done yesterday} and the fill repeated Baseball
+            //   two days running. Same policy as the fair-share gate: the
+            //   last-resort fill leaves the slot Free rather than hand a bunk the
+            //   same activity on consecutive days. Recency >= YESTERDAY_PENALTY
+            //   also covers same-day (Infinity) and active streaks.
+            if (window.__fallbackYesterdayGate !== false &&
+                window.RotationEngine?.calculateRecencyScore) {
+                const _yp = window.RotationEngine.CONFIG?.YESTERDAY_PENALTY || 50000;
+                const rec = window.RotationEngine.calculateRecencyScore(
+                    bunk, act, (typeof slotIdx === 'number' ? slotIdx : 0));
+                if (rec >= _yp) return null;         // did it yesterday — stay Free
+            }
             // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
             //   against a period-windowed count, NOT the lifetime countsByAct — else
             //   the cap silently degrades into a lifetime cap and permanently blocks

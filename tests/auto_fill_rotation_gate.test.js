@@ -42,7 +42,7 @@ function loadInto(filename, ctx) {
     vm.runInContext(src, ctx, { filename });
 }
 
-function setup(rotScores) {
+function setup(rotScores, recencyScores) {
     const sb = makeSandbox();
     const win = sb.window;
     win.loadAllDailyData = () => ({});
@@ -51,9 +51,14 @@ function setup(rotScores) {
     win.activityProperties = {};
     // Stub engine: per-activity score, Infinity = hard block
     win.RotationEngine = {
+        CONFIG: { YESTERDAY_PENALTY: 50000 },
         calculateRotationScore: ({ activityName }) =>
             (activityName in rotScores ? rotScores[activityName] : 0)
     };
+    if (recencyScores) {
+        win.RotationEngine.calculateRecencyScore = (bunk, act) =>
+            (act in recencyScores ? recencyScores[act] : -5000);
+    }
     loadInto('auto_fill_slot.js', sb);
     return sb;
 }
@@ -90,5 +95,49 @@ describe('fallback filler — rotation hard-gate', () => {
         const pick = sb.window.AutoFillSlot._scoreAndPick(
             'לב', [cand('Baseball'), cand('Hockey')], '2026-07-09', 'לב', 1);
         assert.equal(pick.activity, 'Hockey', 'same-day duplicate must be skipped');
+    });
+});
+
+describe('fallback filler — back-to-back (yesterday) gate', () => {
+    // Second 3-day live run (2026-07-09 trace): bunk לב's pool was
+    // {Basketball: fair-share blocked, Baseball: done YESTERDAY}. The Infinity
+    // gate skipped Basketball but Baseball (recency 50000, finite) filled —
+    // the same activity two days running. The fill must leave the slot Free.
+
+    it('skips a did-it-yesterday candidate even when it is the only legal one', () => {
+        const sb = setup({ Basketball: Infinity, Baseball: 56520 },
+                         { Baseball: 50000 });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Basketball'), cand('Baseball')], '2026-07-09', 'לב', 0);
+        assert.equal(pick, null, 'yesterday-repeat must stay Free, not refill');
+    });
+
+    it('prefers an older candidate over a yesterday one', () => {
+        const sb = setup({}, { Baseball: 50000, Hockey: 4500 });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Baseball'), cand('Hockey')], '2026-07-09', 'לב', 0);
+        assert.equal(pick.activity, 'Hockey', 'the 3-days-ago candidate must win');
+    });
+
+    it('kill switch __fallbackYesterdayGate=false restores the old behavior', () => {
+        const sb = setup({ Baseball: 56520 }, { Baseball: 50000 });
+        sb.window.__fallbackYesterdayGate = false;
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Baseball')], '2026-07-09', 'לב', 0);
+        assert.equal(pick && pick.activity, 'Baseball', 'gate off → repeat allowed');
+    });
+
+    it('same-day recency (Infinity) is also caught by the recency gate', () => {
+        const sb = setup({}, { Baseball: Infinity });
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Baseball')], '2026-07-09', 'לב', 0);
+        assert.equal(pick, null, 'Infinity recency >= YESTERDAY_PENALTY → skip');
+    });
+
+    it('engine without calculateRecencyScore keeps prior behavior (no crash)', () => {
+        const sb = setup({ Baseball: 56520 });   // no recency stub installed
+        const pick = sb.window.AutoFillSlot._scoreAndPick(
+            'לב', [cand('Baseball')], '2026-07-09', 'לב', 0);
+        assert.equal(pick && pick.activity, 'Baseball', 'no recency API → old behavior');
     });
 });
