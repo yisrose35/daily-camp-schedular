@@ -131,11 +131,27 @@
     // -------------------------------------------------------------------------
     // The schedulers number every league period ("tile") chronologically via
     // history.gamesPerDate. Playoffs anchor on that counter: startGameCount is
-    // the total when playoffs begin, and league tile #(startGameCount + N)
+    // the count when playoffs begin, and league tile #(startGameCount + N)
     // plays Round N. Read the SAME history the schedulers read (cloud-synced
     // globalSettings mirror, with the localStorage backup as fallback — LG-7
     // freshness rule for regular leagues).
-    function _totalGamesRecorded() {
+
+    // The schedule date the user is working on right now (date picker).
+    function _activeScheduleDate() {
+        try {
+            var d = window.currentScheduleDate;
+            if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+        } catch (_) {}
+        return new Date().toISOString().split('T')[0];
+    }
+
+    // Games recorded on dates BEFORE the active schedule date. This must
+    // mirror the scheduler's calculateStartingGameNumber (which counts only
+    // earlier dates) — and it's why the anchor must NOT count days that were
+    // generated AHEAD of time: if tomorrow's schedule already exists when
+    // playoffs are turned on, counting its game would put the anchor in the
+    // future and today's tile would "predate" it (→ regular league play).
+    function _gamesBeforeActiveDate() {
         try {
             var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
             var cloud, local = null;
@@ -155,22 +171,39 @@
             if (!hist || !hist.gamesPerDate) return 0;
             var key = (_kind === 'specialty') ? (_league.id || _league.name) : _league.name;
             var map = hist.gamesPerDate[key] || {};
+            var activeDate = _activeScheduleDate();
             var total = 0;
-            Object.keys(map).forEach(function (d) { total += Number(map[d]) || 0; });
+            Object.keys(map).forEach(function (d) {
+                if (d < activeDate) total += Number(map[d]) || 0;
+            });
             return total;
         } catch (_) { return 0; }
     }
 
-    // The round the NEXT league tile on the schedule will play.
+    // The round the league tile on the ACTIVE schedule date will play.
+    // Can return 0/negative when the anchor sits after the active date
+    // (that tile plays regular league) — callers surface that state.
     function _upNextRound(p) {
+        var n;
         if (typeof p.startGameCount === 'number') {
-            return Math.max(1, _totalGamesRecorded() - p.startGameCount + 1);
+            n = _gamesBeforeActiveDate() - p.startGameCount + 1;
+        } else {
+            n = p.currentRound || 1;   // legacy manual mode (anchor stamped on next render)
         }
-        return p.currentRound || 1;   // legacy manual mode (anchor stamped on next render)
+        if (n < 1) return n;
+        // Mirror the scheduler: rounds already fully decided never take a tile —
+        // the next tile plays the first round that still needs games.
+        var guard = 0;
+        while (guard++ < 100) {
+            var r = window.PlayoffMode.getRoundByNumber(_league, n);
+            if (r && window.PlayoffMode.isRoundComplete(r)) n++;
+            else break;
+        }
+        return n;
     }
 
-    // Anchor the tile counter so the next league tile plays `nextRound`
-    // (defaults to the first round that isn't fully decided yet).
+    // Anchor the tile counter so the ACTIVE date's league tile plays
+    // `nextRound` (defaults to the first round that isn't fully decided yet).
     function _stampStartCount(p, nextRound) {
         if (nextRound == null) {
             nextRound = 1;
@@ -180,7 +213,7 @@
                 else break;
             }
         }
-        p.startGameCount = Math.max(0, _totalGamesRecorded() - (nextRound - 1));
+        p.startGameCount = Math.max(0, _gamesBeforeActiveDate() - (nextRound - 1));
         p.currentRound = nextRound;   // keep the display cache in step
     }
 
@@ -290,20 +323,27 @@
         var champion = window.PlayoffMode.getChampion(_league);
 
         // ── Automatic round-tracking status ──
+        var activeDate = _activeScheduleDate();
         var played = (typeof p.startGameCount === 'number')
-            ? Math.max(0, _totalGamesRecorded() - p.startGameCount) : 0;
+            ? Math.max(0, _gamesBeforeActiveDate() - p.startGameCount) : 0;
         var track = document.createElement('div');
         track.className = 'ph-track-bar';
-        var trackMsg = 'Round tracking is automatic: league period #1 after playoffs started plays Round 1, period #2 plays Round 2, and so on. '
-            + played + ' league period' + (played === 1 ? '' : 's') + ' counted so far';
-        if (champion) {
-            trackMsg += ' — tournament decided.';
-        } else if (hasRounds && upNext > maxRound) {
-            trackMsg += ' — the next league period plays Round ' + upNext + ', which isn\'t built yet. Add it below.';
+        var trackMsg;
+        if (upNext < 1) {
+            trackMsg = '⚠️ The playoff start point is set AFTER ' + activeDate + ' — league periods generated for this date play regular league games. '
+                + 'To start playoffs here, open the round that should play and click "Play this round next" (with ' + activeDate + ' selected in the calendar).';
         } else {
-            trackMsg += ' — the next league period plays Round ' + upNext + '.';
+            trackMsg = '🎯 Round tracking is automatic: league period #1 after playoffs started plays Round 1, period #2 plays Round 2, and so on. '
+                + played + ' league period' + (played === 1 ? '' : 's') + ' counted so far';
+            if (champion) {
+                trackMsg += ' — tournament decided.';
+            } else if (hasRounds && upNext > maxRound) {
+                trackMsg += ' — generating ' + activeDate + ' plays Round ' + upNext + ', which isn\'t built yet. Add it below.';
+            } else {
+                trackMsg += ' — generating ' + activeDate + ' plays Round ' + upNext + '.';
+            }
         }
-        track.textContent = '🎯 ' + trackMsg;
+        track.textContent = trackMsg;
         card.appendChild(track);
 
         // ── Page picker: one tab per round + "Add Round" ──

@@ -1153,14 +1153,35 @@
                     console.log('[SpecialtyLeagues] 🏆 PLAYOFF: tile #' + gameNumber + ' predates the playoff start anchor (' + _startCnt + ') — regular league play');
                     _playoffPreseason = true;
                 } else {
+                    // ★ Rounds whose winners are already all marked never need a
+                    //   tile (e.g. results entered by hand before the round's slot
+                    //   ran). Walk forward to the first round that still needs
+                    //   games — otherwise the tile would skip, never get counted,
+                    //   and the tracker would point at the decided round forever.
+                    let roundToPlay = derivedRound;
+                    if (typeof _PM_S.getRoundByNumber === 'function') {
+                        let _guard = 0;
+                        while (_guard++ < 100) {
+                            const _r = _PM_S.getRoundByNumber(league, roundToPlay);
+                            if (_r && _PM_S.isRoundComplete(_r)) roundToPlay++;
+                            else break;
+                        }
+                    }
+                    const _reanchor = function () {
+                        if (roundToPlay !== derivedRound && typeof _startCnt === 'number') {
+                            league.playoff.startGameCount = gameNumber - roundToPlay;
+                            console.log('[SpecialtyLeagues] 🏆 PLAYOFF: Round ' + derivedRound + (roundToPlay - derivedRound > 1 ? '–' + (roundToPlay - 1) : '') + ' already decided — tile #' + gameNumber + ' plays Round ' + roundToPlay + ' (anchor re-aligned to ' + league.playoff.startGameCount + ')');
+                        }
+                    };
                     const userRound = (typeof _PM_S.getRoundByNumber === 'function')
-                        ? _PM_S.getRoundByNumber(league, derivedRound) : null;
+                        ? _PM_S.getRoundByNumber(league, roundToPlay) : null;
                     const userRoundMatchups = (userRound && Array.isArray(userRound.matchups)) ? userRound.matchups : [];
                     const userActive = userRoundMatchups.filter(function (m) {
                         return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner;
                     });
                     if (userActive.length > 0) {
-                        _playoffRoundNum = derivedRound;
+                        _reanchor();
+                        _playoffRoundNum = roundToPlay;
                         matchups = userActive.map(function (m) {
                             return {
                                 teamA: m.teamA,
@@ -1172,20 +1193,18 @@
                             };
                         });
                         // Keep the hub's display cache in sync with the tracked round
-                        league.playoff.currentRound = derivedRound;
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + derivedRound + ' (tile #' + gameNumber + '): ' + userActive.length + ' matchup(s)');
-                    } else if (userRound && _PM_S.isRoundComplete(userRound)) {
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF: Round ' + derivedRound + ' is already decided — skipping this league period');
-                        continue;
+                        league.playoff.currentRound = roundToPlay;
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + roundToPlay + ' (tile #' + gameNumber + '): ' + userActive.length + ' matchup(s)');
                     } else if (!userRound && _PM_S.getChampion && _PM_S.getChampion(league)) {
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF: tournament decided (champion: ' + _PM_S.getChampion(league) + ') and no Round ' + derivedRound + ' exists — skipping');
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF: tournament decided (champion: ' + _PM_S.getChampion(league) + ') and no Round ' + roundToPlay + ' exists — skipping');
                         continue;
                     } else {
                         // Round not built yet, or built but teams not filled in —
                         // reserve the slot with TBD placeholders sized from the
                         // user's round (or half the previous round).
+                        _reanchor();
                         const prevRound = (typeof _PM_S.getRoundByNumber === 'function')
-                            ? _PM_S.getRoundByNumber(league, derivedRound - 1) : null;
+                            ? _PM_S.getRoundByNumber(league, roundToPlay - 1) : null;
                         const prevFilled = prevRound
                             ? (prevRound.matchups || []).filter(function (m) {
                                 return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE';
@@ -1197,7 +1216,7 @@
                             .map(function (m) { return m.sport || null; })
                             .filter(Boolean);
                         const fallbackSport = league.sport || null;
-                        _playoffRoundNum = derivedRound;
+                        _playoffRoundNum = roundToPlay;
                         _playoffIsTBD = true;
                         matchups = [];
                         for (let k = 0; k < tbdCount; k++) {
@@ -1218,7 +1237,7 @@
                                 _tbdIndex: k
                             });
                         }
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + derivedRound + ' TBD: ' + tbdCount + ' placeholder matchup(s)'
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + roundToPlay + ' TBD: ' + tbdCount + ' placeholder matchup(s)'
                             + (userRound ? ' (round built, teams not filled in yet)' : ' (round not built yet — add it in the Playoff Hub)'));
                     }
                 }
