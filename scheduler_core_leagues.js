@@ -868,8 +868,52 @@
                 return todayMetCache[key];
             }
             const W_SAMEDAY = (typeof window !== 'undefined' && window.__leagueSameDayOpponentGuard === false) ? 0 : 10000000;
+            // ★ ADJACENT-GAME-DAY OPPONENT GUARD: a pair must not meet on two
+            // CONSECUTIVE game days. met()/recency() only look at dates ≤ dayId,
+            // so a date generated (or regenerated) while a LATER date already
+            // has games was completely blind to that day — both days were
+            // computed from the identical history prefix and the deterministic
+            // optimizer picked the identical pairings (observed live: the same
+            // matchup 3 days running after middle-day regens). Penalize any
+            // meeting on the NEAREST game date on either side of dayId as a
+            // hard tier: a matching containing an adjacent-day rematch loses to
+            // any matching with none, in BOTH modes. When every matching
+            // repeats (2-team league), the penalty is uniform and the normal
+            // weights decide — the game still runs. Same-day meetings are the
+            // same-day guard's job (10× this weight), and byes stay possible
+            // only where they already were.
+            // Killswitch: window.__leagueAdjacentDayOpponentGuard = false.
+            const _adjDates = (function () {
+                const gl = (history.gameLog && history.gameLog[leagueName]) || {};
+                let prev = null, next = null;
+                if (dayId) {
+                    Object.keys(gl).forEach(function (d) {
+                        if (d === dayId || !(gl[d] || []).length) return;
+                        if (d < dayId) { if (!prev || d > prev) prev = d; }
+                        else { if (!next || d < next) next = d; }
+                    });
+                }
+                return [prev, next].filter(Boolean);
+            })();
+            const adjMetCache = {};
+            function metAdjacent(a, b) {
+                if (!_adjDates.length) return 0;
+                const key = getMatchupKey(a, b);
+                if (adjMetCache[key] == null) {
+                    let n = 0;
+                    _adjDates.forEach(function (d) {
+                        (history.gameLog[leagueName][d] || []).forEach(function (e) {
+                            if (e && e.t1 && e.t2 && getMatchupKey(e.t1, e.t2) === key) n++;
+                        });
+                    });
+                    adjMetCache[key] = n;
+                }
+                return adjMetCache[key];
+            }
+            const W_ADJDAY = (typeof window !== 'undefined' && window.__leagueAdjacentDayOpponentGuard === false) ? 0 : 400000;
             function pairWeight(a, b) {
-                return (-met(a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC - metToday(a, b) * W_SAMEDAY;
+                return (-met(a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC
+                    - metToday(a, b) * W_SAMEDAY - metAdjacent(a, b) * W_ADJDAY;
             }
 
             let matching;
@@ -1457,7 +1501,15 @@
     // within the league's share) and BEFORE the pair caveat (rescue wins).
     // Assignments born from a rescue are flagged so the swap pass won't
     // trade the rescued sport away again.
-    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2) {
+    // ★ PAIR-AWARE: a rescue must never force the FN-57 caveat's violation —
+    // if the rescue sport is one THIS PAIR has already played together while
+    // the pool still offers a sport the pair has played less, skip the rescue
+    // (rescued=false, pool unchanged). The pair caveat then keeps the replay
+    // out, and the starved team's rescue fires on a later day against a
+    // different opponent. Without this, a rescue could pin the pair's exact
+    // prior sport AND flag it _rescued so the swap pass couldn't repair it
+    // (observed live: a rematch replayed its previous sport).
+    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history) {
         if (pool.length < 2) return { pool: pool, rescued: false };
         const poolSports = Array.from(new Set(pool.map(function (o) { return o.sport; })));
         if (poolSports.length < 2) return { pool: pool, rescued: false };
@@ -1475,6 +1527,22 @@
             if (d > bestD) { bestD = d; best = s; }
         });
         if (!best) return { pool: pool, rescued: false };
+        if (leagueName && history) {
+            const pairCounts = {};
+            getPairSports(leagueName, t1, t2, history)
+                .forEach(function (s) { pairCounts[s] = (pairCounts[s] || 0) + 1; });
+            if (pairCounts[best]) {
+                let minPair = Infinity;
+                poolSports.forEach(function (sp) {
+                    const c = pairCounts[sp] || 0;
+                    if (c < minPair) minPair = c;
+                });
+                if ((pairCounts[best] || 0) > minPair) {
+                    console.log(`   🆘 ${t1} vs ${t2}: cycle rescue for ${best} skipped — this pair already played it together (rescue defers to a later matchup)`);
+                    return { pool: pool, rescued: false };
+                }
+            }
+        }
         const rescuedPool = pool.filter(function (o) { return o.sport === best; });
         if (!rescuedPool.length) return { pool: pool, rescued: false };
         console.log(`   🆘 ${t1} vs ${t2}: cycle rescue → ${best} (a team is ${bestD} play(s) behind on it)`);
@@ -1605,7 +1673,7 @@
 
             // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
             // as a hard preference (see _applyCycleRescueFilter).
-            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
             _pool = _rescue.pool;
 
             // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
@@ -1787,7 +1855,7 @@
 
             // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
             // as a hard preference (see _applyCycleRescueFilter).
-            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
             _pool = _rescue.pool;
 
             // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
@@ -1915,6 +1983,29 @@
                     .filter(function (x) { return x === s; }).length;
                 return teamScore(a.team1, s) + teamScore(a.team2, s) - pairC * 400;
             }
+            // ★ PAIR-REPLAY REPAIR IS LEXICOGRAPHICALLY FIRST. The FN-57 caveat
+            // says a rematch NEVER replays a sport the pair already played
+            // together while an alternative exists, but with matchups ≈ open
+            // fields the greedy loop hands the LAST matchup the leftover field
+            // — the caveat's per-matchup pool collapses to one option and the
+            // repeat lands (observed live: a pair met again and played the
+            // exact same sport). No finite weight inside assnScore can repair
+            // it reliably: the trade that fixes the pair typically costs
+            // recent-sport (-1500) and cycle-need (~-920) penalties on BOTH
+            // matchups, so the repeat always won the weighted comparison.
+            // Instead, a swap that strictly REDUCES the number of pair-replays
+            // is taken whenever it is legal (no 3-day streak, no same-day
+            // repeat, no rescued sport traded away); the weighted score only
+            // decides among swaps that keep the replay count equal. A team
+            // repeating yesterday's sport is the accepted lesser evil —
+            // 2-in-a-row is allowed by design, and cycle drift self-corrects
+            // on later days. Terminates: each swap either lowers total replay
+            // count or raises total score at equal replay count.
+            function pairReplays(a, s) {
+                return getPairSports(leagueName, a.team1, a.team2, history)
+                    .filter(function (x) { return x === s; }).length;
+            }
+            function legalFor(a, s) { return !illegal(a.team1, s) && !illegal(a.team2, s); }
             let improved = true, guard = 0;
             while (improved && guard++ < 100) {
                 improved = false;
@@ -1923,16 +2014,61 @@
                         const A = assignments[i], B = assignments[j];
                         if (A.sport === B.sport) continue;
                         if (A._rescued || B._rescued) continue;   // never trade a cycle-rescued sport away
-                        if (illegal(A.team1, B.sport) || illegal(A.team2, B.sport)) continue;
-                        if (illegal(B.team1, A.sport) || illegal(B.team2, A.sport)) continue;
+                        if (!legalFor(A, B.sport) || !legalFor(B, A.sport)) continue;
+                        const baseRep = pairReplays(A, A.sport) + pairReplays(B, B.sport);
+                        const swapRep = pairReplays(A, B.sport) + pairReplays(B, A.sport);
                         const base = assnScore(A, A.sport) + assnScore(B, B.sport);
                         const swapped = assnScore(A, B.sport) + assnScore(B, A.sport);
-                        if (swapped > base) {
+                        if (swapRep < baseRep || (swapRep === baseRep && swapped > base)) {
                             const tmp = { field: A.field, sport: A.sport };
                             A.field = B.field; A.sport = B.sport;
                             B.field = tmp.field; B.sport = tmp.sport;
-                            console.log('   ★ [SlotSwap] ' + (A.matchup || A.team1 + ' vs ' + A.team2) + ' ⇄ ' + (B.matchup || B.team1 + ' vs ' + B.team2) + ' traded sport/field for cycle need');
+                            console.log('   ★ [SlotSwap] ' + (A.matchup || A.team1 + ' vs ' + A.team2) + ' ⇄ ' + (B.matchup || B.team1 + ' vs ' + B.team2)
+                                + (swapRep < baseRep ? ' traded sport/field to avoid a pair-rematch sport repeat' : ' traded sport/field for cycle need'));
                             improved = true; break;
+                        }
+                    }
+                }
+                // ★ 3-WAY ROTATION: pairwise swaps can strand a repairable replay
+                // in a local optimum — a 2-swap that MOVES the replay from one
+                // matchup to another is a wash (equal replay count), while the
+                // zero-replay day needs THREE matchups to rotate their
+                // (sport, field) picks at once (observed: picks {B,S,H} with one
+                // replay, and only the rotation {H,B,S} clears it — no single
+                // 2-swap improves). Try every triple in both rotation directions,
+                // accepted ONLY on a strict reduction in total pair-replays, so
+                // the loop's termination stays monotonic. Fields move with
+                // sports, exactly as in 2-swaps, so per-slot field locks and
+                // sport usage stay valid.
+                if (!improved) {
+                    outer:
+                    for (let i = 0; i < assignments.length; i++) {
+                        for (let j = i + 1; j < assignments.length; j++) {
+                            for (let k = j + 1; k < assignments.length; k++) {
+                                const T = [assignments[i], assignments[j], assignments[k]];
+                                if (T.some(function (a) { return a._rescued; })) continue;
+                                const baseRep = T.reduce(function (n, a) { return n + pairReplays(a, a.sport); }, 0);
+                                if (baseRep === 0) continue;
+                                // each element takes the (sport, field) of src[t]
+                                const dirs = [[1, 2, 0], [2, 0, 1]];
+                                for (let d = 0; d < dirs.length; d++) {
+                                    const src = dirs[d];
+                                    let ok = true, rep = 0;
+                                    for (let t = 0; t < 3 && ok; t++) {
+                                        const s = T[src[t]].sport;
+                                        if (!legalFor(T[t], s)) ok = false;
+                                        else rep += pairReplays(T[t], s);
+                                    }
+                                    if (!ok || rep >= baseRep) continue;
+                                    const picks = src.map(function (si) { return { field: T[si].field, sport: T[si].sport }; });
+                                    for (let t = 0; t < 3; t++) { T[t].field = picks[t].field; T[t].sport = picks[t].sport; }
+                                    console.log('   ★ [SlotSwap] 3-way rotation ('
+                                        + T.map(function (a) { return (a.matchup || a.team1 + ' vs ' + a.team2); }).join(' / ')
+                                        + ') to avoid a pair-rematch sport repeat');
+                                    improved = true;
+                                    break outer;
+                                }
+                            }
                         }
                     }
                 }
