@@ -25,64 +25,287 @@
     // LOAD/SAVE HISTORY (NOW CLOUD-SYNCED)
     // =========================================================================
 
-    function loadSpecialtyHistory() {
-        try {
-            // ★ First try to load from cloud-synced global settings
-            const global = window.loadGlobalSettings?.() || {};
-            if (global.specialtyLeagueHistory && Object.keys(global.specialtyLeagueHistory).length > 0) {
-                const history = global.specialtyLeagueHistory;
-                // Ensure all fields exist
-                history.teamFieldRotation = history.teamFieldRotation || {};
-                history.lastSlotOrder = history.lastSlotOrder || {};
-                history.conferenceRounds = history.conferenceRounds || {};
-                history.matchupHistory = history.matchupHistory || {};
-                history.gamesPerDate = history.gamesPerDate || {};  // ★ NEW
-                history.gameLog = history.gameLog || {};            // ★ FN-55
-                console.log("[SpecialtyLeagues] ✅ Loaded history from cloud");
-                return history;
-            }
-            
-            // Fallback to localStorage
-            const raw = localStorage.getItem(SPECIALTY_HISTORY_KEY);
-            if (!raw) return {
-                teamFieldRotation: {},
-                lastSlotOrder: {},
-                conferenceRounds: {},
-                matchupHistory: {},
-                gamesPerDate: {},  // ★ NEW: { leagueId: { "2025-01-01": 2, "2025-01-02": 3 } }
-                gameLog: {}        // ★ FN-55
+    // =========================================================================
+    // ★ LG-8 (specialty port): (LEAGUE, DATE)-GRANULAR HISTORY MERGE
+    // =========================================================================
+    // Same failure class as the regular engine: the specialty history rode the
+    // debounced camp_state_kv sync as a whole blob, and the loader let a cloud
+    // copy shadow local WHOLESALE — two writers (devices/tabs/roles) diverged
+    // into lineages and generation ran blind to whichever copy lost. The merge
+    // treats each (leagueId, date) as the unit: fresher copy wins conflicts,
+    // tombstones make deletions stick, and the derived stores (matchupHistory
+    // date-arrays, teamFieldRotation, slotDebt) are REBUILT from the merged
+    // gameLog for leagues that have one, so they can never diverge from it.
+    // Flat overwrite-only stores (lastSlotOrder, conferenceRounds) come from
+    // the fresher copy.
+    function mergeSpecialtyHistories(a, b) {
+        const norm = (h) => {
+            const out = {
+                teamFieldRotation: (h && h.teamFieldRotation) || {},
+                lastSlotOrder: (h && h.lastSlotOrder) || {},
+                conferenceRounds: (h && h.conferenceRounds) || {},
+                matchupHistory: (h && h.matchupHistory) || {},
+                gamesPerDate: (h && h.gamesPerDate) || {},
+                gameLog: (h && h.gameLog) || {},
+                slotDebt: (h && h.slotDebt) || {},
+                _tombstones: (h && h._tombstones) || {},
+                _savedAt: Number(h && h._savedAt) || 0
             };
+            if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
+            if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
+            return out;
+        };
+        if (!a) return b ? norm(b) : norm(null);
+        if (!b) return norm(a);
+        const A = norm(a), B = norm(b);
+        const F = (A._savedAt >= B._savedAt) ? A : B;   // fresher copy
+        const O = (A._savedAt >= B._savedAt) ? B : A;   // older copy
 
-            const history = JSON.parse(raw);
-            // Ensure new fields exist
+        const merged = {
+            teamFieldRotation: {},
+            lastSlotOrder: F.lastSlotOrder,
+            conferenceRounds: F.conferenceRounds,
+            matchupHistory: {},
+            gamesPerDate: {},
+            gameLog: {},
+            slotDebt: {},
+            _tombstones: {},
+            _savedAt: Math.max(A._savedAt, B._savedAt)
+        };
+        [F, O].forEach(function (h) {
+            Object.keys(h._tombstones).forEach(function (k) {
+                const ts = Number(h._tombstones[k]) || 0;
+                if (!(merged._tombstones[k] >= ts)) merged._tombstones[k] = ts;
+            });
+        });
+        merged._resetAt = Math.max(Number(a && a._resetAt) || 0, Number(b && b._resetAt) || 0) || undefined;
+        if (merged._resetAt === undefined) delete merged._resetAt;
+        const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
+        if (countersResetAt) merged._countersResetAt = countersResetAt;
+        const tombTs = function (lg, d) {
+            return Math.max(
+                merged._tombstones[lg + '|' + d] || 0,
+                merged._tombstones['*|' + d] || 0,
+                Number(merged._resetAt) || 0
+            );
+        };
+        [F, O].forEach(function (src) {
+            Object.keys(src.gameLog).forEach(function (lg) {
+                Object.keys(src.gameLog[lg] || {}).forEach(function (d) {
+                    if (merged.gameLog[lg] && merged.gameLog[lg][d]) return;
+                    if (!(src.gameLog[lg][d] || []).length) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    (merged.gameLog[lg] = merged.gameLog[lg] || {})[d] = src.gameLog[lg][d];
+                });
+            });
+            Object.keys(src.gamesPerDate).forEach(function (lg) {
+                if (!merged.gamesPerDate[lg]) merged.gamesPerDate[lg] = {};
+                Object.keys(src.gamesPerDate[lg] || {}).forEach(function (d) {
+                    if (merged.gamesPerDate[lg][d] !== undefined) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    if (countersResetAt > src._savedAt) return;
+                    merged.gamesPerDate[lg][d] = src.gamesPerDate[lg][d];
+                });
+            });
+        });
+        if (!countersResetAt) {
+            Object.keys(merged.gameLog).forEach(function (lg) {
+                Object.keys(merged.gameLog[lg]).forEach(function (d) {
+                    if (merged.gamesPerDate[lg] && merged.gamesPerDate[lg][d] !== undefined) return;
+                    const labels = new Set();
+                    (merged.gameLog[lg][d] || []).forEach(function (e) { if (e && e.g) labels.add(e.g); });
+                    (merged.gamesPerDate[lg] = merged.gamesPerDate[lg] || {})[d] = Math.max(labels.size, 1);
+                });
+            });
+        }
+        // Rebuild derived stores from the merged log; leagues with no gameLog
+        // at all (pure legacy) keep the fresher copy's entries.
+        const loggedLeagues = new Set(Object.keys(merged.gameLog));
+        const keepLegacy = function (srcMap, destMap) {
+            Object.keys(srcMap).forEach(function (k) {
+                if (!loggedLeagues.has(k.split('|')[0])) destMap[k] = srcMap[k];
+            });
+        };
+        keepLegacy(F.teamFieldRotation, merged.teamFieldRotation);
+        keepLegacy(F.matchupHistory, merged.matchupHistory);
+        keepLegacy(F.slotDebt, merged.slotDebt);
+        loggedLeagues.forEach(function (lg) {
+            Object.keys(merged.gameLog[lg]).sort().forEach(function (d) {
+                (merged.gameLog[lg][d] || []).forEach(function (e) {
+                    if (!e || !e.tA || !e.tB) return;
+                    const mk = `${lg}|${[e.tA, e.tB].sort().join('|')}`;
+                    (merged.matchupHistory[mk] = merged.matchupHistory[mk] || []).push(d);
+                    if (e.field) {
+                        [e.tA, e.tB].forEach(function (t) {
+                            const fk = `${lg}|${t}`;
+                            (merged.teamFieldRotation[fk] = merged.teamFieldRotation[fk] || []).push(e.field);
+                        });
+                    }
+                    if (e.s != null) {
+                        const w = Math.max(0, (e.s || 1) - 1);
+                        if (w > 0) {
+                            [e.tA, e.tB].forEach(function (t) {
+                                const sk = `${lg}|${t}`;
+                                merged.slotDebt[sk] = (merged.slotDebt[sk] || 0) + w;
+                            });
+                        }
+                    }
+                });
+            });
+        });
+        return merged;
+    }
+    SpecialtyLeagues.mergeSpecialtyHistories = mergeSpecialtyHistories;   // diagnostics + batched-sync merge + tests
+
+    function loadSpecialtyHistory() {
+        const EMPTY = () => ({
+            teamFieldRotation: {}, lastSlotOrder: {}, conferenceRounds: {},
+            matchupHistory: {}, gamesPerDate: {}, gameLog: {}, _tombstones: {}
+        });
+        try {
+            // Cloud-synced copy (hydrated into global settings)
+            const global = window.loadGlobalSettings?.() || {};
+            const cloud = (global.specialtyLeagueHistory && Object.keys(global.specialtyLeagueHistory).length > 0)
+                ? global.specialtyLeagueHistory : null;
+
+            // localStorage backup
+            let local = null;
+            try {
+                const raw = localStorage.getItem(SPECIALTY_HISTORY_KEY);
+                if (raw) local = JSON.parse(raw);
+            } catch (_) {}
+
+            // ★ LG-8: MERGE the copies at (league, date) granularity — the old
+            // cloud-wholesale-wins load let a stale cloud row shadow newer
+            // local days (and vice versa via the backup), so generation ran
+            // blind to the losing lineage's games.
+            let history;
+            if (cloud && local) {
+                history = mergeSpecialtyHistories(cloud, local);
+                console.log('[SpecialtyLeagues] ✅ Loaded history (merged cloud + local)');
+            } else if (cloud) {
+                history = cloud;
+                console.log("[SpecialtyLeagues] ✅ Loaded history from cloud");
+            } else if (local) {
+                history = local;
+                // Migrate old format if needed
+                if (history.roundCounters && !history.gamesPerDate) {
+                    console.log("[SpecialtyLeagues] Migrating old history format...");
+                    history.gamesPerDate = {};
+                }
+            } else {
+                return EMPTY();
+            }
+
+            // Ensure all fields exist
             history.teamFieldRotation = history.teamFieldRotation || {};
             history.lastSlotOrder = history.lastSlotOrder || {};
             history.conferenceRounds = history.conferenceRounds || {};
             history.matchupHistory = history.matchupHistory || {};
             history.gamesPerDate = history.gamesPerDate || {};
             history.gameLog = history.gameLog || {};
-            
-            // Migrate old format if needed
-            if (history.roundCounters && !history.gamesPerDate) {
-                console.log("[SpecialtyLeagues] Migrating old history format...");
-                history.gamesPerDate = {};
-            }
-            
+            history._tombstones = history._tombstones || {};
             return history;
         } catch (e) {
             console.error("[SpecialtyLeagues] Failed to load history:", e);
-            return {
-                teamFieldRotation: {},
-                lastSlotOrder: {},
-                conferenceRounds: {},
-                matchupHistory: {},
-                gamesPerDate: {},
-                gameLog: {}
-            };
+            return EMPTY();
         }
     }
 
+    // ★ LG-8: DIRECT VERIFIED CLOUD PUSH — specialty analog of the regular
+    // engine's push (see _pushLeagueHistoryToCloud there): write the row
+    // immediately with read-merge-write, retry 3× with backoff, warn loudly
+    // on a permissions rejection, coalesce concurrent saves.
+    let _spHistoryPushInFlight = false;
+    let _spHistoryPushQueued = null;
+    function _pushSpecialtyHistoryToCloud(history) {
+        try {
+            const sb = (typeof window !== 'undefined') && window.supabase;
+            const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
+            if (!sb || !campId) return;
+            if (_spHistoryPushInFlight) { _spHistoryPushQueued = history; return; }
+            _spHistoryPushInFlight = true;
+            const baseDelay = (typeof window !== 'undefined' && Number(window.__leagueHistoryPushRetryMs)) || 2000;
+            (async function () {
+                let delay = baseDelay;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        let payload = history;
+                        try {
+                            const r = await sb.from('camp_state_kv').select('value')
+                                .eq('camp_id', campId).eq('key', 'specialtyLeagueHistory').maybeSingle();
+                            const cur = r && !r.error && r.data && r.data.value;
+                            if (cur && typeof cur === 'object' && (cur.gameLog || cur.gamesPerDate)) {
+                                payload = mergeSpecialtyHistories(history, cur);
+                            }
+                        } catch (_e) {}
+                        const res = await sb.from('camp_state_kv').upsert({
+                            camp_id: campId, key: 'specialtyLeagueHistory', value: payload,
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'camp_id,key' });
+                        const err = res && res.error;
+                        if (!err) {
+                            console.log('[SpecialtyLeagues] ☁️ History pushed to cloud (verified)');
+                            break;
+                        }
+                        if (String(err.code) === '42501' || /permission|policy|row-level|violates/i.test(err.message || '')) {
+                            console.warn('[SpecialtyLeagues] 🚨 History cloud write BLOCKED by permissions — '
+                                + 'games recorded in this session exist only on this device. Generate from an '
+                                + 'owner/admin account, or apply the scheduler camp_state_kv write migration.', err.message || err);
+                            break;
+                        }
+                        throw err;
+                    } catch (e) {
+                        if (attempt >= 3) {
+                            console.warn('[SpecialtyLeagues] ⚠️ History cloud push failed after 3 attempts — '
+                                + 'relying on the batched sync/localStorage backup:', (e && e.message) || e);
+                            break;
+                        }
+                        await new Promise(function (res) { setTimeout(res, delay); });
+                        delay *= 2;
+                    }
+                }
+                _spHistoryPushInFlight = false;
+                if (_spHistoryPushQueued) {
+                    const next = _spHistoryPushQueued;
+                    _spHistoryPushQueued = null;
+                    _pushSpecialtyHistoryToCloud(next);
+                }
+            })();
+        } catch (_e) {}
+    }
+
+    // ★ LG-8: pre-generation cloud refresh — specialty analog of
+    // SchedulerCoreLeagues.refreshHistoryFromCloud. Fetches the authoritative
+    // row and MERGES it with this device's copy so today's matchups are chosen
+    // from the true cross-session record. Best-effort + time-boxed.
+    SpecialtyLeagues.refreshHistoryFromCloud = async function () {
+        try {
+            const sb = (typeof window !== 'undefined') && window.supabase;
+            const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
+            if (!sb || !campId) { console.log('[SpecialtyLeagues] cloud refresh skipped (no client/camp)'); return false; }
+            const q = sb.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'specialtyLeagueHistory').maybeSingle();
+            const timeout = new Promise(function (res) { setTimeout(function () { res({ _timedOut: true }); }, 6000); });
+            const r = await Promise.race([q, timeout]);
+            if (r && r._timedOut) { console.warn('[SpecialtyLeagues] cloud history refresh timed out — using existing copy'); return false; }
+            if (r && r.error) { console.warn('[SpecialtyLeagues] cloud history refresh error — using existing copy:', r.error); return false; }
+            const cloud = r && r.data && r.data.value;
+            if (!cloud || typeof cloud !== 'object' || !cloud.gameLog) { console.log('[SpecialtyLeagues] no cloud history to refresh'); return false; }
+            const merged = mergeSpecialtyHistories(cloud, loadSpecialtyHistory());
+            if (typeof window.saveGlobalSettings === 'function') { try { window.saveGlobalSettings('specialtyLeagueHistory', merged); } catch (_) {} }
+            try { localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(merged)); } catch (_) {}
+            console.log('[SpecialtyLeagues] ☁️ Refreshed history from cloud (merged; ' +
+                Object.keys(merged.gameLog || {}).length + ' league(s))');
+            return true;
+        } catch (e) {
+            console.warn('[SpecialtyLeagues] cloud history refresh failed — using existing copy:', e);
+            return false;
+        }
+    };
+
     function saveSpecialtyHistory(history) {
+        // ★ LG-8: stamp the save so merges can order the copies.
+        try { if (history && typeof history === 'object') history._savedAt = Date.now(); } catch (_) {}
         // ★ Cloud save FIRST and in its OWN try — see saveLeagueHistory: a full
         //   localStorage must never block the cloud write. Previously a quota error
         //   on the localStorage backup skipped saveGlobalSettings, so the day's games
@@ -90,11 +313,13 @@
         if (typeof window.saveGlobalSettings === 'function') {
             try {
                 window.saveGlobalSettings('specialtyLeagueHistory', history);
-                console.log("[SpecialtyLeagues] ✅ History saved to cloud");
+                console.log("[SpecialtyLeagues] ✅ History saved (queued for cloud sync)");
             } catch (e) {
                 console.error("[SpecialtyLeagues] Failed to save history to cloud:", e);
             }
         }
+        // ★ LG-8: immediate verified push, independent of the debounced batch.
+        _pushSpecialtyHistoryToCloud(history);
         // localStorage backup — best-effort; a quota failure here is non-fatal.
         try {
             localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(history));
@@ -1011,6 +1236,12 @@
                 if (history.gamesPerDate?.[l.id]?.[currentDate] !== undefined) {
                     delete history.gamesPerDate[l.id][currentDate];
                 }
+                // ★ LG-8 tombstone: this generation REPLACES the league's day —
+                // a stale copy's version must lose in any later merge (this
+                // run's end-of-gen save is stamped after this, so its own
+                // re-logged games survive).
+                history._tombstones = history._tombstones || {};
+                history._tombstones[`${l.id}|${currentDate}`] = Date.now();
             });
         })();
 
@@ -1627,6 +1858,13 @@ if (_playoffRoundNum) {
                 }
             }
 
+            // ★ LG-8 tombstone: the whole date was deleted (all leagues) —
+            // stamped even when nothing existed locally, because a divergent
+            // copy on another device may still carry games for this date.
+            history._tombstones = history._tombstones || {};
+            history._tombstones[`*|${dateKey}`] = Date.now();
+            changed = true;
+
             if (!changed) return;
 
             saveSpecialtyHistory(history);
@@ -1662,6 +1900,12 @@ if (_playoffRoundNum) {
                     delete history.gamesPerDate[l.id][dateKey];
                     changed = true;
                 }
+                // ★ LG-8 tombstone: deliberate per-league day reset — a stale
+                // copy must not resurrect it in a merge; a later regen (saved
+                // after this stamp) survives.
+                history._tombstones = history._tombstones || {};
+                history._tombstones[`${l.id}|${dateKey}`] = Date.now();
+                changed = true;
             });
             if (affected.length > 0) {
                 try { window.SpecialtyLeaguesAPI?.removeAutoGamesForDate?.(dateKey, affected); } catch (e) {}
@@ -1687,6 +1931,11 @@ if (_playoffRoundNum) {
             for (const leagueId of Object.keys(history.gamesPerDate)) {
                 history.gamesPerDate[leagueId] = {};
             }
+
+            // ★ LG-8: mark the wipe so merges don't resurrect counters from a
+            // stale copy or heal them back from the retained gameLog —
+            // erase-all restarts game numbering by design.
+            history._countersResetAt = Date.now();
 
             saveSpecialtyHistory(history);
             console.log('[SpecialtyLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');

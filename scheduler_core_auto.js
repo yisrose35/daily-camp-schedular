@@ -670,6 +670,7 @@
         //   today's matchups + sports come from the true cross-session record. Best-
         //   effort + time-boxed (see SchedulerCoreLeagues.refreshHistoryFromCloud).
         try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+        try { if (window.SchedulerCoreSpecialtyLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreSpecialtyLeagues.refreshHistoryFromCloud(); } catch (_eSpRefresh) {}
 
         // ★ SPORT-LEAK GATE: a grade that has NO sport/sports layer must never
         //   receive a field-catalog sport. Open time in such a grade is filled

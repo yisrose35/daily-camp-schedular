@@ -3539,6 +3539,7 @@
         // matchups it had already scheduled. Best-effort + time-boxed inside
         // refreshHistoryFromCloud; any failure keeps the existing copy.
         try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+        try { if (window.SchedulerCoreSpecialtyLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreSpecialtyLeagues.refreshHistoryFromCloud(); } catch (_eSpRefresh) {}
 
         let {
             divisions,

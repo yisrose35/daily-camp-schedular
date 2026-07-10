@@ -787,6 +787,41 @@
                 }
             }
 
+            // ★ LG-8: league histories get a REAL (league, date)-granular merge
+            // at upsert time, not a shallow spread. This batched write used to
+            // replace the whole leagueHistory row last-writer-wins — a stale
+            // queued blob from one device could clobber days another device
+            // had just pushed (the divergent-lineage bug observed live). The
+            // engines expose their merge functions; when a page hasn't loaded
+            // the engine (e.g. Me page), fall back to replacement — the
+            // engines' own direct verified push and merge-on-load re-unify.
+            const HISTORY_MERGERS = {
+                leagueHistory: () => window.SchedulerCoreLeagues?.mergeLeagueHistories,
+                specialtyLeagueHistory: () => window.SchedulerCoreSpecialtyLeagues?.mergeSpecialtyHistories,
+            };
+            for (const histKey of Object.keys(HISTORY_MERGERS)) {
+                const mergeFn = HISTORY_MERGERS[histKey]();
+                if (typeof mergeFn !== 'function') continue;
+                if (!keys.includes(histKey) ||
+                    !changesToSync[histKey] ||
+                    typeof changesToSync[histKey] !== 'object' ||
+                    Array.isArray(changesToSync[histKey])) continue;
+                try {
+                    const { data: cur, error: curErr } = await client
+                        .from('camp_state_kv')
+                        .select('value')
+                        .eq('camp_id', campId)
+                        .eq('key', histKey)
+                        .maybeSingle();
+                    if (!curErr && cur && cur.value && typeof cur.value === 'object' &&
+                        (cur.value.gameLog || cur.value.gamesPerDate)) {
+                        changesToSync[histKey] = mergeFn(changesToSync[histKey], cur.value);
+                    }
+                } catch (mergeErr) {
+                    log(`${histKey} history-merge failed (will replace wholesale):`, mergeErr?.message || mergeErr);
+                }
+            }
+
             const rows = keys.map(k => ({
                 camp_id:    campId,
                 key:        k,

@@ -6202,6 +6202,7 @@ async function runOptimizer() {
     //   so today's matchups + sports are chosen from the true cross-session record
     //   (not a stale in-memory copy). Best-effort + time-boxed — never blocks the gen.
     try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+    try { if (window.SchedulerCoreSpecialtyLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreSpecialtyLeagues.refreshHistoryFromCloud(); } catch (_eSpRefresh) {}
 
     // ★ FN-14 (final): snapshot the gen date NOW. The txn-wait + FN-17 guard above just
     //   confirmed the date transition has settled and picker === window.currentScheduleDate,
