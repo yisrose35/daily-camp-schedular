@@ -56,6 +56,9 @@
 //   getEliminatedTeams(league, beforeRound?) - teams that lost and never reappear
 //                                   later; beforeRound limits to "out going into
 //                                   round N"
+//   getFieldShortages(round, opts) - pure capacity check: which sports have more
+//                                   games than fields that can host them (see the
+//                                   function header for opts + return shape)
 //   getReservedForRound(league, n) - round n's reserved fields (legacy fallback)
 //   getChampion(league)           - winner of a decided single-matchup final, or null
 //   render(league, mountEl, opts) - deprecated stub; the live UI is PlayoffHub
@@ -63,7 +66,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '2.1.0';
+    var VERSION = '2.2.0';
 
     function uid() {
         return 'mu_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
@@ -254,6 +257,156 @@
         return out.sort();
     }
 
+    // -------------------------------------------------------------------------
+    // Field-capacity analysis — "you scheduled 6 baseball games but only 5
+    // baseball fields exist". Pure: all availability comes in via `opts`.
+    //
+    //   getFieldShortages(round, opts)
+    //     opts.fieldsForSport(sport) -> [fieldName, ...]   (regular leagues:
+    //                                    which fields can host that sport)
+    //     opts.sharedFieldPool       -> [fieldName, ...]   (specialty leagues:
+    //                                    every court hosts every matchup —
+    //                                    used when fieldsForSport is absent)
+    //     opts.gamesPerField         -> games one field hosts simultaneously
+    //                                    (default 1; specialty gamesPerFieldSlot)
+    //
+    // Only matchups the scheduler would actually place are counted: both teams
+    // picked, no BYE, no winner yet. The round's reservedActivities are saved
+    // for the teams that are OUT, so they don't count toward game capacity —
+    // EXCEPT a reserved field the user explicitly picked for a matchup (an
+    // explicit pick wins in the scheduler too).
+    //
+    // Returns a list of shortage objects, worst problems first:
+    //   { kind:'no_sport',   count }                        — matchups the
+    //       scheduler will SKIP because no sport is picked (only when
+    //       fieldsForSport mode is active; specialty courts are sport-agnostic)
+    //   { kind:'sport',      sport, games, capacity, shortfall }
+    //       — more games of one sport than fields that can host it
+    //   { kind:'field_dup',  field, picks }                 — the same field
+    //       explicitly picked for more picks than it can host at once
+    //   { kind:'overall',    games, capacity, shortfall }   — cross-sport
+    //       contention: every per-sport count fits, but the sports SHARE
+    //       fields and there aren't enough distinct fields for all games
+    // An empty array means every pending matchup can get a field.
+    // -------------------------------------------------------------------------
+    function getFieldShortages(round, opts) {
+        var out = [];
+        if (!round || !Array.isArray(round.matchups)) return out;
+        opts = opts || {};
+        var perField = Math.max(1, parseInt(opts.gamesPerField, 10) || 1);
+        var sportMode = typeof opts.fieldsForSport === 'function';
+        var pool = Array.isArray(opts.sharedFieldPool) ? opts.sharedFieldPool : [];
+        var reserved = {};
+        (Array.isArray(round.reservedActivities) ? round.reservedActivities : [])
+            .forEach(function (f) { reserved[String(f)] = true; });
+
+        // Matchups the scheduler will try to place.
+        var pending = round.matchups.filter(function (m) {
+            return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner;
+        });
+        if (pending.length === 0) return out;
+
+        // Sport-mode: matchups without a sport are silently skipped by the
+        // scheduler — surface that first, and analyze only the rest.
+        if (sportMode) {
+            var noSport = pending.filter(function (m) { return !m.sport; }).length;
+            if (noSport > 0) out.push({ kind: 'no_sport', count: noSport });
+            pending = pending.filter(function (m) { return !!m.sport; });
+            if (pending.length === 0) return out;
+        }
+
+        // Candidate fields per matchup: an explicit user pick always counts
+        // (even if reserved); auto-pick uses compatible non-reserved fields.
+        function candidatesFor(m) {
+            var base = sportMode ? (opts.fieldsForSport(m.sport) || []) : pool;
+            var set = {};
+            base.forEach(function (f) {
+                f = String(f);
+                if (!reserved[f]) set[f] = true;
+            });
+            if (m.field && base.indexOf(m.field) >= 0) set[String(m.field)] = true;
+            return Object.keys(set);
+        }
+
+        // ── Per-sport counts (the headline warning the user reads) ──
+        if (sportMode) {
+            var bySport = {};
+            pending.forEach(function (m) {
+                (bySport[m.sport] = bySport[m.sport] || []).push(m);
+            });
+            Object.keys(bySport).sort().forEach(function (sport) {
+                var games = bySport[sport].length;
+                var usable = {};
+                bySport[sport].forEach(function (m) {
+                    candidatesFor(m).forEach(function (f) { usable[f] = true; });
+                });
+                var capacity = Object.keys(usable).length * perField;
+                if (games > capacity) {
+                    out.push({ kind: 'sport', sport: sport, games: games, capacity: capacity, shortfall: games - capacity });
+                }
+            });
+        }
+
+        // ── Duplicate explicit picks: same field hand-picked too many times ──
+        var explicitCounts = {};
+        pending.forEach(function (m) {
+            if (m.field) explicitCounts[String(m.field)] = (explicitCounts[String(m.field)] || 0) + 1;
+        });
+        Object.keys(explicitCounts).sort().forEach(function (f) {
+            if (explicitCounts[f] > perField) {
+                out.push({ kind: 'field_dup', field: f, picks: explicitCounts[f] });
+            }
+        });
+
+        // ── Overall feasibility: maximum bipartite matching of matchups onto
+        //    field slots (each field expands to `perField` slots). Catches
+        //    cross-sport contention on shared fields that per-sport counts
+        //    can't see (e.g. 2 baseball + 2 kickball games on 3 dual-use
+        //    fields). Sizes here are tiny (≤64 matchups), so the classic
+        //    augmenting-path algorithm is plenty.
+        var slotIds = {};   // field slot key -> index
+        var slotList = [];
+        var adj = pending.map(function (m) {
+            return candidatesFor(m).reduce(function (acc, f) {
+                for (var c = 0; c < perField; c++) {
+                    var key = f + ' ' + c;
+                    if (!(key in slotIds)) { slotIds[key] = slotList.length; slotList.push(key); }
+                    acc.push(slotIds[key]);
+                }
+                return acc;
+            }, []);
+        });
+        var slotOwner = new Array(slotList.length).fill(-1);
+        function tryPlace(i, seen) {
+            var edges = adj[i];
+            for (var k = 0; k < edges.length; k++) {
+                var s = edges[k];
+                if (seen[s]) continue;
+                seen[s] = true;
+                if (slotOwner[s] === -1 || tryPlace(slotOwner[s], seen)) {
+                    slotOwner[s] = i;
+                    return true;
+                }
+            }
+            return false;
+        }
+        var placed = 0;
+        for (var i = 0; i < pending.length; i++) {
+            if (tryPlace(i, new Array(slotList.length).fill(false))) placed++;
+        }
+        if (placed < pending.length) {
+            // Only add the overall entry when it says something the per-sport
+            // entries didn't already: more drops than the per-sport shortfalls
+            // account for, or no per-sport shortfall at all.
+            var sportShortfall = out.reduce(function (a, w) { return a + (w.kind === 'sport' ? w.shortfall : 0); }, 0);
+            var totalShort = pending.length - placed;
+            if (totalShort > sportShortfall) {
+                out.push({ kind: 'overall', games: pending.length, capacity: placed, shortfall: totalShort });
+            }
+        }
+        return out;
+    }
+
     // Reserved fields to lock for a given round: the round's own list, with
     // the legacy league-wide list as fallback (rounds not built yet / old data).
     function getReservedForRound(league, roundNumber) {
@@ -313,6 +466,7 @@
         createRound: createRound,
         removeRound: removeRound,
         getEliminatedTeams: getEliminatedTeams,
+        getFieldShortages: getFieldShortages,
         getReservedForRound: getReservedForRound,
         getChampion: getChampion,
         render: render

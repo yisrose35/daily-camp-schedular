@@ -23,7 +23,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '4.2.0';
+    var VERSION = '4.3.0';
     var _overlayEl = null;
     var _league = null;
     var _kind = 'regular';
@@ -568,6 +568,14 @@
             warn.textContent = '⚠️ ' + doubled.join(', ') + ' appear' + (doubled.length === 1 ? 's' : '') + ' in more than one matchup this round.';
             card.appendChild(warn);
         }
+        // Field-capacity check: more games of a sport than fields that can host
+        // it means the scheduler will silently drop the extras — warn up front.
+        _fieldShortageMessages(round).forEach(function (msg) {
+            var capWarn = document.createElement('div');
+            capWarn.className = 'ph-round-warn';
+            capWarn.textContent = msg;
+            card.appendChild(capWarn);
+        });
         if (isUpNext && unfilled > 0) {
             var hint = document.createElement('div');
             hint.className = 'ph-explainer subtle';
@@ -584,6 +592,49 @@
         }
 
         return card;
+    }
+
+    // Field-capacity warnings for one round, as user-readable strings.
+    // Regular leagues: per-sport fields (a Baseball matchup needs a field that
+    // hosts Baseball). Specialty leagues: one shared court pool, each court
+    // hosting gamesPerFieldSlot simultaneous games. Reserved fields are saved
+    // for the teams that are out, so they don't count as game capacity (unless
+    // a matchup explicitly picked one — explicit picks win in the scheduler).
+    function _fieldShortageMessages(round) {
+        var msgs = [];
+        if (!window.PlayoffMode || typeof window.PlayoffMode.getFieldShortages !== 'function') return msgs;
+        var opts;
+        if (_kind === 'specialty') {
+            opts = {
+                sharedFieldPool: (_league && Array.isArray(_league.fields)) ? _league.fields : [],
+                gamesPerField: (_league && _league.gamesPerFieldSlot) || 3
+            };
+            if (opts.sharedFieldPool.length === 0) return msgs;   // no courts configured — other UI covers that
+        } else {
+            opts = { fieldsForSport: _fieldsForSport };
+        }
+        var shortages;
+        try { shortages = window.PlayoffMode.getFieldShortages(round, opts) || []; }
+        catch (e) { console.warn('[PlayoffHub] field-capacity check failed:', e); return msgs; }
+        shortages.forEach(function (w) {
+            if (w.kind === 'sport') {
+                msgs.push('⚠️ Not enough ' + w.sport + ' fields: this round has ' + w.games + ' ' + w.sport
+                    + ' game' + (w.games === 1 ? '' : 's') + ' but only ' + w.capacity + ' field'
+                    + (w.capacity === 1 ? '' : 's') + ' can host ' + w.sport + ' at the same time'
+                    + ((round.reservedActivities || []).length ? ' (fields reserved for teams that are out don\'t count)' : '')
+                    + ' — ' + w.shortfall + ' game' + (w.shortfall === 1 ? '' : 's') + ' will be DROPPED when the schedule is generated. '
+                    + 'Change a matchup\'s sport, free up a reserved field, or move a matchup to another round.');
+            } else if (w.kind === 'overall') {
+                msgs.push('⚠️ Not enough fields for all matchups: only ' + w.capacity + ' of the ' + w.games
+                    + ' games can get a field at the same time (the sports share the same fields) — '
+                    + w.shortfall + ' game' + (w.shortfall === 1 ? '' : 's') + ' will be DROPPED when the schedule is generated.');
+            } else if (w.kind === 'field_dup') {
+                msgs.push('⚠️ ' + w.field + ' is hand-picked for ' + w.picks + ' matchups this round — it can\'t host them all at once; the extras fall back to auto-pick and may be dropped.');
+            } else if (w.kind === 'no_sport') {
+                msgs.push('⚠️ ' + w.count + ' matchup' + (w.count === 1 ? ' has' : 's have') + ' teams but no sport picked — the scheduler skips sportless matchups entirely.');
+            }
+        });
+        return msgs;
     }
 
     function _renderMatchupRow(p, round, m, mi, usage, eliminated) {
@@ -746,6 +797,12 @@
             return wrap;
         }
 
+        // Teams already knocked out going into this round: label them so the
+        // user doesn't put an eliminated team on the schedule by accident
+        // (marking one as a bye deliberately brings it back — their call).
+        var outHere = [];
+        try { outHere = window.PlayoffMode.getEliminatedTeams(_league, round.number) || []; } catch (_) {}
+
         var chips = document.createElement('div');
         chips.className = 'ph-chips tight';
         candidates.forEach(function (t) {
@@ -753,7 +810,7 @@
             var chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'ph-chip' + (on ? ' active' : '');
-            chip.textContent = t + (on ? ' • bye' : '');
+            chip.textContent = t + (!on && outHere.indexOf(t) >= 0 ? ' (out)' : '') + (on ? ' • bye' : '');
             chip.onclick = function () {
                 if (on) round.byes = round.byes.filter(function (x) { return x !== t; });
                 else round.byes.push(t);
