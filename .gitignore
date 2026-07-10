@@ -2,3 +2,6 @@
 *Vulner.txt
 SECURITY_AUDIT.md
 
+# Dependencies (local test tooling only — the app itself has no build step)
+node_modules/
+
