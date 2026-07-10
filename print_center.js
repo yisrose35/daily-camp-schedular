@@ -1409,11 +1409,14 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
         // Narrow the bye/chinuch lines the same way: show this bunk's own line
         // when it has one; if the bunk had its own game, drop others' info lines;
         // otherwise (league teams are separate entities) keep all of them.
-        var mineInfo = infoLines.filter(function (l) {
+        // Per-team lines (bye/chinuch) narrow to this bunk; section rows
+        // (Electives / Open fields lists) apply to everyone, so they stay.
+        var sectionInfo = infoLines.filter(function (l) { return !/\b(chinuch|bye)\b/i.test(l); });
+        var teamInfo = infoLines.filter(function (l) { return /\b(chinuch|bye)\b/i.test(l); });
+        var mineInfo = teamInfo.filter(function (l) {
             return pcInfoLineTeam(l).replace(/^bunk\s*/i, '').trim() === bn;
         });
-        if (mineInfo.length) infoLines = mineInfo;
-        else if (mine.length) infoLines = [];
+        infoLines = (mineInfo.length ? mineInfo : (mine.length ? [] : teamInfo)).concat(sectionInfo);
     }
 
     return parsed.map(pcFormatMatchupLine).concat(infoLines);
@@ -1478,6 +1481,12 @@ function pcInfoLineText(m) {
     if (!s) return '';
     if (/\s+vs\.?\s+/i.test(s)) return '';        // a real matchup — not an info line
     if (/\b(chinuch|bye)\b/i.test(s)) return s;   // preserve verbatim (already nicely formatted)
+    // Playoff tile section rows ride in the same array: "Electives:" + its
+    // "• Field" bullets (fields reserved for teams that are out), and the TBD
+    // round's "Open fields:" list / "Round N — winners TBD" header.
+    if (/^(electives|open fields):?\s*$/i.test(s)) return s;
+    if (/^•/.test(s)) return s;
+    if (/winners\s+tbd/i.test(s)) return s;
     return '';
 }
 // Team/bunk name at the front of an info line ("Team A — Bye" → "Team A"),
@@ -1549,11 +1558,14 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
             return na === bn || nb === bn;
         });
         // Narrow bye/chinuch lines to this bunk the same way matchups are.
-        var mineInfo = infoLines.filter(function (l) {
+        // Per-team lines (bye/chinuch) narrow to this bunk; section rows
+        // (Electives / Open fields lists) apply to everyone, so they stay.
+        var sectionInfo = infoLines.filter(function (l) { return !/\b(chinuch|bye)\b/i.test(l); });
+        var teamInfo = infoLines.filter(function (l) { return /\b(chinuch|bye)\b/i.test(l); });
+        var mineInfo = teamInfo.filter(function (l) {
             return pcInfoLineTeam(l).replace(/^bunk\s*/i, '').trim() === bn;
         });
-        if (mineInfo.length) infoLines = mineInfo;
-        else if (mine.length) infoLines = [];
+        infoLines = (mineInfo.length ? mineInfo : (mine.length ? [] : teamInfo)).concat(sectionInfo);
     }
     var chosen = (mine && mine.length) ? mine : parsed;
 
