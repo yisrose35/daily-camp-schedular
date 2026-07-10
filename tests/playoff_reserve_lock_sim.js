@@ -84,4 +84,29 @@ assert(ok === true, 'reserve lock failed to apply');
     console.log('TEST 4 PASS — getLockedFieldsAtSlot honors multi-division membership');
 }
 
+// TEST 5 — TWO leagues reserve the SAME field in the SAME period: division
+// lists MERGE (the second lock used to overwrite the first, silently locking
+// the first league's non-playing kids out of their own reserved field).
+{
+    GFL.lockFieldForDivision('Pool', [4], 'Camp A > 4, Camp A > 5',
+        'Playoff reserve (4th/5th League R1)', { startMin: 800, endMin: 860 });
+    GFL.lockFieldForDivision('Pool', [4], 'Day Camp > 6, Day Camp > 7',
+        'Playoff reserve (6th/7th League R2)', { startMin: 800, endMin: 860 });
+    ['Camp A > 4', 'Camp A > 5', 'Day Camp > 6', 'Day Camp > 7'].forEach(d => {
+        assert.strictEqual(GFL.isFieldLocked('Pool', [4], d), null, 'T5: ' + d + ' should be allowed');
+        assert.strictEqual(GFL.isFieldLockedByTime('Pool', 810, 850, d), null, 'T5: ' + d + ' should pass time check');
+    });
+    assert(GFL.isFieldLocked('Pool', [4], 'Grade 9'), 'T5: uninvolved division must stay blocked');
+    assert(GFL.isFieldLockedByTime('Pool', 810, 850, 'Grade 9'), 'T5: uninvolved division must fail time check');
+    console.log('TEST 5 PASS — overlapping reserves from two leagues merge division lists');
+}
+
+// TEST 6 — a GLOBAL lock still refuses a division lock on top of it.
+{
+    GFL.lockField('Main Field', [5], { lockedBy: 'regular_league', leagueName: 'X League', activity: 'X League Game' });
+    const applied = GFL.lockFieldForDivision('Main Field', [5], 'Camp A > 4', 'Playoff reserve');
+    assert.strictEqual(applied, false, 'T6: division lock must not override a global lock');
+    console.log('TEST 6 PASS — global locks still take precedence over reserves');
+}
+
 console.log('\nALL TESTS PASSED — playoff reserve locks are division-tight');

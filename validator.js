@@ -1631,20 +1631,22 @@
                 for (const cf of cands) {
                     const list = resMap[String(cf).toLowerCase().trim()];
                     if (!list) continue;
-                    for (const r of list) {
-                        if (!(r.startMin < eM && r.endMin > sM)) continue;
-                        if (r.divisions.some(d => String(d) === String(grade))) continue;   // league's own divisions allowed
-                        const sig = cf + '|' + bunk + '|' + sM;
-                        if (seen.has(sig)) continue;
-                        seen.add(sig);
-                        errors.push({
-                            type: 'playoff_reservation',
-                            message: 'Playoff Reserved Field Conflict: ' + bunk + ' (' + grade + ') has "' + act + '" on ' + cf +
-                                ' at ' + _fmt(sM) + '-' + _fmt(eM) + ', but that field is reserved by ' + r.league +
-                                ' (Playoff R' + r.round + ') for its teams that are out'
-                        });
-                        break;
-                    }
+                    const overlapping = list.filter(r => r.startMin < eM && r.endMin > sM);
+                    if (!overlapping.length) continue;
+                    // Admitted when ANY overlapping reservation lists this division —
+                    // two leagues may legitimately reserve the same field/period,
+                    // and each league's own divisions belong there.
+                    if (overlapping.some(r => r.divisions.some(d => String(d) === String(grade)))) continue;
+                    const r = overlapping[0];
+                    const sig = cf + '|' + bunk + '|' + sM;
+                    if (seen.has(sig)) continue;
+                    seen.add(sig);
+                    errors.push({
+                        type: 'playoff_reservation',
+                        message: 'Playoff Reserved Field Conflict: ' + bunk + ' (' + grade + ') has "' + act + '" on ' + cf +
+                            ' at ' + _fmt(sM) + '-' + _fmt(eM) + ', but that field is reserved by ' + r.league +
+                            ' (Playoff R' + r.round + ') for its teams that are out'
+                    });
                 }
             });
         });

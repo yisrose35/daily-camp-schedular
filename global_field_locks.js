@@ -183,25 +183,44 @@
             }
             
             // Check if already locked (global lock takes precedence)
+            let _mergedAllowed = allowedDivision;
+            let _mergedStart = _trStart, _mergedEnd = _trEnd;
+            let _mergedReason = reason || `Elective for ${allowedDivision}`;
             if (this._locks[slotIdx][normalizedField]) {
                 const existing = this._locks[slotIdx][normalizedField];
                 if (existing.lockType === 'global') {
                     // console.warn(`[GLOBAL_LOCKS] ⚠️ Cannot add division lock for "${fieldName}" at slot ${slotIdx} - already GLOBALLY locked by ${existing.lockedBy}`);
                     return false;
                 }
-                // If it's another division lock, warn but allow override
-                // console.warn(`[GLOBAL_LOCKS] ⚠️ Overwriting division lock for "${fieldName}" at slot ${slotIdx}`);
+                // ★ Another DIVISION lock already holds this field/slot (e.g. two
+                //   playoff leagues, or two grades' electives, reserving the same
+                //   room in the same period). Overwriting silently locked the
+                //   FIRST reservation's divisions out of their own field — merge
+                //   the allowed-division lists instead so every reserving
+                //   division keeps access (capacity checks still apply at
+                //   placement time). Time window widens to cover both.
+                if (existing.allowedDivision) {
+                    const seen = new Set();
+                    const merged = [];
+                    String(existing.allowedDivision).split(',').concat(String(allowedDivision).split(','))
+                        .forEach(d => { const t = d.trim(); if (t && !seen.has(t)) { seen.add(t); merged.push(t); } });
+                    _mergedAllowed = merged.join(', ');
+                    if (existing.startMin != null && (_mergedStart == null || existing.startMin < _mergedStart)) _mergedStart = existing.startMin;
+                    if (existing.endMin != null && (_mergedEnd == null || existing.endMin > _mergedEnd)) _mergedEnd = existing.endMin;
+                    if (existing.reason && reason && existing.reason !== reason) _mergedReason = existing.reason + ' + ' + reason;
+                    else if (existing.reason && !reason) _mergedReason = existing.reason;
+                }
             }
             
             // Apply division-specific lock
             this._locks[slotIdx][normalizedField] = {
                 lockedBy: 'elective',
                 lockType: 'division',
-                allowedDivision: allowedDivision,
-                reason: reason || `Elective for ${allowedDivision}`,
+                allowedDivision: _mergedAllowed,
+                reason: _mergedReason,
                 fieldName: fieldName,
-                startMin: (_trStart != null ? _trStart : undefined),
-                endMin: (_trEnd != null ? _trEnd : undefined),
+                startMin: (_mergedStart != null ? _mergedStart : undefined),
+                endMin: (_mergedEnd != null ? _mergedEnd : undefined),
                 timestamp: Date.now()
             };
             
