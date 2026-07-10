@@ -1153,33 +1153,67 @@
                         });
                         console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
                     } else {
-                        // Game 2+ same day: emit TBD placeholders for forecast next round.
+                        // Game 2+ same day. Rounds are user-defined, so the next
+                        // round may already be fully built (every matchup has both
+                        // teams, independent of today's results) — schedule it for
+                        // real. Otherwise emit TBD placeholders, sized/sported from
+                        // the user's round when one exists.
                         const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
-                        const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
-                        const sportsPool = liveMatchups
-                            .map(function (m) { return m.sport || null; })
-                            .filter(Boolean);
-                        const fallbackSport = league.sport || null;
-                        _playoffRoundNum = tbdRoundNum;
-                        _playoffIsTBD = true;
-                        matchups = [];
-                        for (let k = 0; k < tbdCount; k++) {
-                            matchups.push({
-                                teamA: 'TBD',
-                                teamB: 'TBD',
-                                conference: null,
-                                isInterConference: false,
-                                _playoffSport: sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport,
-                                _playoffField: null,
-                                _playoffTBD: true,
-                                // ★ FN-9: unique per-placeholder id so the field-assignment
-                                //   dedup doesn't collapse every "TBD-TBD" matchup into one
-                                //   (which reserved only a SINGLE field for a multi-matchup
-                                //   undecided round, starving the others).
-                                _tbdIndex: k
+                        const userRound = (typeof _PM_S.getRoundByNumber === 'function')
+                            ? _PM_S.getRoundByNumber(league, tbdRoundNum) : null;
+                        const userRoundMatchups = (userRound && Array.isArray(userRound.matchups)) ? userRound.matchups : [];
+                        const userActive = userRoundMatchups.filter(function (m) {
+                            return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner;
+                        });
+                        const userRoundReady = userActive.length > 0
+                            && userRoundMatchups.every(function (m) {
+                                // no half-filled or empty placeholders left
+                                return !m || (m.teamA && m.teamB);
                             });
+                        if (userRoundReady) {
+                            _playoffRoundNum = tbdRoundNum;
+                            matchups = userActive.map(function (m) {
+                                return {
+                                    teamA: m.teamA,
+                                    teamB: m.teamB,
+                                    conference: null,
+                                    isInterConference: false,
+                                    _playoffSport: m.sport || null,
+                                    _playoffField: m.field || null
+                                };
+                            });
+                            console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' (user-defined, pre-filled): ' + userActive.length + ' matchup(s)');
+                        } else {
+                            const tbdCount = userRoundMatchups.length > 0
+                                ? userRoundMatchups.length
+                                : Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
+                            const sportsPool = liveMatchups
+                                .map(function (m) { return m.sport || null; })
+                                .filter(Boolean);
+                            const fallbackSport = league.sport || null;
+                            _playoffRoundNum = tbdRoundNum;
+                            _playoffIsTBD = true;
+                            matchups = [];
+                            for (let k = 0; k < tbdCount; k++) {
+                                const um = userRoundMatchups[k];
+                                matchups.push({
+                                    teamA: 'TBD',
+                                    teamB: 'TBD',
+                                    conference: null,
+                                    isInterConference: false,
+                                    _playoffSport: (um && um.sport)
+                                        || (sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport),
+                                    _playoffField: (um && um.field) || null,
+                                    _playoffTBD: true,
+                                    // ★ FN-9: unique per-placeholder id so the field-assignment
+                                    //   dedup doesn't collapse every "TBD-TBD" matchup into one
+                                    //   (which reserved only a SINGLE field for a multi-matchup
+                                    //   undecided round, starving the others).
+                                    _tbdIndex: k
+                                });
+                            }
+                            console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
                         }
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
                     }
                 } else {
                     console.log('[SpecialtyLeagues] 🏆 PLAYOFF: no active matchups in current round — skipping');
