@@ -1175,6 +1175,122 @@
     }
 
     // =========================================================================
+    // ★ LG-9: HISTORY ⇄ SAVED-SCHEDULE RECONCILIATION (specialty)
+    // =========================================================================
+    // Mirror of the regular engine's reconcileHistoryFromSchedules: rebuild
+    // any (league, date) the gameLog has NO record of from the saved daily
+    // schedules' leagueAssignments (specialty uiEntries store structured
+    // matchups {teamA, teamB, field, slotOrder} under the league's NAME; the
+    // history is keyed by the league's ID). Tombstone-aware; derived stores
+    // (matchup date-arrays, field rotation, slotDebt) and per-date counters
+    // are backfilled alongside; persisted + verified-pushed on change.
+    // Killswitch: window.__leagueHistoryReconcile = false.
+    function _spDailyDataGames(leagueName, date) {
+        try {
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            const la = all && all[date] && all[date].leagueAssignments;
+            if (!la) return [];
+            const out = [];
+            const seen = new Set();
+            Object.keys(la).forEach(function (dv) {
+                const map = la[dv] || {};
+                Object.keys(map).forEach(function (k) {
+                    const g = map[k];
+                    if (!g || (g.leagueName || '') !== leagueName) return;
+                    (g.matchups || []).forEach(function (m) {
+                        if (!m || typeof m !== 'object') return;
+                        const a = m.teamA != null ? m.teamA : m.team1;
+                        const b = m.teamB != null ? m.teamB : m.team2;
+                        if (!a || !b || a === 'BYE' || b === 'BYE' || a === 'TBD' || b === 'TBD') return;
+                        const key = (g.gameLabel || '') + '::' + [String(a), String(b)].sort().join('|');
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        out.push({
+                            tA: String(a), tB: String(b),
+                            field: m.field || null,
+                            g: g.gameLabel || null,
+                            s: (m.slotOrder != null) ? m.slotOrder : null
+                        });
+                    });
+                });
+            });
+            return out;
+        } catch (_e) { return []; }
+    }
+    function reconcileHistoryFromSchedules(history, specialtyLeaguesConfig, skipDate) {
+        if (typeof window !== 'undefined' && window.__leagueHistoryReconcile === false) return 0;
+        let backfilled = 0;
+        try {
+            const leagues = Object.values(specialtyLeaguesConfig || {}).filter(function (l) { return l && l.id && l.name; });
+            if (!leagues.length) return 0;
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            if (!all) return 0;
+            const dates = Object.keys(all).filter(function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
+            if (!dates.length) return 0;
+            history.gameLog = history.gameLog || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            history.matchupHistory = history.matchupHistory || {};
+            history.teamFieldRotation = history.teamFieldRotation || {};
+            const tombs = history._tombstones || {};
+            const resetAt = Number(history._resetAt) || 0;
+            leagues.forEach(function (league) {
+                const teamSet = new Set(league.teams || []);
+                if (teamSet.size < 2) return;
+                dates.forEach(function (d) {
+                    if (d === skipDate) return;
+                    if ((history.gameLog[league.id] || {})[d] && history.gameLog[league.id][d].length) return;
+                    if ((tombs[`${league.id}|${d}`] || 0) > 0 || (tombs[`*|${d}`] || 0) > 0 || resetAt > 0) return;
+                    const games = _spDailyDataGames(league.name, d)
+                        .filter(function (g) { return teamSet.has(g.tA) && teamSet.has(g.tB); });
+                    if (!games.length) return;
+                    if (!history.gameLog[league.id]) history.gameLog[league.id] = {};
+                    if (!history.gameLog[league.id][d]) history.gameLog[league.id][d] = [];
+                    games.forEach(function (g) {
+                        history.gameLog[league.id][d].push({ tA: g.tA, tB: g.tB, field: g.field, g: g.g, s: g.s });
+                        const mk = `${league.id}|${[g.tA, g.tB].sort().join('|')}`;
+                        (history.matchupHistory[mk] = history.matchupHistory[mk] || []).push(d);
+                        if (g.field) {
+                            [g.tA, g.tB].forEach(function (t) {
+                                const fk = `${league.id}|${t}`;
+                                (history.teamFieldRotation[fk] = history.teamFieldRotation[fk] || []).push(g.field);
+                            });
+                        }
+                        if (g.s != null) {
+                            const w = Math.max(0, (g.s || 1) - 1);
+                            if (w > 0) {
+                                if (!history.slotDebt) history.slotDebt = {};
+                                [g.tA, g.tB].forEach(function (t) {
+                                    const sk = `${league.id}|${t}`;
+                                    history.slotDebt[sk] = (history.slotDebt[sk] || 0) + w;
+                                });
+                            }
+                        }
+                        backfilled++;
+                    });
+                    if (history.gamesPerDate[league.id]?.[d] === undefined) {
+                        const labels = new Set(games.map(function (g) { return g.g; }).filter(Boolean));
+                        if (!history.gamesPerDate[league.id]) history.gamesPerDate[league.id] = {};
+                        history.gamesPerDate[league.id][d] = Math.max(labels.size, 1);
+                    }
+                    console.log(`[SpecialtyLeagues] 🩹 Reconstructed ${games.length} game(s) for "${league.name}" on ${d} from the saved schedule (history had no record)`);
+                });
+            });
+            if (backfilled > 0) {
+                console.warn(`[SpecialtyLeagues] 🩹 History reconciliation backfilled ${backfilled} game(s) from saved schedules`);
+                saveSpecialtyHistory(history);
+            }
+        } catch (e) {
+            console.warn('[SpecialtyLeagues] history reconciliation skipped:', e);
+        }
+        return backfilled;
+    }
+    SpecialtyLeagues.reconcileHistoryFromSchedules = function (specialtyLeaguesConfig) {
+        const cfg = specialtyLeaguesConfig || loadSpecialtyLeagues();
+        const history = loadSpecialtyHistory();
+        return reconcileHistoryFromSchedules(history, cfg, null);
+    };
+
+    // =========================================================================
     // ★★★ MAIN PROCESSOR: PROCESSES FIRST, LOCKS FIELDS GLOBALLY ★★★
     // =========================================================================
 
@@ -1209,6 +1325,10 @@
         //   toISOString() is UTC and flips to tomorrow during evening sessions.
         const currentDate = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         console.log(`[SpecialtyLeagues] Current day: "${currentDate}"`);
+
+        // ★ LG-9: rebuild gameLog days the history has NO record of from the
+        // saved schedules before any decision reads it (see the function).
+        reconcileHistoryFromSchedules(history, specialtyLeaguesConfig, currentDate);
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
         const leagueGameCounters = {};

@@ -363,6 +363,7 @@
             try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(merged)); } catch (_) {}
             console.log('[RegularLeagues] ☁️ Refreshed league history from cloud (merged; ' +
                 Object.keys(merged.gameLog || {}).length + ' league(s))');
+            try { window.__leagueHistoryCloudFreshAt = Date.now(); } catch (_) {}
             return true;
         } catch (e) {
             console.warn('[RegularLeagues] cloud history refresh failed — using existing copy:', e);
@@ -673,6 +674,183 @@
         // Normalize matchup key so A vs B === B vs A
         return [team1, team2].sort().join('|');
     }
+
+    // =========================================================================
+    // ★ LG-9: SAVED-SCHEDULE GROUND TRUTH (module-wide)
+    // =========================================================================
+    // The saved daily schedules (campDailyData_v1 → leagueAssignments — the
+    // data that renders the grid, written through the verified per-date
+    // daily_schedules path) independently record who played whom. These
+    // helpers read that record so the engine can (a) guard adjacent days and
+    // (b) RECONSTRUCT lost gameLog days (see reconcileHistoryFromSchedules).
+    // Regular-league entries store matchups as display strings
+    // ("Team 1 vs Team 2 @ BB Field (Basketball)"); parse defensively and
+    // accept structured {teamA/team1, teamB/team2, sport} objects too.
+    function _parseDailyMatchup(m, fallbackSport) {
+        if (!m) return null;
+        if (typeof m === 'object') {
+            const a = m.teamA != null ? m.teamA : m.team1;
+            const b = m.teamB != null ? m.teamB : m.team2;
+            if (!a || !b) return null;
+            return { t1: String(a).trim(), t2: String(b).trim(), sport: (m.sport || fallbackSport || null) };
+        }
+        const s = String(m).trim();
+        // "A vs B @ Field (Sport)" | "A vs B @ Field" | "A vs B"
+        const full = s.match(/^(.+?)\s+vs\.?\s+(.+?)\s+@\s+.+?\(([^()]+)\)\s*$/i);
+        if (full) return { t1: full[1].trim(), t2: full[2].trim(), sport: full[3].trim() };
+        const noSport = s.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s+@\s+.+)?$/i);
+        if (noSport) return { t1: noSport[1].trim(), t2: noSport[2].trim(), sport: fallbackSport || null };
+        return null;
+    }
+
+    function dailyDataLeagueGames(leagueName, date) {
+        try {
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            const la = all && all[date] && all[date].leagueAssignments;
+            if (!la) return [];
+            const out = [];
+            const seen = new Set();   // a game spanning divisions is stored once per division — dedupe
+            Object.keys(la).forEach(function (dv) {
+                const map = la[dv] || {};
+                Object.keys(map).forEach(function (k) {
+                    const g = map[k];
+                    if (!g || (g.leagueName || '') !== leagueName) return;
+                    (g.matchups || []).forEach(function (m) {
+                        const p = _parseDailyMatchup(m, g.sport || null);
+                        if (!p || !p.t1 || !p.t2) return;
+                        if (p.t1 === 'BYE' || p.t2 === 'BYE' || p.t1 === 'TBD' || p.t2 === 'TBD') return;
+                        const key = (g.gameLabel || '') + '::' + getMatchupKey(p.t1, p.t2);
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        out.push({ t1: p.t1, t2: p.t2, sport: p.sport || null, g: g.gameLabel || null });
+                    });
+                });
+            });
+            return out;
+        } catch (_e) { return []; }
+    }
+
+    function dailyDataDates() {
+        try {
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            if (!all) return [];
+            return Object.keys(all).filter(function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
+        } catch (_e) { return []; }
+    }
+
+    // ★ LG-9: FORWARD-LOOKING SPORT SIGNAL — the sports a team plays on its
+    // NEXT game date after dayId (gameLog first, saved schedules as backstop).
+    // Sport decisions only looked backward (getTeamSportHistoryByDate is
+    // strictly-before-dayId by design), so regenerating a middle day could
+    // hand a team the exact sport it already plays TOMORROW — a same-sport
+    // back-to-back the user sees on the calendar, or even a silent 3-day run
+    // (yesterday s / today s / tomorrow s). Used by the assigners' streak cap
+    // (hard: never complete a 3-run), their scoring and the swap pass
+    // (soft -1500 mirror of the recent-sport penalty).
+    // Killswitch: window.__leagueAdjacentDaySportGuard = false.
+    function _getTeamNextDaySports(leagueName, team, history, dayId) {
+        const out = new Set();
+        if (!dayId) return out;
+        if (typeof window !== 'undefined' && window.__leagueAdjacentDaySportGuard === false) return out;
+        try {
+            const gl = (history.gameLog && history.gameLog[leagueName]) || {};
+            let next = null;
+            Object.keys(gl).forEach(function (d) {
+                if (d <= dayId || !(gl[d] || []).length) return;
+                if (!next || d < next) next = d;
+            });
+            dailyDataDates().forEach(function (d) {
+                if (d <= dayId) return;
+                if (next && d >= next) return;
+                if (dailyDataLeagueGames(leagueName, d).length) next = d;
+            });
+            if (!next) return out;
+            const glDay = gl[next];
+            const entries = (glDay && glDay.length) ? glDay : dailyDataLeagueGames(leagueName, next);
+            entries.forEach(function (e) {
+                if (e && e.sport && (e.t1 === team || e.t2 === team)) out.add(e.sport);
+            });
+        } catch (_e) {}
+        return out;
+    }
+
+    // =========================================================================
+    // ★ LG-9: HISTORY ⇄ SAVED-SCHEDULE RECONCILIATION
+    // =========================================================================
+    // The engine's decisions are only as good as the gameLog it reads: meeting
+    // counts, pair recency, sport cycles, the pair-sport caveat, streak caps
+    // and game numbering ALL come from it. The LG-8 merge/push work keeps the
+    // gameLog from diverging, but a day can still be missing outright (history
+    // lost before LG-8, a blocked scheduler-role write, a cleared browser).
+    // The saved schedules still know those games — so before choosing anything,
+    // rebuild every missing (league, date) from them:
+    //   • only dates the gameLog has NO record of (never merges into a day the
+    //     engine already knows — the engine's own record stays authoritative),
+    //   • only matchups whose BOTH teams belong to the league (skips byes,
+    //     chinuch notes, TBD placeholders, foreign leagues),
+    //   • tombstone-aware (a deliberately deleted day stays deleted),
+    //   • aggregates + per-date game counters are backfilled alongside,
+    //   • persisted + verified-pushed immediately so the healing is permanent.
+    // Also exposed as SchedulerCoreLeagues.reconcileHistoryFromSchedules() for
+    // manual repair from the console.
+    // Killswitch: window.__leagueHistoryReconcile = false.
+    function reconcileHistoryFromSchedules(history, masterLeagues, skipDate) {
+        if (typeof window !== 'undefined' && window.__leagueHistoryReconcile === false) return 0;
+        let backfilled = 0;
+        try {
+            const leagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
+            if (!leagues.length) return 0;
+            const dates = dailyDataDates();
+            if (!dates.length) return 0;
+            history.gameLog = history.gameLog || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            history.teamSports = history.teamSports || {};
+            history.matchupHistory = history.matchupHistory || {};
+            const tombs = history._tombstones || {};
+            const resetAt = Number(history._resetAt) || 0;
+            leagues.forEach(function (league) {
+                if (!league || !league.name) return;
+                const teamSet = new Set(league.teams || []);
+                if (teamSet.size < 2) return;
+                dates.forEach(function (d) {
+                    if (d === skipDate) return;                                   // the day being generated is reset/re-recorded by this run
+                    if ((history.gameLog[league.name] || {})[d] && history.gameLog[league.name][d].length) return;
+                    if ((tombs[`${league.name}|${d}`] || 0) > 0 || (tombs[`*|${d}`] || 0) > 0 || resetAt > 0) return;
+                    const games = dailyDataLeagueGames(league.name, d)
+                        .filter(function (g) { return teamSet.has(g.t1) && teamSet.has(g.t2); });
+                    if (!games.length) return;
+                    games.forEach(function (g) {
+                        logGameRecord(league.name, d, g.t1, g.t2, g.sport, history, g.g);
+                        recordMatchup(league.name, g.t1, g.t2, history);
+                        if (g.sport) {
+                            recordTeamSport(league.name, g.t1, g.sport, history);
+                            recordTeamSport(league.name, g.t2, g.sport, history);
+                        }
+                        backfilled++;
+                    });
+                    if (history.gamesPerDate[league.name]?.[d] === undefined) {
+                        const labels = new Set(games.map(function (g) { return g.g; }).filter(Boolean));
+                        if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
+                        history.gamesPerDate[league.name][d] = Math.max(labels.size, 1);
+                    }
+                    console.log(`[RegularLeagues] 🩹 Reconstructed ${games.length} game(s) for "${league.name}" on ${d} from the saved schedule (history had no record)`);
+                });
+            });
+            if (backfilled > 0) {
+                console.warn(`[RegularLeagues] 🩹 History reconciliation backfilled ${backfilled} game(s) from saved schedules — matchup/sport decisions now see the full record`);
+                saveLeagueHistory(history);
+            }
+        } catch (e) {
+            console.warn('[RegularLeagues] history reconciliation skipped:', e);
+        }
+        return backfilled;
+    }
+    Leagues.reconcileHistoryFromSchedules = function (masterLeagues) {
+        const gs = (typeof window !== 'undefined' && window.loadGlobalSettings) ? window.loadGlobalSettings() : {};
+        const ml = masterLeagues || (gs.app1 && gs.app1.leagues) || gs.leaguesByName || {};
+        const history = loadLeagueHistory();
+        return reconcileHistoryFromSchedules(history, ml, null);
+    };
 
     function getMatchupCount(leagueName, team1, team2, history) {
         const matchupKey = `${leagueName}:${getMatchupKey(team1, team2)}`;
@@ -1055,10 +1233,21 @@
             const W_SPORT = isMatchup ? 8 : 300;
             const W_REC = isMatchup ? 100 : 10;
 
+            // ★ LG-9: meeting counts cover the FULL SEASON — past AND already-
+            // scheduled future dates (asOfDate=null → no date filter). The old
+            // ≤dayId filter made a middle-day regen blind to games that are
+            // ALREADY on the calendar after it: a pair meeting Wednesday could
+            // be re-picked while regenerating Monday even when fresh pairings
+            // existed. Future games are real commitments — they belong in the
+            // fairness ledger. The generated day's own OLD games were already
+            // rolled back (FN-54), and same-day earlier games are counted
+            // either way, so nothing double-counts. (Sport-cycle/recency stay
+            // date-relative by design — "most recent sport" is meaningless
+            // across the boundary; the forward sport guard handles that side.)
             const metCache = {};
             function met(a, b) {
                 const key = getMatchupKey(a, b);
-                if (metCache[key] == null) metCache[key] = getMatchupCountByDate(leagueName, a, b, history, dayId);
+                if (metCache[key] == null) metCache[key] = getMatchupCountByDate(leagueName, a, b, history, null);
                 return metCache[key];
             }
             // ★ SAME-DAY OPPONENT GUARD: a pair that already met in an EARLIER
@@ -1115,46 +1304,21 @@
             // sequential generation). The SAVED SCHEDULES themselves —
             // campDailyData_v1 → leagueAssignments, written through the
             // verified per-date daily_schedules path that also renders the
-            // grid — still know who played whom. So adjacent game dates are
-            // taken from the UNION of the gameLog and the saved daily data,
-            // and meetings on a date the gameLog is missing are read straight
-            // from the day's stored matchups.
-            function _dailyDataLeagueGames(date) {
-                try {
-                    const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
-                    const la = all && all[date] && all[date].leagueAssignments;
-                    if (!la) return [];
-                    const out = [];
-                    Object.keys(la).forEach(function (dv) {
-                        const map = la[dv] || {};
-                        Object.keys(map).forEach(function (k) {
-                            const g = map[k];
-                            if (!g || (g.leagueName || '') !== leagueName) return;
-                            (g.matchups || []).forEach(function (m) {
-                                const a = m && (m.teamA || m.team1), b = m && (m.teamB || m.team2);
-                                if (!a || !b) return;
-                                if (a === 'BYE' || b === 'BYE' || a === 'TBD' || b === 'TBD') return;
-                                out.push({ t1: String(a), t2: String(b) });
-                            });
-                        });
-                    });
-                    return out;
-                } catch (_e) { return []; }
-            }
+            // grid — still know who played whom (see dailyDataLeagueGames /
+            // reconcileHistoryFromSchedules, which normally heals the gameLog
+            // BEFORE this runs). So adjacent game dates are taken from the
+            // UNION of the gameLog and the saved daily data, and meetings on a
+            // date the gameLog is missing are read straight from the day's
+            // stored matchups.
             const _adjDates = (function () {
                 const gl = (history.gameLog && history.gameLog[leagueName]) || {};
                 let prev = null, next = null;
                 if (dayId) {
                     const seen = new Set(Object.keys(gl).filter(function (d) { return (gl[d] || []).length; }));
-                    try {
-                        const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
-                        if (all) {
-                            Object.keys(all).forEach(function (d) {
-                                if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || seen.has(d)) return;
-                                if (_dailyDataLeagueGames(d).length) seen.add(d);
-                            });
-                        }
-                    } catch (_e) {}
+                    dailyDataDates().forEach(function (d) {
+                        if (seen.has(d)) return;
+                        if (dailyDataLeagueGames(leagueName, d).length) seen.add(d);
+                    });
                     seen.forEach(function (d) {
                         if (d === dayId) return;
                         if (d < dayId) { if (!prev || d > prev) prev = d; }
@@ -1173,7 +1337,7 @@
                         // Engine record when it exists; saved-schedule matchups when
                         // the gameLog has no memory of the date (stale history).
                         const glDay = history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][d];
-                        const entries = (glDay && glDay.length) ? glDay : _dailyDataLeagueGames(d);
+                        const entries = (glDay && glDay.length) ? glDay : dailyDataLeagueGames(leagueName, d);
                         entries.forEach(function (e) {
                             if (e && e.t1 && e.t2 && getMatchupKey(e.t1, e.t2) === key) n++;
                         });
@@ -1701,15 +1865,22 @@
     // still win, and because the penalty doesn't escalate with streak length,
     // nothing stopped a THIRD day. This filter makes day 3 impossible: any
     // sport equal to BOTH of a team's last two games is excluded outright.
+    // ★ LG-9 FORWARD EDGE: when regenerating a middle day, a 3-run can also
+    // straddle the boundary — yesterday s / today s / TOMORROW s (tomorrow is
+    // already on the calendar). Block s when it equals a team's most recent
+    // sport AND appears on that team's next game day (next1/next2, from
+    // _getTeamNextDaySports).
     // Soft fallback: if every remaining option is streak-blocked (pathological
     // — e.g. a single-sport league), keep the pool so the matchup still gets
     // a game rather than being dropped.
-    function _applyStreakCapFilter(pool, t1, t2, hist1, hist2) {
+    function _applyStreakCapFilter(pool, t1, t2, hist1, hist2, next1, next2) {
         if (!pool.length) return pool;
         const blocked = new Set();
-        [hist1, hist2].forEach(function (hist) {
+        [[hist1, next1], [hist2, next2]].forEach(function (pair) {
+            const hist = pair[0], next = pair[1];
             const n = hist.length;
             if (n >= 2 && hist[n - 1] === hist[n - 2]) blocked.add(hist[n - 1]);
+            if (n >= 1 && next && next.size && next.has(hist[n - 1])) blocked.add(hist[n - 1]);
         });
         if (!blocked.size) return pool;
         const ok = pool.filter(function (o) { return !blocked.has(o.sport); });
@@ -1906,14 +2077,20 @@
             let bestOption = null;
             let bestScore = -Infinity;
 
+            // ★ LG-9: the sports each team plays on its NEXT game day (empty
+            // when today is the latest day — the common case).
+            const _next1 = _getTeamNextDaySports(leagueName, t1, history, dayId);
+            const _next2 = _getTeamNextDaySports(leagueName, t2, history, dayId);
+
             // ★ INDOOR HARD CONSTRAINT: restrict to indoor (or non-indoor) when
             // the rule requires it AND such a field is available; otherwise use
             // the full eligible set so the matchup always gets a sport.
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
             let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
-            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row.
-            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row
+            // — including a 3-run straddling a middle-day regen (LG-9).
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), _next1, _next2);
 
             // ★ FAIR-SHARE CAP: prefer sports this league hasn't used up its per-slot
             // share of, so it leaves scarce fields for the other grades playing at the
@@ -1979,6 +2156,12 @@
                 const _svR1 = _svH1.length && _svH1[_svH1.length - 1] === option.sport ? 1 : 0;
                 const _svR2 = _svH2.length && _svH2[_svH2.length - 1] === option.sport ? 1 : 0;
                 score -= (_svR1 + _svR2) * 1500;
+
+                // ★ LG-9: forward mirror of the recent-sport penalty — the team
+                // already plays this sport on its NEXT game day (middle regen).
+                const _fw1 = _next1.has(option.sport) ? 1 : 0;
+                const _fw2 = _next2.has(option.sport) ? 1 : 0;
+                score -= (_fw1 + _fw2) * 1500;
 
                 // Prefer sports not yet used this slot
                 const sportUsageThisSlot = usedSportsThisSlot[option.sport] || 0;
@@ -2098,12 +2281,18 @@
             let bestOption = null;
             let bestScore = -Infinity;
 
+            // ★ LG-9: the sports each team plays on its NEXT game day (empty
+            // when today is the latest day — the common case).
+            const _next1 = _getTeamNextDaySports(leagueName, t1, history, dayId);
+            const _next2 = _getTeamNextDaySports(leagueName, t2, history, dayId);
+
             // ★ INDOOR HARD CONSTRAINT (non-blocking) — same as SportVariety
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
             let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
-            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row.
-            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2));
+            // ★ HARD STREAK CAP: same sport never more than 2 game days in a row
+            // — including a 3-run straddling a middle-day regen (LG-9).
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), _next1, _next2);
 
             // ★ FAIR-SHARE CAP: same as SportVariety — don't let this league claim
             // more than its share of a scarce sport's fields, leaving the rest for the
@@ -2173,6 +2362,12 @@
                 const recent2 = h2.length && h2[h2.length - 1] === option.sport ? 1 : 0;
                 score -= (recent1 + recent2) * 1500;
 
+                // ★ LG-9: forward mirror — the team already plays this sport on
+                // its NEXT game day (middle regen).
+                const _fw1 = _next1.has(option.sport) ? 1 : 0;
+                const _fw2 = _next2.has(option.sport) ? 1 : 0;
+                score -= (_fw1 + _fw2) * 1500;
+
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
                 score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
@@ -2237,16 +2432,22 @@
             // avoided; swapping AWAY from a forced repeat stays allowed.
             const _todaySports = {};
             teams.forEach(function (t) { _todaySports[t] = _getTeamSportsToday(leagueName, t, history, dayId); });
+            // ★ LG-9: forward signal — sports each team plays on its NEXT game
+            // day (empty when today is the latest day).
+            const _nextSports = {};
+            teams.forEach(function (t) { _nextSports[t] = _getTeamNextDaySports(leagueName, t, history, dayId); });
             function teamScore(t, s) {
                 const g = cycles.gap(t, s);
                 let sc = g <= 0 ? 1000 : Math.max(0, 100 - g * 20);
                 const h = hists[t];
                 if (h.length && h[h.length - 1] === s) sc -= 1500;
+                if (_nextSports[t] && _nextSports[t].has(s)) sc -= 1500;   // plays it tomorrow (middle regen)
                 return sc;
             }
-            function illegal(t, s) {   // 3-days-in-a-row streak, or a same-day repeat
+            function illegal(t, s) {   // 3-days-in-a-row streak (incl. straddling tomorrow), or a same-day repeat
                 const h = hists[t];
                 if (h.length >= 2 && h[h.length - 1] === s && h[h.length - 2] === s) return true;
+                if (h.length >= 1 && h[h.length - 1] === s && _nextSports[t] && _nextSports[t].has(s)) return true;
                 if (window.__leagueSameDayRepeatGuard !== false && _todaySports[t] && _todaySports[t].has(s)) return true;
                 return false;
             }
@@ -2701,6 +2902,27 @@
         //   during evening sessions.
         const dayId = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         console.log(`[RegularLeagues] Current day: "${dayId}"`);
+
+        // ★ LG-9: before any matchup/sport decision, rebuild gameLog days the
+        // history has NO record of from the saved schedules (ground truth) —
+        // meeting counts, recency, sport cycles, the pair caveat and game
+        // numbering all read the gameLog, so a lost day would blind them all.
+        reconcileHistoryFromSchedules(history, masterLeagues, dayId);
+
+        // ★ LG-9: freshness beacon — refreshHistoryFromCloud stamps this on a
+        // successful pre-generation fetch. Generating without a recent cloud
+        // confirmation is allowed (offline etc.) but must be VISIBLE, not
+        // silent: a stale local copy is how duplicate matchups happened.
+        // Only meaningful when a cloud client is actually configured.
+        try {
+            const _hasCloud = !!(window.supabase && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId());
+            const _freshAt = Number(window.__leagueHistoryCloudFreshAt) || 0;
+            if (_hasCloud && (Date.now() - _freshAt > 10 * 60 * 1000)) {
+                console.warn('[RegularLeagues] ⚠️ Generating without a recent cloud history confirmation — '
+                    + 'matchups are chosen from the local/merged copy. If another device generated recently, '
+                    + 'regenerate after connectivity returns.');
+            }
+        } catch (_e) {}
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
         const leagueGameCounters = {};  // Tracks how many games each league has scheduled TODAY

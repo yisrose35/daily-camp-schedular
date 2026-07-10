@@ -146,21 +146,53 @@ for (const mode of ['matchup_variety', 'sport_variety']) {
     console.log('✅ TEST 3 — middle-day regen: no collision with the previous or next day');
 }
 
-// ---- TEST 4: killswitch restores the old (broken) behavior — causality ----
+// ---- TEST 4: killswitch causality — the guard, not met(), blocks the dup ----
+// LG-9 made met() full-season, so a *blind-history* duplicate is usually
+// prevented by meeting counts alone. This seed makes met() actively FAVOR
+// duplicating tomorrow's pairing (the trio met once — on tomorrow's date —
+// while every alternative pair met twice historically), so only the
+// adjacent-day guard stands between the optimizer and the repeat.
 {
-    reset();
+    const TRIO = [['Team 1', 'Team 2'], ['Team 3', 'Team 4'], ['Team 5', 'Team 6']];
+    const CLEAN = [['Team 1', 'Team 3'], ['Team 2', 'Team 5'], ['Team 4', 'Team 6']];
+    const seed = () => {
+        reset();
+        const gl = {};
+        const push = (d, a, b) => (gl[d] = gl[d] || []).push({ t1: a, t2: b, sport: null, g: 'Game X' });
+        // every non-trio pair met twice; CLEAN pairs only on 06-20, the rest on 06-21
+        const trioKeys = new Set(TRIO.map(p => pairKey(p[0], p[1])));
+        const cleanKeys = new Set(CLEAN.map(p => pairKey(p[0], p[1])));
+        for (let i = 0; i < TEAMS.length; i++) for (let j = i + 1; j < TEAMS.length; j++) {
+            const a = TEAMS[i], b = TEAMS[j], k = pairKey(a, b);
+            if (trioKeys.has(k)) continue;
+            const d = cleanKeys.has(k) ? '2026-06-20' : '2026-06-21';
+            push(d, a, b); push(d, a, b);
+        }
+        // tomorrow (07-04) already generated: the trio plays there (their ONLY meeting)
+        TRIO.forEach(p => push('2026-07-04', p[0], p[1]));
+        cloud.leagueHistory = {
+            teamSports: {}, matchupHistory: {}, gamesPerDate: {}, offCampusCounts: {},
+            gameLog: { [LG]: gl },
+        };
+    };
+    const trioKeys = new Set(TRIO.map(p => pairKey(p[0], p[1])));
+
+    // Guard OFF → met() favors the trio (1 meeting vs 2) → tomorrow duplicated.
+    seed();
     global.window.__leagueAdjacentDayOpponentGuard = false;
-    try {
-        ['2026-07-01', '2026-07-02', '2026-07-04'].forEach(d => gen(d, FIELDS6, 'matchup_variety'));
-        gen('2026-07-03', FIELDS6, 'matchup_variety');
-    } finally {
-        delete global.window.__leagueAdjacentDayOpponentGuard;
-    }
-    const d4 = pairsOn('2026-07-04');
-    const dup = gamesOn('2026-07-03').filter(g => d4.has(pairKey(g.t1, g.t2))).length;
-    assert.strictEqual(dup, 3,
-        `TEST4: with the guard OFF, 07-03 must fully duplicate 07-04's pairings (same history prefix, deterministic optimizer) — got ${dup}/3`);
-    console.log('✅ TEST 4 — killswitch reproduces the pre-fix duplicate day (proves the guard is the fix)');
+    try { gen('2026-07-03', FIELDS6, 'matchup_variety'); }
+    finally { delete global.window.__leagueAdjacentDayOpponentGuard; }
+    const dupOff = gamesOn('2026-07-03').filter(g => trioKeys.has(pairKey(g.t1, g.t2))).length;
+    assert.strictEqual(dupOff, 3,
+        `TEST4: guard OFF — met() favors tomorrow's trio, so it must be duplicated (got ${dupOff}/3)`);
+
+    // Guard ON → the same seed must NOT restage any of tomorrow's pairs.
+    seed();
+    gen('2026-07-03', FIELDS6, 'matchup_variety');
+    const dupOn = gamesOn('2026-07-03').filter(g => trioKeys.has(pairKey(g.t1, g.t2))).length;
+    assert.strictEqual(dupOn, 0,
+        `TEST4: guard ON — tomorrow's pairs must be avoided even when met() favors them (got ${dupOn})`);
+    console.log('✅ TEST 4 — killswitch causality: guard OFF duplicates tomorrow, guard ON never does');
 }
 
 // ---- TEST 5: 2-team league — adjacent rematch unavoidable, game still runs ----
