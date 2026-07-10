@@ -24,10 +24,162 @@
 
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
 
+    // =========================================================================
+    // ★ LG-8: (LEAGUE, DATE)-GRANULAR HISTORY MERGE
+    // =========================================================================
+    // leagueHistory used to be resolved WHOLESALE — whichever copy (cloud row
+    // vs localStorage backup) carried the newer _savedAt won and the other was
+    // discarded (LG-7). With more than one writer (two devices, owner +
+    // scheduler, a tab that closed inside the sync debounce) the copies
+    // DIVERGE into separate lineages, and every load flapped between them:
+    // observed live — a cloud lineage with full game counters and a local
+    // lineage with a full gameLog but wiped counters; whichever was "fresher"
+    // at generation time was blind to the other's days, so the deterministic
+    // optimizer restaged identical matchups and the game counter reset.
+    //
+    // The merge treats each (league, date) as the unit of truth:
+    //   • present in both copies → the FRESHER copy's version wins,
+    //   • present in one → adopted, unless a TOMBSTONE newer than that copy's
+    //     _savedAt says the day was deliberately deleted,
+    //   • aggregates (teamSports / matchupHistory) are REBUILT from the merged
+    //     gameLog for every league that has one (kills the counter/aggregate
+    //     divergence class); leagues with no gameLog at all (pure legacy)
+    //     keep the fresher copy's aggregates untouched.
+    //
+    // Tombstones (history._tombstones = { "<league>|<date>" | "*|<date>": ts })
+    // are stamped by the delete paths (cleanupDateFromHistory, resetDayRecords,
+    // the FN-54 in-gen day reset) so a deleted day cannot be resurrected by a
+    // stale copy — while a day REGENERATED after its deletion (its copy's
+    // _savedAt > tombstone) survives.
+    function mergeLeagueHistories(a, b) {
+        const norm = (h) => {
+            const out = {
+                teamSports: (h && h.teamSports) || {},
+                matchupHistory: (h && h.matchupHistory) || {},
+                gamesPerDate: (h && h.gamesPerDate) || {},
+                offCampusCounts: (h && h.offCampusCounts) || {},
+                gameLog: (h && h.gameLog) || {},
+                _tombstones: (h && h._tombstones) || {},
+                _savedAt: Number(h && h._savedAt) || 0
+            };
+            if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
+            if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
+            return out;
+        };
+        if (!a) return b ? norm(b) : norm(null);
+        if (!b) return norm(a);
+        const A = norm(a), B = norm(b);
+        const F = (A._savedAt >= B._savedAt) ? A : B;   // fresher copy
+        const O = (A._savedAt >= B._savedAt) ? B : A;   // older copy
+
+        const merged = {
+            teamSports: {},
+            matchupHistory: {},
+            gamesPerDate: {},
+            offCampusCounts: F.offCampusCounts,
+            gameLog: {},
+            _tombstones: {},
+            _savedAt: Math.max(A._savedAt, B._savedAt)
+        };
+        [F, O].forEach(function (h) {
+            Object.keys(h._tombstones).forEach(function (k) {
+                const ts = Number(h._tombstones[k]) || 0;
+                if (!(merged._tombstones[k] >= ts)) merged._tombstones[k] = ts;
+            });
+        });
+        // Full-history reset marker (window.resetLeagueHistory): every
+        // (league, date) from a copy saved before the reset is dropped.
+        merged._resetAt = Math.max(Number(a && a._resetAt) || 0, Number(b && b._resetAt) || 0) || undefined;
+        if (merged._resetAt === undefined) delete merged._resetAt;
+        // Counter-reset marker (clearAllGamesPerDate — "erase all days"
+        // restarts game numbering while keeping the fairness gameLog):
+        // counters from copies saved before it stay wiped, and healing skips
+        // days whose data predates it.
+        const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
+        if (countersResetAt) merged._countersResetAt = countersResetAt;
+        const tombTs = function (lg, d) {
+            return Math.max(
+                merged._tombstones[lg + '|' + d] || 0,
+                merged._tombstones['*|' + d] || 0,
+                Number(merged._resetAt) || 0
+            );
+        };
+        // Per-(league,date) adoption: fresher copy first, older fills gaps.
+        // A copy's data for a day loses only to a tombstone stamped AFTER
+        // that copy was saved (strictly — a same-instant regen must survive).
+        [F, O].forEach(function (src) {
+            Object.keys(src.gameLog).forEach(function (lg) {
+                Object.keys(src.gameLog[lg] || {}).forEach(function (d) {
+                    if (merged.gameLog[lg] && merged.gameLog[lg][d]) return;
+                    if (!(src.gameLog[lg][d] || []).length) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    (merged.gameLog[lg] = merged.gameLog[lg] || {})[d] = src.gameLog[lg][d];
+                });
+            });
+            Object.keys(src.gamesPerDate).forEach(function (lg) {
+                if (!merged.gamesPerDate[lg]) merged.gamesPerDate[lg] = {};
+                Object.keys(src.gamesPerDate[lg] || {}).forEach(function (d) {
+                    if (merged.gamesPerDate[lg][d] !== undefined) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    // a counter wiped by clearAllGamesPerDate stays wiped for
+                    // copies saved before the wipe
+                    if (countersResetAt > src._savedAt) return;
+                    merged.gamesPerDate[lg][d] = src.gamesPerDate[lg][d];
+                });
+            });
+        });
+        // A merged day whose counter is missing (a lineage whose gamesPerDate
+        // was lost while its gameLog survived) gets it derived from the day's
+        // distinct game labels — heals the "Game 1" reset. Disabled entirely
+        // once a deliberate counter wipe (clearAllGamesPerDate) exists:
+        // erase-all restarts numbering by design, and days generated after
+        // the wipe get real counters through recordGamesOnDate anyway.
+        if (!countersResetAt) {
+            Object.keys(merged.gameLog).forEach(function (lg) {
+                Object.keys(merged.gameLog[lg]).forEach(function (d) {
+                    if (merged.gamesPerDate[lg] && merged.gamesPerDate[lg][d] !== undefined) return;
+                    const labels = new Set();
+                    (merged.gameLog[lg][d] || []).forEach(function (e) { if (e && e.g) labels.add(e.g); });
+                    (merged.gamesPerDate[lg] = merged.gamesPerDate[lg] || {})[d] = Math.max(labels.size, 1);
+                });
+            });
+        }
+        // Rebuild the flat aggregates from the merged log (date order) so they
+        // can never diverge from it again; pure-legacy leagues (no gameLog)
+        // keep the fresher copy's aggregate entries.
+        const loggedLeagues = new Set(Object.keys(merged.gameLog));
+        Object.keys(F.teamSports).forEach(function (k) {
+            if (!loggedLeagues.has(k.split('|')[0])) merged.teamSports[k] = F.teamSports[k];
+        });
+        Object.keys(F.matchupHistory).forEach(function (k) {
+            if (!loggedLeagues.has(k.split(':')[0])) merged.matchupHistory[k] = F.matchupHistory[k];
+        });
+        loggedLeagues.forEach(function (lg) {
+            Object.keys(merged.gameLog[lg]).sort().forEach(function (d) {
+                (merged.gameLog[lg][d] || []).forEach(function (e) {
+                    if (!e) return;
+                    if (e.t1 && e.t2) {
+                        const mk = `${lg}:${getMatchupKey(e.t1, e.t2)}`;
+                        merged.matchupHistory[mk] = (merged.matchupHistory[mk] || 0) + 1;
+                    }
+                    if (e.sport) {
+                        [e.t1, e.t2].forEach(function (t) {
+                            if (!t) return;
+                            const tk = `${lg}|${t}`;
+                            (merged.teamSports[tk] = merged.teamSports[tk] || []).push(e.sport);
+                        });
+                    }
+                });
+            });
+        });
+        return merged;
+    }
+    Leagues.mergeLeagueHistories = mergeLeagueHistories;   // diagnostics + tests
+
     function loadLeagueHistory() {
         const EMPTY = () => ({
             teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-            offCampusCounts: {}, gameLog: {}
+            offCampusCounts: {}, gameLog: {}, _tombstones: {}
         });
         try {
             // Cloud-synced copy (hydrated into global settings)
@@ -42,17 +194,16 @@
                 if (raw) local = JSON.parse(raw);
             } catch (_) {}
 
-            // ★ LG-7: when BOTH stores have data, prefer the FRESHER by _savedAt
-            //   (stamped in saveLeagueHistory). A stale cloud row — e.g. an offline
-            //   local save that hasn't synced yet — must not shadow newer local
-            //   history at generation time, which made the game counter "reset".
-            //   Falls back to cloud when timestamps are absent (legacy) or equal.
+            // ★ LG-8: when BOTH stores have data, MERGE them at (league, date)
+            //   granularity (see mergeLeagueHistories) — neither lineage's days
+            //   are lost, deliberate deletions stick via tombstones, and the
+            //   aggregates are rebuilt from the merged log. Replaces the LG-7
+            //   wholesale fresher-wins pick, which flapped between divergent
+            //   copies and generated blind.
             let history;
             if (cloud && local) {
-                const ct = Number(cloud._savedAt) || 0;
-                const lt = Number(local._savedAt) || 0;
-                history = (lt > ct) ? local : cloud;
-                console.log(`[RegularLeagues] ✅ Loaded history (${history === local ? 'local is newer' : 'cloud'})`);
+                history = mergeLeagueHistories(cloud, local);
+                console.log('[RegularLeagues] ✅ Loaded history (merged cloud + local)');
             } else if (cloud) {
                 history = cloud;
                 console.log("[RegularLeagues] ✅ Loaded history from cloud");
@@ -73,11 +224,84 @@
             history.gamesPerDate = history.gamesPerDate || {};
             history.offCampusCounts = history.offCampusCounts || {};
             history.gameLog = history.gameLog || {};
+            history._tombstones = history._tombstones || {};
             return history;
         } catch (e) {
             console.error("Failed to load league history:", e);
             return EMPTY();
         }
+    }
+
+    // ★ LG-8: DIRECT VERIFIED CLOUD PUSH. saveGlobalSettings queues the
+    // leagueHistory row into the DEBOUNCED batched camp_state_kv sync — a tab
+    // closed inside the debounce window silently loses the day's games, a
+    // role/RLS rejection is swallowed by the batch (the league code still
+    // logged "saved to cloud"), and the batch write is whole-blob last-writer-
+    // wins. This push writes the row immediately: read the current cloud row,
+    // MERGE it in (another writer's days are never clobbered), upsert, retry
+    // 3× with backoff, and warn LOUDLY on a permissions rejection instead of
+    // pretending it synced. Concurrent saves coalesce — the newest history
+    // wins the follow-up push.
+    let _historyPushInFlight = false;
+    let _historyPushQueued = null;
+    function _pushLeagueHistoryToCloud(history) {
+        try {
+            const sb = (typeof window !== 'undefined') && window.supabase;
+            const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
+            if (!sb || !campId) return;
+            if (_historyPushInFlight) { _historyPushQueued = history; return; }
+            _historyPushInFlight = true;
+            const baseDelay = (typeof window !== 'undefined' && Number(window.__leagueHistoryPushRetryMs)) || 2000;
+            (async function () {
+                let delay = baseDelay;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        // Read-merge-write: never clobber days another writer
+                        // pushed since our copy was loaded.
+                        let payload = history;
+                        try {
+                            const r = await sb.from('camp_state_kv').select('value')
+                                .eq('camp_id', campId).eq('key', 'leagueHistory').maybeSingle();
+                            const cur = r && !r.error && r.data && r.data.value;
+                            if (cur && typeof cur === 'object' && (cur.gameLog || cur.gamesPerDate)) {
+                                payload = mergeLeagueHistories(history, cur);
+                            }
+                        } catch (_e) {}
+                        const res = await sb.from('camp_state_kv').upsert({
+                            camp_id: campId, key: 'leagueHistory', value: payload,
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'camp_id,key' });
+                        const err = res && res.error;
+                        if (!err) {
+                            console.log('[RegularLeagues] ☁️ League history pushed to cloud (verified)');
+                            break;
+                        }
+                        if (String(err.code) === '42501' || /permission|policy|row-level|violates/i.test(err.message || '')) {
+                            console.warn('[RegularLeagues] 🚨 League history cloud write BLOCKED by permissions — '
+                                + 'games recorded in this session exist only on this device and other devices will '
+                                + 'generate blind to them. Generate leagues from an owner/admin account, or apply the '
+                                + 'scheduler camp_state_kv write migration.', err.message || err);
+                            break;
+                        }
+                        throw err;
+                    } catch (e) {
+                        if (attempt >= 3) {
+                            console.warn('[RegularLeagues] ⚠️ League history cloud push failed after 3 attempts — '
+                                + 'relying on the batched sync/localStorage backup:', (e && e.message) || e);
+                            break;
+                        }
+                        await new Promise(function (res) { setTimeout(res, delay); });
+                        delay *= 2;
+                    }
+                }
+                _historyPushInFlight = false;
+                if (_historyPushQueued) {
+                    const next = _historyPushQueued;
+                    _historyPushQueued = null;
+                    _pushLeagueHistoryToCloud(next);
+                }
+            })();
+        } catch (_e) {}
     }
 
     function saveLeagueHistory(history) {
@@ -95,11 +319,13 @@
         if (typeof window.saveGlobalSettings === 'function') {
             try {
                 window.saveGlobalSettings('leagueHistory', history);
-                console.log("[RegularLeagues] ✅ History saved to cloud");
+                console.log("[RegularLeagues] ✅ History saved (queued for cloud sync)");
             } catch (e) {
                 console.error("Failed to save league history to cloud:", e);
             }
         }
+        // ★ LG-8: immediate verified push, independent of the debounced batch.
+        _pushLeagueHistoryToCloud(history);
         // localStorage backup — best-effort; a quota failure here is non-fatal.
         try {
             localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
@@ -126,23 +352,17 @@
             if (r && r.error) { console.warn('[RegularLeagues] cloud history refresh error — using existing copy:', r.error); return false; }
             const cloud = r && r.data && r.data.value;
             if (!cloud || typeof cloud !== 'object' || !cloud.gameLog) { console.log('[RegularLeagues] no cloud history to refresh'); return false; }
-            // Adopt the cloud copy unless our in-memory/local copy is strictly newer
-            // (an unsynced local edit must not be clobbered — mirrors LG-7 recency).
-            let localSavedAt = 0;
-            try {
-                const cur = (window.loadGlobalSettings && window.loadGlobalSettings().leagueHistory) || {};
-                localSavedAt = Number(cur._savedAt) || 0;
-                const raw = localStorage.getItem(LEAGUE_HISTORY_KEY);
-                if (raw) { const l = JSON.parse(raw); localSavedAt = Math.max(localSavedAt, Number(l._savedAt) || 0); }
-            } catch (_) {}
-            if ((Number(cloud._savedAt) || 0) < localSavedAt) {
-                console.log('[RegularLeagues] local league history is newer than cloud — keeping local');
-                return false;
-            }
-            if (typeof window.saveGlobalSettings === 'function') { try { window.saveGlobalSettings('leagueHistory', cloud); } catch (_) {} }
-            try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(cloud)); } catch (_) {}
-            console.log('[RegularLeagues] ☁️ Refreshed league history from cloud (' +
-                Object.keys(cloud.gameLog || {}).length + ' league(s))');
+            // ★ LG-8: MERGE the fetched cloud row with whatever this device
+            // already has (hydrated copy + localStorage backup, themselves
+            // merged by loadLeagueHistory) instead of the old adopt-or-keep —
+            // which discarded whichever lineage was older WHOLESALE and left
+            // generation blind to its days. The merged result is written back
+            // to both local stores so the sync engine reads the union.
+            const merged = mergeLeagueHistories(cloud, loadLeagueHistory());
+            if (typeof window.saveGlobalSettings === 'function') { try { window.saveGlobalSettings('leagueHistory', merged); } catch (_) {} }
+            try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(merged)); } catch (_) {}
+            console.log('[RegularLeagues] ☁️ Refreshed league history from cloud (merged; ' +
+                Object.keys(merged.gameLog || {}).length + ' league(s))');
             return true;
         } catch (e) {
             console.warn('[RegularLeagues] cloud history refresh failed — using existing copy:', e);
@@ -2616,6 +2836,12 @@
                     if (_raw && _raw.length) _plbl = new Set(_raw);
                 } catch (_e) {}
                 rollbackDayRecords(league.name, dayId, history, _plbl);
+                // ★ LG-8 tombstone: this generation REPLACES the league's day —
+                // in any later merge, a stale copy's version of this (league,
+                // date) must lose to this run's result (the end-of-gen save is
+                // stamped after this, so its own re-logged games survive).
+                history._tombstones = history._tombstones || {};
+                history._tombstones[`${league.name}|${dayId}`] = Date.now();
                 const _keptRecs = history.gameLog?.[league.name]?.[dayId] || [];
                 const _keptGames = new Set(_keptRecs.map(function (r) { return r && r.g; }).filter(Boolean)).size;
                 _preservedTodayCounts[league.name] = _keptGames;
@@ -4129,12 +4355,21 @@ window._debugLeagueTimeData = timeData;
 
     window.resetLeagueHistory = function() {
         if (confirm("Reset ALL league history? This will start fresh.")) {
-            localStorage.removeItem(LEAGUE_HISTORY_KEY);
-            // Also clear from cloud
+            // ★ LG-8: a bare {} would be resurrected by any stale copy in the
+            // (league,date) merge — write a RESET MARKER instead. _resetAt makes
+            // every (league,date) saved before this instant lose in merges, on
+            // every device that syncs it.
+            const resetHistory = {
+                teamSports: {}, matchupHistory: {}, gamesPerDate: {},
+                offCampusCounts: {}, gameLog: {}, _tombstones: {},
+                _resetAt: Date.now(), _savedAt: Date.now()
+            };
+            try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(resetHistory)); } catch (_) {}
             if (typeof window.saveGlobalSettings === 'function') {
-                window.saveGlobalSettings('leagueHistory', {});
+                window.saveGlobalSettings('leagueHistory', resetHistory);
             }
-            console.log("League history reset.");
+            _pushLeagueHistoryToCloud(resetHistory);
+            console.log("League history reset (reset marker synced).");
         }
     };
 
@@ -4228,6 +4463,13 @@ window._debugLeagueTimeData = timeData;
                     delete history.gamesPerDate[league.name][dateKey];
                     changed = true;
                 }
+                // ★ LG-8 tombstone: this league's day was deliberately reset —
+                // a stale copy from another device/tab must not resurrect it in
+                // a merge. A later regen of the day (saved after this stamp)
+                // still survives.
+                history._tombstones = history._tombstones || {};
+                history._tombstones[`${league.name}|${dateKey}`] = Date.now();
+                changed = true;
             });
             // ★ FN-58: the day's auto-saved result games are gone with it
             if (affected.length > 0) {
@@ -4267,6 +4509,15 @@ window._debugLeagueTimeData = timeData;
                 }
             }
 
+            // ★ LG-8 tombstone: the whole date was deleted (all leagues) —
+            // stamped even when nothing existed locally, because a DIVERGENT
+            // copy on another device may still carry games for this date and
+            // must not resurrect them in a merge. A later regen of the date
+            // (saved after this stamp) still survives.
+            history._tombstones = history._tombstones || {};
+            history._tombstones[`*|${dateKey}`] = Date.now();
+            changed = true;
+
             if (!changed) return;
 
             saveLeagueHistory(history);
@@ -4292,6 +4543,11 @@ window._debugLeagueTimeData = timeData;
             for (const leagueName of Object.keys(history.gamesPerDate)) {
                 history.gamesPerDate[leagueName] = {};
             }
+
+            // ★ LG-8: mark the wipe so the merge doesn't resurrect counters
+            // from a stale copy (or heal them back from the retained gameLog)
+            // — erase-all restarts game numbering by design.
+            history._countersResetAt = Date.now();
 
             saveLeagueHistory(history);
             console.log('[RegularLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
