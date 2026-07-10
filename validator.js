@@ -230,6 +230,12 @@
         try { checkElectiveReservations(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('🛡️ elective-reservation check failed:', e); }
 
+        // =====================================================================
+        // 17. ★★★ PLAYOFF RESERVED FIELDS (saved for teams that are out) ★★★
+        // =====================================================================
+        try { checkPlayoffReservations(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('playoff-reservation check failed:', e); }
+
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
         if (!silent) showValidationModal(errors, warnings);
@@ -1517,6 +1523,134 @@
      * semantics). Pinned-tile reservations are NOT re-checked here — those tiles
      * DO fill entries (with _reservedFields) so CHECK 12 already covers them.
      */
+
+    // ★ PLAYOFF reserved fields. Each playoff round reserves fields for the
+    //   teams that are OUT — locked exclusively for the league's divisions
+    //   during the league period (a pinned-elective-style hold). Nothing from
+    //   any OTHER division, and no OTHER league's game, may sit on those
+    //   fields at that time. The league's own divisions are exempt: that's
+    //   where the not-playing kids get routed. Reservations are rebuilt from
+    //   today's playoff league tiles (_playoffRound + _leagueName) + the
+    //   league's playoff config, so the check works on reload too.
+    function checkPlayoffReservations(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const PM = window.PlayoffMode;
+        if (!PM || !PM.getReservedForRound) return errors;
+
+        const leagues = [];
+        const lbn = window.leaguesByName || {};
+        Object.keys(lbn).forEach(k => { if (lbn[k] && lbn[k].name) leagues.push(lbn[k]); });
+        const slz = window.specialtyLeagues || {};
+        Object.keys(slz).forEach(k => { if (slz[k] && slz[k].name) leagues.push(slz[k]); });
+        if (!leagues.length) return errors;
+
+        const _fmt = m => Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
+
+        // 1. Today's playoff league tiles -> active reservations per field
+        const resMap = {};   // field(lc) -> [{fieldName, league, round, divisions[], startMin, endMin}]
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            const grade = bunkDivMap[String(bunk)];
+            const gSlots = (divisionTimes && divisionTimes[grade]) || [];
+            arr.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                const rnd = entry._playoffRound;
+                const lgName = entry._leagueName;
+                if (!rnd || !lgName) return;
+                const lg = leagues.find(l => l.name === lgName);
+                if (!lg || !lg.playoff || !lg.playoff.enabled) return;
+                const reserved = PM.getReservedForRound(lg, rnd) || [];
+                if (!reserved.length) return;
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = gSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+                const divs = (lg.divisions || []).map(String);
+                reserved.forEach(f => {
+                    const key = String(f).toLowerCase().trim();
+                    if (!resMap[key]) resMap[key] = [];
+                    if (resMap[key].some(r => r.league === lgName && r.startMin === sM)) return;
+                    resMap[key].push({ fieldName: String(f), league: lgName, round: rnd, divisions: divs, startMin: sM, endMin: eM });
+                });
+            });
+        });
+        if (!Object.keys(resMap).length) return errors;
+
+        // Resolve special-activity rooms so a special placed on a reserved room hits.
+        const specLoc = {};
+        const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        (((gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [])).forEach(s => {
+            if (s && s.name && s.location) { const n = String(s.name).toLowerCase().trim(); if (!specLoc[n]) specLoc[n] = s.location; }
+        });
+        const IGN = { 'free': 1, 'free play': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'transition': 1, 'buffer': 1 };
+
+        const seen = new Set();
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            const grade = bunkDivMap[String(bunk)];
+            const gSlots = (divisionTimes && divisionTimes[grade]) || [];
+            arr.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = gSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+
+                // (a) another league's GAME on a reserved field — game fields
+                //     live in the tile's matchup strings ("A vs B @ Field (sport)")
+                if (entry._leagueName && Array.isArray(entry._allMatchups)) {
+                    entry._allMatchups.forEach(line => {
+                        const m = /@\s*([^()]+?)(?:\s*\(|\s*$)/.exec(String(line));
+                        if (!m) return;
+                        const f = m[1].trim().toLowerCase();
+                        (resMap[f] || []).forEach(r => {
+                            if (r.league === entry._leagueName) return;   // its own reservation
+                            if (!(r.startMin < eM && r.endMin > sM)) return;
+                            const sig = 'lg|' + f + '|' + entry._leagueName + '|' + sM;
+                            if (seen.has(sig)) return;
+                            seen.add(sig);
+                            errors.push({
+                                type: 'playoff_reservation',
+                                message: 'Playoff Reserved Field Conflict: league "' + entry._leagueName + '" has a game on ' +
+                                    r.fieldName + ' at ' + _fmt(sM) + '-' + _fmt(eM) + ', but that field is reserved by ' +
+                                    r.league + ' (Playoff R' + r.round + ') for its teams that are out'
+                            });
+                        });
+                    });
+                    return;   // league tile handled — no per-bunk field to check
+                }
+
+                const act = entry._activity || entry.field;
+                if (!act || IGN[String(act).toLowerCase().trim()]) return;
+                const cands = new Set();
+                const add = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') cands.add(f.trim()); };
+                add(entry.field); add(entry._location);
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(add);
+                add(specLoc[String(act).toLowerCase().trim()]);
+                try { if (window.getLocationForActivity) add(window.getLocationForActivity(act)); } catch (e) { /* ignore */ }
+                for (const cf of cands) {
+                    const list = resMap[String(cf).toLowerCase().trim()];
+                    if (!list) continue;
+                    for (const r of list) {
+                        if (!(r.startMin < eM && r.endMin > sM)) continue;
+                        if (r.divisions.some(d => String(d) === String(grade))) continue;   // league's own divisions allowed
+                        const sig = cf + '|' + bunk + '|' + sM;
+                        if (seen.has(sig)) continue;
+                        seen.add(sig);
+                        errors.push({
+                            type: 'playoff_reservation',
+                            message: 'Playoff Reserved Field Conflict: ' + bunk + ' (' + grade + ') has "' + act + '" on ' + cf +
+                                ' at ' + _fmt(sM) + '-' + _fmt(eM) + ', but that field is reserved by ' + r.league +
+                                ' (Playoff R' + r.round + ') for its teams that are out'
+                        });
+                        break;
+                    }
+                }
+            });
+        });
+        return errors;
+    }
+
     function checkElectiveReservations(assignments, bunkDivMap, divisionTimes) {
         const errors = [];
         const Utils = window.SchedulerCoreUtils;

@@ -3409,19 +3409,32 @@
                     // know which kids will be playing yet. Per-round list —
                     // later rounds usually reserve more fields as more teams
                     // are knocked out (legacy league-wide list as fallback).
+                    // ONE multi-division lock per field (comma list) with an
+                    // explicit time window — see the main reserve site below.
                     const _tbdReserved = _PM.getReservedForRound
                         ? _PM.getReservedForRound(league, playoffRoundNum)
                         : ((league.playoff && league.playoff.reservedActivities) || []);
                     if (window.GlobalFieldLocks && _tbdReserved.length > 0) {
                         const reservedReason = 'Playoff reserve (' + league.name + ' R' + playoffRoundNum + ' TBD)';
-                        leagueDivisions.forEach(function (divName) {
-                            _tbdReserved.forEach(function (act) {
-                                try {
-                                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
-                                } catch (e) {
-                                    console.warn('[PLAYOFF TBD] failed to reserve "' + act + '" for ' + divName + ':', e);
-                                }
-                            });
+                        const _tbdResDivs = leagueDivisions.join(', ');
+                        // Same window derivation as the main league lock: start
+                        // from the authoritative period start (timeKey), end
+                        // best-effort from the league's own slot grid.
+                        const _tbdDivSlots = window.divisionTimes?.[leagueDivisions[0]] || [];
+                        let _tbdStart = (timeKey != null && !isNaN(Number(timeKey))) ? Number(timeKey) : null;
+                        let _tbdEnd = null;
+                        if (slots.length > 0 && _tbdDivSlots[slots[0]]) {
+                            if (_tbdStart == null) _tbdStart = _tbdDivSlots[slots[0]].startMin;
+                            _tbdEnd = _tbdDivSlots[slots[slots.length - 1]]?.endMin;
+                        }
+                        if (_tbdStart != null && (_tbdEnd == null || _tbdEnd <= _tbdStart)) _tbdEnd = _tbdStart + 40;
+                        _tbdReserved.forEach(function (act) {
+                            try {
+                                window.GlobalFieldLocks.lockFieldForDivision(act, slots, _tbdResDivs, reservedReason,
+                                    (_tbdStart != null ? { startMin: _tbdStart, endMin: _tbdEnd } : undefined));
+                            } catch (e) {
+                                console.warn('[PLAYOFF TBD] failed to reserve "' + act + '" for ' + _tbdResDivs + ':', e);
+                            }
                         });
                     }
                     console.log('   📈 Game #' + gameNumber + ' (TBD info) complete for "' + league.name + '"');
@@ -3436,6 +3449,15 @@
                 if (playoffMatchupSports) {
                     assignments = [];
                     const _poolUsed = new Set();
+                    // ★ The round's reserved fields are saved for the kids who are
+                    //   OUT — the playoff games themselves must not auto-pick them
+                    //   (the pool is built before the reserve locks apply). An
+                    //   EXPLICIT user-chosen field still wins, even if reserved.
+                    const _resFieldSet = new Set(
+                        (playoffRoundNum && _PM.getReservedForRound)
+                            ? _PM.getReservedForRound(league, playoffRoundNum).map(function (f) { return String(f); })
+                            : []
+                    );
                     matchups.forEach(function (mu, i) {
                         const teamA = Array.isArray(mu) ? mu[0] : mu;
                         const teamB = Array.isArray(mu) ? mu[1] : null;
@@ -3462,13 +3484,15 @@
                             console.log('   ⚠️ PLAYOFF: chosen field "' + wantedField + '" for ' + teamA + ' vs ' + teamB +
                                 ' is unavailable (in use or doesn\'t support ' + wantedSport + ') — falling back to auto-pick');
                         }
+                        // Auto-pick never lands on a reserved field.
+                        candidates = candidates.filter(function (p) { return !_resFieldSet.has(p.field); });
                         if (candidates.length === 0) {
                             // For TBD placeholders, the "wanted" sport is just a
                             // forecast — the actual round 2 sport isn't known yet.
                             // Fall back to any available pool entry so the slot
                             // still gets reserved with a TBD label.
                             if (playoffIsTBD) {
-                                const fallback = availablePool.filter(function (p) { return !_poolUsed.has(p.field); });
+                                const fallback = availablePool.filter(function (p) { return !_poolUsed.has(p.field) && !_resFieldSet.has(p.field); });
                                 if (fallback.length > 0) {
                                     const pickF = fallback[0];
                                     _poolUsed.add(pickF.field);
@@ -3477,7 +3501,8 @@
                                     return;
                                 }
                             }
-                            console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
+                            console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')'
+                                + (_resFieldSet.size ? ' — reserved fields [' + Array.from(_resFieldSet).join(', ') + '] are off-limits to games' : ''));
                             _recordByeEvent({
                                 league: league.name, kind: 'bye', team1: teamA, team2: teamB,
                                 reason: 'Playoff: no open field supported "' + wantedSport + '" at this time — the matchup could not be placed.'
@@ -3586,16 +3611,21 @@ if (playoffRoundNum) {
         : ((league.playoff && league.playoff.reservedActivities) || []);
     if (_roundReserved.length > 0) {
         const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum}` + (playoffIsTBD ? ' TBD)' : ')');
-        leagueDivisions.forEach(function (divName) {
-            _roundReserved.forEach(function (act) {
-                try {
-                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
-                } catch (e) {
-                    console.warn('[PLAYOFF] failed to reserve "' + act + '" for ' + divName + ':', e);
-                }
-            });
+        // ★ ONE division lock per field, allowing ALL the league's divisions
+        //   (comma list — see GlobalFieldLocks.divisionAllowed). Per-division
+        //   calls overwrote each other, leaving only the LAST division allowed.
+        //   Explicit time window so cross-grade time checks don't have to guess
+        //   from slot grids that may not line up.
+        const _resDivs = leagueDivisions.join(', ');
+        _roundReserved.forEach(function (act) {
+            try {
+                window.GlobalFieldLocks.lockFieldForDivision(act, slots, _resDivs, reservedReason,
+                    { startMin: _lockStartMin, endMin: _lockEndMin });
+            } catch (e) {
+                console.warn('[PLAYOFF] failed to reserve "' + act + '" for ' + _resDivs + ':', e);
+            }
         });
-        console.log('   🎯 PLAYOFF R' + playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for [' + leagueDivisions.join(', ') + ']');
+        console.log('   🎯 PLAYOFF R' + playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for [' + _resDivs + ']');
     }
 }
 }

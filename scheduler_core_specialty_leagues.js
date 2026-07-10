@@ -785,8 +785,16 @@
             }
 
             if (!bestField) {
+                // ★ Playoff: reserved fields (saved for teams that are out) are
+                //   off-limits to the games' auto-pick; only an explicit
+                //   user-chosen field (handled above) may land on one.
+                const _resFieldSet = new Set(
+                    (league && Array.isArray(league._playoffReservedNow))
+                        ? league._playoffReservedNow.map(String) : []
+                );
                 let bestRot = -Infinity;
                 for (const field of availableFields) {
+                    if (_resFieldSet.has(field)) continue;
                     const currentGames = _effectiveGames(field);
                     const maxGames = gamesPerFieldSlot || 3;
                     if (currentGames >= maxGames) continue;   // court already full this period
@@ -1144,6 +1152,7 @@
             //   Legacy playoffs without the anchor fall back to
             //   currentRound + todayGameIndex.
             let _playoffPreseason = false;   // playoff enabled, but this tile predates the start anchor
+            league._playoffReservedNow = null;   // set below when a playoff round plays
             if (_PM_S && _PM_S.isLeagueInPlayoff(league)) {
                 const _startCnt = league.playoff.startGameCount;
                 const derivedRound = (typeof _startCnt === 'number')
@@ -1173,6 +1182,10 @@
                             console.log('[SpecialtyLeagues] 🏆 PLAYOFF: Round ' + derivedRound + (roundToPlay - derivedRound > 1 ? '–' + (roundToPlay - 1) : '') + ' already decided — tile #' + gameNumber + ' plays Round ' + roundToPlay + ' (anchor re-aligned to ' + league.playoff.startGameCount + ')');
                         }
                     };
+                    // ★ The round's reserved fields are for the kids who are OUT —
+                    //   the field assigner must not auto-pick them for games.
+                    league._playoffReservedNow = _PM_S.getReservedForRound
+                        ? _PM_S.getReservedForRound(league, roundToPlay) : null;
                     const userRound = (typeof _PM_S.getRoundByNumber === 'function')
                         ? _PM_S.getRoundByNumber(league, roundToPlay) : null;
                     const userRoundMatchups = (userRound && Array.isArray(userRound.matchups)) ? userRound.matchups : [];
@@ -1308,14 +1321,21 @@ if (_playoffRoundNum) {
         : ((league.playoff && league.playoff.reservedActivities) || []);
     if (_roundReserved.length > 0) {
         const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
+        // ★ ONE division lock per field allowing ALL the league's divisions
+        //   (comma list — GlobalFieldLocks.divisionAllowed). Per-division calls
+        //   overwrote each other across processing passes, leaving only the
+        //   last division allowed. Explicit time window for cross-grade checks.
+        const _resDivs = (Array.isArray(league.divisions) && league.divisions.length > 0)
+            ? league.divisions.join(', ') : divName;
         _roundReserved.forEach(function (act) {
             try {
-                window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
+                window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, _resDivs, reservedReason,
+                    (_specLockStart != null ? { startMin: _specLockStart, endMin: _specLockEnd } : undefined));
             } catch (e) {
-                console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + divName + ':', e);
+                console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + _resDivs + ':', e);
             }
         });
-        console.log('[SpecialtyLeagues] 🎯 PLAYOFF R' + _playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for ' + divName);
+        console.log('[SpecialtyLeagues] 🎯 PLAYOFF R' + _playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for ' + _resDivs);
     }
 }
 }

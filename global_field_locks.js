@@ -152,6 +152,19 @@
      * @param {string} allowedDivision - The division that CAN still use this field
      * @param {string} reason - Description (e.g., "Elective (2nd Grade)")
      */
+    // ★ Division-lock membership: allowedDivision may be a SINGLE division or a
+    //   comma-separated list (e.g. a playoff league reserving fields for all of
+    //   its divisions — "Camp A > 4, Camp A > 5"). A caller matching ANY listed
+    //   division is allowed; everyone else is locked out.
+    GlobalFieldLocks.divisionAllowed = function(lock, divisionContext) {
+        if (!lock || lock.lockType !== 'division' || !lock.allowedDivision || !divisionContext) return false;
+        const allowed = String(lock.allowedDivision);
+        const ctx = String(divisionContext).trim();
+        if (allowed === ctx) return true;
+        if (allowed.indexOf(',') < 0) return false;
+        return allowed.split(',').some(function (d) { return d.trim() === ctx; });
+    };
+
     GlobalFieldLocks.lockFieldForDivision = function(fieldName, slots, allowedDivision, reason, timeRange) {
         if (!this._initialized) this.reset();
         if (!fieldName || !slots || slots.length === 0 || !allowedDivision) return false;
@@ -221,8 +234,8 @@
                 
                 // Check if this is a division-specific lock (elective)
                 if (lock.lockType === 'division' && lock.allowedDivision) {
-                    // If the caller's division matches the allowed division, NOT locked for them
-                    if (divisionContext && divisionContext === lock.allowedDivision) {
+                    // If the caller's division matches the allowed division(s), NOT locked for them
+                    if (GlobalFieldLocks.divisionAllowed(lock, divisionContext)) {
                         continue; // Check next slot, this one is OK for this division
                     }
                 }
@@ -271,8 +284,7 @@
                             //   other. Kill switch: window.__comboSiblingUnblock = false.
                             if (lock._fromComboPropagation === true &&
                                 window.__comboSiblingUnblock !== false) continue;
-                            if (lock.lockType === 'division' && lock.allowedDivision &&
-                                divisionContext && divisionContext === lock.allowedDivision) continue;
+                            if (GlobalFieldLocks.divisionAllowed(lock, divisionContext)) continue;
                             let lStart = lock.startMin, lEnd = lock.endMin;
                             if (lStart == null || lEnd == null) {
                                 const lockDiv = lock.division || lock.allowedDivision;
@@ -350,9 +362,9 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
         const lock = slotLocks[normalizedField];
 
-        // Skip division locks where caller IS the allowed division
+        // Skip division locks where caller IS (one of) the allowed division(s)
         if (lock.lockType === 'division' && lock.allowedDivision) {
-            if (divisionContext && divisionContext === lock.allowedDivision) {
+            if (GlobalFieldLocks.divisionAllowed(lock, divisionContext)) {
                 continue;
             }
         }
@@ -428,8 +440,7 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
                     if (lock._fromComboPropagation === true &&
                         window.__comboSiblingUnblock !== false) continue;
                     // Skip division locks the caller is allowed for
-                    if (lock.lockType === 'division' && lock.allowedDivision &&
-                        divisionContext && divisionContext === lock.allowedDivision) continue;
+                    if (GlobalFieldLocks.divisionAllowed(lock, divisionContext)) continue;
                     // Resolve lock time range
                     let lStart = lock.startMin, lEnd = lock.endMin;
                     if (lStart == null || lEnd == null) {
@@ -480,8 +491,8 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         
         const locked = [];
         for (const [fieldKey, lock] of Object.entries(this._locks[slotIdx])) {
-            // Skip division locks if caller is the allowed division
-            if (lock.lockType === 'division' && lock.allowedDivision === divisionContext) {
+            // Skip division locks if caller is (one of) the allowed division(s)
+            if (GlobalFieldLocks.divisionAllowed(lock, divisionContext)) {
                 continue;
             }
             locked.push(lock.fieldName);
