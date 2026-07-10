@@ -25,10 +25,11 @@
 (function () {
     'use strict';
 
-    var VERSION = '4.0.0';
+    var VERSION = '4.1.0';
     var _overlayEl = null;
     var _league = null;
     var _kind = 'regular';
+    var _activePage = null;   // round number shown in Step 1, or 'add' for the new-round page
 
     function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
@@ -128,6 +129,64 @@
     }
 
     // -------------------------------------------------------------------------
+    // Automatic round tracking
+    // -------------------------------------------------------------------------
+    // The schedulers number every league period ("tile") chronologically via
+    // history.gamesPerDate. Playoffs anchor on that counter: startGameCount is
+    // the total when playoffs begin, and league tile #(startGameCount + N)
+    // plays Round N. Read the SAME history the schedulers read (cloud-synced
+    // globalSettings mirror, with the localStorage backup as fallback — LG-7
+    // freshness rule for regular leagues).
+    function _totalGamesRecorded() {
+        try {
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var cloud, local = null;
+            if (_kind === 'specialty') {
+                cloud = gs.specialtyLeagueHistory;
+                try { var rawS = localStorage.getItem('campSpecialtyLeagueHistory_v1'); if (rawS) local = JSON.parse(rawS); } catch (_) {}
+            } else {
+                cloud = gs.leagueHistory;
+                try { var rawR = localStorage.getItem('campLeagueHistory_v2'); if (rawR) local = JSON.parse(rawR); } catch (_) {}
+            }
+            var hist;
+            if (cloud && local) {
+                hist = ((Number(local._savedAt) || 0) > (Number(cloud._savedAt) || 0)) ? local : cloud;
+            } else {
+                hist = cloud || local;
+            }
+            if (!hist || !hist.gamesPerDate) return 0;
+            var key = (_kind === 'specialty') ? (_league.id || _league.name) : _league.name;
+            var map = hist.gamesPerDate[key] || {};
+            var total = 0;
+            Object.keys(map).forEach(function (d) { total += Number(map[d]) || 0; });
+            return total;
+        } catch (_) { return 0; }
+    }
+
+    // The round the NEXT league tile on the schedule will play.
+    function _upNextRound(p) {
+        if (typeof p.startGameCount === 'number') {
+            return Math.max(1, _totalGamesRecorded() - p.startGameCount + 1);
+        }
+        return p.currentRound || 1;   // legacy manual mode (anchor stamped on next render)
+    }
+
+    // Anchor the tile counter so the next league tile plays `nextRound`
+    // (defaults to the first round that isn't fully decided yet).
+    function _stampStartCount(p, nextRound) {
+        if (nextRound == null) {
+            nextRound = 1;
+            var sorted = (p.rounds || []).slice().sort(function (a, b) { return a.number - b.number; });
+            for (var i = 0; i < sorted.length; i++) {
+                if (sorted[i].number === nextRound && window.PlayoffMode.isRoundComplete(sorted[i])) nextRound++;
+                else break;
+            }
+        }
+        p.startGameCount = Math.max(0, _totalGamesRecorded() - (nextRound - 1));
+        p.currentRound = nextRound;   // keep the display cache in step
+    }
+
+    // -------------------------------------------------------------------------
     // Render
     // -------------------------------------------------------------------------
 
@@ -140,6 +199,14 @@
         body.innerHTML = '';
 
         var p = window.PlayoffMode.getOrInit(_league);
+
+        // Migration: an enabled playoff from before automatic round tracking
+        // has no anchor — stamp one that continues from the first undecided
+        // round, so tracking picks up exactly where the user left off.
+        if (p.enabled && typeof p.startGameCount !== 'number') {
+            _stampStartCount(p, null);
+            _save();
+        }
 
         // Top row: enable toggle
         var topRow = document.createElement('div');
@@ -158,6 +225,11 @@
         enableCb.checked = !!p.enabled;
         enableCb.onchange = function () {
             p.enabled = enableCb.checked;
+            if (p.enabled) {
+                // Start (or resume) the tile counter: the next league period
+                // plays the first round that isn't decided yet.
+                _stampStartCount(p, null);
+            }
             _save();
             _render();
         };
@@ -172,7 +244,7 @@
         if (!p.enabled) {
             var off = document.createElement('div');
             off.className = 'ph-explainer';
-            off.textContent = 'Turn on Playoff to replace regular round-robin scheduling with rounds you build yourself: you decide how many matchups each round has, which team plays which, what sport they play, and (optionally) on which field. The scheduler places whichever round is marked as current.';
+            off.textContent = 'Turn on Playoff to replace regular round-robin scheduling with rounds you build yourself: you decide how many matchups each round has, which team plays which, what sport they play, and (optionally) on which field. Round tracking is automatic — once playoffs are on, the first league period on the schedule plays Round 1, the second plays Round 2, and so on.';
             body.appendChild(off);
             return;
         }
@@ -213,22 +285,75 @@
         var card = document.createElement('section');
         card.className = 'ph-step-card';
         card.appendChild(_stepHead(1, 'Build rounds & matchups',
-            'You are in full control: add each round, choose how many matchups it has, pick any team vs any team, pick the sport, and either pick a field or let the scheduler find one. Mark winners as games finish.'));
+            'Each round is its own page: set how many matchups it has, pick any team vs any team, pick the sport, and either pick a field or let the scheduler find one. Mark winners as games finish.'));
 
-        if (!p.rounds || p.rounds.length === 0) {
-            var empty = document.createElement('div');
-            empty.className = 'ph-explainer subtle';
-            empty.textContent = 'No rounds yet — add Round 1 below and choose how many matchups it should have.';
-            card.appendChild(empty);
+        var hasRounds = p.rounds && p.rounds.length > 0;
+        var upNext = _upNextRound(p);
+        var maxRound = 0;
+        (p.rounds || []).forEach(function (r) { if (r && r.number > maxRound) maxRound = r.number; });
+        var champion = window.PlayoffMode.getChampion(_league);
+
+        // ── Automatic round-tracking status ──
+        var played = (typeof p.startGameCount === 'number')
+            ? Math.max(0, _totalGamesRecorded() - p.startGameCount) : 0;
+        var track = document.createElement('div');
+        track.className = 'ph-track-bar';
+        var trackMsg = 'Round tracking is automatic: league period #1 after playoffs started plays Round 1, period #2 plays Round 2, and so on. '
+            + played + ' league period' + (played === 1 ? '' : 's') + ' counted so far';
+        if (champion) {
+            trackMsg += ' — tournament decided.';
+        } else if (hasRounds && upNext > maxRound) {
+            trackMsg += ' — the next league period plays Round ' + upNext + ', which isn\'t built yet. Add it below.';
         } else {
-            p.rounds.forEach(function (round) {
-                card.appendChild(_renderRound(p, round));
-            });
+            trackMsg += ' — the next league period plays Round ' + upNext + '.';
+        }
+        track.textContent = '🎯 ' + trackMsg;
+        card.appendChild(track);
+
+        // ── Page picker: one tab per round + "Add Round" ──
+        if (_activePage == null
+            || (_activePage !== 'add' && !window.PlayoffMode.getRoundByNumber(_league, _activePage))) {
+            _activePage = hasRounds
+                ? (window.PlayoffMode.getRoundByNumber(_league, upNext) ? upNext : maxRound)
+                : 'add';
         }
 
-        card.appendChild(_renderAddRoundRow(p));
+        var tabs = document.createElement('div');
+        tabs.className = 'ph-round-tabs';
+        (p.rounds || []).slice().sort(function (a, b) { return a.number - b.number; }).forEach(function (r) {
+            var tab = document.createElement('button');
+            tab.type = 'button';
+            var complete = window.PlayoffMode.isRoundComplete(r);
+            tab.className = 'ph-round-tab' + (_activePage === r.number ? ' active' : '');
+            tab.innerHTML = escHtml('Round ' + r.number)
+                + (complete ? ' <span class="ph-tab-check">✓</span>' : '')
+                + (!champion && r.number === upNext ? ' <span class="ph-tab-next">next</span>' : '');
+            tab.onclick = function () { _activePage = r.number; _render(); };
+            tabs.appendChild(tab);
+        });
+        var addTab = document.createElement('button');
+        addTab.type = 'button';
+        addTab.className = 'ph-round-tab add' + (_activePage === 'add' ? ' active' : '');
+        addTab.textContent = '+ Add Round';
+        addTab.onclick = function () { _activePage = 'add'; _render(); };
+        tabs.appendChild(addTab);
+        card.appendChild(tabs);
 
-        if (p.rounds && p.rounds.length > 0) {
+        // ── Active page ──
+        if (_activePage === 'add') {
+            if (!hasRounds) {
+                var empty = document.createElement('div');
+                empty.className = 'ph-explainer subtle';
+                empty.textContent = 'No rounds yet — create the Round 1 page and choose how many matchups it should have. Once playoffs are on, the first league period on the schedule plays Round 1.';
+                card.appendChild(empty);
+            }
+            card.appendChild(_renderAddRoundRow(p));
+        } else {
+            var round = window.PlayoffMode.getRoundByNumber(_league, _activePage);
+            if (round) card.appendChild(_renderRound(p, round, upNext));
+        }
+
+        if (hasRounds) {
             var bottom = document.createElement('div');
             bottom.className = 'ph-actions-row';
             var clearBtn = document.createElement('button');
@@ -238,6 +363,8 @@
             clearBtn.onclick = function () {
                 if (!confirm('Clear every playoff round for ' + (_league.name || 'this league') + '?')) return;
                 p.rounds = []; p.currentRound = 1;
+                _stampStartCount(p, 1);   // next league period plays Round 1 again
+                _activePage = 'add';
                 _save(); _render();
             };
             bottom.appendChild(clearBtn);
@@ -286,12 +413,12 @@
         var addBtn = document.createElement('button');
         addBtn.type = 'button';
         addBtn.className = 'ph-btn primary';
-        addBtn.textContent = '+ Add Round ' + nextNum;
+        addBtn.textContent = '+ Create Round ' + nextNum + ' page';
         addBtn.onclick = function () {
             var n = parseInt(input.value, 10);
             if (!n || n < 1) { input.focus(); return; }
-            window.PlayoffMode.createRound(p, n);
-            if (p.rounds.length === 1) p.currentRound = p.rounds[0].number;
+            var round = window.PlayoffMode.createRound(p, n);
+            _activePage = round.number;
             _save(); _render();
         };
         row.appendChild(addBtn);
@@ -299,11 +426,11 @@
         return row;
     }
 
-    function _renderRound(p, round) {
+    function _renderRound(p, round, upNext) {
+        var isUpNext = round.number === upNext;
         var card = document.createElement('div');
-        card.className = 'ph-round-card' + (p.currentRound === round.number ? ' current' : '');
+        card.className = 'ph-round-card' + (isUpNext ? ' current' : '');
 
-        var isCurrent = p.currentRound === round.number;
         var complete = window.PlayoffMode.isRoundComplete(round);
 
         // ── Header ──
@@ -315,11 +442,11 @@
         title.textContent = 'Round ' + round.number;
         top.appendChild(title);
 
-        if (isCurrent) {
+        if (isUpNext && !window.PlayoffMode.getChampion(_league)) {
             var cur = document.createElement('span');
             cur.className = 'ph-round-badge current';
-            cur.textContent = 'scheduling next';
-            cur.title = 'The scheduler will place this round\'s matchups in the next league slot.';
+            cur.textContent = 'up next';
+            cur.title = 'Round tracking is automatic — the next league period on the schedule plays this round.';
             top.appendChild(cur);
         }
         if (complete) {
@@ -333,13 +460,16 @@
         spacer.className = 'ph-round-spacer';
         top.appendChild(spacer);
 
-        if (!isCurrent) {
+        if (!isUpNext) {
+            // Manual re-align escape hatch: shift the automatic tile counter so
+            // THIS round plays in the next league period.
             var setBtn = document.createElement('button');
             setBtn.type = 'button';
             setBtn.className = 'ph-btn ghost small';
-            setBtn.textContent = 'Set as current';
+            setBtn.textContent = 'Play this round next';
+            setBtn.title = 'Re-aligns the automatic tracking so the next league period on the schedule plays Round ' + round.number + '.';
             setBtn.onclick = function () {
-                p.currentRound = round.number;
+                _stampStartCount(p, round.number);
                 _save(); _render();
             };
             top.appendChild(setBtn);
@@ -352,6 +482,7 @@
         delBtn.onclick = function () {
             if (!confirm('Delete Round ' + round.number + '? Later rounds will be renumbered.')) return;
             window.PlayoffMode.removeRound(p, round.number);
+            _activePage = null;   // re-resolve to a valid page
             _save(); _render();
         };
         top.appendChild(delBtn);
@@ -398,33 +529,19 @@
             warn.textContent = '⚠️ ' + doubled.join(', ') + ' appear' + (doubled.length === 1 ? 's' : '') + ' in more than one matchup this round.';
             card.appendChild(warn);
         }
-        if (isCurrent && unfilled > 0) {
+        if (isUpNext && unfilled > 0) {
             var hint = document.createElement('div');
             hint.className = 'ph-explainer subtle';
             hint.textContent = unfilled + ' matchup' + (unfilled === 1 ? '' : 's') + ' still need' + (unfilled === 1 ? 's' : '') + ' teams — the scheduler only places matchups with both teams picked.';
             card.appendChild(hint);
         }
-        if (isCurrent && complete) {
-            var next = window.PlayoffMode.getRoundByNumber(_league, round.number + 1);
-            var nextRow = document.createElement('div');
-            nextRow.className = 'ph-actions-row';
-            if (next) {
-                var advBtn = document.createElement('button');
-                advBtn.type = 'button';
-                advBtn.className = 'ph-btn primary';
-                advBtn.textContent = 'Make Round ' + next.number + ' current';
-                advBtn.onclick = function () {
-                    p.currentRound = next.number;
-                    _save(); _render();
-                };
-                nextRow.appendChild(advBtn);
-            } else if (!window.PlayoffMode.getChampion(_league)) {
-                var doneHint = document.createElement('div');
-                doneHint.className = 'ph-explainer subtle';
-                doneHint.textContent = 'All matchups decided — add the next round below and fill in its matchups.';
-                nextRow.appendChild(doneHint);
-            }
-            if (nextRow.children.length > 0) card.appendChild(nextRow);
+        if (complete
+            && !window.PlayoffMode.getRoundByNumber(_league, round.number + 1)
+            && !window.PlayoffMode.getChampion(_league)) {
+            var doneHint = document.createElement('div');
+            doneHint.className = 'ph-explainer subtle';
+            doneHint.textContent = 'All matchups decided — create the Round ' + (round.number + 1) + ' page from the tab bar above and fill in its matchups.';
+            card.appendChild(doneHint);
         }
 
         return card;
@@ -674,6 +791,7 @@
         _injectStyles();
         _league = league;
         _kind = kind === 'specialty' ? 'specialty' : 'regular';
+        _activePage = null;
 
         _overlayEl = document.createElement('div');
         _overlayEl.className = 'ph-overlay';
@@ -744,6 +862,20 @@
             '.ph-step-title-wrap{display:flex;flex-direction:column;gap:2px;}',
             '.ph-step-title{font-size:1rem;font-weight:700;color:#0A4A56;}',
             '.ph-step-sub{font-size:0.8rem;color:#6B7280;line-height:1.45;}',
+
+            // Automatic round-tracking status bar
+            '.ph-track-bar{padding:10px 14px;background:#F0FDFA;border:1px solid #99F6E4;border-radius:10px;color:#0A4A56;font-size:0.82rem;line-height:1.5;}',
+
+            // Round page tabs
+            '.ph-round-tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid #E5E7EB;padding-bottom:0;}',
+            '.ph-round-tab{padding:9px 16px;border:1px solid #E5E7EB;border-bottom:none;background:#F9FAFB;border-radius:10px 10px 0 0;cursor:pointer;font-size:0.85rem;font-weight:600;font-family:inherit;color:#475569;margin-bottom:-2px;}',
+            '.ph-round-tab:hover{color:#147D91;border-color:#147D91;}',
+            '.ph-round-tab.active{background:#147D91;color:#fff;border-color:#147D91;}',
+            '.ph-round-tab.add{border-style:dashed;background:transparent;color:#147D91;}',
+            '.ph-round-tab.add.active{background:#147D91;color:#fff;border-style:solid;}',
+            '.ph-tab-check{color:#10B981;font-weight:800;}',
+            '.ph-round-tab.active .ph-tab-check{color:#A7F3D0;}',
+            '.ph-tab-next{font-size:0.62rem;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;background:#FDE68A;color:#92400E;border-radius:999px;padding:2px 7px;vertical-align:middle;}',
 
             // Round card
             '.ph-round-card{border:1px solid #E5E7EB;border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;background:#FCFDFD;}',

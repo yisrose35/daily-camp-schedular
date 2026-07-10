@@ -3189,68 +3189,78 @@
                 let playoffIsTBD = false;            // true when emitting placeholder for an undecided future round
                 const _PM = window.PlayoffMode;
 
+                // ★ AUTOMATIC ROUND TRACKING: with playoff.startGameCount set
+                //   (stamped by the Playoff Hub when playoffs are turned on),
+                //   every league tile after that point plays the next round in
+                //   sequence — tile #1 = Round 1, tile #2 = Round 2, … — derived
+                //   from the same chronological game counter the league already
+                //   keeps: round = gameNumber - startGameCount. Legacy playoffs
+                //   without the anchor fall back to currentRound + todayGameIndex.
+                let _playoffPreseason = false;   // playoff enabled, but this tile predates the start anchor
                 if (_PM && _PM.isLeagueInPlayoff(league)) {
-                    const liveMatchups = _PM.getActiveMatchups(league);
-                    if (liveMatchups.length > 0) {
-                        if (todayGameIndex === 0) {
-                            playoffRoundNum = league.playoff.currentRound;
-                            matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
-                            playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
-                            playoffMatchupFields = liveMatchups.map(function (m) { return m.field || ''; });
-                            console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
-                        } else {
-                            // Game 2+ same day. Rounds are user-defined, so the
-                            // next round may already be fully built (every matchup
-                            // has both teams, independent of today's results) —
-                            // schedule it for real. Otherwise emit placeholder TBD
-                            // matchups, sized/sported from the user's round when
-                            // one exists.
-                            const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
-                            const userRound = (typeof _PM.getRoundByNumber === 'function')
-                                ? _PM.getRoundByNumber(league, tbdRoundNum) : null;
-                            const userRoundMatchups = (userRound && Array.isArray(userRound.matchups)) ? userRound.matchups : [];
-                            const userActive = userRoundMatchups.filter(function (m) {
-                                return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner;
-                            });
-                            const userRoundReady = userActive.length > 0
-                                && userRoundMatchups.every(function (m) {
-                                    // no half-filled or empty placeholders left
-                                    return !m || (m.teamA && m.teamB);
-                                });
-                            if (userRoundReady) {
-                                playoffRoundNum = tbdRoundNum;
-                                matchups = userActive.map(function (m) { return [m.teamA, m.teamB]; });
-                                playoffMatchupSports = userActive.map(function (m) { return m.sport || null; });
-                                playoffMatchupFields = userActive.map(function (m) { return m.field || ''; });
-                                console.log('   🏆 PLAYOFF Round ' + tbdRoundNum + ' (user-defined, pre-filled): ' + userActive.length + ' matchup(s)');
-                            } else {
-                                const tbdCount = userRoundMatchups.length > 0
-                                    ? userRoundMatchups.length
-                                    : Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
-                                const sportsPool = liveMatchups
-                                    .map(function (m) { return m.sport || null; })
-                                    .filter(Boolean);
-                                const fallbackSport = (league.sports && league.sports[0]) || null;
-                                playoffRoundNum = tbdRoundNum;
-                                playoffIsTBD = true;
-                                matchups = [];
-                                playoffMatchupSports = [];
-                                playoffMatchupFields = [];
-                                for (let k = 0; k < tbdCount; k++) {
-                                    const um = userRoundMatchups[k];
-                                    matchups.push(['TBD', 'TBD']);
-                                    playoffMatchupSports.push((um && um.sport)
-                                        || (sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport));
-                                    playoffMatchupFields.push((um && um.field) || '');
-                                }
-                                console.log('   🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
-                            }
-                        }
+                    const _startCnt = league.playoff.startGameCount;
+                    const derivedRound = (typeof _startCnt === 'number')
+                        ? (gameNumber - _startCnt)
+                        : (league.playoff.currentRound + todayGameIndex);
+                    if (derivedRound < 1) {
+                        console.log('   🏆 PLAYOFF: tile #' + gameNumber + ' predates the playoff start anchor (' + _startCnt + ') — regular league play');
+                        _playoffPreseason = true;
                     } else {
-                        console.log('   🏆 PLAYOFF: no active matchups in current round (all decided or all byes) — skipping');
-                        continue;
+                        const userRound = (typeof _PM.getRoundByNumber === 'function')
+                            ? _PM.getRoundByNumber(league, derivedRound) : null;
+                        const userRoundMatchups = (userRound && Array.isArray(userRound.matchups)) ? userRound.matchups : [];
+                        const userActive = userRoundMatchups.filter(function (m) {
+                            return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner;
+                        });
+                        if (userActive.length > 0) {
+                            playoffRoundNum = derivedRound;
+                            matchups = userActive.map(function (m) { return [m.teamA, m.teamB]; });
+                            playoffMatchupSports = userActive.map(function (m) { return m.sport || null; });
+                            playoffMatchupFields = userActive.map(function (m) { return m.field || ''; });
+                            // Keep the hub's display cache in sync with the tracked round
+                            league.playoff.currentRound = derivedRound;
+                            console.log('   🏆 PLAYOFF Round ' + derivedRound + ' (tile #' + gameNumber + '): ' + userActive.length + ' matchup(s)');
+                        } else if (userRound && _PM.isRoundComplete(userRound)) {
+                            console.log('   🏆 PLAYOFF: Round ' + derivedRound + ' is already decided — skipping this league period');
+                            continue;
+                        } else if (!userRound && _PM.getChampion && _PM.getChampion(league)) {
+                            console.log('   🏆 PLAYOFF: tournament decided (champion: ' + _PM.getChampion(league) + ') and no Round ' + derivedRound + ' exists — skipping');
+                            continue;
+                        } else {
+                            // Round not built yet, or built but teams not filled in
+                            // — reserve the slot with TBD placeholders sized from
+                            // the user's round (or half the previous round).
+                            const prevRound = (typeof _PM.getRoundByNumber === 'function')
+                                ? _PM.getRoundByNumber(league, derivedRound - 1) : null;
+                            const prevFilled = prevRound
+                                ? (prevRound.matchups || []).filter(function (m) {
+                                    return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE';
+                                }) : [];
+                            const tbdCount = userRoundMatchups.length > 0
+                                ? userRoundMatchups.length
+                                : Math.max(1, Math.ceil((prevFilled.length || 2) / 2));
+                            const sportsPool = (userRoundMatchups.length ? userRoundMatchups : prevFilled)
+                                .map(function (m) { return m.sport || null; })
+                                .filter(Boolean);
+                            const fallbackSport = (league.sports && league.sports[0]) || null;
+                            playoffRoundNum = derivedRound;
+                            playoffIsTBD = true;
+                            matchups = [];
+                            playoffMatchupSports = [];
+                            playoffMatchupFields = [];
+                            for (let k = 0; k < tbdCount; k++) {
+                                const um = userRoundMatchups[k];
+                                matchups.push(['TBD', 'TBD']);
+                                playoffMatchupSports.push((um && um.sport)
+                                    || (sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport));
+                                playoffMatchupFields.push((um && um.field) || '');
+                            }
+                            console.log('   🏆 PLAYOFF Round ' + derivedRound + ' TBD: ' + tbdCount + ' placeholder matchup(s)'
+                                + (userRound ? ' (round built, teams not filled in yet)' : ' (round not built yet — add it in the Playoff Hub)'));
+                        }
                     }
-                } else {
+                }
+                if (!(_PM && _PM.isLeagueInPlayoff(league)) || _playoffPreseason) {
                     // ★ NO PREDETERMINED ROUND-ROBIN: every game's matchups are
                     //   computed FRESH from history — how many times teams have met
                     //   + which sports each team still needs this cycle — via

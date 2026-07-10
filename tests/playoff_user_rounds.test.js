@@ -24,6 +24,19 @@ test('getOrInit initializes the user-defined-rounds model', () => {
     assert.deepStrictEqual(p.rounds, []);
     assert.deepStrictEqual(p.reservedActivities, []);
     assert.strictEqual(p.currentRound, 1);
+    assert.strictEqual(p.startGameCount, null);
+});
+
+test('getOrInit normalizes startGameCount: keeps valid counts, nulls garbage', () => {
+    const league = freshLeague();
+    league.playoff = { enabled: true, rounds: [], currentRound: 1, startGameCount: 7 };
+    assert.strictEqual(PM.getOrInit(league).startGameCount, 7);
+    const league2 = freshLeague();
+    league2.playoff = { enabled: true, rounds: [], currentRound: 1, startGameCount: -3 };
+    assert.strictEqual(PM.getOrInit(league2).startGameCount, null);
+    const league3 = freshLeague();
+    league3.playoff = { enabled: true, rounds: [], currentRound: 1, startGameCount: '5' };
+    assert.strictEqual(PM.getOrInit(league3).startGameCount, null);
 });
 
 test('createRound appends N empty matchups with sequential numbering', () => {

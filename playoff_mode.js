@@ -19,7 +19,14 @@
 //     ],
 //     reservedActivities: [activityName, ...],  // fields saved (pinned) for
 //                                               // teams that are out
-//     currentRound: 1               // round NUMBER the scheduler runs next
+//     currentRound: 1,              // display cache + legacy manual fallback
+//     startGameCount: null|number   // AUTOMATIC ROUND TRACKING anchor: the
+//                                   // league's total recorded game count
+//                                   // (history.gamesPerDate tiles) at the
+//                                   // moment playoffs started. Each league
+//                                   // tile after that plays the next round:
+//                                   //   round = gameNumber - startGameCount
+//                                   // null = legacy manual currentRound mode.
 //   }
 //
 // A matchup with an empty teamA/teamB is a placeholder the user hasn't filled
@@ -46,7 +53,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '2.0.0';
+    var VERSION = '2.1.0';
 
     function uid() {
         return 'mu_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
@@ -107,6 +114,7 @@
         if (!Array.isArray(p.rounds)) p.rounds = [];
         if (!Array.isArray(p.reservedActivities)) p.reservedActivities = [];
         if (typeof p.currentRound !== 'number' || p.currentRound < 1) p.currentRound = 1;
+        if (typeof p.startGameCount !== 'number' || p.startGameCount < 0) p.startGameCount = null;
         // Normalize every round/matchup (also migrates v1 auto-generated
         // brackets — same shape; extra v1 fields like seedA/seedB/isBye and
         // the top-level style/seedOrder/bracketAdjust are left alone/ignored).
