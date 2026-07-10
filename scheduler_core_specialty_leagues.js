@@ -1321,10 +1321,24 @@ if (_playoffRoundNum) {
                 console.log(`   ✅ ${a.teamA} vs ${a.teamB} @ ${a.field} (Slot ${a.slotOrder})`);
             });
 
-            // Build matchup display strings
-            const matchupStrings = assignments.map(a =>
+            // Build matchup display strings. For playoff rounds, list the
+            // round's reserved fields underneath as "Electives" — where the
+            // teams that are out go during this period (out teams themselves
+            // are not listed).
+            let matchupStrings = assignments.map(a =>
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
+            if (_playoffRoundNum) {
+                const _dispReserved = (_PM_S.getReservedForRound
+                    ? _PM_S.getReservedForRound(league, _playoffRoundNum)
+                    : ((league.playoff && league.playoff.reservedActivities) || []));
+                if (_dispReserved.length > 0) {
+                    matchupStrings = matchupStrings.concat(
+                        ['Electives:'],
+                        _dispReserved.map(f => `  • ${f}`)
+                    );
+                }
+            }
 
             const gameLabel = _playoffRoundNum
                 ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))

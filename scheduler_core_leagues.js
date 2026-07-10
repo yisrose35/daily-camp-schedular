@@ -3345,10 +3345,18 @@
                         _openList.push(p.field);
                     });
                     const _tbdLabel = 'Playoff R' + playoffRoundNum + ' TBD';
+                    // Show the round's reserved fields as "Electives" — where
+                    // the teams that are out go during this period.
+                    const _tbdReservedRows = (_PM.getReservedForRound
+                        ? _PM.getReservedForRound(league, playoffRoundNum)
+                        : ((league.playoff && league.playoff.reservedActivities) || []));
                     const _tbdRows = ['Round ' + playoffRoundNum + ' — winners TBD']
                         .concat(_openList.length > 0
                             ? ['Open fields:'].concat(_openList.map(function (s) { return '  • ' + s; }))
-                            : ['(no open fields at this time)']);
+                            : ['(no open fields at this time)'])
+                        .concat(_tbdReservedRows.length > 0
+                            ? ['Electives:'].concat(_tbdReservedRows.map(function (s) { return '  • ' + s; }))
+                            : []);
                     console.log('   🏆 PLAYOFF TBD info-only: ' + _openList.length + ' open field(s) listed');
                     leagueDivisions.forEach(function (divName) {
                         const blocksForDiv = timeData.byDivision[divName];
@@ -3649,9 +3657,27 @@ window._debugLeagueTimeData = timeData;
             if (a.team1) _playingTeams.add(a.team1);
             if (a.team2) _playingTeams.add(a.team2);
         });
-        const _byeLines = (activeTeams || [])
-            .filter(function (t) { return !_playingTeams.has(t); })
-            .map(function (t) { return `${t} — Bye`; });
+        // ★ PLAYOFF tiles: teams that are OUT are not listed as byes anymore —
+        //   only the round's explicitly-marked byes (sitting out, still in)
+        //   show. Underneath the matchups the tile lists the round's reserved
+        //   fields under "Electives" — that's where the not-playing kids go.
+        let _byeLines, _electiveLines = [];
+        if (playoffRoundNum) {
+            const _round = _PM && _PM.getRoundByNumber ? _PM.getRoundByNumber(league, playoffRoundNum) : null;
+            _byeLines = ((_round && _round.byes) || [])
+                .filter(function (t) { return !_playingTeams.has(t); })
+                .map(function (t) { return `${t} — Bye`; });
+            const _resFields = (_PM && _PM.getReservedForRound)
+                ? _PM.getReservedForRound(league, playoffRoundNum)
+                : ((league.playoff && league.playoff.reservedActivities) || []);
+            if (_resFields.length > 0) {
+                _electiveLines = ['Electives:'].concat(_resFields.map(function (f) { return `  • ${f}`; }));
+            }
+        } else {
+            _byeLines = (activeTeams || [])
+                .filter(function (t) { return !_playingTeams.has(t); })
+                .map(function (t) { return `${t} — Bye`; });
+        }
         const pick = {
                             field: `League: ${league.name}`,
                             sport: _firstSport,
@@ -3661,7 +3687,7 @@ window._debugLeagueTimeData = timeData;
                             _fixed: true,
                             _allMatchups: assignments.map(a =>
                                 `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
-                            ).concat(_byeLines).concat(_chinuchLines),
+                            ).concat(_byeLines).concat(_chinuchLines).concat(_electiveLines),
                             _gameLabel: _gameLbl,
                             _playoffRound: playoffRoundNum || null
                         };
