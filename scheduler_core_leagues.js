@@ -883,12 +883,60 @@
             // same-day guard's job (10× this weight), and byes stay possible
             // only where they already were.
             // Killswitch: window.__leagueAdjacentDayOpponentGuard = false.
+            //
+            // ★ GROUND-TRUTH BACKSTOP: the gameLog lives in leagueHistory,
+            // whose cloud row rides the debounced, role-gated camp_state_kv
+            // sync — a scheduler-role account can never write it, a tab closed
+            // inside the debounce window loses it, and a localStorage quota
+            // failure drops the local backup. When that history is stale, every
+            // day generates from the SAME record and the deterministic
+            // optimizer restages the identical matchups day after day
+            // (observed live: one pair met 3 days running under normal
+            // sequential generation). The SAVED SCHEDULES themselves —
+            // campDailyData_v1 → leagueAssignments, written through the
+            // verified per-date daily_schedules path that also renders the
+            // grid — still know who played whom. So adjacent game dates are
+            // taken from the UNION of the gameLog and the saved daily data,
+            // and meetings on a date the gameLog is missing are read straight
+            // from the day's stored matchups.
+            function _dailyDataLeagueGames(date) {
+                try {
+                    const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+                    const la = all && all[date] && all[date].leagueAssignments;
+                    if (!la) return [];
+                    const out = [];
+                    Object.keys(la).forEach(function (dv) {
+                        const map = la[dv] || {};
+                        Object.keys(map).forEach(function (k) {
+                            const g = map[k];
+                            if (!g || (g.leagueName || '') !== leagueName) return;
+                            (g.matchups || []).forEach(function (m) {
+                                const a = m && (m.teamA || m.team1), b = m && (m.teamB || m.team2);
+                                if (!a || !b) return;
+                                if (a === 'BYE' || b === 'BYE' || a === 'TBD' || b === 'TBD') return;
+                                out.push({ t1: String(a), t2: String(b) });
+                            });
+                        });
+                    });
+                    return out;
+                } catch (_e) { return []; }
+            }
             const _adjDates = (function () {
                 const gl = (history.gameLog && history.gameLog[leagueName]) || {};
                 let prev = null, next = null;
                 if (dayId) {
-                    Object.keys(gl).forEach(function (d) {
-                        if (d === dayId || !(gl[d] || []).length) return;
+                    const seen = new Set(Object.keys(gl).filter(function (d) { return (gl[d] || []).length; }));
+                    try {
+                        const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+                        if (all) {
+                            Object.keys(all).forEach(function (d) {
+                                if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || seen.has(d)) return;
+                                if (_dailyDataLeagueGames(d).length) seen.add(d);
+                            });
+                        }
+                    } catch (_e) {}
+                    seen.forEach(function (d) {
+                        if (d === dayId) return;
                         if (d < dayId) { if (!prev || d > prev) prev = d; }
                         else { if (!next || d < next) next = d; }
                     });
@@ -902,7 +950,11 @@
                 if (adjMetCache[key] == null) {
                     let n = 0;
                     _adjDates.forEach(function (d) {
-                        (history.gameLog[leagueName][d] || []).forEach(function (e) {
+                        // Engine record when it exists; saved-schedule matchups when
+                        // the gameLog has no memory of the date (stale history).
+                        const glDay = history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][d];
+                        const entries = (glDay && glDay.length) ? glDay : _dailyDataLeagueGames(d);
+                        entries.forEach(function (e) {
                             if (e && e.t1 && e.t2 && getMatchupKey(e.t1, e.t2) === key) n++;
                         });
                     });

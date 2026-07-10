@@ -19,6 +19,10 @@
 //      TEST 4 — killswitch (__leagueAdjacentDayOpponentGuard=false) restores
 //               the old behavior on the out-of-order seed, proving causality.
 //      TEST 5 — 2-team league: adjacent rematch unavoidable → game still runs.
+//      TEST 7 — STALE-HISTORY BACKSTOP: with leagueHistory empty/lost (its
+//               camp_state_kv sync is debounced + role-gated and can drop),
+//               yesterday's games read from the SAVED SCHEDULES
+//               (leagueAssignments in daily data) still block a repeat.
 //
 //   2. PAIR-REMATCH SPORT REPAIR (lexicographic replay reduction in
 //      _swapReoptimizeAssignments + pair-aware cycle rescue): when a rematch
@@ -168,6 +172,47 @@ for (const mode of ['matchup_variety', 'sport_variety']) {
         assert.strictEqual(gamesOn(d).length, 1, `TEST5: the only possible matchup must still play on ${d}`);
     });
     console.log('✅ TEST 5 — 2-team league: uniform penalty, game never dropped');
+}
+
+// ---- TEST 7: STALE-HISTORY BACKSTOP — saved schedules are ground truth ----
+// leagueHistory rides the debounced, role-gated camp_state_kv sync and can be
+// stale/lost (scheduler role can't write it; tab closed inside the debounce;
+// localStorage quota). The saved daily schedules (leagueAssignments) survive
+// via the per-date daily_schedules path. With an EMPTY league history but
+// yesterday's games present in the saved schedule data, today must still not
+// restage yesterday's matchups.
+{
+    reset();
+    // Learn the deterministic empty-history pick (what "yesterday" got, and
+    // what today WOULD repeat if the backstop didn't exist).
+    gen('2026-07-08', FIELDS6, 'matchup_variety');
+    const p0 = [...pairsOn('2026-07-08')];
+    assert.strictEqual(p0.length, 3, 'TEST7: seed day produced 3 matchups');
+
+    // Wipe the engine's history entirely (simulates the lost cloud row /
+    // cleared localStorage) but surface yesterday's games ONLY through the
+    // saved schedule data, exactly as the grid would still show them.
+    reset();
+    const yesterdayAssignments = {
+        Juniors: {
+            0: {
+                leagueName: LG, gameLabel: LG + ' Game 1', sport: '',
+                matchups: p0.map(pk => { const [a, b] = pk.split('|'); return { teamA: a, teamB: b }; }),
+                _startMin: 780, _endMin: 840,
+            },
+        },
+    };
+    global.window.loadAllDailyData = () => ({ '2026-07-08': { leagueAssignments: yesterdayAssignments } });
+    try {
+        gen('2026-07-09', FIELDS6, 'matchup_variety');
+    } finally {
+        delete global.window.loadAllDailyData;
+    }
+    const today = pairsOn('2026-07-09');
+    assert.strictEqual(today.size, 3, 'TEST7: today still produced 3 matchups');
+    p0.forEach(pk => assert.ok(!today.has(pk),
+        `TEST7: ${pk} restaged from yesterday despite the saved-schedule backstop (history was stale)`));
+    console.log('✅ TEST 7 — stale/lost league history: yesterday\'s SAVED SCHEDULE still blocks a repeat matchup');
 }
 
 // ---- TEST 6: no avoidable rematch-sport replay across a 12-day season ----

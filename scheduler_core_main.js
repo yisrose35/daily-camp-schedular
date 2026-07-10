@@ -3531,6 +3531,15 @@
             }
         }
 
+        // ★★★ LEAGUE HISTORY: pull the authoritative cross-session record from the
+        // cloud before generating (parity with auto mode — scheduler_core_auto.js
+        // does the same at generation entry). Without this, manual generation read
+        // whatever leagueHistory was hydrated at page load: a stale copy from
+        // another device/session made the pairing optimizer restage the same
+        // matchups it had already scheduled. Best-effort + time-boxed inside
+        // refreshHistoryFromCloud; any failure keeps the existing copy.
+        try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+
         let {
             divisions,
             activityProperties,
