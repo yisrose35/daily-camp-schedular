@@ -3378,11 +3378,16 @@
                     });
                     // Reserved-activity locks still apply so non-playing bunks
                     // get routed away from these activities even though we don't
-                    // know which kids will be playing yet.
-                    if (window.GlobalFieldLocks && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+                    // know which kids will be playing yet. Per-round list —
+                    // later rounds usually reserve more fields as more teams
+                    // are knocked out (legacy league-wide list as fallback).
+                    const _tbdReserved = _PM.getReservedForRound
+                        ? _PM.getReservedForRound(league, playoffRoundNum)
+                        : ((league.playoff && league.playoff.reservedActivities) || []);
+                    if (window.GlobalFieldLocks && _tbdReserved.length > 0) {
                         const reservedReason = 'Playoff reserve (' + league.name + ' R' + playoffRoundNum + ' TBD)';
                         leagueDivisions.forEach(function (divName) {
-                            league.playoff.reservedActivities.forEach(function (act) {
+                            _tbdReserved.forEach(function (act) {
                                 try {
                                     window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
                                 } catch (e) {
@@ -3542,21 +3547,28 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
 });
 
 // ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
-// User-configured list of facilities/activities that should be reserved
-// exclusively for this league's divisions during the playoff slot, so the
-// auto-scheduler routes the not-playing bunks into them.
-if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
-    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum}` + (playoffIsTBD ? ' TBD)' : ')');
-    leagueDivisions.forEach(function (divName) {
-        league.playoff.reservedActivities.forEach(function (act) {
-            try {
-                window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
-            } catch (e) {
-                console.warn('[PLAYOFF] failed to reserve "' + act + '" for ' + divName + ':', e);
-            }
+// User-configured PER-ROUND list of facilities/activities that should be
+// reserved exclusively for this league's divisions during the playoff slot,
+// so the auto-scheduler routes the not-playing/eliminated bunks into them.
+// Later rounds usually reserve more fields as more teams are knocked out
+// (legacy league-wide list as fallback for old data / unbuilt rounds).
+if (playoffRoundNum) {
+    const _roundReserved = _PM.getReservedForRound
+        ? _PM.getReservedForRound(league, playoffRoundNum)
+        : ((league.playoff && league.playoff.reservedActivities) || []);
+    if (_roundReserved.length > 0) {
+        const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum}` + (playoffIsTBD ? ' TBD)' : ')');
+        leagueDivisions.forEach(function (divName) {
+            _roundReserved.forEach(function (act) {
+                try {
+                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
+                } catch (e) {
+                    console.warn('[PLAYOFF] failed to reserve "' + act + '" for ' + divName + ':', e);
+                }
+            });
         });
-    });
-    console.log('   🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for [' + leagueDivisions.join(', ') + ']');
+        console.log('   🎯 PLAYOFF R' + playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for [' + leagueDivisions.join(', ') + ']');
+    }
 }
 }
 

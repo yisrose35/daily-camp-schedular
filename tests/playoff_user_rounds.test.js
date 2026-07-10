@@ -143,6 +143,55 @@ test('getEliminatedTeams: losers are out unless they reappear in a later round (
     assert.deepStrictEqual(PM.getEliminatedTeams(league), ['Bears']);
 });
 
+test('per-round reserved fields: carry forward on createRound, resolved per round', () => {
+    const league = freshLeague();
+    const p = PM.getOrInit(league);
+    p.enabled = true;
+    const r1 = PM.createRound(p, 3);
+    assert.deepStrictEqual(r1.reservedActivities, []);
+    r1.reservedActivities = ['Canteen'];
+    const r2 = PM.createRound(p, 2);
+    assert.deepStrictEqual(r2.reservedActivities, ['Canteen']);   // seeded from round 1
+    r2.reservedActivities.push('Pool');                           // round 2 reserves MORE
+    assert.deepStrictEqual(r1.reservedActivities, ['Canteen']);   // round 1 untouched
+    assert.deepStrictEqual(PM.getReservedForRound(league, 1), ['Canteen']);
+    assert.deepStrictEqual(PM.getReservedForRound(league, 2), ['Canteen', 'Pool']);
+    // Unbuilt round falls back to the legacy league-wide list
+    p.reservedActivities = ['Gym'];
+    assert.deepStrictEqual(PM.getReservedForRound(league, 3), ['Gym']);
+});
+
+test('legacy rounds without a per-round list inherit the league-wide list on getOrInit', () => {
+    const league = freshLeague();
+    league.playoff = {
+        enabled: true,
+        rounds: [{ number: 1, matchups: [{ id: 'a', teamA: 'Lions', teamB: 'Tigers', sport: '', field: '', winner: null }] }],
+        reservedActivities: ['Canteen', 'Pool'],
+        currentRound: 1
+    };
+    const p = PM.getOrInit(league);
+    assert.deepStrictEqual(p.rounds[0].reservedActivities, ['Canteen', 'Pool']);
+    // Independent copy — editing the round doesn't mutate the legacy list
+    p.rounds[0].reservedActivities.push('Gym');
+    assert.deepStrictEqual(p.reservedActivities, ['Canteen', 'Pool']);
+});
+
+test('getEliminatedTeams with beforeRound: only losses in earlier rounds count', () => {
+    const league = freshLeague();
+    const p = PM.getOrInit(league);
+    p.enabled = true;
+    const r1 = PM.createRound(p, 2);
+    Object.assign(r1.matchups[0], { teamA: 'Lions', teamB: 'Tigers', winner: 'Lions' });
+    Object.assign(r1.matchups[1], { teamA: 'Bears', teamB: 'Wolves', winner: 'Wolves' });
+    const r2 = PM.createRound(p, 1);
+    Object.assign(r2.matchups[0], { teamA: 'Lions', teamB: 'Wolves', winner: 'Wolves' });
+
+    assert.deepStrictEqual(PM.getEliminatedTeams(league, 1), []);                       // nobody out going into R1
+    assert.deepStrictEqual(PM.getEliminatedTeams(league, 2), ['Bears', 'Tigers']);      // R1 losers out going into R2
+    assert.deepStrictEqual(PM.getEliminatedTeams(league, 3), ['Bears', 'Lions', 'Tigers']);
+    assert.deepStrictEqual(PM.getEliminatedTeams(league), ['Bears', 'Lions', 'Tigers']); // no cutoff = everyone who lost
+});
+
 test('getChampion: winner of a decided single-matchup final round', () => {
     const league = freshLeague();
     const p = PM.getOrInit(league);

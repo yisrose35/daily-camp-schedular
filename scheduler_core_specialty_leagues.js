@@ -1281,16 +1281,23 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
 });
 
 // ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
-if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
-    const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
-    league.playoff.reservedActivities.forEach(function (act) {
-        try {
-            window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
-        } catch (e) {
-            console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + divName + ':', e);
-        }
-    });
-    console.log('[SpecialtyLeagues] 🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for ' + divName);
+// Per-round list — later rounds usually reserve more fields as more teams
+// are knocked out (legacy league-wide list as fallback).
+if (_playoffRoundNum) {
+    const _roundReserved = _PM_S.getReservedForRound
+        ? _PM_S.getReservedForRound(league, _playoffRoundNum)
+        : ((league.playoff && league.playoff.reservedActivities) || []);
+    if (_roundReserved.length > 0) {
+        const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
+        _roundReserved.forEach(function (act) {
+            try {
+                window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
+            } catch (e) {
+                console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + divName + ':', e);
+            }
+        });
+        console.log('[SpecialtyLeagues] 🎯 PLAYOFF R' + _playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for ' + divName);
+    }
 }
 }
 

@@ -6,17 +6,15 @@
 // "Playoff Mode" button launches its own focused hub.
 //
 // v4 — USER-DEFINED ROUNDS. The system no longer generates brackets. The user
-// builds each round by hand: how many matchups it has, who plays who, which
-// sport, and (optionally) which field. Teams not placed in a matchup can be
-// marked as byes (sit out, still in). The scheduler runs whichever round is
-// marked "current". Fields can be reserved for teams that are out of the
-// playoffs — those are locked like a custom pinned elective and cannot be
-// overwritten by the auto-scheduler.
-//
-// Step layout:
-//   Step 1 — Build rounds & matchups   (add rounds, pick teams/sports/fields,
-//                                       mark winners, set the current round)
-//   Step 2 — Reserve fields             (pinned electives for teams that are out)
+// builds each round by hand on its own PAGE: how many matchups it has, who
+// plays who, which sport, (optionally) which field, byes, and which fields
+// are reserved for teams that are out during that round (locked like a
+// custom pinned elective the auto-scheduler cannot overwrite — later rounds
+// usually reserve more as more teams get knocked out; new rounds seed from
+// the previous round's picks). Round progression is automatic: playoffs
+// anchor on the league's chronological tile counter (startGameCount) — the
+// 1st league period after playoffs start plays Round 1, the 2nd Round 2, …
+// with a per-page "Play this round next" re-align escape hatch.
 //
 // Public API: window.PlayoffHub
 //   .open(league, kind)
@@ -25,7 +23,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '4.1.0';
+    var VERSION = '4.2.0';
     var _overlayEl = null;
     var _league = null;
     var _kind = 'regular';
@@ -259,11 +257,9 @@
             body.appendChild(champ);
         }
 
-        // Step 1 — Build rounds & matchups
+        // Rounds — each round is a full page: matchups, byes, and the fields
+        // reserved for teams that are out during that round.
         body.appendChild(_renderStep1(p));
-
-        // Step 2 — Reserve fields for teams that are out
-        body.appendChild(_renderStep2(p));
     }
 
     function _stepHead(num, title, sub) {
@@ -285,7 +281,7 @@
         var card = document.createElement('section');
         card.className = 'ph-step-card';
         card.appendChild(_stepHead(1, 'Build rounds & matchups',
-            'Each round is its own page: set how many matchups it has, pick any team vs any team, pick the sport, and either pick a field or let the scheduler find one. Mark winners as games finish.'));
+            'Each round is its own full page: set how many matchups it has, pick any team vs any team, pick the sport, and either pick a field or let the scheduler find one. Each page also picks which fields are reserved for teams that are out during that round — later rounds usually reserve more. Mark winners as games finish.'));
 
         var hasRounds = p.rounds && p.rounds.length > 0;
         var upNext = _upNextRound(p);
@@ -520,6 +516,9 @@
         // ── Byes ──
         card.appendChild(_renderByes(round, usage));
 
+        // ── Reserved fields for teams that are out (per round) ──
+        card.appendChild(_renderRoundReserved(p, round));
+
         // ── Hints ──
         var unfilled = (round.matchups || []).filter(function (m) { return m && (!m.teamA || !m.teamB); }).length;
         var doubled = Object.keys(usage).filter(function (t) { return usage[t] > 1; });
@@ -727,55 +726,63 @@
     }
 
     // -------------------------------------------------------------------------
-    // Step 2 — reserved fields for teams that are out
+    // Per-round reserved fields for teams that are out
     // -------------------------------------------------------------------------
 
-    function _renderStep2(p) {
-        var card = document.createElement('section');
-        card.className = 'ph-step-card';
-        card.appendChild(_stepHead(2, 'Save fields for teams that are out',
-            'Pick fields/activities to reserve during the playoff slot for '
-            + ((_league.divisions || []).join(', ') || 'this league\'s grades')
-            + '. They are locked like a custom pinned elective — the auto-scheduler cannot overwrite them, and routes eliminated / non-playing bunks into them.'));
+    function _renderRoundReserved(p, round) {
+        var wrap = document.createElement('div');
+        wrap.className = 'ph-reserved-wrap';
 
-        // Who's out (derived from marked winners)
-        var out = window.PlayoffMode.getEliminatedTeams(_league);
+        var label = document.createElement('div');
+        label.className = 'ph-byes-label';
+        label.textContent = 'Fields saved for teams that are out — Round ' + round.number;
+        wrap.appendChild(label);
+
+        var sub = document.createElement('div');
+        sub.className = 'ph-reserved-sub';
+        sub.textContent = 'Reserved during this round\'s league period for '
+            + ((_league.divisions || []).join(', ') || 'this league\'s grades')
+            + ' — locked like a custom pinned elective the auto-scheduler cannot overwrite; eliminated / non-playing bunks get routed into them. New rounds start with the previous round\'s picks — add more as more teams get knocked out.';
+        wrap.appendChild(sub);
+
+        // Who's out GOING INTO this round (losers of earlier rounds)
+        var out = window.PlayoffMode.getEliminatedTeams(_league, round.number);
         var outRow = document.createElement('div');
         outRow.className = 'ph-out-row';
         if (out.length === 0) {
-            outRow.innerHTML = '<span class="ph-out-label">Out of the playoffs:</span><span class="ph-out-none">no teams yet — mark winners in Step 1 as games finish.</span>';
+            outRow.innerHTML = '<span class="ph-out-label">Out going into this round:</span><span class="ph-out-none">no teams — winners of earlier rounds decide this.</span>';
         } else {
-            outRow.innerHTML = '<span class="ph-out-label">Out of the playoffs:</span>'
+            outRow.innerHTML = '<span class="ph-out-label">Out going into this round:</span>'
                 + out.map(function (t) { return '<span class="ph-out-chip">' + escHtml(t) + '</span>'; }).join('');
         }
-        card.appendChild(outRow);
+        wrap.appendChild(outRow);
 
-        var chips = document.createElement('div');
-        chips.className = 'ph-chips';
         var allActs = _allFacilityNames();
         if (allActs.length === 0) {
             var none = document.createElement('div');
-            none.className = 'ph-step-sub';
-            none.style.marginLeft = '42px';
+            none.className = 'ph-byes-none';
             none.textContent = 'No facilities configured yet — add them in the Facilities tab.';
-            card.appendChild(none);
-            return card;
+            wrap.appendChild(none);
+            return wrap;
         }
+        if (!Array.isArray(round.reservedActivities)) round.reservedActivities = [];
+        var chips = document.createElement('div');
+        chips.className = 'ph-chips tight';
         allActs.forEach(function (act) {
-            var on = (p.reservedActivities || []).indexOf(act) >= 0;
+            var on = round.reservedActivities.indexOf(act) >= 0;
             var chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'ph-chip' + (on ? ' active' : '');
             chip.textContent = act;
             chip.onclick = function () {
-                if (on) p.reservedActivities = p.reservedActivities.filter(function (x) { return x !== act; });
-                else { p.reservedActivities = p.reservedActivities || []; p.reservedActivities.push(act); }
+                if (on) round.reservedActivities = round.reservedActivities.filter(function (x) { return x !== act; });
+                else round.reservedActivities.push(act);
                 _save(); _render();
             };
             chips.appendChild(chip);
         });
-        card.appendChild(chips);
-        return card;
+        wrap.appendChild(chips);
+        return wrap;
     }
 
     // -------------------------------------------------------------------------
@@ -904,6 +911,10 @@
             '.ph-pickrow-label{color:#6B7280;font-weight:600;min-width:42px;}',
             '.ph-pickrow select{flex:1;padding:5px 8px;border:1px solid #CBD5E1;border-radius:6px;font-size:0.78rem;background:#fff;font-family:inherit;}',
 
+            // Per-round reserved fields
+            '.ph-reserved-wrap{display:flex;flex-direction:column;gap:8px;padding:12px;background:#F9FAFB;border:1px solid #E5E7EB;border-radius:10px;}',
+            '.ph-reserved-sub{font-size:0.76rem;color:#6B7280;line-height:1.45;}',
+
             // Byes
             '.ph-byes-wrap{display:flex;flex-direction:column;gap:6px;padding-top:2px;}',
             '.ph-byes-label{font-size:0.72rem;font-weight:700;color:#147D91;text-transform:uppercase;letter-spacing:0.06em;}',
@@ -932,8 +943,7 @@
             '.ph-champion-name{font-size:1.6rem;font-weight:800;margin-top:6px;}',
 
             // Out-of-playoffs row
-            '.ph-out-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:42px;padding:8px 12px;background:#F9FAFB;border:1px solid #E5E7EB;border-radius:10px;}',
-            '@media (max-width:720px){.ph-out-row{margin-left:0;}}',
+            '.ph-out-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:#fff;border:1px solid #E5E7EB;border-radius:10px;}',
             '.ph-out-label{font-size:0.7rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:0.06em;}',
             '.ph-out-none{font-size:0.78rem;color:#9CA3AF;font-style:italic;}',
             '.ph-out-chip{padding:3px 10px;background:#FEE2E2;color:#991B1B;border:1px solid #FCA5A5;border-radius:999px;font-size:0.78rem;}',

@@ -14,11 +14,18 @@
 //     rounds: [
 //       { number: 1,
 //         matchups: [ { id, teamA, teamB, sport, field, winner } ],
-//         byes: [teamName, ...]     // sit out this round, still in the playoffs
+//         byes: [teamName, ...],    // sit out this round, still in the playoffs
+//         reservedActivities: [activityName, ...]  // PER-ROUND fields saved
+//                                   // (pinned) for teams that are out during
+//                                   // THIS round — later rounds typically
+//                                   // reserve more as more teams get knocked
+//                                   // out. New rounds seed from the previous
+//                                   // round's list; fully editable per round.
 //       }
 //     ],
-//     reservedActivities: [activityName, ...],  // fields saved (pinned) for
-//                                               // teams that are out
+//     reservedActivities: [activityName, ...],  // legacy league-wide list —
+//                                               // fallback when a round has
+//                                               // no list of its own
 //     currentRound: 1,              // display cache + legacy manual fallback
 //     startGameCount: null|number   // AUTOMATIC ROUND TRACKING anchor: the
 //                                   // league's total recorded game count
@@ -46,7 +53,10 @@
 //   createMatchup()               - one empty matchup object
 //   createRound(p, matchupCount)  - append a user-defined round with N empty matchups
 //   removeRound(p, number)        - delete a round + renumber the rest
-//   getEliminatedTeams(league)    - teams that lost and never reappear later
+//   getEliminatedTeams(league, beforeRound?) - teams that lost and never reappear
+//                                   later; beforeRound limits to "out going into
+//                                   round N"
+//   getReservedForRound(league, n) - round n's reserved fields (legacy fallback)
 //   getChampion(league)           - winner of a decided single-matchup final, or null
 //   render(league, mountEl, opts) - deprecated stub; the live UI is PlayoffHub
 // =============================================================================
@@ -75,15 +85,21 @@
     }
 
     // Append a new round with `matchupCount` empty matchups. Returns the round.
+    // Reserved fields carry FORWARD: the new round starts with the previous
+    // round's reserved list (eliminations accumulate — round 3 usually needs
+    // more fields than round 2), and the user edits it from there.
     function createRound(p, matchupCount) {
-        var n = 0;
+        var n = 0, prev = null;
         (p.rounds || []).forEach(function (r) {
-            if (r && typeof r.number === 'number' && r.number > n) n = r.number;
+            if (r && typeof r.number === 'number' && r.number > n) { n = r.number; prev = r; }
         });
         var count = Math.max(1, Math.min(64, parseInt(matchupCount, 10) || 1));
         var matchups = [];
         for (var i = 0; i < count; i++) matchups.push(createMatchup());
-        var round = { number: n + 1, matchups: matchups, byes: [] };
+        var seedReserved = (prev && Array.isArray(prev.reservedActivities))
+            ? prev.reservedActivities.slice()
+            : (Array.isArray(p.reservedActivities) ? p.reservedActivities.slice() : []);
+        var round = { number: n + 1, matchups: matchups, byes: [], reservedActivities: seedReserved };
         if (!Array.isArray(p.rounds)) p.rounds = [];
         p.rounds.push(round);
         return round;
@@ -123,6 +139,9 @@
             if (typeof r.number !== 'number') r.number = i + 1;
             if (!Array.isArray(r.matchups)) r.matchups = [];
             if (!Array.isArray(r.byes)) r.byes = [];
+            // Migration: rounds from before per-round reservations inherit the
+            // legacy league-wide list (preserves the old locking behavior).
+            if (!Array.isArray(r.reservedActivities)) r.reservedActivities = p.reservedActivities.slice();
             r.matchups.forEach(function (m) {
                 if (!m || typeof m !== 'object') return;
                 if (!m.id) m.id = uid();
@@ -202,12 +221,15 @@
     // A team is OUT when it lost a decided matchup and does not appear in any
     // later round (as a matchup team or a bye). Appearing later re-enters the
     // team — the user is free to shape the tournament however they like.
-    function getEliminatedTeams(league) {
+    // Optional `beforeRound`: only count losses in rounds BEFORE that number —
+    // "who is out going into round N" (drives the per-round reserved-fields UI).
+    function getEliminatedTeams(league, beforeRound) {
         if (!league || !league.playoff || !Array.isArray(league.playoff.rounds)) return [];
         var rounds = league.playoff.rounds;
         var lossRound = {};   // team -> highest round number it lost in
         rounds.forEach(function (r) {
             if (!r || !Array.isArray(r.matchups)) return;
+            if (typeof beforeRound === 'number' && r.number >= beforeRound) return;
             r.matchups.forEach(function (m) {
                 if (!m || !m.winner || !m.teamA || !m.teamB) return;
                 if (m.teamA === 'BYE' || m.teamB === 'BYE') return;
@@ -230,6 +252,15 @@
             if (!reappears) out.push(team);
         });
         return out.sort();
+    }
+
+    // Reserved fields to lock for a given round: the round's own list, with
+    // the legacy league-wide list as fallback (rounds not built yet / old data).
+    function getReservedForRound(league, roundNumber) {
+        var r = getRoundByNumber(league, roundNumber);
+        if (r && Array.isArray(r.reservedActivities)) return r.reservedActivities;
+        return (league && league.playoff && Array.isArray(league.playoff.reservedActivities))
+            ? league.playoff.reservedActivities : [];
     }
 
     // Champion: the last round has exactly one fully-specified matchup and it
@@ -282,6 +313,7 @@
         createRound: createRound,
         removeRound: removeRound,
         getEliminatedTeams: getEliminatedTeams,
+        getReservedForRound: getReservedForRound,
         getChampion: getChampion,
         render: render
     };
