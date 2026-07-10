@@ -841,8 +841,35 @@
                 if (metCache[key] == null) metCache[key] = getMatchupCountByDate(leagueName, a, b, history, dayId);
                 return metCache[key];
             }
+            // ★ SAME-DAY OPPONENT GUARD: a pair that already met in an EARLIER
+            // game TODAY (each period's games are logged before the next period
+            // is paired) is penalized so heavily it acts as a hard tier — a
+            // matching containing ANY same-day rematch loses to any matching
+            // with none, in BOTH modes, in both the exact-search and greedy
+            // branches (they share pairWeight). Without this, sport_variety's
+            // tiny opponent weight (25 vs 300 per fresh sport), or a rematch
+            // pair simply having met less often HISTORICALLY than every
+            // alternative pairing, let the optimizer hand two teams the same
+            // opponent twice in one day. When every possible matching repeats
+            // a pair (2-team league), the penalty is uniform across matchings
+            // and the normal weights decide — the game still runs, never a
+            // bye. The off-campus double-header path already hard-excludes
+            // game-1 pairs (ocFindRepairings).
+            // Killswitch: window.__leagueSameDayOpponentGuard = false.
+            const todayMetCache = {};
+            function metToday(a, b) {
+                const key = getMatchupKey(a, b);
+                if (todayMetCache[key] == null) {
+                    let n = 0;
+                    ((history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [])
+                        .forEach(function (e) { if (e && e.t1 && e.t2 && getMatchupKey(e.t1, e.t2) === key) n++; });
+                    todayMetCache[key] = n;
+                }
+                return todayMetCache[key];
+            }
+            const W_SAMEDAY = (typeof window !== 'undefined' && window.__leagueSameDayOpponentGuard === false) ? 0 : 10000000;
             function pairWeight(a, b) {
-                return (-met(a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC;
+                return (-met(a, b)) * W_OPP + sportFresh(a, b) * W_SPORT - recency(a, b) * W_REC - metToday(a, b) * W_SAMEDAY;
             }
 
             let matching;
