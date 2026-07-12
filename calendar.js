@@ -616,6 +616,12 @@ all[date].updated_at = new Date().toISOString();
                 var _gsAll = window.loadGlobalSettings?.() || {};
                 var _app1 = _gsAll.app1 || {};
                 _app1.halfStartDate = epoch;
+                // ★ HR-69: the auto solver's swim/week ledgers keep a THIRD copy
+                // inside the app1 blob (loadSwimHistory/loadWeekHistory fall back
+                // to gs.app1.*) — scrub it here or a stale mirror could reseed
+                // the cleared top-level keys.
+                delete _app1.swimRotationHistory;
+                delete _app1.activityHistory;
                 window.saveGlobalSettings?.('app1', _app1);
             } catch (e) { failures.push('halfStartDate hook: ' + (e.message || e)); }
 
