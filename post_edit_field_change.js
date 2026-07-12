@@ -672,16 +672,41 @@
         (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div>' +
         histNote + '</button>';
     }).join('');
+    // Custom text for the WHOLE league period — editable right here, no need
+    // to drill into a specific game. Shows as a line under the matchups on the
+    // schedule, print center and live view.
+    var pickerNote = (ctx.pendingCustomText != null) ? ctx.pendingCustomText : (ctx.customText || '');
+    var pickerNoteHtml = '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0f0f2;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional — for this whole league period)</span></label>' +
+      '<input id="pefc-picker-custom-text" type="text" value="' + esc(pickerNote) + '" placeholder="Type anything — e.g. Championship round, wear team colors!"' +
+      ' style="width:100%;padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;background:#fff;">' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Shows under the matchups on the schedule, print &amp; live view. Clear it to remove.</div>' +
+      '<button id="pefc-picker-save-note" style="width:100%;margin-top:10px;padding:9px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.85rem;font-weight:600;cursor:pointer;">Save custom text</button></div>';
+
     var box = shell(header('Edit a league game') +
       '<div style="font-size:0.85rem;color:#6b7280;margin-bottom:12px;">' + esc(ctx.leagueName || 'League') + ' — pick the game to edit:</div>' +
-      rows);
+      rows + pickerNoteHtml);
     box.querySelector('#pefc-close').onclick = closeModal;
+    function readPickerNote() {
+      var el = box.querySelector('#pefc-picker-custom-text');
+      return el ? String(el.value || '') : '';
+    }
     box.querySelectorAll('.pefc-game').forEach(function (btn) {
       btn.onclick = function () {
+        // Carry any typed-but-unsaved text into the per-game editor's box.
+        ctx.pendingCustomText = readPickerNote();
         ctx.game = ctx.games[parseInt(btn.dataset.i, 10)];
         showFieldPicker(ctx);
       };
     });
+    var saveNoteBtn = box.querySelector('#pefc-picker-save-note');
+    if (saveNoteBtn) saveNoteBtn.onclick = function () {
+      var changed = PEFC.applyCustomText(ctx, readPickerNote().trim());
+      ctx.pendingCustomText = null;
+      if (!changed) { toast('Nothing changed.', 'info'); return; }
+      closeModal();
+      toast('Custom text saved.', 'success');
+    };
   }
 
   function showFieldPicker(ctx) {
