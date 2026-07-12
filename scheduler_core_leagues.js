@@ -4103,7 +4103,14 @@
                     const _tbdReservedRows = (_PM.getReservedForRound
                         ? _PM.getReservedForRound(league, playoffRoundNum)
                         : ((league.playoff && league.playoff.reservedActivities) || []));
+                    // User-marked byes for the round (sitting out, still in the
+                    // playoffs) — shown even before the matchups are filled in.
+                    // Eliminated teams are never listed.
+                    const _tbdRoundObj = _PM.getRoundByNumber ? _PM.getRoundByNumber(league, playoffRoundNum) : null;
+                    const _tbdByeRows = ((_tbdRoundObj && _tbdRoundObj.byes) || [])
+                        .map(function (t) { return t + ' — Bye'; });
                     const _tbdRows = ['Round ' + playoffRoundNum + ' — winners TBD']
+                        .concat(_tbdByeRows)
                         .concat(_openList.length > 0
                             ? ['Open fields:'].concat(_openList.map(function (s) { return '  • ' + s; }))
                             : ['(no open fields at this time)'])
@@ -4236,9 +4243,21 @@
                             }
                             console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')'
                                 + (_resFieldSet.size ? ' — reserved fields [' + Array.from(_resFieldSet).join(', ') + '] are off-limits to games' : ''));
+                            // Field-shortage math for the warning: how many games of
+                            // this sport the round asked for vs how many open fields
+                            // could host it this period (reserved ones excluded —
+                            // they're saved for the teams that are out).
+                            const _sportGames = playoffMatchupSports.filter(function (s) { return s === wantedSport; }).length;
+                            const _sportFieldsOpen = new Set(availablePool
+                                .filter(function (p) { return p.sport === wantedSport && !_resFieldSet.has(p.field); })
+                                .map(function (p) { return p.field; })).size;
                             _recordByeEvent({
                                 league: league.name, kind: 'bye', team1: teamA, team2: teamB,
-                                reason: 'Playoff: no open field supported "' + wantedSport + '" at this time — the matchup could not be placed.'
+                                reason: 'Playoff field shortage: this round has ' + _sportGames + ' ' + wantedSport
+                                    + ' game' + (_sportGames === 1 ? '' : 's') + ', but only ' + _sportFieldsOpen
+                                    + ' open field' + (_sportFieldsOpen === 1 ? '' : 's') + ' could host ' + wantedSport + ' at this time'
+                                    + (_resFieldSet.size ? ' (fields reserved for the teams that are out don\'t count)' : '')
+                                    + ' — ' + teamA + ' vs ' + teamB + ' was dropped from the schedule. Free up a field, change the matchup\'s sport, or move it to another round in the Playoff Hub.'
                             });
                             return;
                         }

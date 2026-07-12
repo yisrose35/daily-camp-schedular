@@ -1638,6 +1638,21 @@
                 continue;
             }
 
+            // ★ Playoff court shortage: the round asked for more games than the
+            //   league's courts could hold this period — say WHICH matchups got
+            //   dropped instead of losing them silently (the validator's
+            //   playoff-field-shortage check reports the same thing post-gen).
+            if (_playoffRoundNum && !_playoffIsTBD && assignments.length < matchups.length) {
+                const _placedPairs = new Set(assignments.map(a => a.teamA + '|' + a.teamB));
+                matchups
+                    .filter(m => !_placedPairs.has(m.teamA + '|' + m.teamB) && !_placedPairs.has(m.teamB + '|' + m.teamA))
+                    .forEach(m => console.warn('[SpecialtyLeagues] 🚨 PLAYOFF R' + _playoffRoundNum + ' ('
+                        + league.name + '): ' + m.teamA + ' vs ' + m.teamB + ' did not get a court — '
+                        + matchups.length + ' games scheduled but the league\'s ' + ((league.fields || []).length)
+                        + ' court(s) hold at most ' + (((league.fields || []).length) * (league.gamesPerFieldSlot || 3))
+                        + ' simultaneous games. The matchup was dropped from the schedule.'));
+            }
+
             // ★★★ INCREMENT TODAY'S GAME COUNTER ★★★
             leagueGameCounters[league.id]++;
 
@@ -1712,13 +1727,22 @@ if (_playoffRoundNum) {
             });
 
             // Build matchup display strings. For playoff rounds, list the
-            // round's reserved fields underneath as "Electives" — where the
-            // teams that are out go during this period (out teams themselves
-            // are not listed).
+            // round's user-marked byes underneath the games ("Team — Bye":
+            // sitting out this round, still in the playoffs), then the round's
+            // reserved fields as "Electives" — where the teams that are out go
+            // during this period. Eliminated (knocked-out) teams themselves are
+            // never listed.
             let matchupStrings = assignments.map(a =>
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
             if (_playoffRoundNum) {
+                const _dispRound = _PM_S.getRoundByNumber ? _PM_S.getRoundByNumber(league, _playoffRoundNum) : null;
+                const _playingTeams = new Set();
+                assignments.forEach(a => { if (a.teamA) _playingTeams.add(a.teamA); if (a.teamB) _playingTeams.add(a.teamB); });
+                const _byeRows = ((_dispRound && _dispRound.byes) || [])
+                    .filter(t => !_playingTeams.has(t))
+                    .map(t => `${t} — Bye`);
+                matchupStrings = matchupStrings.concat(_byeRows);
                 const _dispReserved = (_PM_S.getReservedForRound
                     ? _PM_S.getReservedForRound(league, _playoffRoundNum)
                     : ((league.playoff && league.playoff.reservedActivities) || []));

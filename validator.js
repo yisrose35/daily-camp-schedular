@@ -236,6 +236,12 @@
         try { checkPlayoffReservations(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('playoff-reservation check failed:', e); }
 
+        // =====================================================================
+        // 18. ★★★ PLAYOFF FIELD SHORTAGE (more games than fields — dropped) ★★★
+        // =====================================================================
+        try { checkPlayoffFieldShortages(assignments).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('playoff-field-shortage check failed:', e); }
+
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
         if (!silent) showValidationModal(errors, warnings);
@@ -1648,6 +1654,108 @@
                             ' (Playoff R' + r.round + ') for its teams that are out'
                     });
                 }
+            });
+        });
+        return errors;
+    }
+
+    // ★ PLAYOFF FIELD SHORTAGE — "you scheduled 6 Baseball games but only 5
+    //   fields host Baseball". When a playoff round asks for more simultaneous
+    //   games of a sport than there are fields to hold them, the league engine
+    //   drops the extra matchups with only a console note. Re-derive the drop
+    //   here: every playoff tile placed today is compared against its round's
+    //   definition in the Playoff Hub; any still-undecided matchup that never
+    //   made it onto the tile is reported, with the field math that explains it.
+    function checkPlayoffFieldShortages(assignments) {
+        const errors = [];
+        const PM = window.PlayoffMode;
+        if (!PM || !PM.getRoundByNumber) return errors;
+
+        const leagues = [];
+        const lbn = window.leaguesByName || {};
+        Object.keys(lbn).forEach(k => { if (lbn[k] && lbn[k].name) leagues.push({ lg: lbn[k], specialty: false }); });
+        const slz = window.specialtyLeagues || {};
+        Object.keys(slz).forEach(k => { if (slz[k] && slz[k].name) leagues.push({ lg: slz[k], specialty: true }); });
+        if (!leagues.length) return errors;
+
+        // Global fields config → which fields can host a sport (message math).
+        const gsPF = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        const fieldsCfg = ((gsPF.app1 && gsPF.app1.fields) || gsPF.fields || []).filter(f => f && f.name);
+
+        // One representative tile per league+round (every bunk holds a copy).
+        const tiles = {};
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            arr.forEach(entry => {
+                if (!entry || entry.continuation) return;
+                if (!entry._playoffRound || !entry._leagueName) return;
+                if (entry._playoffTBD) return;                                 // regular TBD tile — places no games
+                if (/\bTBD\b/.test(String(entry._gameLabel || ''))) return;    // specialty TBD tile
+                if ((entry._allMatchups || []).some(l => /winners TBD/i.test(String(l)))) return;
+                const key = entry._leagueName + '|' + entry._playoffRound;
+                if (!tiles[key]) tiles[key] = entry;
+            });
+        });
+
+        Object.keys(tiles).forEach(key => {
+            const entry = tiles[key];
+            const rec = leagues.find(x => x.lg.name === entry._leagueName);
+            if (!rec || !rec.lg.playoff || !rec.lg.playoff.enabled) return;
+            const lg = rec.lg;
+            const round = PM.getRoundByNumber(lg, entry._playoffRound);
+            if (!round || !Array.isArray(round.matchups)) return;
+
+            // What the user asked this round to play (fully filled, undecided).
+            const expected = round.matchups.filter(m =>
+                m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner);
+            if (!expected.length) return;
+
+            // What actually landed on the tile: "A vs B @ Field (Sport)" (regular)
+            // or "A vs B — Field" (specialty). Bye/Electives rows don't match.
+            const placed = new Set();
+            (entry._allMatchups || []).forEach(line => {
+                const m = /^(.+?)\s+vs\s+(.+?)\s+(?:@|—)\s/.exec(String(line));
+                if (m) placed.add(m[1].trim().toLowerCase() + '|' + m[2].trim().toLowerCase());
+            });
+
+            const missing = expected.filter(mu =>
+                !placed.has(mu.teamA.toLowerCase() + '|' + mu.teamB.toLowerCase()) &&
+                !placed.has(mu.teamB.toLowerCase() + '|' + mu.teamA.toLowerCase()));
+            if (!missing.length) return;
+
+            const reserved = new Set((PM.getReservedForRound ? (PM.getReservedForRound(lg, entry._playoffRound) || []) : []).map(String));
+            const bySport = {};
+            missing.forEach(mu => { const s = mu.sport || ''; (bySport[s] = bySport[s] || []).push(mu); });
+
+            Object.keys(bySport).forEach(sport => {
+                const dropped = bySport[sport].map(mu => mu.teamA + ' vs ' + mu.teamB).join(', ');
+                let why;
+                if (!sport) {
+                    why = 'no sport is picked for ' + (bySport[sport].length === 1 ? 'it' : 'them') + ' in the Playoff Hub';
+                } else if (rec.specialty) {
+                    const courts = Array.isArray(lg.fields) ? lg.fields.length : 0;
+                    const per = lg.gamesPerFieldSlot || 3;
+                    why = 'you scheduled ' + expected.length + ' game' + (expected.length === 1 ? '' : 's')
+                        + ', but this league\'s ' + courts + ' court' + (courts === 1 ? '' : 's')
+                        + ' can hold at most ' + (courts * per) + ' simultaneous games'
+                        + ' (courts already in use by other activities at that time don\'t count)';
+                } else {
+                    const wanted = expected.filter(mu => mu.sport === sport).length;
+                    const hosts = fieldsCfg.filter(f => Array.isArray(f.activities) && f.activities.indexOf(sport) >= 0).map(f => String(f.name));
+                    const usable = hosts.filter(f => !reserved.has(f));
+                    why = 'you scheduled ' + wanted + ' ' + sport + ' game' + (wanted === 1 ? '' : 's')
+                        + ', but only ' + usable.length + ' field' + (usable.length === 1 ? '' : 's')
+                        + ' can host ' + sport
+                        + (hosts.length !== usable.length ? ' (' + (hosts.length - usable.length) + ' more reserved for the teams that are out)' : '')
+                        + (usable.length ? ' — and fields already taken by other leagues or divisions at that time don\'t count' : '');
+                }
+                errors.push({
+                    type: 'playoff_field_shortage',
+                    message: 'Playoff Game Dropped: "' + entry._leagueName + '" Round ' + entry._playoffRound + ' — '
+                        + dropped + ' never got a field: ' + why
+                        + '. Fix it in the Playoff Hub (different sport or field for the matchup, fewer games this round, or un-reserve a field) and regenerate.'
+                });
             });
         });
         return errors;
