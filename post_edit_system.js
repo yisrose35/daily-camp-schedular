@@ -382,17 +382,27 @@
     // APPLY DIRECT EDIT
     // =========================================================================
 
-    function applyDirectEdit(bunk, slots, activity, location, isClear) {
-        const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) || 
+    function applyDirectEdit(bunk, slots, activity, location, isClear, opts = {}) {
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
                         window.getDivisionForBunk?.(bunk);
         const divTimes = window.divisionTimes?.[divName] || [];
-        
+
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) {
             window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
         }
 
         const fieldValue = location ? `${location} – ${activity}` : activity;
+
+        // Per-cell display-name ALIAS / CUSTOM TEXT: shown on the schedule (and
+        // print / live view) instead of the real activity name. Custom-text
+        // blocks (free text, no real activity behind them) always keep their
+        // text; an alias is kept only when it differs from the activity.
+        const _dn = (!isClear && opts.customText)
+            ? String(opts.displayName || activity || '').trim() || null
+            : ((!isClear && opts.displayName && String(opts.displayName).trim()
+                && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+                ? String(opts.displayName).trim() : null);
 
         // Manual edits always use deduct mode for travel-time (user sets the times)
         const _travelInfo = (!isClear && location)
@@ -406,6 +416,8 @@
                 continuation: i > 0,
                 _fixed: !isClear,
                 _activity: isClear ? 'Free' : activity,
+                _displayName: _dn,
+                _customText: !isClear && !!opts.customText,
                 _location: location,
                 _postEdit: true,
                 _editedAt: Date.now(),
@@ -618,7 +630,7 @@
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText } = editData;
         const unifiedTimes = window.unifiedTimes || [];
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -653,7 +665,8 @@
         console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear });
 
         // ★ Manual-mode cooldown check — soft confirm if the edit would violate a rule
-        if (!isClear && window.SchedulingRules && !editData._cooldownChecked) {
+        //   (skipped for custom text: free text is a label, not a real activity)
+        if (!isClear && !customText && window.SchedulingRules && !editData._cooldownChecked) {
             try {
                 const tmpl = window.SchedulingRules.buildTemplateFromBunkSlots(bunk, slots);
                 const candidate = {
@@ -674,7 +687,7 @@
         // ★ Access-restriction soft warning — if the chosen activity/field/special
         //   is not allowed for this bunk/grade, WARN but let the user place it
         //   anyway. Post-edits are intentional overrides; we never hard-block them.
-        if (!isClear && !editData._accessChecked) {
+        if (!isClear && !customText && !editData._accessChecked) {
             try {
                 const acc = peiIsActivityAllowedForBunk(activity, location, bunk);
                 if (!acc.allowed) {
@@ -709,7 +722,7 @@
                 alert('System Error: Conflict resolution module not loaded.');
             }
         } else {
-            applyDirectEdit(bunk, slots, activity, location, isClear);
+            applyDirectEdit(bunk, slots, activity, location, isClear, { displayName, customText });
         }
         
         console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
@@ -751,8 +764,10 @@
         window.saveSchedule?.();
 
         // Post-edit counts + rotation history (single shared implementation)
+        // Custom text is a label, not a real activity — credit nothing for it
+        // (old activities are still debited since the slot was overwritten).
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {
-            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity && !customText) ? activity : null, slots);
         }
         
         // Render
@@ -1259,14 +1274,19 @@
         
         let currentActivity = currentValue || '';
         let currentField = '';
+        let currentCustomText = '';
         let resolutionChoice = 'notify';
-        
+
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
             if (entry) {
                 currentField = typeof entry.field === 'object' ? entry.field?.name : (entry.field || '');
                 currentActivity = entry._activity || currentField || currentValue;
+                currentCustomText = entry._displayName || '';
+                // Custom-text block: the "activity" is just the typed text — keep
+                // the activity box empty so re-saving stays a custom-text write.
+                if (entry._customText) { currentActivity = ''; currentField = ''; }
             }
         }
 
@@ -1333,6 +1353,12 @@
                     <input type="text" id="post-edit-activity" value="${escHtml(currentActivity)}" placeholder="e.g., Basketball"
                         style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Enter CLEAR or FREE to empty this slot</div>
+                </div>
+                <div>
+                    <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <input type="text" id="post-edit-custom-text" value="${escHtml(currentCustomText)}" placeholder="Type anything — e.g. Color War Breakout!"
+                        style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Shows on the schedule, print &amp; live view exactly as typed. With an activity above it just renames it; with no activity it becomes a free-text block.</div>
                 </div>
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label>
@@ -1489,22 +1515,33 @@
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
+            const customTextVal = document.getElementById('post-edit-custom-text')?.value.trim() || '';
             const times = getEffectiveTimes();
-            
-            if (!activity) { alert('Please enter an activity name.'); return; }
+
             if (times.endMin <= times.startMin) { alert('End time must be after start time.'); return; }
-            
+
+            // Custom-text-only save: no activity typed, just free text — place it
+            // as a custom text block (no field claim, no rotation credit).
+            if (!activity && customTextVal) {
+                onSave({ activity: customTextVal, displayName: customTextVal, customText: true,
+                    location: '', startMin: times.startMin, endMin: times.endMin,
+                    hasConflict: false, conflicts: [] });
+                closeModal();
+                return;
+            }
+            if (!activity) { alert('Enter an activity name — or type custom text below to place free text.'); return; }
+
             const targetSlots = window.SchedulerCoreUtils?.findSlotsForRange?.(times.startMin, times.endMin, unifiedTimes) || [];
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
-            
+
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, startMin: times.startMin, endMin: times.endMin,
+                onSave({ activity, location, displayName: customTextVal, startMin: times.startMin, endMin: times.endMin,
                     hasConflict: true, conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName: customTextVal, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };

@@ -19,17 +19,22 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
 // ─── VERBATIM: applyDirectEdit's _displayName computation + entry write ──────
+// (includes the CUSTOM TEXT branch: a free-text block always keeps its text as
+//  the display name and is flagged _customText so rotation credits nothing)
 function buildEntry(activity, location, isClear, opts = {}) {
     const fieldValue = location ? `${location} – ${activity}` : activity;
-    const _dn = (!isClear && opts.displayName && String(opts.displayName).trim()
-        && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
-        ? String(opts.displayName).trim() : null;
+    const _dn = (!isClear && opts.customText)
+        ? String(opts.displayName || activity || '').trim() || null
+        : ((!isClear && opts.displayName && String(opts.displayName).trim()
+            && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+            ? String(opts.displayName).trim() : null);
     return {
         field: isClear ? 'Free' : fieldValue,
         sport: isClear ? null : activity,
         _fixed: !isClear,
         _activity: isClear ? 'Free' : activity,
         _displayName: _dn,
+        _customText: !isClear && !!opts.customText,
         _location: location,
     };
 }
@@ -119,5 +124,56 @@ describe('post-edit display-name alias', () => {
     it('trims surrounding whitespace from the alias', () => {
         const e = buildEntry('Caps Making', null, false, { displayName: '  Shirt Making  ' });
         assert.equal(e._displayName, 'Shirt Making');
+    });
+});
+
+describe('post-edit CUSTOM TEXT block (free text, no real activity)', () => {
+    it('stores the typed text as both activity and display name, flagged _customText', () => {
+        const e = buildEntry('Color War Breakout!', '', false,
+            { displayName: 'Color War Breakout!', customText: true });
+        assert.equal(e._customText, true);
+        assert.equal(e._displayName, 'Color War Breakout!');
+        assert.equal(e._activity, 'Color War Breakout!');
+        assert.equal(e._location, '');
+    });
+
+    it('keeps the display name even when it EQUALS the activity (unlike the alias)', () => {
+        // The alias path drops a display name equal to the activity; a custom
+        // text block IS its own text, so it must keep it — every view renders
+        // _displayName verbatim.
+        const e = buildEntry('Pizza Party', '', false, { displayName: 'Pizza Party', customText: true });
+        assert.equal(e._displayName, 'Pizza Party');
+        assert.equal(getActivityDisplayName(e), 'Pizza Party');
+        assert.equal(formatEntryName(e), 'Pizza Party');
+    });
+
+    it('renders the text verbatim with no location appended', () => {
+        const e = buildEntry('Visiting Day — parents arrive', '', false,
+            { displayName: 'Visiting Day — parents arrive', customText: true });
+        const resolveLoc = () => 'Main Field';
+        assert.equal(formatEntryWithLocation(e, resolveLoc), 'Visiting Day — parents arrive');
+    });
+
+    it('falls back to the activity text when displayName is omitted', () => {
+        const e = buildEntry('Camp Photo', '', false, { customText: true });
+        assert.equal(e._displayName, 'Camp Photo');
+        assert.equal(e._customText, true);
+    });
+
+    it('a cleared slot never carries the custom-text flag or text', () => {
+        const e = buildEntry('Camp Photo', '', true, { displayName: 'Camp Photo', customText: true });
+        assert.equal(e._customText, false);
+        assert.equal(e._displayName, null);
+        assert.equal(e._activity, 'Free');
+    });
+
+    it('rotation credit rule: custom text credits no new activity', () => {
+        // Mirrors applyEdit's call:
+        //   applyPostEditCounts(bunk, oldActs, (!isClear && activity && !customText) ? activity : null, slots)
+        const creditFor = (isClear, activity, customText) =>
+            (!isClear && activity && !customText) ? activity : null;
+        assert.equal(creditFor(false, 'Basketball', false), 'Basketball');
+        assert.equal(creditFor(false, 'Pizza Party', true), null, 'custom text must not create a rotation key');
+        assert.equal(creditFor(true, 'Free', false), null);
     });
 });

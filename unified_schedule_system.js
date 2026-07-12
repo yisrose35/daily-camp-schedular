@@ -2082,7 +2082,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     // Apply the primary edit first. Carry the soft-override the caller may have
     // already approved via the in-app gate so applyDirectEdit doesn't re-prompt.
-    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName, allowSoftOverride: !!editData._allowSoftOverride });
+    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName, customText: !!editData.customText, allowSoftOverride: !!editData._allowSoftOverride });
     
     // Lock the field
     if (window.GlobalFieldLocks) {
@@ -4408,8 +4408,10 @@ if (bypassStatus.highlight) {
         // auto pipeline would then preserve via _pinned. The auto
         // pipeline's commitWriteIfLegal stops at the manual entry
         // point; this is the manual-side equivalent. Free-writes are
-        // exempt (they release a slot).
-        if (!isClear && activity && slots.length > 0) {
+        // exempt (they release a slot). Custom-text writes are exempt
+        // too — the text is a label, not a real activity/field claim,
+        // so there is nothing for the gate to check.
+        if (!isClear && activity && slots.length > 0 && !opts.customText) {
             const _pbsArr = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || [];
             const _firstSlotMeta = _pbsArr[slots[0]] || divSlots[slots[0]];
             const _lastSlotMeta = _pbsArr[slots[slots.length - 1]] || divSlots[slots[slots.length - 1]];
@@ -4472,9 +4474,13 @@ if (bypassStatus.highlight) {
         // instead of the real activity (e.g. "Shirt Making" for a Caps Making slot).
         // _activity stays the real activity so rotation/counting are unaffected.
         // Kept only when it's a non-empty value that actually differs from the activity.
-        const _dn = (!isClear && opts.displayName && String(opts.displayName).trim()
-            && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
-            ? String(opts.displayName).trim() : null;
+        // CUSTOM TEXT: a free-text block (no real activity behind it) always keeps
+        // its text as the display name — every view (grid, print, live) shows it verbatim.
+        const _dn = (!isClear && opts.customText)
+            ? String(opts.displayName || activity || '').trim() || null
+            : ((!isClear && opts.displayName && String(opts.displayName).trim()
+                && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+                ? String(opts.displayName).trim() : null);
         slots.forEach((idx, i) => {
             window.scheduleAssignments[bunk][idx] = {
                 field: isClear ? 'Free' : fieldValue,
@@ -4483,6 +4489,7 @@ if (bypassStatus.highlight) {
                 _fixed: !isClear,
                 _activity: isClear ? 'Free' : activity,
                 _displayName: _dn,
+                _customText: !isClear && !!opts.customText,
                 _location: location,
                 _postEdit: true,
                 _pinned: shouldPin && !isClear,
@@ -5034,7 +5041,7 @@ if (bypassStatus.highlight) {
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText } = editData;
         const divName = getDivisionForBunk(bunk);
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -5048,11 +5055,11 @@ if (bypassStatus.highlight) {
         const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
 
-        if (!isClear && window.checkSequenceViolation && slots.length > 0) {
+        if (!isClear && !customText && window.checkSequenceViolation && slots.length > 0) {
             const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
             if (_seqCheck?.violated) { if (!(await usSoftConfirm('Sequence warning: ' + _seqCheck.reason))) return; }
         }
-        if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
+        if (!isClear && !customText && window.isLocationInCooldown && location && slots.length > 0) {
             const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
             if (_coolCheck?.blocked) { if (!(await usSoftConfirm('Location cooldown: ' + _coolCheck.reason))) return; }
         }
@@ -5063,7 +5070,7 @@ if (bypassStatus.highlight) {
         // "Place anyway?" in-app prompt and, on accept, passes allowSoftOverride
         // so applyDirectEdit won't re-prompt with window.confirm. A HARD block
         // (physical conflict, disabled, time window) shows an in-app alert.
-        if (!isClear && activity && slots.length > 0 && typeof window.commitManualWriteIfLegal === 'function') {
+        if (!isClear && !customText && activity && slots.length > 0 && typeof window.commitManualWriteIfLegal === 'function') {
             const _gate = window.commitManualWriteIfLegal(
                 bunk, slots[0], activity, location, divName, startMin, endMin,
                 { allowSoftOverride: false, slotRange: slots }
@@ -5103,12 +5110,12 @@ if (bypassStatus.highlight) {
             if (hasPerBunk && !isClear && startMin != null && endMin != null) {
                 const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
                 if (reshaped.length > 0) {
-                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName, allowSoftOverride: _softOv });
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName, customText, allowSoftOverride: _softOv });
                 } else {
-                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, allowSoftOverride: _softOv });
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, allowSoftOverride: _softOv });
                 }
             } else {
-                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, allowSoftOverride: _softOv });
+                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, allowSoftOverride: _softOv });
             }
         }
 
@@ -5144,8 +5151,10 @@ if (bypassStatus.highlight) {
         }
 
         // Post-edit counts + rotation history (single shared implementation)
+        // Custom text is a label, not a real activity — credit nothing for it
+        // (old activities are still debited since the slot was overwritten).
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {
-            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity && !customText) ? activity : null, slots);
         }
 
         updateTable();
@@ -5727,6 +5736,10 @@ if (bypassStatus.highlight) {
                 currentField = fieldLabel(entry.field);
                 currentActivity = entry._activity || currentField || currentValue;
                 currentDisplayName = entry._displayName || '';
+                // Custom-text block: the "activity" is just the typed text — keep the
+                // dropdown empty and let the custom text box carry it, so re-saving
+                // stays a custom-text write instead of a fake-activity write.
+                if (entry._customText) { currentActivity = ''; currentField = ''; }
             }
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
@@ -5778,11 +5791,11 @@ if (bypassStatus.highlight) {
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court.</div>
                 </div>
                 <div>
-                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">Display name <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
                     <input id="post-edit-display-name" type="text" value="${escapeHtml(currentDisplayName)}"
-                        placeholder="e.g. Shirt Making"
+                        placeholder="Type anything — e.g. Color War Breakout!"
                         style="width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;" />
-                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shown on the schedule instead of the activity name. Still counts as the chosen activity. Leave blank to use the real name.</div>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shows on the schedule, print &amp; live view exactly as typed. With an activity picked above it just renames it (still counts as that activity); with no activity it becomes a free-text block.</div>
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -5984,7 +5997,14 @@ if (bypassStatus.highlight) {
             const activity = actInput.value.trim();
             const location = locationSelect.value;
             const displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
-            if (!activity) { alert('Please enter an activity name.'); return; }
+            // Custom-text-only save: no activity chosen, just free text — place it
+            // as a custom text block (no field claim, no rotation credit).
+            if (!activity && displayName) {
+                onSave({ activity: displayName, displayName, customText: true, location: '', startMin, endMin, hasConflict: false, conflicts: [] });
+                closeModal();
+                return;
+            }
+            if (!activity) { alert('Pick an activity — or type custom text below to place free text.'); return; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
@@ -6869,6 +6889,12 @@ function minutesToTimeString(mins) {
                     </select>
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court for all bunks.</div>
                 </div>
+                <div>
+                    <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <input id="multi-edit-custom-text" type="text" placeholder="Type anything — e.g. Color War Breakout!"
+                        style="width: 100%; padding: 10px; border: 1.5px solid #d1d5db; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem;">
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shows on the schedule, print &amp; live view exactly as typed. Leave the activity empty to place just this text on all selected bunks.</div>
+                </div>
                 <div id="multi-field-result" style="display:none;"></div>
                 <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
                     <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">Override field manually</summary>
@@ -7019,6 +7045,22 @@ function minutesToTimeString(mins) {
                 }
             });
         }
+
+        // Custom-text-only mode: free text with no activity needs no field search
+        // or conflict preview — enable Apply as soon as there's text to place.
+        const multiCustomText = document.getElementById('multi-edit-custom-text');
+        if (multiCustomText) {
+            const _syncMultiSubmit = () => {
+                const submitBtn = document.getElementById('multi-edit-submit');
+                if (!submitBtn) return;
+                const hasText = !!multiCustomText.value.trim();
+                const hasActivity = !!(multiActInput && multiActInput.value.trim());
+                if (hasText && !hasActivity) submitBtn.disabled = false;
+                else if (!_multiBunkPreviewResult) submitBtn.disabled = true;
+            };
+            multiCustomText.addEventListener('input', _syncMultiSubmit);
+            if (multiActInput) multiActInput.addEventListener('change', _syncMultiSubmit);
+        }
     }
 
     function previewMultiBunkEdit() {
@@ -7107,9 +7149,20 @@ if (softBlocks.length > 0) {
     }
 
     async function submitMultiBunkEdit() {
+        // Custom-text-only apply: free text with no activity — no cascade plan needed.
+        const _mCustomText = document.getElementById('multi-edit-custom-text')?.value.trim() || '';
+        const _mActivity = document.getElementById('multi-edit-activity')?.value.trim() || '';
+        if (_mCustomText && !_mActivity) {
+            await applyMultiBunkCustomText(_mCustomText);
+            closeIntegratedEditModal();
+            return;
+        }
+
         if (!_multiBunkPreviewResult) { alert('Please preview first'); return; }
 
         const result = _multiBunkPreviewResult;
+        // Activity + custom text together = display alias on the primary writes.
+        result.displayName = _mCustomText || null;
         const mode = document.querySelector('input[name="multi-mode"]:checked')?.value || 'notify';
         const myDivisions = new Set(getMyDivisions());
         const otherMoves = result.plan.filter(p => !myDivisions.has(p.division));
@@ -7440,6 +7493,13 @@ if (softBlocks.length > 0) {
             );
         }
 
+        // Optional display alias (custom text typed alongside a real activity):
+        // shown verbatim on the schedule/print/live view; rotation still credits
+        // the real activity. Only kept when it actually differs from the activity.
+        const _mbDn = (result.displayName && String(result.displayName).trim()
+            && String(result.displayName).trim().toLowerCase() !== String(activity || '').trim().toLowerCase())
+            ? String(result.displayName).trim() : null;
+
         for (const bunk of _committedBunks) {
             const bunkSlots = _bunkSlotsByBunk[bunk];
             const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
@@ -7449,6 +7509,7 @@ if (softBlocks.length > 0) {
             for (let i = 0; i < bunkSlots.length; i++) {
                 window.scheduleAssignments[bunk][bunkSlots[i]] = {
                     field: location, sport: null, _activity: activity,
+                    _displayName: _mbDn,
                     _fixed: true, _pinned: true, _multiBunkEdit: true,
                     continuation: i > 0,
                     _startMin: result.timeStartMin,
@@ -7555,6 +7616,92 @@ if (softBlocks.length > 0) {
         if (isAutoMode && location && bunks.length > 1) {
             setTimeout(() => autoModeRebalanceCheck(divName, bunks, location, activity, result.timeStartMin, result.timeEndMin), 400);
         }
+    }
+
+    // =========================================================================
+    // APPLY MULTI-BUNK CUSTOM TEXT
+    // =========================================================================
+    // Free-text block placed across many bunks at once (e.g. "Color War
+    // Breakout!" for a whole division). The text is a label, not an activity:
+    // no field is claimed, no legality gate applies, and rotation credits
+    // nothing new (old activities are still debited since they're overwritten).
+    // _displayName makes every view — grid, print center, live view — show the
+    // text verbatim.
+    async function applyMultiBunkCustomText(text) {
+        const ctx = _multiBunkEditContext;
+        if (!ctx) { alert('Edit context lost. Please try again.'); return; }
+        const { bunks, slots, divName, perBunkSlots, isAutoMode, timeStartMin, timeEndMin } = ctx;
+        const divSlots = window.divisionTimes?.[divName] || [];
+
+        const bunkSlotsByBunk = {};
+        const oldActivitiesByBunk = {};
+        for (const bunk of bunks) {
+            let bunkSlots;
+            if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+                bunkSlots = ensurePerBunkSlotForRange(bunk, divName, timeStartMin, timeEndMin);
+            } else if (isAutoMode && perBunkSlots && perBunkSlots[String(bunk)]) {
+                bunkSlots = perBunkSlots[String(bunk)];
+            } else {
+                bunkSlots = slots;
+            }
+            if (!bunkSlots || bunkSlots.length === 0) {
+                console.warn('[applyMultiBunkCustomText] No slots resolved for ' + bunk + ', skipping');
+                continue;
+            }
+            bunkSlotsByBunk[bunk] = bunkSlots;
+            oldActivitiesByBunk[bunk] = bunkSlots
+                .filter(idx => window.scheduleAssignments?.[bunk]?.[idx] && !window.scheduleAssignments[bunk][idx].continuation)
+                .map(idx => window.scheduleAssignments[bunk][idx]._activity || window.scheduleAssignments[bunk][idx].field)
+                .filter(Boolean);
+        }
+        const targets = Object.keys(bunkSlotsByBunk);
+        if (targets.length === 0) { alert('No time slots resolved for the selected bunks.'); return; }
+
+        await createAutoBackup(text, divName);
+
+        // Undo transaction (counts payload debits-only: newAct = null)
+        if (typeof window.peiSnapshotTransaction === 'function') {
+            window.peiSnapshotTransaction(
+                targets,
+                'Custom text "' + text + '" → ' + targets.length + ' bunks',
+                { counts: targets.map(b => ({ bunk: b, newAct: null, oldActs: oldActivitiesByBunk[b] || [], slots: bunkSlotsByBunk[b] })) }
+            );
+        }
+
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        for (const bunk of targets) {
+            const bunkSlots = bunkSlotsByBunk[bunk];
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
+            for (let i = 0; i < bunkSlots.length; i++) {
+                window.scheduleAssignments[bunk][bunkSlots[i]] = {
+                    field: text, sport: null, _activity: text,
+                    _displayName: text, _customText: true,
+                    _fixed: true, _pinned: true, _postEdit: true, _multiBunkEdit: true,
+                    continuation: i > 0,
+                    _startMin: timeStartMin, _endMin: timeEndMin,
+                    _editedAt: Date.now()
+                };
+            }
+            if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+                window.SchedulerCoreUtils.applyPostEditCounts(bunk, oldActivitiesByBunk[bunk] || [], null, bunkSlots);
+            }
+        }
+
+        markPostEditInProgress();
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks(targets);
+        else saveSchedule();
+
+        try {
+            const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                detail: { bunks: targets, date: _rcDate, source: 'multi-bunk-custom-text' }
+            }));
+        } catch (_e) { /* non-fatal */ }
+
+        if (typeof renderStaggeredView === 'function') renderStaggeredView();
+        showIntegratedToast('Custom text placed on ' + targets.length + ' bunk(s).', 'success');
     }
 
     // =========================================================================
