@@ -4335,6 +4335,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         bunkOverrides.forEach(override => {
             let activityName = override.activity;
             let overrideType = override.type;
+            // ★ Fixed-tile overrides (Lunch/Snacks/Swim/Dinner/Dismissal picked in
+            //   the bunk-override UI) carry their behavior type — in manual mode
+            //   they place through the 'pinned' lane, which resolves the picked
+            //   location (override.location → pinned defaults → activity lookup)
+            //   and pins field=location, _activity=tile name. Previously they fell
+            //   into the generic-pin fallback and lost their location.
+            if ({ swim: 1, lunch: 1, snacks: 1, snack: 1, dinner: 1, dismissal: 1 }[String(overrideType || '').toLowerCase()]) {
+                overrideType = 'pinned';
+            }
             let _poolChosenLocation = null; // set when a sportPool override resolves to a chosen candidate
             const startMin = override.startMin ?? Utils.parseTimeToMinutes(override.startTime);
             const endMin = override.endMin ?? Utils.parseTimeToMinutes(override.endTime);

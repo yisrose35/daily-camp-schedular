@@ -3916,6 +3916,12 @@
             //   zero-trims the later one (same failure family as FN-33). With the
             //   substitution inside the derivation, every wall rebuild re-applies
             //   the override instead of fighting it. Window stays the wall's own.
+            // ★ FIXED walls too (lunch/snacks/swim/dinner/dismissal): a per-bunk
+            //   location override on a fixed tile rides the same source-
+            //   substitution lane — the old injection path lost to the wall for
+            //   exactly the reason above, so the picked location never survived
+            //   generation.
+            var _P0_FIXED_WALL_TYPES = { swim: 1, lunch: 1, snacks: 1, snack: 1, dinner: 1, dismissal: 1 };
             var _p0CustomForceOvs = [];
             try {
                 var _fddOv = (typeof loadCurrentDailyData === 'function' ? loadCurrentDailyData() : null) || {};
@@ -3928,7 +3934,8 @@
             _p0CustomForceOvs = _p0CustomForceOvs.filter(function (o) {
                 if (!o || !o.bunk || !o.activity) return false;
                 if ((o.overrideMode || 'force') !== 'force') return false;
-                if (String(o.layerType || '').toLowerCase() !== 'custom') return false;
+                var _olt = String(o.layerType || '').toLowerCase();
+                if (_olt !== 'custom' && !_P0_FIXED_WALL_TYPES[_olt]) return false;
                 if (o.activity === '+ added layer' || o.activity === '⇕ resized' || o.activity === '— deleted —') return false;
                 return true;
             });
@@ -4829,15 +4836,19 @@
                         let _fldBunk = isCustom
                             ? (layer.customField || _p0GAFieldMap[String(eventName).toLowerCase().trim()] || null)
                             : null;
+                        let _ovApplied = false;
                         if (isCustom && _p0CustomForceOvs.length) {
                             const _co = _p0CustomForceOvs.find(o => {
                                 if (String(o.bunk) !== String(bunk)) return false;
+                                // Fixed-typed overrides belong to fixed walls, not custom ones.
+                                if (_P0_FIXED_WALL_TYPES[String(o.layerType || '').toLowerCase()]) return false;
                                 const os = o.startMin != null ? o.startMin : parseTimeToMinutes(o.startTime);
                                 const oe = o.endMin != null ? o.endMin : parseTimeToMinutes(o.endTime);
                                 return (os === layer.startMin && oe === layer.endMin) ||
                                        (os === blockStart && oe === blockEnd);
                             });
                             if (_co) {
+                                _ovApplied = true;
                                 _evBunk = _co.activity;
                                 if (_co.location) {
                                     _fldBunk = _co.location;
@@ -4861,7 +4872,36 @@
                                     (_fldBunk && _fldBunk !== layer.customField ? ' @ ' + _fldBunk : '') + ' (bunk override)');
                             }
                         }
-                        const _isOvWall = _evBunk !== eventName;
+                        // ★ FIXED walls (lunch/snacks/swim/dinner/dismissal): a force
+                        //   override substitutes this bunk's LOCATION (and, if the user
+                        //   picked one, the display name) at the source — same FN-37b
+                        //   lane. The wall keeps its native type/window, so meal/swim
+                        //   semantics are untouched; only this bunk's location moves.
+                        const _wallT = String(layer.type || '').toLowerCase();
+                        const _isFixedWall = !isCustom && !!_P0_FIXED_WALL_TYPES[_wallT];
+                        if (_isFixedWall && _p0CustomForceOvs.length) {
+                            const _fo = _p0CustomForceOvs.find(o => {
+                                if (String(o.bunk) !== String(bunk)) return false;
+                                const olt = String(o.layerType || '').toLowerCase();
+                                // Native fixed-typed overrides + legacy saves (which
+                                // carried layerType 'custom' for GA-backed fixed bands).
+                                if (olt !== _wallT && !(olt === 'snack' && _wallT === 'snacks') && olt !== 'custom') return false;
+                                const os = o.startMin != null ? o.startMin : parseTimeToMinutes(o.startTime);
+                                const oe = o.endMin != null ? o.endMin : parseTimeToMinutes(o.endTime);
+                                return (os === layer.startMin && oe === layer.endMin) ||
+                                       (os === blockStart && oe === blockEnd);
+                            });
+                            if (_fo) {
+                                _ovApplied = true;
+                                if (_fo.location) _fldBunk = _fo.location;
+                                // Legacy location-picks stored the facility name as the
+                                // activity — keep the wall's own name in that case.
+                                if (_fo.activity && _fo.activity !== _fo.location) _evBunk = _fo.activity;
+                                log('[Phase0] Fixed wall "' + eventName + '" (' + _wallT + ') override for ' + bunk +
+                                    (_fldBunk ? ' @ ' + _fldBunk : '') + (_evBunk !== eventName ? ' as "' + _evBunk + '"' : ''));
+                            }
+                        }
+                        const _isOvWall = _ovApplied || _evBunk !== eventName;
                         bunkTimelines[bunk].push({
                             startMin: blockStart, endMin: blockEnd,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
@@ -4869,13 +4909,15 @@
                             // ★ FN-37c: block.field is the durable claim carrier — Phase 3's
                             //   pre-register pass claims it in the rebuilt fieldLedger, which
                             //   keeps other bunks off the auto-assigned field at this window.
-                            field: (isCustom && _isOvWall && _fldBunk) ? _fldBunk : undefined,
+                            field: ((isCustom || _isFixedWall) && _isOvWall && _fldBunk) ? _fldBunk : undefined,
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
                             _noBacktrack: isGradeWide,
                             _bunkOverride: _isOvWall ? true : undefined,
-                            _customActivity: isCustom ? (_isOvWall ? _evBunk : layer.customActivity) : null,
-                            _customField: isCustom ? _fldBunk : null,
+                            _customActivity: isCustom ? (_isOvWall ? _evBunk : layer.customActivity)
+                                : ((_isFixedWall && _isOvWall) ? _evBunk : null),
+                            _customField: isCustom ? _fldBunk
+                                : ((_isFixedWall && _isOvWall) ? _fldBunk : null),
                             _customBunks: isCustom ? layer.customBunks : null
                         });
                     }
@@ -14953,7 +14995,8 @@
                     if (!window._bunkDeletedLayers[bunk]) window._bunkDeletedLayers[bunk] = [];
                     window._bunkDeletedLayers[bunk].push({
                         startMin: tStart, endMin: tEnd,
-                        layerType: ov.layerType || 'custom'
+                        layerType: ov.layerType || 'custom',
+                        layerName: ov.layerName || null
                     });
                     if (totalIters < 1) log('[P0] Layer delete override recorded for ' + bunk + ' (' + tStart + '-' + tEnd + ', layer=' + (ov.layerType || 'custom') + ')');
                     return;
@@ -14988,17 +15031,24 @@
                 if (!ov.activity) return;
                 // Defense-in-depth: never pin a UI placeholder string as an activity.
                 if (ov.activity === '+ added layer' || ov.activity === '⇕ resized' || ov.activity === '— deleted —') return;
-                // ★ FN-37b: custom-layer force overrides are applied at the SOURCE —
-                //   the Phase-0 wall push substitutes the bunk's activity name. If
-                //   that wall exists, don't inject a competing fixed block here
-                //   (the duplicate just gets zero-trimmed by integrity anyway).
-                if (String(ov.layerType || '').toLowerCase() === 'custom') {
-                    const _wall = bunkTimelines[bunk].find(b =>
-                        b && (b.type || '').toLowerCase() === 'custom' &&
-                        b.startMin === tStart && b.endMin === tEnd &&
-                        b.event === ov.activity);
+                // ★ FN-37b: custom-layer AND fixed-wall force overrides are applied
+                //   at the SOURCE — the Phase-0 wall push substitutes the bunk's
+                //   activity/location. If a wall block already carries this
+                //   override (marked _bunkOverride, and walls carry their layer),
+                //   don't inject a competing fixed block here (the duplicate just
+                //   gets zero-trimmed by integrity anyway). Overlap-matched, not
+                //   window-equal: full-grade lunch walls centre-snap to bell
+                //   periods, so the wall's window can differ from the layer's.
+                {
+                    const _wall = bunkTimelines[bunk].find(b => b && (
+                        (b._bunkOverride === true && b.layer &&
+                            b.startMin < tEnd && b.endMin > tStart) ||
+                        ((b.type || '').toLowerCase() === 'custom' &&
+                            b.startMin === tStart && b.endMin === tEnd &&
+                            b.event === ov.activity)
+                    ));
                     if (_wall) {
-                        if (totalIters < 1) log('[P0] Custom-layer override for ' + bunk + ' already applied at the wall ("' + ov.activity + '") — injection skipped');
+                        if (totalIters < 1) log('[P0] Override for ' + bunk + ' ("' + ov.activity + '") already applied at the wall — injection skipped');
                         return;
                     }
                 }
@@ -15008,18 +15058,34 @@
                 ) || '';
                 const sportName = ov.activity;
 
+                // ★ Fixed-tile overrides (Lunch/Snacks/Swim/Dinner/Dismissal picked
+                //   in the bunk-override UI) keep their NATIVE behavior type so every
+                //   type-keyed branch in the solver (meal handling, rainy-day, print,
+                //   preservation sweeps) treats them exactly like the grade tile —
+                //   previously they collapsed to a generic 'custom' block.
+                const _FIXED_BEHAVIOR_TYPES = { swim: 1, lunch: 1, snacks: 1, snack: 1, dinner: 1, dismissal: 1 };
+                let fixedType = null;
+                const _ovTypeLc = String(ov.type || '').toLowerCase();
+                const _ovLayerLc = String(ov.layerType || '').toLowerCase();
+                if (_FIXED_BEHAVIOR_TYPES[_ovTypeLc]) fixedType = _ovTypeLc;
+                else if (_FIXED_BEHAVIOR_TYPES[_ovLayerLc]) fixedType = _ovLayerLc;
+                if (fixedType === 'snack') fixedType = 'snacks';
+
                 // Check if ANY field hosts this activity (case-insensitive) → it's a sport
                 const sportNameLower = sportName.toLowerCase().trim();
                 let isSport = false;
-                for (const fn of Object.keys(fieldLedger)) {
-                    if (fieldLedger[fn].activities.some(a => a.toLowerCase().trim() === sportNameLower)) {
-                        isSport = true;
-                        break;
+                if (!fixedType) {
+                    for (const fn of Object.keys(fieldLedger)) {
+                        if (fieldLedger[fn].activities.some(a => a.toLowerCase().trim() === sportNameLower)) {
+                            isSport = true;
+                            break;
+                        }
                     }
                 }
-                const blockType = isSport ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
+                const blockType = fixedType || (isSport ? 'sport' : (ov.type === 'special' ? 'special' : 'custom'));
 
-                // Auto-assign field if not specified
+                // Auto-assign field if not specified (sports only — a fixed tile
+                // without a picked location stays location-less like its grade twin)
                 let assignedField = ov.location || null;
                 if (!assignedField && isSport) {
                     for (const fn of Object.keys(fieldLedger)) {
@@ -15040,6 +15106,11 @@
                     layer: null, _classification: 'pinned', _committed: true, _fixed: true,
                     _bunkOverride: true, _activityLocked: true, _noBacktrack: true,
                     _assignedSport: isSport ? ov.activity : null,
+                    // Mirror the grade pinned-tile block shape (custom + fixed tiles
+                    // carry the activity/facility pairing the wall push sets).
+                    ...(fixedType || blockType === 'custom'
+                        ? { _customActivity: ov.activity, _customField: assignedField }
+                        : {}),
                     _source: 'capacity_checked'
                 });
                 // ★ FLAG #1: the override is authoritative — reserve the field EXCLUSIVELY
@@ -29977,15 +30048,23 @@
         try {
             var _del = window._bunkDeletedLayers || {};
             var _delEvicted = 0;
-            var _slotIsLayerType = function (slot, lt) {
+            var _slotIsLayerType = function (slot, lt, layerName) {
                 lt = String(lt || '').toLowerCase();
                 var act = String(slot._activity || '').toLowerCase();
                 var fld = String(slot.field || '').toLowerCase();
+                // GA-backed fixed tiles can carry a custom name ("Milk & Cookies",
+                // quickType snacks) — the delete override records the band's real
+                // name so the evictor can match the placed block by name too.
+                var nm = String(layerName || '').toLowerCase().trim();
+                var nameMatch = !!nm && (act === nm ||
+                    String(slot._customActivity || '').toLowerCase().trim() === nm);
                 if (lt === 'sport' || lt === 'sports') return !!slot.sport;
                 if (lt === 'special') return slot._autoSpecial === true;
-                if (lt === 'swim') return act === 'swim' || fld === 'swim';
-                if (lt === 'lunch') return act === 'lunch';
-                if (lt === 'snack' || lt === 'snacks') return act === 'snack' || act === 'snacks';
+                if (lt === 'swim') return act === 'swim' || fld === 'swim' || nameMatch;
+                if (lt === 'lunch') return act === 'lunch' || nameMatch;
+                if (lt === 'dinner') return act === 'dinner' || nameMatch;
+                if (lt === 'dismissal') return act === 'dismissal' || nameMatch;
+                if (lt === 'snack' || lt === 'snacks') return act === 'snack' || act === 'snacks' || nameMatch;
                 if (lt === 'custom') return !!(slot._customActivity || slot._customField);
                 return false;
             };
@@ -30010,7 +30089,7 @@
                             || (s._source && /trip/i.test(String(s._source)));
                         var ev = false;
                         if (overlaps && !protectedSlot) {
-                            if (_slotIsLayerType(s, lt)) ev = true;
+                            if (_slotIsLayerType(s, lt, d.layerName)) ev = true;
                             else if (s.continuation === true && prevEvicted) ev = true; // tail of an evicted block
                         }
                         if (ev) {

@@ -7178,10 +7178,38 @@ function _boGetActivityGroups() {
       facilities.push({ name: loc, zone: zn, displayName: loc + ' (' + zn + ')' });
     });
   });
+  // ★ Fixed tiles (Lunch / Snacks / Swim / Dinner / Dismissal) — the pinned
+  //   behavior tiles a bunk can be given directly. GA-backed entries come from
+  //   the facility editor (they carry the real facility so capacity/sharing
+  //   connect); built-in fallbacks cover types with no GA configured. Picking
+  //   one saves type:'lunch'/… so generation places it NATIVELY (not as a
+  //   generic custom block).
+  const fixedTiles = [];
+  try {
+    const _QT_NORM = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner', dismissal: 'dismissal' };
+    const _seenFixed = new Set();
+    (window.getGeneralActivityPaletteItems?.() || []).forEach(ga => {
+      const qt = _QT_NORM[String(ga?.quickType || '').toLowerCase()];
+      if (!ga?.name || !qt) return;
+      const key = (ga.name + '|' + (ga.facility || '')).toLowerCase();
+      if (_seenFixed.has(key)) return;
+      _seenFixed.add(key);
+      fixedTiles.push({
+        name: ga.name, location: ga.facility || null, type: qt,
+        label: ga.name + (ga.facility ? ' → ' + ga.facility : '')
+      });
+    });
+    [['Lunch','lunch'], ['Snacks','snacks'], ['Swim','swim'], ['Dinner','dinner'], ['Dismissal','dismissal']].forEach(([nm, t]) => {
+      if (fixedTiles.some(ft => ft.type === t)) return;   // a GA-backed version exists
+      fixedTiles.push({ name: nm, location: null, type: t, label: nm });
+    });
+  } catch (e) { /* palette helper unavailable — group stays minimal */ }
+
   return {
     pinned: Object.entries(pinnedDefaults).sort(([a],[b]) => a.localeCompare(b)).map(([act, fac]) => ({
       name: act, location: fac, type: 'pinned', label: act + ' → ' + fac
     })),
+    fixedTiles,
     facilities: facilities.sort((a,b) => a.name.localeCompare(b.name)).map(f => ({
       name: f.name, location: f.name, type: 'pinned', label: f.displayName
     })),
@@ -7212,13 +7240,31 @@ function _boSaveOverrides(overrides) {
   currentOverrides.bunkActivityOverrides = overrides;
 }
 
+// ★ Fixed-tile normalization: GA-backed fixed tiles (Lunch/Snacks/Swim/Dinner
+//   from the facility editor) are saved as `custom` layers carrying a
+//   `quickType`. Normalize to the BEHAVIOR type exactly like the solver does
+//   (scheduler_core_auto STEP 1.5) so the bunk grid renders them as what they
+//   are — previously they showed as generic custom bands and the user
+//   "couldn't see the fixed tiles" in the per-bunk view.
+const _BO_GA_QT = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner' };
+const _BO_FIXED_SET = { swim: 1, lunch: 1, snacks: 1, dinner: 1, dismissal: 1 };
+function _boLayerKey(layer) {
+  const t = String(layer?.type || 'custom').toLowerCase();
+  const qt = _BO_GA_QT[String(layer?.quickType || '').toLowerCase()];
+  return (t === 'custom' && qt) ? qt : t;
+}
+
 // ★ FN-33: does override `o` belong to the layer band (sm-em, ltKey)?
 //   Direct match on the band's window — OR, for resize overrides (which store
 //   their NEW window in startMin/endMin), match on the ORIGINAL layer window
 //   they were created from. Without the second clause a resized band's override
 //   would detach from its layer and render as a duplicate orphan band.
 function _boOvMatchesLayer(o, sm, em, ltKey) {
-  if (!o || o.layerType !== ltKey) return false;
+  if (!o) return false;
+  // GA-backed fixed bands were historically saved with layerType 'custom' —
+  // accept either key so pre-normalization overrides stay attached.
+  const oLt = String(o.layerType || '');
+  if (oLt !== ltKey && !(oLt === 'custom' && _BO_FIXED_SET[ltKey])) return false;
   if (o.startMin === sm && o.endMin === em) return true;
   return o.overrideMode === 'resize' && o.originalStartMin === sm && o.originalEndMin === em;
 }
@@ -7432,14 +7478,14 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   // Layer-type → tile background colour (matches the auto builder palette)
   const TYPE_BG = {
     sport: '#bbf7d0', special: '#e9d5ff', activity: '#dbeafe',
-    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7',
+    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7', dinner: '#fed7aa',
     dismissal: '#fbcfe8', custom: '#e5e7eb',
     league: '#fee2e2', specialty_league: '#fce7f3', elective: '#f5d0fe'
   };
   const _typeLabel = (l) => {
     const t = String(l.type || 'custom').toLowerCase();
     const map = { sport: 'Sport', special: 'Special Activity', activity: 'Activity',
-                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
+                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dinner: 'Dinner', dismissal: 'Dismissal',
                   custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
                   elective: 'Elective' };
     // ★ FN-37: custom pinned layers carry their real activity name
@@ -7462,7 +7508,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   //   the grade layers — so a freshly added band landed past the column's
   //   right edge, clipped under the next bunk's column ("blocked"-looking).
   //   Width every column for the widest bunk (layers + its extra bands).
-  const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, String(l.type || 'custom')));
+  const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, _boLayerKey(l)));
   let _maxExtraBands = 0;
   bunks.forEach(b => {
     const n = overrides.filter(o => String(o.bunk) === String(b) && !_ovOnAnyLayer(o)).length;
@@ -7523,7 +7569,9 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const height = (em - sm) * PX;
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
 
-      const _ltKey = (layer.type || 'custom');
+      // ★ GA-backed fixed tiles normalize to their behavior type (lunch/swim/…)
+      //   so they render with the fixed-tile colour + the right popover.
+      const _ltKey = _boLayerKey(layer);
       const override = overrides.find(o => o.bunk === bunk && _boOvMatchesLayer(o, sm, em, _ltKey));
 
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
@@ -7861,6 +7909,10 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   let curEnd   = existing?.endMin   ?? endMin;
   let pickedActivity = (existing && !isPoolType && existing.activity && !PLACEHOLDER_ACTS[existing.activity])
     ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+  // ★ Custom Pinned (per-bunk): remembered location for the free-typed
+  //   activity — same "name @ facility" pairing a grade custom pinned layer
+  //   carries (customActivity + customField), scoped to this bunk.
+  let freeLocPick = (existing && existing.location) || null;
 
   const pop = document.createElement('div');
   pop.id = 'bo-auto-popover';
@@ -7870,7 +7922,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   pop.style.top  = Math.min(rect.bottom + 6, window.innerHeight - 540) + 'px';
   pop.style.left = Math.min(rect.left, window.innerWidth - 370) + 'px';
 
-  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
+  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dinner: 'Dinner', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
   const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
   // ★ FN-37: the band stamps the layer's real activity name (custom layers) so
   //   the popover can show it instead of the generic type label.
@@ -7946,12 +7998,23 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       const icon = opts.icon || '🎯';
       // ★ FN-37: custom layers (and added bands) accept a typed activity name —
       //   same as typing a custom pinned layer's name in the Master Scheduler.
+      // ★ Custom Pinned (per-bunk): the typed name + optional location save as
+      //   a force pin with type:'custom' — generation treats it exactly like a
+      //   grade-level Custom Pinned tile, scoped to this one bunk.
+      const _freeLocOptions = [...(groups.facilities || []), ...(groups.fields || [])]
+        .map(it => it.name)
+        .filter((n, i, arr) => n && arr.indexOf(n) === i)
+        .sort((a, b) => a.localeCompare(b));
       const freeHtml = opts.freeText ? `
         <div style="margin-bottom:10px;">
-          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:4px;">✏️ Type any activity name:</div>
+          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:4px;">📌 Custom Pinned — type any activity name:</div>
           <input id="bo-pop-freename" type="text" value="${_escHtml(pickedActivity?.name || '')}"
             placeholder="${_escHtml(opts.freePlaceholder || 'e.g. Learning, Rest Hour, Carnival')}"
             style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;" />
+          <select id="bo-pop-freeloc" style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 6px;border:1px solid #cbd5e1;border-radius:6px;margin-top:6px;background:#fff;color:#475569;">
+            <option value="">📍 Location (optional)</option>
+            ${_freeLocOptions.map(n => `<option value="${_escHtml(n)}"${freeLocPick === n ? ' selected' : ''}>${_escHtml(n)}</option>`).join('')}
+          </select>
           <div style="font-size:10px;color:#94a3b8;margin-top:6px;">…or pick from the lists below:</div>
         </div>` : '';
       body.innerHTML = `${freeHtml}
@@ -7964,7 +8027,14 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         // No re-render on input — rebuilding the body would steal focus per keystroke.
         freeInput.oninput = () => {
           const v = freeInput.value.trim();
-          pickedActivity = v ? { name: v, location: null, type: 'custom' } : null;
+          pickedActivity = v ? { name: v, location: freeLocPick, type: 'custom' } : null;
+        };
+      }
+      const freeLocSel = body.querySelector('#bo-pop-freeloc');
+      if (freeLocSel) {
+        freeLocSel.onchange = () => {
+          freeLocPick = freeLocSel.value || null;
+          if (pickedActivity && pickedActivity.type === 'custom') pickedActivity.location = freeLocPick;
         };
       }
       const root = body.querySelector('#bo-pop-options');
@@ -7995,6 +8065,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         desc: 'Pick the activity to ADD for ' + bunk + ' at this time',
         freeText: true,
         cats: [
+          { label: '🔒 Fixed Tiles (Lunch / Snacks / Swim / Dismissal…)', items: groups.fixedTiles },
           { label: '📌 Pinned Activities', items: groups.pinned },
           { label: '🏢 Facilities', items: groups.facilities },
           { label: '🏟️ Fields', items: groups.fields },
@@ -8042,6 +8113,16 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           ]
         });
         break;
+      case 'dinner':
+        renderSinglePick({
+          icon: '🍽️',
+          desc: 'Pick a custom Dinner location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /dinner|lunch|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
       case 'dismissal':
         renderSinglePick({
           icon: '🚌',
@@ -8068,6 +8149,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
             ? 'e.g. a replacement for ' + layerName
             : 'e.g. Learning, Rest Hour, Carnival',
           cats: [
+            { label: '🔒 Fixed Tiles (Lunch / Snacks / Swim / Dismissal…)', items: groups.fixedTiles },
             { label: '📌 Pinned Activities', items: groups.pinned },
             { label: '🏢 Facilities', items: groups.facilities },
             { label: '🏟️ Fields', items: groups.fields },
@@ -8095,6 +8177,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           id: uid(), bunk, startMin, endMin,
           startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
           layerType: layerType || 'custom',
+          // The band's real activity name (GA-backed tiles can be custom-named,
+          // e.g. "Milk & Cookies") — the delete evictor matches on it too.
+          layerName: (anchorEl?.dataset?.layerName || '').trim() || null,
           overrideMode: 'delete',
           activity: '— deleted —', location: null, type: 'delete'
         });
@@ -8163,15 +8248,28 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         if (!pickedActivity || !String(pickedActivity.name || '').trim()) { alert('Type or pick an activity, or click Cancel.'); return; }
         // Reserved UI placeholder strings must never become a real pin.
         if (PLACEHOLDER_ACTS[pickedActivity.name]) { alert('That name is reserved — type the real activity name.'); return; }
+        // ★ Fixed bands (lunch/snacks/dinner/swim/dismissal): their pickers
+        //   offer LOCATIONS — keep the tile's own identity as the activity and
+        //   carry the pick as the location, typed with the fixed type so
+        //   generation places it NATIVELY (previously it pinned a generic
+        //   custom block named after the facility).
+        let _saveAct = pickedActivity.name;
+        let _saveLoc = pickedActivity.location || null;
+        let _saveType = pickedActivity.type;
+        if (_BO_FIXED_SET[_lt] && pickedActivity.type === 'pinned') {
+          _saveLoc = pickedActivity.location || pickedActivity.name;
+          _saveAct = labelMap[_lt] || _lt;
+          _saveType = _lt;
+        }
         list.push({
           id: uid(), bunk,
           startMin: curStart, endMin: curEnd,
           startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
           layerType: _lt,
           overrideMode: 'force',
-          activity: pickedActivity.name,
-          location: pickedActivity.location || null,
-          type: pickedActivity.type
+          activity: _saveAct,
+          location: _saveLoc,
+          type: _saveType
         });
       }
       _boSaveOverrides(list);
@@ -8736,6 +8834,7 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   picker.appendChild(body);
 
   const categoryDefs = [
+    { key: 'fixedTiles', label: '🔒 Fixed Tiles (Lunch / Snacks / Swim / Dismissal…)', items: groups.fixedTiles || [] },
     { key: 'pinned', label: '📌 Pinned Activities', items: groups.pinned },
     { key: 'facilities', label: '🏢 Facilities', items: groups.facilities },
     { key: 'fields', label: '🏟️ Fields', items: groups.fields },
