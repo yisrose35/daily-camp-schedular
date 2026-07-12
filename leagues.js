@@ -2508,11 +2508,16 @@
                 );
 
                 if (existingIdx >= 0) {
-                    // Merge: add new matchups but preserve existing scores
+                    // Merge: add new matchups but preserve existing scores.
+                    // ★ Pair match is ORDER-INDEPENDENT — the schedule can emit
+                    // "B vs A" for an existing "A vs B" match; an ordered-only
+                    // compare appended a duplicate row that double-counted the
+                    // matchup in standings.
                     const existing = league.games[existingIdx];
+                    const pairKey = m => [m.teamA, m.teamB].sort().join('|');
                     newGame.matches.forEach(nm => {
                         const found = (existing.matches || []).find(em =>
-                            em.teamA === nm.teamA && em.teamB === nm.teamB
+                            pairKey(em) === pairKey(nm)
                         );
                         if (!found) {
                             if (!existing.matches) existing.matches = [];

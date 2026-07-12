@@ -735,7 +735,7 @@ describe('gamesPerDate cleanup on day delete', () => {
         assert.equal(specialtyCleanup, '2026-07-15', 'specialty cleanupDateFromHistory called');
     });
 
-    it('scheduler: cleanupDateFromHistory called after scoped delete', async () => {
+    it('scheduler: SCOPED resetDayRecords called (unscoped cleanup skipped — LG-5)', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': {
@@ -754,13 +754,21 @@ describe('gamesPerDate cleanup on day delete', () => {
         };
         global.supabase = makeSupabaseMock();
 
+        // ★ LG-5: a scheduler's day delete must NOT run the unscoped
+        // cleanupDateFromHistory (it would roll back every OTHER scheduler's
+        // leagues for the date). It must instead reconcile the scheduler's own
+        // leagues via the division-scoped resetDayRecords.
         let regularCleanup = null;
         let specialtyCleanup = null;
+        let regularScoped = null;
+        let specialtyScoped = null;
         global.SchedulerCoreLeagues = {
-            cleanupDateFromHistory(dateKey) { regularCleanup = dateKey; }
+            cleanupDateFromHistory(dateKey) { regularCleanup = dateKey; },
+            resetDayRecords(divisions, dateKey) { regularScoped = { divisions, dateKey }; }
         };
         global.SchedulerCoreSpecialtyLeagues = {
-            cleanupDateFromHistory(dateKey) { specialtyCleanup = dateKey; }
+            cleanupDateFromHistory(dateKey) { specialtyCleanup = dateKey; },
+            resetDayRecords(divisions, dateKey) { specialtyScoped = { divisions, dateKey }; }
         };
 
         setupMocks('scheduler');
@@ -768,7 +776,13 @@ describe('gamesPerDate cleanup on day delete', () => {
 
         await global.eraseCurrentDailyData();
 
-        assert.equal(regularCleanup, '2026-07-15', 'regular cleanupDateFromHistory called');
-        assert.equal(specialtyCleanup, '2026-07-15', 'specialty cleanupDateFromHistory called');
+        assert.equal(regularCleanup, null, 'unscoped regular cleanup NOT called for scheduler');
+        assert.equal(specialtyCleanup, null, 'unscoped specialty cleanup NOT called for scheduler');
+        assert.ok(regularScoped, 'scoped regular resetDayRecords called');
+        assert.equal(regularScoped.dateKey, '2026-07-15', 'scoped regular reset targets the date');
+        assert.deepEqual(regularScoped.divisions, ['Junior Boys'], 'scoped regular reset limited to own divisions');
+        assert.ok(specialtyScoped, 'scoped specialty resetDayRecords called');
+        assert.equal(specialtyScoped.dateKey, '2026-07-15', 'scoped specialty reset targets the date');
+        assert.deepEqual(specialtyScoped.divisions, ['Junior Boys'], 'scoped specialty reset limited to own divisions');
     });
 });

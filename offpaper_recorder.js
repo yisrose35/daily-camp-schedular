@@ -502,7 +502,26 @@
             var before = 0, gm = history.gamesPerDate[lg];
             Object.keys(gm).forEach(function (dd) { if (dd < date) before += (gm[dd] || 0); });
 
-            var logArr = history.gameLog[lg][date] = []; // this date is authoritative (idempotent re-record)
+            // This date is authoritative (idempotent re-record): subtract any
+            // prior entries' aggregate contributions BEFORE wiping the day's
+            // log, else a re-record double-counts matchupHistory/teamSports.
+            (history.gameLog[lg][date] || []).forEach(function (e) {
+                if (!e) return;
+                if (e.t1 && e.t2) {
+                    var omk = lg + ':' + [e.t1, e.t2].sort().join('|');
+                    if (history.matchupHistory[omk] > 1) history.matchupHistory[omk]--;
+                    else delete history.matchupHistory[omk];
+                }
+                if (e.sport) {
+                    [e.t1, e.t2].forEach(function (t) {
+                        var arr = t && history.teamSports[lg + '|' + t];
+                        if (!arr) return;
+                        var idx = arr.lastIndexOf(e.sport);
+                        if (idx !== -1) arr.splice(idx, 1);
+                    });
+                }
+            });
+            var logArr = history.gameLog[lg][date] = [];
             games.forEach(function (g, gi) {
                 var gameNumber = before + gi + 1;
                 var label = 'Game ' + gameNumber;
@@ -518,6 +537,16 @@
                     logArr.push({ t1: m.teamA, t2: m.teamB, sport: m.sport || null, g: label });
                     var mk = lg + ':' + [m.teamA, m.teamB].sort().join('|');
                     history.matchupHistory[mk] = (history.matchupHistory[mk] || 0) + 1;
+                    // teamSports (sport variety) — without this, the engine's
+                    // sport chooser is blind to off-paper games whenever the
+                    // load path doesn't rebuild aggregates from the gameLog.
+                    if (m.sport) {
+                        [m.teamA, m.teamB].forEach(function (t) {
+                            if (!t) return;
+                            var tk = lg + '|' + t;
+                            (history.teamSports[tk] = history.teamSports[tk] || []).push(m.sport);
+                        });
+                    }
                 });
                 recorded++;
             });
@@ -538,7 +567,15 @@
         return recorded;
     }
 
+    // ★ Route through the engine's canonical history path when available —
+    // the engine merges cloud + local lineages at (league, date) granularity,
+    // honors tombstones, and saves with an immediate VERIFIED cloud push.
+    // The fallbacks below (pre-LG-8 wholesale pick / batched-only save) run
+    // only if the engine isn't loaded on this page.
     function _loadLeagueHistory() {
+        if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.loadHistory === 'function') {
+            try { return window.SchedulerCoreLeagues.loadHistory(); } catch (e) {}
+        }
         var gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
         var cloud = gs.leagueHistory && Object.keys(gs.leagueHistory).length ? gs.leagueHistory : null, local = null;
         try { var raw = localStorage.getItem('campLeagueHistory_v2'); if (raw) local = JSON.parse(raw); } catch (e) {}
@@ -550,6 +587,9 @@
         return h;
     }
     function _saveLeagueHistory(h) {
+        if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.saveHistory === 'function') {
+            try { window.SchedulerCoreLeagues.saveHistory(h); return; } catch (e) {}
+        }
         try { h._savedAt = Date.now(); } catch (e) {}
         try { if (window.saveGlobalSettings) window.saveGlobalSettings('leagueHistory', h); } catch (e) {}
         try { localStorage.setItem('campLeagueHistory_v2', JSON.stringify(h)); } catch (e) {}

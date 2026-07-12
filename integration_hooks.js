@@ -1930,6 +1930,33 @@
                     log('Using cloud state (newer)');
                 }
 
+                // ★ LG-8 (hydrate leg): league histories must NEVER be resolved
+                // by picking one lineage wholesale — every branch above does
+                // exactly that per key, so a realtime-triggered hydrate could
+                // clobber the in-memory/IDB copy holding games the other
+                // lineage lacks (the localStorage backup is the only safety
+                // net, and it is quota-fallible). Apply the engines' own
+                // (league, date)-granular merge whenever both copies exist;
+                // tombstones keep deliberate deletions deleted.
+                try {
+                    const HYDRATE_HISTORY_MERGERS = {
+                        leagueHistory: window.SchedulerCoreLeagues?.mergeLeagueHistories,
+                        specialtyLeagueHistory: window.SchedulerCoreSpecialtyLeagues?.mergeSpecialtyHistories,
+                    };
+                    for (const hk of Object.keys(HYDRATE_HISTORY_MERGERS)) {
+                        const mergeFn = HYDRATE_HISTORY_MERGERS[hk];
+                        if (typeof mergeFn !== 'function') continue;
+                        const c = cloudState[hk], l = localState[hk];
+                        if (c && l && typeof c === 'object' && typeof l === 'object' &&
+                            (c.gameLog || c.gamesPerDate) && (l.gameLog || l.gamesPerDate)) {
+                            mergedState[hk] = mergeFn(c, l);
+                            log(`${hk}: merged cloud + local lineages at (league, date) granularity`);
+                        }
+                    }
+                } catch (eHistMerge) {
+                    log('League history hydrate-merge skipped:', eHistMerge?.message || eHistMerge);
+                }
+
                 // When IDB preload succeeded, local has trustworthy data.
                 // Fill any top-level keys present locally but missing from
                 // cloud — these were saved to IDB but never synced (e.g.

@@ -58,6 +58,8 @@
                 matchupHistory: (h && h.matchupHistory) || {},
                 gamesPerDate: (h && h.gamesPerDate) || {},
                 offCampusCounts: (h && h.offCampusCounts) || {},
+                ocTripsByDate: (h && h.ocTripsByDate) || {},
+                _ocResetAt: (h && h._ocResetAt) || {},
                 gameLog: (h && h.gameLog) || {},
                 _tombstones: (h && h._tombstones) || {},
                 _savedAt: Number(h && h._savedAt) || 0
@@ -76,7 +78,9 @@
             teamSports: {},
             matchupHistory: {},
             gamesPerDate: {},
-            offCampusCounts: F.offCampusCounts,
+            offCampusCounts: {},
+            ocTripsByDate: {},
+            _ocResetAt: {},
             gameLog: {},
             _tombstones: {},
             _savedAt: Math.max(A._savedAt, B._savedAt)
@@ -85,6 +89,13 @@
             Object.keys(h._tombstones).forEach(function (k) {
                 const ts = Number(h._tombstones[k]) || 0;
                 if (!(merged._tombstones[k] >= ts)) merged._tombstones[k] = ts;
+            });
+            // Off-campus trip reset markers (resetOffCampusHistory): newest
+            // stamp per league key ('*' = all leagues) survives the merge, so
+            // a deliberate trip reset can't be resurrected by a stale copy.
+            Object.keys(h._ocResetAt).forEach(function (k) {
+                const ts = Number(h._ocResetAt[k]) || 0;
+                if (!(merged._ocResetAt[k] >= ts)) merged._ocResetAt[k] = ts;
             });
         });
         // Full-history reset marker (window.resetLeagueHistory): every
@@ -127,7 +138,42 @@
                     merged.gamesPerDate[lg][d] = src.gamesPerDate[lg][d];
                 });
             });
+            // Off-campus trips: same per-(league,date) adoption as gamesPerDate.
+            // A day tombstoned/deleted after this copy was saved loses its trip
+            // record; a trip reset stamped after the copy wipes its trips.
+            Object.keys(src.ocTripsByDate).forEach(function (lg) {
+                const ocReset = Math.max(
+                    Number(merged._ocResetAt[lg]) || 0,
+                    Number(merged._ocResetAt['*']) || 0
+                );
+                Object.keys(src.ocTripsByDate[lg] || {}).forEach(function (d) {
+                    if (merged.ocTripsByDate[lg] && merged.ocTripsByDate[lg][d]) return;
+                    if (!(src.ocTripsByDate[lg][d] || []).length) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    if (ocReset > src._savedAt) return;
+                    (merged.ocTripsByDate[lg] = merged.ocTripsByDate[lg] || {})[d] = src.ocTripsByDate[lg][d];
+                });
+            });
         });
+        // Rebuild the flat away-trip counters from the merged per-day trip
+        // records so they can never diverge from them (regen-inflation class);
+        // leagues with no per-day record (pure legacy) keep the fresher copy's
+        // flat entries.
+        (function () {
+            const ocLeagues = new Set(Object.keys(merged.ocTripsByDate));
+            Object.keys(F.offCampusCounts).forEach(function (k) {
+                if (!ocLeagues.has(k.split('|')[0])) merged.offCampusCounts[k] = F.offCampusCounts[k];
+            });
+            ocLeagues.forEach(function (lg) {
+                Object.keys(merged.ocTripsByDate[lg]).forEach(function (d) {
+                    (merged.ocTripsByDate[lg][d] || []).forEach(function (t) {
+                        if (!t) return;
+                        const k = lg + '|' + t;
+                        merged.offCampusCounts[k] = (merged.offCampusCounts[k] || 0) + 1;
+                    });
+                });
+            });
+        })();
         // A merged day whose counter is missing (a lineage whose gamesPerDate
         // was lost while its gameLog survived) gets it derived from the day's
         // distinct game labels — heals the "Game 1" reset. Disabled entirely
@@ -179,7 +225,7 @@
     function loadLeagueHistory() {
         const EMPTY = () => ({
             teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-            offCampusCounts: {}, gameLog: {}, _tombstones: {}
+            offCampusCounts: {}, ocTripsByDate: {}, gameLog: {}, _tombstones: {}
         });
         try {
             // Cloud-synced copy (hydrated into global settings)
@@ -223,6 +269,7 @@
             history.matchupHistory = history.matchupHistory || {};
             history.gamesPerDate = history.gamesPerDate || {};
             history.offCampusCounts = history.offCampusCounts || {};
+            history.ocTripsByDate = history.ocTripsByDate || {};
             history.gameLog = history.gameLog || {};
             history._tombstones = history._tombstones || {};
             return history;
@@ -2838,9 +2885,33 @@
         return pairMap;
     }
 
-    function ocRecordTrips(history, leagueName, teams) {
+    // ★ LG-13/LG-21 fix: away trips are recorded PER (league, date) so a
+    // regeneration re-records the day idempotently (the old flat counter
+    // inflated by +1 per regen and permanently skewed ocSelectGroups' trip
+    // fairness) and a day delete can subtract exactly what it contributed.
+    function rollbackOcTrips(history, leagueName, date) {
+        const rec = history.ocTripsByDate && history.ocTripsByDate[leagueName] && history.ocTripsByDate[leagueName][date];
+        if (!rec || !rec.length) return 0;
+        rec.forEach(function (t) {
+            const k = leagueName + '|' + t;
+            const c = (history.offCampusCounts && history.offCampusCounts[k]) || 0;
+            if (c > 1) history.offCampusCounts[k] = c - 1;
+            else if (history.offCampusCounts) delete history.offCampusCounts[k];
+        });
+        delete history.ocTripsByDate[leagueName][date];
+        console.log('[OffCampus] ↩️ Rolled back ' + rec.length + ' away trip(s) for "' + leagueName + '" on ' + date);
+        return rec.length;
+    }
+
+    function ocRecordTrips(history, leagueName, teams, dayId) {
         if (!history.offCampusCounts) history.offCampusCounts = {};
+        if (!history.ocTripsByDate) history.ocTripsByDate = {};
+        if (!history.ocTripsByDate[leagueName]) history.ocTripsByDate[leagueName] = {};
+        // Idempotent re-record: subtract what THIS day previously contributed
+        // (regen path) before charging the new travel group.
+        if (dayId) rollbackOcTrips(history, leagueName, dayId);
         teams.forEach(function(t) { history.offCampusCounts[leagueName+'|'+t] = (history.offCampusCounts[leagueName+'|'+t]||0) + 1; });
+        if (dayId) history.ocTripsByDate[leagueName][dayId] = teams.slice();
     }
 
     window.viewOffCampusHistory = function(ln) {
@@ -2851,9 +2922,26 @@
         return f;
     };
     window.resetOffCampusHistory = function(ln) {
-        var h = ((window.loadGlobalSettings?.()||{}).leagueHistory||{});
-        if (ln) { var c=h.offCampusCounts||{}; Object.keys(c).forEach(function(k){if(k.indexOf(ln+'|')===0)delete c[k];}); } else { h.offCampusCounts={}; }
-        window.saveGlobalSettings?.('leagueHistory', h);
+        // ★ LG-39 fix: go through loadLeagueHistory/saveLeagueHistory — the old
+        // path read the raw hydrated blob (early-boot it could be near-empty and
+        // the batched save would shrink the cloud row), never updated the
+        // localStorage backup, and never stamped _savedAt, so the LG-8 merge
+        // treated the reset as the OLDER copy and resurrected the counts.
+        var h = loadLeagueHistory();
+        h.offCampusCounts = h.offCampusCounts || {};
+        h.ocTripsByDate = h.ocTripsByDate || {};
+        h._ocResetAt = h._ocResetAt || {};
+        if (ln) {
+            Object.keys(h.offCampusCounts).forEach(function(k){ if(k.indexOf(ln+'|')===0) delete h.offCampusCounts[k]; });
+            delete h.ocTripsByDate[ln];
+            h._ocResetAt[ln] = Date.now();   // makes the reset stick in merges
+        } else {
+            h.offCampusCounts = {};
+            h.ocTripsByDate = {};
+            h._ocResetAt['*'] = Date.now();
+        }
+        saveLeagueHistory(h);
+        console.log('[OffCampus] Trip history reset' + (ln ? ' for "' + ln + '"' : ' (all leagues)') + ' — synced to cloud.');
     };
     // =========================================================================
     // ★★★ MAIN REGULAR LEAGUE PROCESSOR ★★★
@@ -3058,6 +3146,10 @@
                     if (_raw && _raw.length) _plbl = new Set(_raw);
                 } catch (_e) {}
                 rollbackDayRecords(league.name, dayId, history, _plbl);
+                // ★ Away trips: a full day reset takes the day's trip charge
+                // with it (a per-tile regen with preserved games keeps it —
+                // the OC path re-records idempotently if it runs again).
+                if (!_plbl || !_plbl.size) rollbackOcTrips(history, league.name, dayId);
                 // ★ LG-8 tombstone: this generation REPLACES the league's day —
                 // in any later merge, a stale copy's version of this (league,
                 // date) must lose to this run's result (the end-of-gen save is
@@ -3257,8 +3349,6 @@
                 var dh = ocSelectGroups(g1Matchups, league.offCampus.teamsPerDay, history, league.name, priority, zoneSports);
                 if (!dh) continue;
 
-                ocRecordTrips(history, league.name, dh.offCampus.teams);
-
                 var ocDivs = league.divisions.filter(function(d) { return Object.keys(blocksByTime[timeKey1]?.byDivision||{}).includes(d); });
                 var s1 = blocksByTime[timeKey1].allBlocks[0]?.slots || [];
                 var s2 = blocksByTime[timeKey2].allBlocks[0]?.slots || [];
@@ -3349,6 +3439,13 @@
                     // ★ FN-54: date-keyed log so regen/delete can subtract this game
                     logGameRecord(league.name, dayId, a.team1||a.teamA, a.team2||a.teamB, a.sport, history, lbl2);
                 });
+
+                // ★ Trips are charged only when an away game actually got a
+                // field (the old call fired before assignment, so a bye'd-out
+                // away day still counted). Day-keyed → regen is idempotent.
+                if (g1Off.length > 0 || g2Off.length > 0) {
+                    ocRecordTrips(history, league.name, dh.offCampus.teams, dayId);
+                }
 
                 leagueGameCounters[league.name] += 2;
                 if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
@@ -4575,6 +4672,13 @@ window._debugLeagueTimeData = timeData;
         return loadLeagueHistory();
     };
 
+    // ★ Canonical history access for OTHER writers (offpaper_recorder.js).
+    // External modules used to reimplement load/save and drifted behind the
+    // LG-8 hardening (wholesale fresher-wins pick, no verified cloud push,
+    // no tombstone awareness). Route them through the engine's own path.
+    Leagues.loadHistory = loadLeagueHistory;
+    Leagues.saveHistory = saveLeagueHistory;
+
     window.resetLeagueHistory = function() {
         if (confirm("Reset ALL league history? This will start fresh.")) {
             // ★ LG-8: a bare {} would be resurrected by any stale copy in the
@@ -4583,7 +4687,8 @@ window._debugLeagueTimeData = timeData;
             // every device that syncs it.
             const resetHistory = {
                 teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-                offCampusCounts: {}, gameLog: {}, _tombstones: {},
+                offCampusCounts: {}, ocTripsByDate: {}, gameLog: {}, _tombstones: {},
+                _ocResetAt: { '*': Date.now() },
                 _resetAt: Date.now(), _savedAt: Date.now()
             };
             try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(resetHistory)); } catch (_) {}
@@ -4681,6 +4786,7 @@ window._debugLeagueTimeData = timeData;
                 if (!(league.divisions || []).some(function (d) { return divSet.has(d); })) return;
                 affected.push(league.name);
                 if (rollbackDayRecords(league.name, dateKey, history) > 0) changed = true;
+                if (rollbackOcTrips(history, league.name, dateKey) > 0) changed = true;
                 if (history.gamesPerDate?.[league.name]?.[dateKey] !== undefined) {
                     delete history.gamesPerDate[league.name][dateKey];
                     changed = true;
@@ -4717,6 +4823,15 @@ window._debugLeagueTimeData = timeData;
             // deleted day's games stayed in the aggregates forever.
             for (const leagueName of Object.keys(history.gameLog || {})) {
                 if (rollbackDayRecords(leagueName, dateKey, history) > 0) {
+                    changed = true;
+                }
+            }
+
+            // ★ Away trips: the deleted date's trip charges go with it (keyed
+            // off ocTripsByDate directly — a league can have trips on a date
+            // whose gameLog was already rolled back or never existed locally).
+            for (const leagueName of Object.keys(history.ocTripsByDate || {})) {
+                if (rollbackOcTrips(history, leagueName, dateKey) > 0) {
                     changed = true;
                 }
             }

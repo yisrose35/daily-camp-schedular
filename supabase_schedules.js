@@ -620,6 +620,7 @@
         } catch (e) { /* fall back to row timestamps */ }
         const _bunkEff = {};
         const _segEff = {};
+        const _lgEff = {};   // leagueAssignments winner per division (same MS-3 stamps)
         // ★ MS-4c: the division's GRID (divisionTimes + _perBunkSlotsData)
         // must come from the SAME row that wins the division's CONTENT.
         // The old "keep the version with more slots" rule could pair one
@@ -684,10 +685,20 @@
                 });
             }
             
-            // Merge leagueAssignments
+            // Merge leagueAssignments — ★ MS-3 parity: the map is DIVISION-
+            // keyed, so arbitrate each division by its _divStamps recency
+            // (falling back to the row's updated_at) exactly like
+            // scheduleAssignments above. The old unconditional overwrite let a
+            // scoped generation's re-saved STALE copy of another division's
+            // league games (fresh row timestamp, old content) shadow the
+            // other scheduler's newer matchups.
             if (data.leagueAssignments) {
                 Object.entries(data.leagueAssignments).forEach(([div, slots]) => {
-                    mergedLeagues[div] = slots;
+                    const eff = (_stamps && _stamps[div] != null) ? _stamps[div] : _rowMs;
+                    if (_lgEff[div] == null || eff > _lgEff[div]) {
+                        _lgEff[div] = eff;
+                        mergedLeagues[div] = slots;
+                    }
                 });
             }
             

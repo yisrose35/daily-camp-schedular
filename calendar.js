@@ -1237,6 +1237,16 @@ all[date].updated_at = new Date().toISOString();
             if (window.RotationCloud?.save) {
                 window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
             }
+
+            // ★ SCOPED league-history reconcile: roll back this date's records
+            // for leagues in THIS scheduler's divisions only (resetDayRecords
+            // is division-scoped, unlike the owner-only unscoped cleanup
+            // below). Without it, the deleted day's games kept counting in the
+            // scheduler's leagues' game numbering and matchup/sport fairness
+            // until the next regeneration of that date — and never, if the
+            // date was simply left deleted.
+            try { window.SchedulerCoreLeagues?.resetDayRecords?.(myDivisions, dateKey); } catch (e) { /* non-fatal */ }
+            try { window.SchedulerCoreSpecialtyLeagues?.resetDayRecords?.(myDivisions, dateKey); } catch (e) { /* non-fatal */ }
         }
         // ═══════════════════════════════════════════════════════════════
         // OWNER/ADMIN: Delete everything
