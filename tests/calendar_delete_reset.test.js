@@ -539,63 +539,141 @@ describe('eraseRotationHistory', () => {
     });
 });
 
-describe('startNewHalf', () => {
+describe('startNewHalf (non-deleting epoch reset)', () => {
 
-    it('owner: clears ALL counters + schedules', async () => {
+    // ★ HR: startNewHalf no longer deletes anything. It stamps a rotation
+    // epoch (ISO dateKey), resets counter stores, and leaves schedules,
+    // league history blobs, and rotation_counts intact.
+
+    function setupEpochMocks() {
+        global.RotationCloud = {
+            clearAllCalls: 0,
+            clearAll: async function() { this.clearAllCalls++; return true; },
+            clearForBunks: async function() { return true; }
+        };
+        global.RotationEvents = {
+            clearAllCompletedCalls: [],
+            clearAllCompleted: function(dateKeys, bunkFilter) { this.clearAllCompletedCalls.push([dateKeys, bunkFilter]); }
+        };
+        global.RotationEngine = { clearAllHistory: function() {} };
+        global.SchedulerCoreLeagues = {
+            epochStamps: [],
+            setHistoryEpoch: function(d) { this.epochStamps.push(d); return true; }
+        };
+        global.SchedulerCoreSpecialtyLeagues = {
+            epochStamps: [],
+            setHistoryEpoch: function(d) { this.epochStamps.push(d); return true; }
+        };
+        global.LeaguesAPI = {
+            resetCalls: 0,
+            resetStandingsAndPlayoffs: function() { this.resetCalls++; return 2; }
+        };
+        global.SpecialtyLeaguesAPI = {
+            resetCalls: 0,
+            resetStandingsAndPlayoffs: function() { this.resetCalls++; return 1; }
+        };
+        global.leagueRoundState = { League: { currentRound: 7 } };
+        delete global.loadGlobalSettings;
+        delete global.Utils;
+    }
+
+    function findSetting(key) {
+        return saveGlobalSettingsCalls.filter(c => c.key === key).pop();
+    }
+
+    it('owner: stamps epoch, resets counters, DELETES NOTHING', async () => {
         resetStorage({
-            'campRotationHistory_v1': JSON.stringify({ data: true }),
+            'campRotationHistory_v1': JSON.stringify({ bunks: { 'Bunk 1': { Art: 3 } }, leagues: {} }),
             'smartTileHistory_v1': JSON.stringify({ data: true }),
             'smartTileSpecialHistory_v1': JSON.stringify({ data: true }),
-            'campLeagueHistory_v2': JSON.stringify({ game: 5 }),
-            'campSpecialtyLeagueHistory_v1': JSON.stringify({ sgame: 3 }),
+            'campLeagueHistory_v2': JSON.stringify({ gamesPerDate: { League: { '2026-06-30': 2 } } }),
+            'campSpecialtyLeagueHistory_v1': JSON.stringify({ gameLog: {} }),
             'campDailyData_v1': JSON.stringify({
-                '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Art'] } }
+                '2026-07-01': { scheduleAssignments: { 'Bunk 1': ['Art'] } }
             })
         });
-        global.supabase = makeSupabaseMock(); // fresh log so delete assertion is clean
-        clearCloudKeysCalls = [];
+        supabaseMockData = {
+            '2026-07-01': [{ id: 'rec1', schedule_data: { scheduleAssignments: { 'Bunk 1': ['Art'] } } }]
+        };
+        global.supabase = makeSupabaseMock();
         setupMocks('owner');
+        setupEpochMocks();
         reloadCalled = false;
 
         await global.startNewHalf();
 
-        // All 6 keys removed
-        assert.equal(fakeStorage.hasOwnProperty('campRotationHistory_v1'), false);
+        // ── Nothing deleted ──
+        assert.ok(fakeStorage.hasOwnProperty('campDailyData_v1'), 'daily schedules preserved');
+        assert.ok(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), 'league history blob preserved (carries the epoch stamp)');
+        assert.ok(fakeStorage.hasOwnProperty('campSpecialtyLeagueHistory_v1'), 'specialty history blob preserved');
+        const supabaseDelete = supabaseLog.find(e => e.action === 'delete' && e.table === 'daily_schedules');
+        assert.equal(supabaseDelete, undefined, 'startNewHalf must NOT delete from daily_schedules');
+        assert.equal(global.RotationCloud.clearAllCalls, 0, 'rotation_counts table must NOT be cleared (reads are epoch-filtered)');
+        const daily = JSON.parse(fakeStorage['campDailyData_v1']);
+        assert.deepEqual(daily['2026-07-01'].scheduleAssignments['Bunk 1'], ['Art'], 'old schedule content intact');
+
+        // ── Epoch stamped ──
+        const epochCall = findSetting('rotationEpoch');
+        assert.ok(epochCall, 'rotationEpoch written to globalSettings');
+        assert.match(epochCall.val.date, /^\d{4}-\d{2}-\d{2}$/, 'epoch is an ISO dateKey');
+        const todayKey = new Date().toISOString().slice(0, 10);
+        assert.ok(epochCall.val.date >= new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10),
+            'epoch is not in the distant past');
+        const app1Call = findSetting('app1');
+        assert.ok(app1Call, 'app1 blob written');
+        assert.equal(app1Call.val.halfStartDate, epochCall.val.date, 'halfStartDate hook set to the epoch');
+
+        // ── League machinery invoked with the SAME epoch ──
+        assert.deepEqual(global.SchedulerCoreLeagues.epochStamps, [epochCall.val.date], 'regular league blob stamped');
+        assert.deepEqual(global.SchedulerCoreSpecialtyLeagues.epochStamps, [epochCall.val.date], 'specialty league blob stamped');
+        assert.equal(global.LeaguesAPI.resetCalls, 1, 'regular standings/playoffs reset');
+        assert.equal(global.SpecialtyLeaguesAPI.resetCalls, 1, 'specialty standings/playoffs reset');
+
+        // ── Counter stores cleared (one-time clears; epoch-filtered rebuilders repopulate) ──
+        const rot = findSetting('rotationHistory');
+        assert.deepEqual(rot.val, { bunks: {}, leagues: {} }, 'rotationHistory reset to empty shape');
+        ['historicalCounts', 'historicalCountedDates', 'historicalCountsByDate',
+         'manualUsageOffsets', 'smartTileHistory', 'swimRotationHistory',
+         'activityHistory', 'leagueRoundState'].forEach(k => {
+            const c = findSetting(k);
+            assert.ok(c, k + ' cleared via saveGlobalSettings');
+            assert.deepEqual(c.val, {}, k + ' cleared to {}');
+        });
+        assert.equal(fakeStorage.hasOwnProperty('campRotationHistory_v1'), false, 'local rotation history removed');
         assert.equal(fakeStorage.hasOwnProperty('smartTileHistory_v1'), false);
         assert.equal(fakeStorage.hasOwnProperty('smartTileSpecialHistory_v1'), false);
-        assert.equal(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), false);
-        assert.equal(fakeStorage.hasOwnProperty('campSpecialtyLeagueHistory_v1'), false);
-        assert.equal(fakeStorage.hasOwnProperty('campDailyData_v1'), false);
+        assert.deepEqual(global.leagueRoundState, {}, 'in-memory round state reset');
+        assert.equal(global.RotationEvents.clearAllCompletedCalls.length, 1, 'rotation-event completions wiped');
 
-        // Direct Supabase delete must fire (not just clearCloudKeys which skips the table)
-        const supabaseDelete = supabaseLog.find(
-            e => e.action === 'delete' && e.table === 'daily_schedules' && e.filters.camp_id === 'test-camp-123'
-        );
-        assert.ok(supabaseDelete, 'startNewHalf must directly delete from Supabase daily_schedules table');
-
-        // All 9 cloud keys
-        const keys = clearCloudKeysCalls[0] || [];
-        assert.ok(keys.includes('leagueRoundState'));
-        assert.ok(keys.includes('leagueHistory'));
-        assert.ok(keys.includes('specialtyLeagueHistory'));
-        assert.ok(keys.includes('daily_schedules'));
-        assert.ok(keys.includes('manualUsageOffsets'));
-        assert.ok(keys.includes('historicalCounts'));
-        assert.ok(keys.includes('historicalCountedDates'), 'historicalCountedDates must be cleared with historicalCounts');
-        assert.ok(keys.includes('smartTileHistory'));
-        assert.ok(keys.includes('rotationHistory'));
-
-        assert.ok(reloadCalled);
+        assert.ok(reloadCalled, 'Reload triggered');
     });
 
-    it('user cancels: everything preserved', async () => {
+    it('epoch snaps to configured half-2 start date when reset happens near it', async () => {
+        resetStorage({});
+        setupMocks('owner');
+        setupEpochMocks();
+        const half2 = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+        global.loadGlobalSettings = function(key) {
+            if (key === 'campDates') return { startDate: '2026-06-01', half2Start: half2 };
+            return undefined;
+        };
+        reloadCalled = false;
+
+        await global.startNewHalf();
+
+        const epochCall = findSetting('rotationEpoch');
+        assert.equal(epochCall.val.date, half2, 'epoch snapped to campDates.half2Start');
+        delete global.loadGlobalSettings;
+    });
+
+    it('user cancels: nothing written, nothing cleared', async () => {
         resetStorage({
             'campRotationHistory_v1': JSON.stringify({ data: true }),
-            'campDailyData_v1': JSON.stringify({ '2026-07-15': {} }),
+            'campDailyData_v1': JSON.stringify({ '2026-07-01': {} }),
             'campLeagueHistory_v2': JSON.stringify({ game: 5 })
         });
-        clearCloudKeysCalls = [];
         setupMocks('owner');
+        setupEpochMocks();
         confirmResult = false;
         reloadCalled = false;
 
@@ -604,99 +682,100 @@ describe('startNewHalf', () => {
         assert.ok(fakeStorage.hasOwnProperty('campRotationHistory_v1'), 'Preserved');
         assert.ok(fakeStorage.hasOwnProperty('campDailyData_v1'), 'Preserved');
         assert.ok(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), 'Preserved');
-        assert.equal(clearCloudKeysCalls.length, 0);
+        assert.equal(findSetting('rotationEpoch'), undefined, 'no epoch written');
         assert.equal(reloadCalled, false);
     });
 
-    it('scheduler: scoped new half — only assigned divisions cleared', async () => {
+    it('scheduler: permission denied (owner-only feature)', async () => {
         resetStorage({
-            'campRotationHistory_v1': JSON.stringify({ bunks: { 'Bunk 1': { Art: 3 }, 'Bunk 3': { Music: 2 } }, leagues: {} }),
-            'campDailyData_v1': JSON.stringify({
-                '2026-07-15': {
-                    scheduleAssignments: { 'Bunk 1': ['Art'], 'Bunk 3': ['Music'] },
-                    leagueAssignments: {}
-                }
-            }),
-            'smartTileHistory_v1': JSON.stringify({ 'Bunk 1': { Art: 1 }, 'Bunk 3': { Music: 1 } })
+            'campRotationHistory_v1': JSON.stringify({ data: true }),
+            'campDailyData_v1': JSON.stringify({ '2026-07-01': {} })
         });
-        clearCloudKeysCalls = [];
-        supabaseMockData = {
-            '2026-07-15': [{ id: 'rec1', schedule_data: {
-                scheduleAssignments: { 'Bunk 1': ['Art'], 'Bunk 3': ['Music'] },
-                leagueAssignments: {}
-            }}]
-        };
-        global.supabase = makeSupabaseMock();
         setupMocks('scheduler');
-        global.RotationCloud = { clearForBunks: async function() {} };
-        global.loadRotationHistory = function() {
-            return JSON.parse(fakeStorage['campRotationHistory_v1'] || '{"bunks":{},"leagues":{}}');
-        };
-        global.saveRotationHistory = function(data) {
-            fakeStorage['campRotationHistory_v1'] = JSON.stringify(data);
-        };
-        global.loadGlobalSettings = function(key) {
-            if (key === 'historicalCounts') return {};
-            return {};
-        };
+        setupEpochMocks();
         reloadCalled = false;
 
         await global.startNewHalf();
 
-        // Rotation history: Bunk 1 removed, Bunk 3 preserved
-        const rotHist = JSON.parse(fakeStorage['campRotationHistory_v1'] || '{}');
-        assert.equal(rotHist.bunks?.['Bunk 1'], undefined, 'Bunk 1 rotation cleared');
-        assert.ok(rotHist.bunks?.['Bunk 3'], 'Bunk 3 rotation preserved');
+        assert.ok(fakeStorage.hasOwnProperty('campRotationHistory_v1'), 'Data NOT touched');
+        assert.equal(findSetting('rotationEpoch'), undefined, 'no epoch written');
+        assert.equal(global.SchedulerCoreLeagues.epochStamps.length, 0, 'no league stamp');
+        assert.equal(reloadCalled, false, 'no reload');
+        assert.ok(alertMessages.some(m => /Permission denied/i.test(m)), 'permission denied surfaced');
+    });
 
-        // Daily data: Bunk 1 removed from schedule, Bunk 3 preserved
-        const daily = JSON.parse(fakeStorage['campDailyData_v1'] || '{}');
-        assert.equal(daily['2026-07-15']?.scheduleAssignments?.['Bunk 1'], undefined, 'Bunk 1 schedule cleared');
-        assert.deepEqual(daily['2026-07-15']?.scheduleAssignments?.['Bunk 3'], ['Music'], 'Bunk 3 schedule preserved');
+    it('viewer: permission denied', async () => {
+        resetStorage({ 'campRotationHistory_v1': JSON.stringify({ data: true }) });
+        setupMocks('viewer');
+        setupEpochMocks();
 
-        assert.ok(reloadCalled, 'Page reload triggered');
+        await global.startNewHalf();
+
+        assert.ok(fakeStorage.hasOwnProperty('campRotationHistory_v1'), 'Data NOT touched');
+        assert.equal(findSetting('rotationEpoch'), undefined, 'no epoch written');
+    });
+
+    it('failed league stamp surfaces a warning instead of a clean success alert', async () => {
+        resetStorage({});
+        setupMocks('owner');
+        setupEpochMocks();
+        global.SchedulerCoreLeagues.setHistoryEpoch = function() { return false; };
+        reloadCalled = false;
+
+        await global.startNewHalf();
+
+        assert.ok(alertMessages.some(m => /warning/i.test(m)), 'warning alert shown on partial failure');
+        assert.ok(reloadCalled, 'still reloads (epoch itself was written)');
     });
 });
 
 describe('Scope: New Half vs Reset History', () => {
 
-    it('reset history clears LESS than new half', async () => {
-        // Set up all keys
+    it('both preserve schedules + league blobs; only New Half stamps the epoch', async () => {
         const allKeys = {
             'campRotationHistory_v1': JSON.stringify({ data: true }),
             'smartTileHistory_v1': JSON.stringify({ data: true }),
             'smartTileSpecialHistory_v1': JSON.stringify({ data: true }),
             'campLeagueHistory_v2': JSON.stringify({ game: 5 }),
             'campSpecialtyLeagueHistory_v1': JSON.stringify({ sgame: 3 }),
-            'campDailyData_v1': JSON.stringify({ '2026-07-15': {} })
+            'campDailyData_v1': JSON.stringify({ '2026-07-01': {} })
         };
 
         // Run eraseRotationHistory
         resetStorage({ ...allKeys });
         clearCloudKeysCalls = [];
         setupMocks('owner');
+        global.RotationCloud = { clearAll: async function() { return true; }, clearForBunks: async function() { return true; } };
+        global.RotationEvents = { clearAllCompleted: function() {} };
         await global.eraseRotationHistory();
-
         const afterReset = { ...fakeStorage };
-        const resetRemoved = Object.keys(allKeys).filter(k => !afterReset.hasOwnProperty(k));
-        const resetPreserved = Object.keys(allKeys).filter(k => afterReset.hasOwnProperty(k));
+        const resetEpoch = saveGlobalSettingsCalls.filter(c => c.key === 'rotationEpoch').pop();
 
         // Run startNewHalf
         resetStorage({ ...allKeys });
         clearCloudKeysCalls = [];
         setupMocks('owner');
+        global.RotationCloud = { clearAllCalls: 0, clearAll: async function() { this.clearAllCalls++; return true; } };
+        global.RotationEvents = { clearAllCompletedCalls: [], clearAllCompleted: function() { this.clearAllCompletedCalls.push(1); } };
+        global.RotationEngine = { clearAllHistory: function() {} };
+        global.SchedulerCoreLeagues = { setHistoryEpoch: function() { return true; } };
+        global.SchedulerCoreSpecialtyLeagues = { setHistoryEpoch: function() { return true; } };
+        global.LeaguesAPI = { resetStandingsAndPlayoffs: function() { return 0; } };
+        global.SpecialtyLeaguesAPI = { resetStandingsAndPlayoffs: function() { return 0; } };
+        delete global.loadGlobalSettings;
         await global.startNewHalf();
-
         const afterNewHalf = { ...fakeStorage };
-        const nhRemoved = Object.keys(allKeys).filter(k => !afterNewHalf.hasOwnProperty(k));
+        const nhEpoch = saveGlobalSettingsCalls.filter(c => c.key === 'rotationEpoch').pop();
 
-        // New Half removes strictly more
-        assert.ok(nhRemoved.length > resetRemoved.length,
-            `New Half removes ${nhRemoved.length} keys vs Reset History's ${resetRemoved.length}`);
+        // BOTH preserve schedules and league history blobs now
+        ['campDailyData_v1', 'campLeagueHistory_v2', 'campSpecialtyLeagueHistory_v1'].forEach(k => {
+            assert.ok(afterReset.hasOwnProperty(k), 'Reset History preserves ' + k);
+            assert.ok(afterNewHalf.hasOwnProperty(k), 'New Half preserves ' + k);
+        });
 
-        // Reset History should preserve leagues + schedules
-        assert.ok(resetPreserved.includes('campLeagueHistory_v2'), 'Reset preserves league history');
-        assert.ok(resetPreserved.includes('campSpecialtyLeagueHistory_v1'), 'Reset preserves specialty league');
-        assert.ok(resetPreserved.includes('campDailyData_v1'), 'Reset preserves daily schedules');
+        // Only New Half stamps the counting epoch
+        assert.equal(resetEpoch, undefined, 'Reset History does not write an epoch');
+        assert.ok(nhEpoch, 'New Half writes the rotationEpoch');
     });
 });
 

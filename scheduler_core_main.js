@@ -1917,8 +1917,21 @@
         (function _allocCampWideCappedQueue() {
             const _allDaily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
             const _todayKey = window.currentScheduleDate || '';
+            // ★ HR-36: rotation-epoch watermark (non-deleting half reset) —
+            //   COMPLETE reset: pre-epoch days are invisible to both the counts
+            //   AND the `ago` recency tiebreak (new campers at the half).
+            const _lrEpoch = (function() {
+                try {
+                    const U = window.SchedulerCoreUtils || window.Utils;
+                    if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const d = (typeof e === 'string') ? e : (e && e.date);
+                    return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+                } catch (_) { return null; }
+            })();
             const _pastDatesDesc = Object.keys(_allDaily)
-                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey))
+                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey)
+                    && (!_lrEpoch || d >= _lrEpoch)) // ★ HR-36: pre-epoch days invisible
                 .sort((a, b) => b.localeCompare(a)); // most recent first → index = days-ago
             const _lrStats = (bunk, labelNorm) => {
                 let n = 0, ago = 1e9;
@@ -1928,7 +1941,11 @@
                     for (let i = 0; i < sched.length; i++) {
                         const e = sched[i];
                         if (!e || e.continuation || e._isTransition) continue;
-                        if (String(e._activity || '').toLowerCase().trim() === labelNorm) { n++; if (di < ago) ago = di; break; }
+                        if (String(e._activity || '').toLowerCase().trim() === labelNorm) {
+                            n++;
+                            if (di < ago) ago = di;
+                            break;
+                        }
                     }
                 }
                 return { count: n, ago };

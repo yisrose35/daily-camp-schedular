@@ -1560,8 +1560,21 @@
         }
 
         // Step 3: Build lastDone from allDaily + rotationHistory (merged below)
+        // ★ HR-40: rotation-epoch watermark (complete half reset) — the report
+        // shows fresh-half numbers, so pre-epoch days are invisible to lastDone
+        // just like they are to counts (cloud + historicalCounts are already
+        // epoch-scoped upstream).
+        const _hrEpAn = (function() {
+            try {
+                const U = window.SchedulerCoreUtils || window.Utils;
+                if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                const d = (typeof e === 'string') ? e : (e && e.date);
+                return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+            } catch (_) { return null; }
+        })();
         Object.keys(allDaily)
-            .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+            .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && (!_hrEpAn || k >= _hrEpAn))
             .sort()
             .forEach(dateKey => {
                 const sched = (dateKey === liveDate) ? todaySched

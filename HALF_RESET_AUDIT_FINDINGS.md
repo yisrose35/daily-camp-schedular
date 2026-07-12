@@ -1,5 +1,30 @@
 # Half Reset — Deep Audit Findings
 
+> **IMPLEMENTATION STATUS (2026-07-12): SHIPPED.** The non-deleting epoch reset
+> described in §4 is implemented (all changes carry `★ HR-n` comments; grep `HR-`).
+> Owner decisions locked during implementation:
+> 1. **Cooldowns reset** at the epoch (pre-epoch visits never block).
+> 2. **Multi-part sequences restart** at part 1.
+> 3. **Epoch snaps to a period boundary** — configured Half-2 start when the
+>    reset happens near it, else the next camp-week boundary, else next Monday.
+> 4. **COMPLETE reset** (revised from the §5.4 recommendation): bunks get new
+>    campers at the half, so even the short-term variety heuristics
+>    (yesterday-repeat, 14-day recency/streak, league adjacent-day rematch and
+>    forward-sport guards) treat pre-epoch days as nonexistent.
+> 5. **Owner-only** — the scheduler-scoped destructive variant is retired.
+>
+> Mechanism shipped: `rotationEpoch` in `camp_state_kv` (+ the dormant
+> `app1.halfStartDate` hook now written), merge-surviving `_epochDate` inside
+> both league-history blobs (adopt-max), `dateKey >= epoch` filters at every
+> site listed in §4 (incl. the two self-healing daemons), epoch-scoped flat
+> aggregate rebuilds, `SchedulerCoreLeagues.setHistoryEpoch` /
+> `SchedulerCoreSpecialtyLeagues.setHistoryEpoch` /
+> `LeaguesAPI.resetStandingsAndPlayoffs` / `SpecialtyLeaguesAPI.resetStandingsAndPlayoffs`,
+> `window.saveLeaguesData` exposed (fixes F3), and a rewritten owner-only
+> `startNewHalf` (calendar.js) that deletes NOTHING — schedules, `rotation_counts`
+> rows and `league.games` stay as a filtered archive, making the reset reversible.
+> Tests: `tests/calendar_delete_reset.test.js` rewritten for the new semantics.
+
 **Date:** 2026-07-12
 **Scope:** The "Start New Half" feature (`calendar.js:509` `window.startNewHalf`, button `flow.html:362`) and every system that would have to respect a **non-deleting** half reset — rotation counters, usage caps, cooldowns, multi-part specials, rotation events, regular + specialty leagues, playoffs, standings, and the cloud-sync/merge machinery.
 **Method:** Four parallel deep-read audits (rotation counters, leagues, specials/cross-day constraints, the reset implementation itself), findings cross-verified against the code. Every claim cites `file:line`.

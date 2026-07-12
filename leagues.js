@@ -2342,6 +2342,23 @@
             const leagueAssignments = window.leagueAssignments || {};
             const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
+            // ★ HR-62: pre-epoch (archive) dates must not be imported into the
+            // results store — their games belong to the previous half.
+            const _hrEpImp = (function () {
+                try {
+                    const U = window.SchedulerCoreUtils || window.Utils;
+                    if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const d = (typeof e === 'string') ? e : (e && e.date);
+                    return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+                } catch (_) { return null; }
+            })();
+            if (_hrEpImp && currentDate < _hrEpImp) {
+                alert('This date is before the current half (counting restarted ' + _hrEpImp + ').\nIts games are archive and cannot be imported into the results.');
+                console.warn('[LEAGUES] Import blocked: ' + currentDate + ' predates the rotation epoch ' + _hrEpImp);
+                return;
+            }
+
             console.log('[LEAGUES] Import: Looking for games for league "' + league.name + '"');
             console.log('[LEAGUES] Import: League divisions:', league.divisions);
             console.log('[LEAGUES] Import: Available leagueAssignments keys:', Object.keys(leagueAssignments));
@@ -2613,7 +2630,21 @@
         });
 
         // Calculate from games
+        // ★ HR-61: rotation epoch (non-deleting half reset) — standings show
+        // the new half only. Pre-epoch games stay in league.games as the
+        // results archive but never count toward W/L/T. Games without a date
+        // (manual entries) count conservatively — they can't be dated.
+        var _hrEpSt = (function () {
+            try {
+                var U = window.SchedulerCoreUtils || window.Utils;
+                if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                var d = (typeof e === 'string') ? e : (e && e.date);
+                return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+            } catch (_) { return null; }
+        })();
         (league.games || []).forEach(function (g) {
+            if (_hrEpSt && g && typeof g.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(g.date) && g.date < _hrEpSt) return; // ★ HR-61
             (g.matches || []).forEach(function (m) {
                 if (!m.teamA || !m.teamB) return;
                 if (!league.standings[m.teamA] || !league.standings[m.teamB]) return;
@@ -2796,6 +2827,36 @@
     }
 
     window.LeaguesAPI = window.LeaguesAPI || {};
+
+    // ★ HR-63: expose the module-private saver. calendar.js (startNewHalf) and
+    // playoff_hub.js have always called window.saveLeaguesData behind typeof
+    // guards that silently no-op'd because it was never assigned — league
+    // standings/playoff resets never persisted (audit finding F3).
+    window.saveLeaguesData = saveLeaguesData;
+
+    // ★ HR-64: standings + playoff reset for the non-deleting half reset.
+    // league.games is KEPT (results archive) — recalcStandings is epoch-
+    // filtered (HR-61), so the rebuilt standings reflect only the new half.
+    window.LeaguesAPI.resetStandingsAndPlayoffs = function () {
+        let n = 0;
+        try {
+            Object.values(leaguesByName || {}).forEach(function (lg) {
+                if (!lg) return;
+                Object.keys(lg.standings || {}).forEach(function (t) {
+                    if (lg.standings[t]) delete lg.standings[t]._manual;
+                });
+                lg.standings = {};
+                lg.playoff = { enabled: false, rounds: [] };
+                recalcStandings(lg);   // epoch-filtered → new-half W/L/T only
+                n++;
+            });
+            saveLeaguesData();
+            console.log('[LEAGUES] ★ HR-64: standings + playoffs reset for ' + n + ' league(s) (games kept as archive).');
+        } catch (e) {
+            console.error('[LEAGUES] resetStandingsAndPlayoffs failed:', e);
+        }
+        return n;
+    };
 
     window.LeaguesAPI.syncGamesFromGeneration = function (leagueName, dateKey, gameEntries) {
         try {

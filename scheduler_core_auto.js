@@ -61,6 +61,22 @@
 
     function uid() { return 'ac_' + Math.random().toString(36).slice(2, 9); }
 
+    // ★ HR-20: rotation-epoch watermark reader (non-deleting half reset).
+    //   Returns the ISO dateKey before which history-COUNTING scans must not
+    //   look — schedules are never deleted. Prefers the canonical
+    //   Utils.getRotationEpoch; inline fallback tolerates load order and the
+    //   legacy bare-string form. COMPLETE reset: yesterday-repeat, recency and
+    //   league back-to-back checks are epoch-filtered too (new campers).
+    function _getRotationEpoch() {
+        try {
+            const U = window.SchedulerCoreUtils || window.Utils;
+            if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+
     // Unified scheduling-rules check. Every phase that places or extends a
     // block should call this before committing. Returns true if placement is
     // OK (no rule loaded, or candidate passes all active cooldown rules).
@@ -1298,6 +1314,9 @@
             d.setDate(d.getDate() - daysToMon - (weeksBack * 7));
             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
+        // ★ HR-21: per-run rotation epoch — all history-counting helpers below
+        //   ignore schedule dates before this watermark (schedules stay saved).
+        const _rotEpoch = _getRotationEpoch();
         function getHalfStartDate() {
             const cd = _campDates;
             if (cd) {
@@ -1310,7 +1329,11 @@
                 if (cd.startDate) return cd.startDate;
             }
             const s = globalSettings.app1 || globalSettings;
-            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || (Object.keys(allDailyData).sort()[0] || null);
+            // ★ HR-22: epoch precedes the settings keys, and the earliest-schedule
+            //   fallback only considers post-epoch keys — otherwise a non-deleting
+            //   reset would pin "half start" to camp day 1 forever.
+            return _rotEpoch || s.halfStartDate || s.currentHalfStart || s.sessionHalfStart ||
+                (Object.keys(allDailyData).filter(k => !_rotEpoch || k >= _rotEpoch).sort()[0] || null);
         }
 
         const _campDates = (function() {
@@ -1333,19 +1356,28 @@
             const periodStartDay = periodIndex * nWeeks * 7;
             const periodDate = new Date(campStart);
             periodDate.setDate(periodDate.getDate() + periodStartDay);
-            return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            const _cdRes = periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            // ★ HR-23: clamp camp-date period starts to the epoch (null stays
+            //   null — it is the fall-through sentinel to the Monday windows).
+            return (_rotEpoch && _cdRes < _rotEpoch) ? _rotEpoch : _cdRes;
         }
 
         function getPeriodStartDate(period) {
             const campDateStart = _getCampDatePeriodStart(period);
-            if (campDateStart) return campDateStart;
-            switch (period) {
-                case '1week': return getMondayOfWeek(currentDate, 0);
-                case '2weeks': return getMondayOfWeek(currentDate, 1);
-                case '3weeks': return getMondayOfWeek(currentDate, 2);
-                case '4weeks': return getMondayOfWeek(currentDate, 3);
-                default: return getHalfStartDate();
+            let _psResult;
+            if (campDateStart) _psResult = campDateStart;
+            else switch (period) {
+                case '1week': _psResult = getMondayOfWeek(currentDate, 0); break;
+                case '2weeks': _psResult = getMondayOfWeek(currentDate, 1); break;
+                case '3weeks': _psResult = getMondayOfWeek(currentDate, 2); break;
+                case '4weeks': _psResult = getMondayOfWeek(currentDate, 3); break;
+                default: _psResult = getHalfStartDate();
             }
+            // ★ HR-24: epoch floor on every period start (mirrors the clamp in
+            //   Utils.getPeriodStartDate); a null (= lifetime) result becomes
+            //   the epoch itself so counts never look before the watermark.
+            if (_rotEpoch && (!_psResult || _psResult < _rotEpoch)) return _rotEpoch;
+            return _psResult;
         }
         function getPeriodCount(bunk, specialName, maxUsagePeriod) {
             const periodStart = getPeriodStartDate(maxUsagePeriod || 'half');
@@ -1353,6 +1385,7 @@
             Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
                 if (dateKey >= currentDate) return;
                 if (periodStart && dateKey < periodStart) return;
+                if (_rotEpoch && dateKey < _rotEpoch) return; // ★ HR-25: belt-and-braces epoch skip
                 const slots = dayData?.scheduleAssignments?.[bunk];
                 if (!Array.isArray(slots)) return;
                 if (slots.some(e => e && !e.continuation && (e._activity === specialName || e.field === specialName))) count++;
@@ -1374,6 +1407,7 @@
             let priorCount = 0;
             for (const dk in allDailyData) {
                 if (dk >= currentDate) continue;
+                if (_rotEpoch && dk < _rotEpoch) continue; // ★ HR-26: pre-epoch parts invisible — sequence restarts at part 1
                 const slots = allDailyData[dk]?.scheduleAssignments?.[String(bunk)];
                 if (Array.isArray(slots) && slots.some(e =>
                     e && !e.continuation && (e._activity === specialName || e.field === specialName))) {
@@ -1402,6 +1436,7 @@
             let count = 0;
             Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
                 if (dateKey >= currentDate) return;
+                if (_rotEpoch && dateKey < _rotEpoch) return; // ★ HR-27: cohort "lifetime" counts are epoch-scoped
                 const slots = dayData?.scheduleAssignments?.[bunk];
                 if (!Array.isArray(slots)) return;
                 if (slots.some(e => e && !e.continuation &&
@@ -5596,6 +5631,7 @@
                     let lastDone = null;
                     for (let _dk = sortedKeys.length - 1; _dk >= 0; _dk--) {
                         if (sortedKeys[_dk] >= currentDate) continue;
+                        if (_rotEpoch && sortedKeys[_dk] < _rotEpoch) break; // ★ HR-28: descending scan — everything below is pre-epoch (parts restart at 1)
                         const _slots = allDailyData[sortedKeys[_dk]]?.scheduleAssignments?.[String(bunk)];
                         if (Array.isArray(_slots) && _slots.some(e => e && !e.continuation && (e._activity === s.name || e.field === s.name))) {
                             priorCount++;
@@ -5627,6 +5663,7 @@
                         const _cdKeys = Object.keys(allDailyData).sort();
                         for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
                             if (_cdKeys[_cdk] >= currentDate) continue;
+                            if (_rotEpoch && _cdKeys[_cdk] < _rotEpoch) break; // ★ HR-29: cooldowns reset at the epoch — pre-epoch visits invisible
                             const _cdSlots = allDailyData[_cdKeys[_cdk]]?.scheduleAssignments?.[String(bunk)];
                             if (Array.isArray(_cdSlots) && _cdSlots.some(function(e) {
                                 return e && !e.continuation && (e._activity === s.name || e.field === s.name);
@@ -24210,11 +24247,15 @@
                         ? allDailyData
                         : (window.loadAllDailyData ? window.loadAllDailyData() : {});
                     const _bunkKey = String(bunk);
+                    // ★ HR-30: write-gate epoch floor — reuse the per-run watermark
+                    //   (in scope; avoids a settings read on every commit attempt).
+                    const _wgEpoch = _rotEpoch;
                     function _crossDayCount(periodStart) {
                         let c = 0;
                         for (const dk of Object.keys(_all)) {
                             if (dk >= _today) continue;
                             if (periodStart && dk < periodStart) continue;
+                            if (_wgEpoch && dk < _wgEpoch) continue; // ★ HR-31: pre-epoch days never count toward caps
                             const sl = _all[dk] && _all[dk].scheduleAssignments && _all[dk].scheduleAssignments[_bunkKey];
                             if (Array.isArray(sl) && sl.some(function (e) {
                                 return e && !e.continuation && (e._activity === activityName || e.field === activityName);
@@ -24255,6 +24296,7 @@
                         const _keys = Object.keys(_all).sort();
                         for (let i = _keys.length - 1; i >= 0; i--) {
                             if (_keys[i] >= _today) continue;
+                            if (_wgEpoch && _keys[i] < _wgEpoch) break; // ★ HR-32: cooldown resets at the epoch (descending scan — rest is pre-epoch)
                             const sl = _all[_keys[i]] && _all[_keys[i]].scheduleAssignments
                                 && _all[_keys[i]].scheduleAssignments[_bunkKey];
                             if (Array.isArray(sl) && sl.some(function (e) {
@@ -25282,6 +25324,10 @@
             const d = new Date(parts[0], parts[1] - 1, parts[2]);
             d.setDate(d.getDate() - 1);
             const yk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+            // ★ HR-38: COMPLETE reset — a pre-epoch yesterday is invisible to the
+            //   league engines' back-to-back/away detection (new campers at the half).
+            const _hrEpY = _getRotationEpoch();
+            if (_hrEpY && yk < _hrEpY) return {};
             return allDailyData[yk]?.scheduleAssignments || {};
         })();
 
@@ -26078,6 +26124,7 @@
                     let _cdSkip = false;
                     for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
                         if (_cdKeys[_cdk] >= _p49Today) continue;
+                        if (_rotEpoch && _cdKeys[_cdk] < _rotEpoch) break; // ★ HR-33: Phase-4.9 cooldown resets at the epoch (descending scan)
                         const _cdSlots = _p49AllDaily[_cdKeys[_cdk]]?.scheduleAssignments?.[String(def.bunk)];
                         if (Array.isArray(_cdSlots) && _cdSlots.some(e =>
                             e && !e.continuation && (e._activity === def.name || e.field === def.name))) {
