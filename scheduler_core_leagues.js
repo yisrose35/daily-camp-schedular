@@ -59,6 +59,7 @@
                 gamesPerDate: (h && h.gamesPerDate) || {},
                 offCampusCounts: (h && h.offCampusCounts) || {},
                 ocTripsByDate: (h && h.ocTripsByDate) || {},
+                chinuchByDate: (h && h.chinuchByDate) || {},
                 _ocResetAt: (h && h._ocResetAt) || {},
                 gameLog: (h && h.gameLog) || {},
                 _tombstones: (h && h._tombstones) || {},
@@ -80,6 +81,7 @@
             gamesPerDate: {},
             offCampusCounts: {},
             ocTripsByDate: {},
+            chinuchByDate: {},
             _ocResetAt: {},
             gameLog: {},
             _tombstones: {},
@@ -136,6 +138,16 @@
                     // copies saved before the wipe
                     if (countersResetAt > src._savedAt) return;
                     merged.gamesPerDate[lg][d] = src.gamesPerDate[lg][d];
+                });
+            });
+            // Chinuch attendance: same per-(league,date) adoption as gamesPerDate,
+            // so the rotation ledger survives multi-device merges and deletions.
+            Object.keys(src.chinuchByDate).forEach(function (lg) {
+                Object.keys(src.chinuchByDate[lg] || {}).forEach(function (d) {
+                    if (merged.chinuchByDate[lg] && merged.chinuchByDate[lg][d]) return;
+                    if (!(src.chinuchByDate[lg][d] || []).length) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    (merged.chinuchByDate[lg] = merged.chinuchByDate[lg] || {})[d] = src.chinuchByDate[lg][d];
                 });
             });
             // Off-campus trips: same per-(league,date) adoption as gamesPerDate.
@@ -225,7 +237,7 @@
     function loadLeagueHistory() {
         const EMPTY = () => ({
             teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-            offCampusCounts: {}, ocTripsByDate: {}, gameLog: {}, _tombstones: {}
+            offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, gameLog: {}, _tombstones: {}
         });
         try {
             // Cloud-synced copy (hydrated into global settings)
@@ -270,6 +282,7 @@
             history.gamesPerDate = history.gamesPerDate || {};
             history.offCampusCounts = history.offCampusCounts || {};
             history.ocTripsByDate = history.ocTripsByDate || {};
+            history.chinuchByDate = history.chinuchByDate || {};
             history.gameLog = history.gameLog || {};
             history._tombstones = history._tombstones || {};
             return history;
@@ -3150,6 +3163,12 @@
                 // with it (a per-tile regen with preserved games keeps it —
                 // the OC path re-records idempotently if it runs again).
                 if (!_plbl || !_plbl.size) rollbackOcTrips(history, league.name, dayId);
+                // ★ Chinuch attendance: same — the precompute re-records today
+                // for leagues it still covers; a league whose chinuch got
+                // disabled must not keep a stale attendance entry.
+                if ((!_plbl || !_plbl.size) && history.chinuchByDate && history.chinuchByDate[league.name]) {
+                    delete history.chinuchByDate[league.name][dayId];
+                }
                 // ★ LG-8 tombstone: this generation REPLACES the league's day —
                 // in any later merge, a stale copy's version of this (league,
                 // date) must lose to this run's result (the end-of-gen save is
@@ -3220,8 +3239,26 @@
                         .slice(0, numPeriods)
                     : null;
 
-                // Shuffle teams using date+leagueName seed for daily variety
-                const shuffled = _seededShuffle(teams, dayId + league.name);
+                // ★ Chinuch rotation ledger: when only a SUBSET of teams attends
+                // per day (cap < roster), the pure daily shuffle had no memory —
+                // a team could be picked several days running while another
+                // missed out. Order by cross-day attendance (fewest first, from
+                // the cloud-synced per-date record); the date-seeded shuffle
+                // only breaks ties, so full-coverage configs keep their daily
+                // period rotation unchanged.
+                const _chCounts = {};
+                teams.forEach(function (t) { _chCounts[t] = 0; });
+                try {
+                    const _cbd = (history.chinuchByDate && history.chinuchByDate[league.name]) || {};
+                    Object.keys(_cbd).forEach(function (d) {
+                        if (d === dayId) return;   // today's own (pre-regen) record must not bias today
+                        (_cbd[d] || []).forEach(function (t) { if (_chCounts[t] != null) _chCounts[t]++; });
+                    });
+                } catch (_eCbd) {}
+                // Shuffle teams using date+leagueName seed for daily variety,
+                // then stable-sort by attendance so least-attended go first.
+                const shuffled = _seededShuffle(teams, dayId + league.name)
+                    .sort(function (a, b) { return _chCounts[a] - _chCounts[b]; });
                 const bunkSchedule = {};
                 let _mode;
                 let _summary;
@@ -3281,6 +3318,18 @@
                 }
 
                 window.chinuchSchedule[league.name] = bunkSchedule;
+                // ★ Record today's attendance into the cloud-synced history
+                // (date-keyed → regen overwrites idempotently, day deletes roll
+                // it back, and the LG-8 merge adopts it per (league, date)).
+                try {
+                    history.chinuchByDate = history.chinuchByDate || {};
+                    const _att = Object.keys(bunkSchedule);
+                    if (_att.length) {
+                        (history.chinuchByDate[league.name] = history.chinuchByDate[league.name] || {})[dayId] = _att;
+                    } else if (history.chinuchByDate[league.name]) {
+                        delete history.chinuchByDate[league.name][dayId];
+                    }
+                } catch (_eChRec) {}
                 console.log('[Chinuch] "' + league.name + '" (' + _mode + '): ' + teams.length + ' team(s), ' + _summary);
             }
         })();
@@ -3335,14 +3384,69 @@
                 var gameNum = baseGN + leagueGameCounters[league.name] + 1;
                 var lSports = league.sports || ['General Sport'];
                 var priority = league.schedulingPriority || 'sport_variety';
+
+                // ★ LG-20 fix: CHINUCH teams can't be in the away double-header —
+                //   it occupies BOTH paired periods and a chinuch team must be on
+                //   campus for its session. Teams assigned chinuch at either
+                //   period sit the double-header out (chinuch in their period, a
+                //   visible bye in the other). If excluding them leaves fewer
+                //   than 4 teams, chinuch yields for this league TODAY — loudly —
+                //   rather than double-booking teams (the old behavior: matchups
+                //   said they play, the chinuch plan said they learn).
+                var _chSched = (league.chinuch && league.chinuch.enabled &&
+                    window.chinuchSchedule && window.chinuchSchedule[league.name]) || null;
+                var chT1 = [], chT2 = [];
+                if (_chSched) {
+                    Object.keys(_chSched).forEach(function (t) {
+                        var p = Number(_chSched[t]);
+                        if (p === Number(timeKey1)) chT1.push(t);
+                        else if (p === Number(timeKey2)) chT2.push(t);
+                    });
+                }
+                var _chAll = new Set(chT1.concat(chT2));
+                var ocTeams = _chAll.size ? leagueTeams.filter(function (t) { return !_chAll.has(t); }) : leagueTeams;
+                if (_chAll.size && ocTeams.length < 4) {
+                    console.warn('[OffCampus] "' + league.name + '": excluding today\'s ' + _chAll.size +
+                        ' chinuch team(s) would leave only ' + ocTeams.length +
+                        ' for the away double-header — chinuch yields for this league today.');
+                    _recordByeEvent({
+                        league: league.name, kind: 'skipped', time: timeKey1, game: gameNum,
+                        reason: 'Chinuch was skipped for this league today: the Away Games double-header needs at least 4 teams free for both periods, and the chinuch plan would leave only ' + ocTeams.length + '. Lower teams-per-session, or keep chinuch off away days.'
+                    });
+                    delete window.chinuchSchedule[league.name];
+                    try {
+                        if (history.chinuchByDate && history.chinuchByDate[league.name]) {
+                            delete history.chinuchByDate[league.name][dayId];
+                        }
+                    } catch (_eChY) {}
+                    chT1 = []; chT2 = []; _chAll = new Set();
+                    ocTeams = leagueTeams;
+                }
+                // Chinuch/bye lines for the two game blocks (mirrors the normal
+                // path's display: every team appears every period).
+                var _ocChLine = function (t) {
+                    var fac = (league.chinuch && league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[t]) || 'Chinuch';
+                    return t + ' — Chinuch (' + fac + ')';
+                };
+                var _ocExtraLines = function (gAll, chHere) {
+                    var playing = new Set();
+                    gAll.forEach(function (a) { if (a.team1) playing.add(a.team1); if (a.team2) playing.add(a.team2); });
+                    var lines = chHere.map(_ocChLine);
+                    var chSet = new Set(chHere);
+                    leagueTeams.forEach(function (t) {
+                        if (!playing.has(t) && !chSet.has(t)) lines.push(t + ' — Bye');
+                    });
+                    return lines;
+                };
+
                 // ★ NO PREDETERMINED ROUND-ROBIN: game-1 matchups are computed fresh
                 //   from history (meetings + sport needs), same as the main path. The
                 //   round-robin round is only the error/kill-switch fallback inside
                 //   chooseDailyMatchups. (The league-wide sport list stands in for the
                 //   field pool here — the real pools are built per time key below.)
-                var fullSched = generateRoundRobinSchedule(leagueTeams);
+                var fullSched = generateRoundRobinSchedule(ocTeams);
                 var rrFallback = fullSched[(gameNum - 1) % fullSched.length] || [];
-                var g1Matchups = chooseDailyMatchups(leagueTeams, lSports.map(function (s) { return { sport: s }; }), league.name, history, rrFallback, dayId, priority);
+                var g1Matchups = chooseDailyMatchups(ocTeams, lSports.map(function (s) { return { sport: s }; }), league.name, history, rrFallback, dayId, priority);
                 if (g1Matchups.length === 0) continue;
 
                 var zoneSports = ocGetZoneSports(league.offCampus.zone, lSports, context);
@@ -3385,6 +3489,12 @@
                 var g2All = g2Off.concat(g2On);
 
               if (g1All.length > 0 && fillBlock) {
+                    // Chinuch teams at period 1 + benched teams show on the block
+                    // (and in the bye report) instead of silently vanishing.
+                    _recordUnpairedByes(league.name,
+                        leagueTeams.filter(function (t) { return chT1.indexOf(t) < 0; }),
+                        dh.offCampus.game1.concat(dh.onCampus.game1));
+                    var _g1Extra = _ocExtraLines(g1All, chT1);
                     ocDivs.forEach(function(d) {
                         var blocksForDiv = (blocksByTime[timeKey1]?.byDivision[d]) || [];
                         blocksForDiv.forEach(function(block) {
@@ -3394,7 +3504,7 @@
                                 _activity: 'League: ' + league.name,
                                 _leagueName: league.name,
                                 _h2h: true, _fixed: true,
-                                _allMatchups: g1All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
+                                _allMatchups: g1All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }).concat(_g1Extra),
                                 _gameLabel: lbl1
                             };
                             fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
@@ -3408,6 +3518,10 @@
                     }
                 }
                if (g2All.length > 0 && fillBlock) {
+                    _recordUnpairedByes(league.name,
+                        leagueTeams.filter(function (t) { return chT2.indexOf(t) < 0; }),
+                        dh.offCampus.game2.concat(dh.onCampus.game2));
+                    var _g2Extra = _ocExtraLines(g2All, chT2);
                     ocDivs.forEach(function(d) {
                         var blocksForDiv = (blocksByTime[timeKey2]?.byDivision[d]) || [];
                         blocksForDiv.forEach(function(block) {
@@ -3417,7 +3531,7 @@
                                 _activity: 'League: ' + league.name,
                                 _leagueName: league.name,
                                 _h2h: true, _fixed: true,
-                                _allMatchups: g2All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }),
+                                _allMatchups: g2All.map(function(a){ return a.team1+' vs '+a.team2+' @ '+a.field+' ('+a.sport+')'; }).concat(_g2Extra),
                                 _gameLabel: lbl2
                             };
                             fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
@@ -4706,7 +4820,7 @@ window._debugLeagueTimeData = timeData;
             // every device that syncs it.
             const resetHistory = {
                 teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-                offCampusCounts: {}, ocTripsByDate: {}, gameLog: {}, _tombstones: {},
+                offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, gameLog: {}, _tombstones: {},
                 _ocResetAt: { '*': Date.now() },
                 _resetAt: Date.now(), _savedAt: Date.now()
             };
@@ -4806,6 +4920,10 @@ window._debugLeagueTimeData = timeData;
                 affected.push(league.name);
                 if (rollbackDayRecords(league.name, dateKey, history) > 0) changed = true;
                 if (rollbackOcTrips(history, league.name, dateKey) > 0) changed = true;
+                if (history.chinuchByDate?.[league.name]?.[dateKey] !== undefined) {
+                    delete history.chinuchByDate[league.name][dateKey];
+                    changed = true;
+                }
                 if (history.gamesPerDate?.[league.name]?.[dateKey] !== undefined) {
                     delete history.gamesPerDate[league.name][dateKey];
                     changed = true;
@@ -4851,6 +4969,14 @@ window._debugLeagueTimeData = timeData;
             // whose gameLog was already rolled back or never existed locally).
             for (const leagueName of Object.keys(history.ocTripsByDate || {})) {
                 if (rollbackOcTrips(history, leagueName, dateKey) > 0) {
+                    changed = true;
+                }
+            }
+
+            // ★ Chinuch attendance: the deleted date's record goes with it.
+            for (const leagueName of Object.keys(history.chinuchByDate || {})) {
+                if (history.chinuchByDate[leagueName][dateKey] !== undefined) {
+                    delete history.chinuchByDate[leagueName][dateKey];
                     changed = true;
                 }
             }
