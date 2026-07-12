@@ -26,6 +26,21 @@
         return window.CampistryDB?.getCampId?.();
     }
 
+    // ★ HR-7: rotation-epoch reader (Half Reset watermark). Pre-epoch
+    // rotation_counts rows stay in the table as history but are invisible
+    // to every aggregate consumer — a non-deleting, reversible reset.
+    // Local fallback because this module may load before scheduler_core_utils.
+    function getRotationEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            var d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+
     function getValidActivityNames() {
         if (window.SchedulerCoreUtils?.getValidActivityNames) {
             return window.SchedulerCoreUtils.getValidActivityNames();
@@ -194,13 +209,20 @@
         //
         // We fetch 1000 rows at a time, ordered by id, and concatenate.
         var PAGE_SIZE = 1000;
+        // ★ HR-7: with an epoch set, fetch only post-epoch rows. Pre-epoch rows
+        // stay in the table (never deleted) but drop out of counts/lastDone/
+        // countsByDate, so every downstream aggregate (gen preamble overlays,
+        // mergeCloudData, analytics seeding, period caps) restarts at the epoch.
+        var _hrEpoch = getRotationEpoch();
         function fetchAll(allRows, page) {
             var from = page * PAGE_SIZE;
             var to = from + PAGE_SIZE - 1;
-            return client
+            var q = client
                 .from(TABLE)
                 .select('bunk, activity, count, date_key')
-                .eq('camp_id', campId)
+                .eq('camp_id', campId);
+            if (_hrEpoch) q = q.gte('date_key', _hrEpoch); // ★ HR-7
+            return q
                 // Order by the composite PK so pagination is deterministic.
                 // rotation_counts has no surrogate `id` column — its PK is
                 // (camp_id, date_key, bunk, activity). camp_id is already
@@ -225,6 +247,9 @@
                 var lastDone = {};
                 var countsByDate = {}; // ★ Per-date breakdown for smart merging
                 allData.forEach(function(row) {
+                    // ★ HR-7: belt-and-braces — never aggregate a pre-epoch row
+                    // even if the query-side .gte filter was bypassed.
+                    if (_hrEpoch && String(row.date_key).substring(0, 10) < _hrEpoch) return;
                     counts[row.bunk] = counts[row.bunk] || {};
                     counts[row.bunk][row.activity] = (counts[row.bunk][row.activity] || 0) + row.count;
 

@@ -38,6 +38,29 @@
     // gameLog for leagues that have one, so they can never diverge from it.
     // Flat overwrite-only stores (lastSlotOrder, conferenceRounds) come from
     // the fresher copy.
+    // ★ HR-55: rotation epoch (non-deleting half reset) — mirrors the regular
+    // engine's HR-41. history._epochDate is an ISO dateKey; every read treats
+    // dates before it as nonexistent while the records stay as archive. The
+    // field is merge-surviving (adopt-max).
+    function _getGlobalEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+    function _effectiveEpoch(history) {
+        const blobEpoch = (history && typeof history._epochDate === 'string'
+            && /^\d{4}-\d{2}-\d{2}$/.test(history._epochDate)) ? history._epochDate : '';
+        const globalEpoch = _getGlobalEpoch() || '';
+        const eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        return eff || null;
+    }
+    SpecialtyLeagues.getEffectiveEpoch = _effectiveEpoch; // diagnostics + tests
+
     function mergeSpecialtyHistories(a, b) {
         const norm = (h) => {
             const out = {
@@ -53,6 +76,8 @@
             };
             if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
             if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
+            // ★ HR-55: the epoch dateKey must survive normalization
+            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) out._epochDate = h._epochDate;
             return out;
         };
         if (!a) return b ? norm(b) : norm(null);
@@ -82,6 +107,12 @@
         if (merged._resetAt === undefined) delete merged._resetAt;
         const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
         if (countersResetAt) merged._countersResetAt = countersResetAt;
+        // ★ HR-55: rotation epoch — adopt-MAX across lineages (mirrors HR-41).
+        (function () {
+            const ea = (A._epochDate || ''), eb = (B._epochDate || '');
+            const em = ea >= eb ? ea : eb;
+            if (em) merged._epochDate = em;
+        })();
         const tombTs = function (lg, d) {
             return Math.max(
                 merged._tombstones[lg + '|' + d] || 0,
@@ -129,8 +160,13 @@
         keepLegacy(F.teamFieldRotation, merged.teamFieldRotation);
         keepLegacy(F.matchupHistory, merged.matchupHistory);
         keepLegacy(F.slotDebt, merged.slotDebt);
+        // ★ HR-56: derived-store rebuild is EPOCH-SCOPED (mirrors HR-42) — the
+        // pre-epoch gameLog stays as archive but never re-inflates matchup
+        // recency, field rotation or slot debt after the half reset.
+        const _hrEpM = merged._epochDate || _getGlobalEpoch() || '';
         loggedLeagues.forEach(function (lg) {
             Object.keys(merged.gameLog[lg]).sort().forEach(function (d) {
+                if (_hrEpM && d < _hrEpM) return; // ★ HR-56
                 (merged.gameLog[lg][d] || []).forEach(function (e) {
                     if (!e || !e.tA || !e.tB) return;
                     const mk = `${lg}|${[e.tA, e.tB].sort().join('|')}`;
@@ -341,15 +377,20 @@
         if (!history.gamesPerDate[leagueId]) history.gamesPerDate[leagueId] = {};
         
         const gamesMap = history.gamesPerDate[leagueId];
-        
+
         // Sum games from all dates BEFORE currentDate (chronologically)
+        // ★ HR-57: game numbering restarts at the rotation epoch (mirrors
+        // HR-43) — and since specialty matchups are round-robin off the game
+        // number, this IS the specialty matchup-history restart.
+        const _hrEp = _effectiveEpoch(history);
         let total = 0;
         for (const date of Object.keys(gamesMap)) {
+            if (_hrEp && date < _hrEp) continue; // ★ HR-57
             if (date < currentDate) {
                 total += gamesMap[date];
             }
         }
-        
+
         console.log(`[SpecialtyLeagues] Starting game# for league ${leagueId} on ${currentDate}: ${total + 1} (${total} games on earlier dates)`);
         return total;
     }
@@ -384,10 +425,13 @@
         const specialtyLeaguesConfig = loadSpecialtyLeagues();
         
         // Load all daily data
+        // ★ HR-58: never renumber pre-epoch archived schedules (mirrors HR-44).
+        const _hrEpUF = _effectiveEpoch(history);
         const allDailyData = window.loadAllDailyData?.() || {};
         const futureDates = Object.keys(allDailyData)
             .filter(date => {
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+                if (_hrEpUF && date < _hrEpUF) return false; // ★ HR-58
                 return date > currentDate;
             })
             .sort();
@@ -418,8 +462,9 @@
                 // ★★★ CRITICAL: Count games from all dates BEFORE this future date ★★★
                 const gamesPerDateMap = history.gamesPerDate[leagueId] || {};
                 let gamesBeforeThisDate = 0;
-                
+
                 for (const histDate of Object.keys(gamesPerDateMap)) {
+                    if (_hrEpUF && histDate < _hrEpUF) continue; // ★ HR-58: pre-epoch games never count
                     if (histDate < futureDate) {
                         gamesBeforeThisDate += gamesPerDateMap[histDate];
                     }
@@ -1233,10 +1278,16 @@
             history.teamFieldRotation = history.teamFieldRotation || {};
             const tombs = history._tombstones || {};
             const resetAt = Number(history._resetAt) || 0;
+            // ★ HR-59: reconcile fence (mirrors HR-47) — pre-epoch saved
+            // schedules are archive; rebuilding them would resurrect last
+            // half's matchup recency, field rotation, slot debt and counters.
+            // Post-epoch days keep healing normally.
+            const _hrEpRec = _effectiveEpoch(history);
             leagues.forEach(function (league) {
                 const teamSet = new Set(league.teams || []);
                 if (teamSet.size < 2) return;
                 dates.forEach(function (d) {
+                    if (_hrEpRec && d < _hrEpRec) return;  // ★ HR-59
                     if (d === skipDate) return;
                     if ((history.gameLog[league.id] || {})[d] && history.gameLog[league.id][d].length) return;
                     if ((tombs[`${league.id}|${d}`] || 0) > 0 || (tombs[`*|${d}`] || 0) > 0 || resetAt > 0) return;
@@ -2092,6 +2143,58 @@ if (_playoffRoundNum) {
     // they get the same cloud-first resolution the engine uses.
     SpecialtyLeagues.getHistorySnapshot = function () {
         return loadSpecialtyHistory();
+    };
+
+    // ★ HR-60a: EPOCH STAMP — specialty mirror of the regular engine's HR-54.
+    // Called by startNewHalf (calendar.js). Stamps the merge-surviving
+    // _epochDate and rebuilds the derived fairness stores (matchup date-arrays,
+    // field rotation, slot debt) epoch-scoped; gameLog/gamesPerDate stay as
+    // archive and every read is epoch-filtered.
+    SpecialtyLeagues.setHistoryEpoch = function (dateKey) {
+        try {
+            if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))) return false;
+            const h = loadSpecialtyHistory();
+            const prev = (typeof h._epochDate === 'string') ? h._epochDate : '';
+            h._epochDate = (prev && prev > dateKey) ? prev : String(dateKey);
+            // Rebuild derived stores epoch-scoped (mirrors the HR-56 merge
+            // rebuild). Pure-legacy leagues without a gameLog have undated
+            // entries that cannot be filtered — a complete reset zeroes them.
+            h.matchupHistory = {};
+            h.teamFieldRotation = {};
+            h.slotDebt = {};
+            Object.keys(h.gameLog || {}).forEach(function (lg) {
+                Object.keys(h.gameLog[lg] || {}).sort().forEach(function (d) {
+                    if (d < h._epochDate) return;
+                    (h.gameLog[lg][d] || []).forEach(function (e) {
+                        if (!e || !e.tA || !e.tB) return;
+                        const mk = lg + '|' + [e.tA, e.tB].sort().join('|');
+                        (h.matchupHistory[mk] = h.matchupHistory[mk] || []).push(d);
+                        if (e.field) {
+                            [e.tA, e.tB].forEach(function (t) {
+                                const fk = lg + '|' + t;
+                                (h.teamFieldRotation[fk] = h.teamFieldRotation[fk] || []).push(e.field);
+                            });
+                        }
+                        if (e.s != null) {
+                            const w = Math.max(0, (e.s || 1) - 1);
+                            if (w > 0) {
+                                [e.tA, e.tB].forEach(function (t) {
+                                    const sk = lg + '|' + t;
+                                    h.slotDebt[sk] = (h.slotDebt[sk] || 0) + w;
+                                });
+                            }
+                        }
+                    });
+                });
+            });
+            h.lastSlotOrder = {};
+            saveSpecialtyHistory(h);
+            console.log('[SpecialtyLeagues] ★ HR-60a: rotation epoch stamped at ' + h._epochDate + ' — game numbering (and thus round-robin matchups), field rotation and slot debt restart there (records kept as archive).');
+            return true;
+        } catch (e) {
+            console.error('[SpecialtyLeagues] setHistoryEpoch failed:', e);
+            return false;
+        }
     };
 
     window.SchedulerCoreSpecialtyLeagues = SpecialtyLeagues;

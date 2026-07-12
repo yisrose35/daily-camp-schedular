@@ -53,6 +53,21 @@
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
 
+    // ★ HR-8: rotation-epoch reader (Half Reset watermark). The reconcile must
+    // never treat pre-epoch cloud rows as drift to heal, never re-upsert
+    // pre-epoch dates into rotation_counts, and never rebuild pre-epoch counts
+    // — otherwise the daily auto-reconcile would resurrect the reset history.
+    function getRotationEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            var d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+
     window.backfillRotationMemory = async function (opts) {
         opts = opts || {};
         var dryRun = !!opts.dryRun;
@@ -91,6 +106,13 @@
         if (pastOnly) {
             var _cut = localToday();
             dates = dates.filter(function (d) { return d < _cut; });
+        }
+        // ★ HR-8: restrict the reconcile universe to post-epoch dates. Kept
+        // pre-epoch schedules (and any pre-epoch rotation_counts rows) are
+        // archive — they must be neither healed nor re-upserted.
+        var _hrEpoch = getRotationEpoch();
+        if (_hrEpoch) {
+            dates = dates.filter(function (d) { return d >= _hrEpoch; });
         }
         if (dates.length === 0) {
             console.error('[Backfill] No local day-data found even after hydrate — nothing to reconcile.');

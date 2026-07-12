@@ -3195,10 +3195,24 @@ window.getBunkCompletionCount = function(bunkName, activityName) {
         // Source 3: Scan all past daily schedules
         var allDaily = window.loadAllDailyData?.() || {};
         var currentDate = window.currentScheduleDate || window.currentDate || '';
+        // ★ HR-37: rotation-epoch watermark (non-deleting half reset) — pre-epoch
+        //   days are invisible to completion counts, so multiPart sequences (and
+        //   their display labels) restart at part 1. Sources 1-2 above are
+        //   epoch-scoped upstream (cleared/rebuilt at reset time).
+        var _hrEpoch = (function() {
+            try {
+                var U = window.SchedulerCoreUtils || window.Utils;
+                if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                var d = (typeof e === 'string') ? e : (e && e.date);
+                return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+            } catch (_) { return null; }
+        })();
         var sortedDates = Object.keys(allDaily).sort();
         for (var i = 0; i < sortedDates.length; i++) {
             var dateKey = sortedDates[i];
             if (currentDate && dateKey >= currentDate) continue;
+            if (_hrEpoch && dateKey < _hrEpoch) continue; // ★ HR-37 (pre-epoch parts invisible)
             var sched = allDaily[dateKey]?.scheduleAssignments?.[bunkName];
             if (!Array.isArray(sched)) continue;
             for (var j = 0; j < sched.length; j++) {

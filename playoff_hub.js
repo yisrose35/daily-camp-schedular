@@ -172,8 +172,25 @@
             var key = (_kind === 'specialty') ? (_league.id || _league.name) : _league.name;
             var map = hist.gamesPerDate[key] || {};
             var activeDate = _activeScheduleDate();
+            // ★ HR-68: rotation epoch (non-deleting half reset) — the tile
+            // counter this anchor rides restarts at the epoch (HR-43/HR-57),
+            // so the hub must count the same window or rounds derail.
+            var _hrEp = (function () {
+                try {
+                    var be = (hist && typeof hist._epochDate === 'string') ? hist._epochDate : '';
+                    var U = window.SchedulerCoreUtils || window.Utils;
+                    var ge = (U && typeof U.getRotationEpoch === 'function') ? (U.getRotationEpoch() || '') : (function () {
+                        var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                        var d = (typeof e === 'string') ? e : (e && e.date);
+                        return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : '';
+                    })();
+                    var eff = be >= ge ? be : ge;
+                    return /^\d{4}-\d{2}-\d{2}$/.test(eff) ? eff : null;
+                } catch (_) { return null; }
+            })();
             var total = 0;
             Object.keys(map).forEach(function (d) {
+                if (_hrEp && d < _hrEp) return; // ★ HR-68
                 if (d < activeDate) total += Number(map[d]) || 0;
             });
             return total;

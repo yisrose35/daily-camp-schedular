@@ -502,228 +502,213 @@ all[date].updated_at = new Date().toISOString();
             alert("Error resetting history. Check console.");
         }
     };
-    
     // ==========================================================
-    // START NEW HALF
+    // START NEW HALF — ★ HR-60: non-deleting epoch reset.
+    // Concept: schedules are NEVER deleted. A rotation epoch (ISO
+    // dateKey) is stamped instead, and every counting system ignores
+    // dates before it: rotation/usage counters, per-period caps,
+    // frequencyDays cooldowns, multiPart sequences, cohort counts,
+    // league game numbering (back to Game 1), matchup history,
+    // standings and playoffs. This is a COMPLETE reset — bunks get
+    // new campers at the half, so even the short-term variety checks
+    // (yesterday-repeat, 14-day recency, league back-to-back guards)
+    // treat pre-epoch days as nonexistent. Owner-only by product decision.
+    //
+    // What is deliberately NOT touched:
+    //   • daily_schedules (Supabase) and campDailyData_v1 — archive
+    //   • rotation_counts table — pre-epoch rows stay; reads filter
+    //   • league gameLog / league.games — kept as archive; reads and
+    //     standings recalcs filter by the epoch
+    // This also makes the reset reversible: restoring the previous
+    // epoch date restores all history exactly.
     // ==========================================================
-    window.startNewHalf = async function() {
-        var _role = window.AccessControl?.getCurrentRole?.();
-        if (!window.AccessControl?.canEraseData?.()) {
-            window.AccessControl?.showPermissionDenied?.('start new half');
-            return;
+
+    function _hrTodayKey() {
+        var d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function _hrAddDays(iso, n) {
+        var p = iso.split('-').map(Number);
+        var d = new Date(p[0], p[1] - 1, p[2]);
+        d.setDate(d.getDate() + n);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    // days from a to b (b - a)
+    function _hrDayDiff(a, b) {
+        var pa = a.split('-').map(Number), pb = b.split('-').map(Number);
+        return Math.round((new Date(pb[0], pb[1] - 1, pb[2]) - new Date(pa[0], pa[1] - 1, pa[2])) / 86400000);
+    }
+
+    // ★ HR-61: epoch date snaps to a period boundary (product decision) so
+    // per-week / per-half caps never double-dose across a mid-week reset.
+    // Priority: configured half-2 start (when the reset happens near it) →
+    // next camp-week boundary on the campDates.startDate weekly grid →
+    // next Monday. Today itself is used when it IS the boundary.
+    function _hrComputeEpochDate() {
+        var todayKey = _hrTodayKey();
+        var cd = null;
+        try { cd = window.Utils?.getCampDates?.() || window.loadGlobalSettings?.('campDates') || null; } catch (_) {}
+
+        if (cd && cd.half2Start && /^\d{4}-\d{2}-\d{2}$/.test(cd.half2Start)) {
+            var diff = _hrDayDiff(todayKey, cd.half2Start);
+            // clicked up to 13 days after the boundary, or up to 28 before it
+            if (diff >= -13 && diff <= 28) return { date: cd.half2Start, reason: 'your configured Half 2 start date' };
         }
-
-        // ═══════════════════════════════════════════════════════════════
-        // SCHEDULER: Scoped new half — only their assigned divisions
-        // ═══════════════════════════════════════════════════════════════
-        if (_role === 'scheduler') {
-            var myDivisions = window.AccessControl?.getGeneratableDivisions?.() || [];
-            if (myDivisions.length === 0) { alert("You don't have any divisions assigned."); return; }
-            var myBunks = getBunksForDivisions(myDivisions);
-            var confirmed = confirm(
-                "🏕️ START NEW HALF for your divisions (" + myDivisions.join(', ') + ")\n\n" +
-                "This will reset:\n" +
-                "  ✓ Activity usage counters for your bunks\n" +
-                "  ✓ Rotation history for your bunks\n" +
-                "  ✓ Daily schedules for your divisions\n\n" +
-                "Other divisions will NOT be affected.\n\n" +
-                "Are you sure?"
-            );
-            if (!confirmed) return;
-
-            logAuditEvent('start_new_half_partial', { divisions: myDivisions });
-            try {
-                console.log('⭐ SCHEDULER NEW HALF for:', myDivisions);
-
-                // 1. Delete our bunks from all schedule records
-                var client = window.CampistryDB?.getClient?.() || window.supabase;
-                var campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
-                if (client && campId && myBunks.length > 0) {
-                    var { data: allRecords } = await client.from('daily_schedules').select('*').eq('camp_id', campId);
-                    for (var record of (allRecords || [])) {
-                        var scheduleData = record.schedule_data || {};
-                        var assignments = { ...(scheduleData.scheduleAssignments || {}) };
-                        var leagues = { ...(scheduleData.leagueAssignments || {}) };
-                        var modified = false;
-                        myBunks.forEach(function(bunk) {
-                            if (assignments[bunk] !== undefined) { delete assignments[bunk]; modified = true; }
-                            if (leagues[bunk] !== undefined) { delete leagues[bunk]; }
-                        });
-                        if (!modified) continue;
-                        if (Object.keys(assignments).length === 0) {
-                            await client.from('daily_schedules').delete().eq('id', record.id);
-                        } else {
-                            await client.from('daily_schedules')
-                                .update({ schedule_data: { ...scheduleData, scheduleAssignments: assignments, leagueAssignments: leagues }, updated_at: new Date().toISOString() })
-                                .eq('id', record.id);
-                        }
-                    }
-                }
-
-                // 2. Clear localStorage — remove only our bunks from each date
-                var allData = window.loadAllDailyData?.() || {};
-                Object.keys(allData).forEach(function(dk) {
-                    var dateData = allData[dk];
-                    if (!dateData) return;
-                    myBunks.forEach(function(bunk) {
-                        if (dateData.scheduleAssignments) delete dateData.scheduleAssignments[bunk];
-                        if (dateData.leagueAssignments) delete dateData.leagueAssignments[bunk];
-                    });
-                });
-                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(allData));
-
-                // 3. Clear rotation counts for our bunks
-                await window.RotationCloud?.clearForBunks?.(myBunks);
-
-                // ★★★ CB-90: clear rotation-event completions for our bunks (scheduler scope)
-                try { window.RotationEvents?.clearAllCompleted?.(null, myBunks); } catch (e) { /* non-fatal */ }
-
-                // 4. Scrub local rotation history for our bunks
-                var bunkSet = new Set(myBunks);
-                var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-                Object.keys(_rotHist.bunks || {}).forEach(function(bk) { if (bunkSet.has(bk)) delete _rotHist.bunks[bk]; });
-                window.saveRotationHistory?.(_rotHist);
-
-                var _hist = window.loadGlobalSettings?.('historicalCounts') || {};
-                Object.keys(_hist).forEach(function(bk) { if (bunkSet.has(bk)) delete _hist[bk]; });
-                window.saveGlobalSettings?.('historicalCounts', _hist);
-
-                var _smartHist = JSON.parse(localStorage.getItem(SMART_TILE_HISTORY_KEY) || '{}');
-                Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
-                safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
-                window.saveGlobalSettings?.('smartTileHistory', _smartHist);
-
-                // ★★★ CB-71: scrub manualUsageOffsets for our bunks (owner branch
-                // clears it; scheduler branch omitted it → stale offset carried into
-                // the new half).
-                var _muoNH = window.loadGlobalSettings?.('manualUsageOffsets') || {};
-                Object.keys(_muoNH).forEach(function(bk) { if (bunkSet.has(bk)) delete _muoNH[bk]; });
-                window.saveGlobalSettings?.('manualUsageOffsets', _muoNH);
-
-                clearBunksFromGlobals(myBunks);
-
-                console.log('⭐ SCHEDULER NEW HALF COMPLETE');
-                alert('New half started for your divisions!\n\nReloading page...');
-                window.location.reload();
-            } catch (e) {
-                console.error('Failed to start new half:', e);
-                alert('Error starting new half. Check console.');
+        if (cd && cd.startDate && /^\d{4}-\d{2}-\d{2}$/.test(cd.startDate)) {
+            var since = _hrDayDiff(cd.startDate, todayKey);
+            if (since >= 0) {
+                var rem = since % 7;
+                var next = (rem === 0) ? todayKey : _hrAddDays(todayKey, 7 - rem);
+                return { date: next, reason: (rem === 0 ? 'today — a camp-week boundary' : 'the next camp-week boundary') };
             }
+        }
+        // Fallback: next Monday (today if Monday) — matches the rolling
+        // weekly window used by getPeriodStartDate when no camp dates exist.
+        var p = todayKey.split('-').map(Number);
+        var d = new Date(p[0], p[1] - 1, p[2]);
+        var dow = d.getDay();
+        var ahead = (dow === 1) ? 0 : ((8 - dow) % 7);
+        return { date: _hrAddDays(todayKey, ahead), reason: (ahead === 0 ? 'today — start of the week' : 'the next start of week (Monday)') };
+    }
+
+    window.startNewHalf = async function() {
+        // ★ HR-62: owner-only (product decision). The old scheduler-scoped
+        // destructive variant is retired along with schedule deletion.
+        var _role = window.AccessControl?.getCurrentRole?.();
+        if (_role !== 'owner') {
+            window.AccessControl?.showPermissionDenied?.('start a new half (owner only)');
             return;
         }
+        if (window._newHalfInProgress) return; // ★ HR-63: re-entrancy guard
+        var picked = _hrComputeEpochDate();
+        var epoch = picked.date;
 
-        // ═══════════════════════════════════════════════════════════════
-        // OWNER/ADMIN: Full new half
-        // ═══════════════════════════════════════════════════════════════
         if (!confirm(
             "🏕️ START NEW HALF\n\n" +
-            "This will reset:\n" +
-            "  ✓ Bunk activity usage counters\n" +
-            "  ✓ Smart Tile rotation history\n" +
-            "  ✓ Regular League game counters (back to Game 1)\n" +
-            "  ✓ Specialty League game counters (back to Game 1)\n" +
-            "  ✓ All generated daily schedules\n\n" +
-            "This will NOT change:\n" +
-            "  • Fields configuration\n" +
-            "  • Special Activities setup\n" +
-            "  • Master Schedule templates\n" +
-            "  • Divisions and Bunks\n\n" +
-            "Are you sure you want to start a new half?"
+            "Counting will restart from " + epoch + "\n(" + picked.reason + ").\n\n" +
+            "From that date the camp behaves like day 1:\n" +
+            "  ✓ Activity rotation & usage counters restart\n" +
+            "  ✓ Cooldowns and multi-part sequences restart\n" +
+            "  ✓ League games renumber from Game 1\n" +
+            "  ✓ Matchup history, standings & playoffs reset\n\n" +
+            "Nothing is deleted:\n" +
+            "  • All previous schedules stay saved & viewable\n" +
+            "  • Past game results remain as an archive\n" +
+            "  • Fields, activities, divisions & templates unchanged\n\n" +
+            "Start the new half?"
         )) return;
 
-        logAuditEvent('start_new_half');
+        window._newHalfInProgress = true;
+        logAuditEvent('start_new_half_epoch', { epoch: epoch });
+        var failures = [];
         try {
-            console.log("=".repeat(50));
-            console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
-            console.log("=".repeat(50));
+            console.log('⭐ STARTING NEW HALF — epoch reset at', epoch);
 
-            // Clear localStorage
+            // 1) Write the epoch: canonical KV key + the app1.halfStartDate
+            //    hook that getPeriodStartDate('half')/getHalfStartDate read.
+            var prevE = null;
+            try { prevE = window.loadGlobalSettings?.('rotationEpoch') || null; } catch (_) {}
+            var prevDate = (typeof prevE === 'string') ? prevE : ((prevE && prevE.date) || null);
+            try {
+                window.saveGlobalSettings?.('rotationEpoch', { date: epoch, setAt: Date.now(), prevEpoch: prevDate });
+            } catch (e) { failures.push('epoch key: ' + (e.message || e)); }
+            try {
+                var _gsAll = window.loadGlobalSettings?.() || {};
+                var _app1 = _gsAll.app1 || {};
+                _app1.halfStartDate = epoch;
+                // ★ HR-69: the auto solver's swim/week ledgers keep a THIRD copy
+                // inside the app1 blob (loadSwimHistory/loadWeekHistory fall back
+                // to gs.app1.*) — scrub it here or a stale mirror could reseed
+                // the cleared top-level keys.
+                delete _app1.swimRotationHistory;
+                delete _app1.activityHistory;
+                window.saveGlobalSettings?.('app1', _app1);
+            } catch (e) { failures.push('halfStartDate hook: ' + (e.message || e)); }
+
+            // 2) Stamp the merge-surviving _epochDate into BOTH league history
+            //    blobs (a bare {} clear loses newest-wins merges to stale
+            //    devices — the F2 bug class; the stamp wins them instead).
+            try {
+                if (window.SchedulerCoreLeagues?.setHistoryEpoch) {
+                    if (!window.SchedulerCoreLeagues.setHistoryEpoch(epoch)) failures.push('regular league history epoch stamp');
+                } else failures.push('regular league engine not loaded — history epoch not stamped');
+            } catch (e) { failures.push('regular league epoch: ' + (e.message || e)); }
+            try {
+                if (window.SchedulerCoreSpecialtyLeagues?.setHistoryEpoch) {
+                    if (!window.SchedulerCoreSpecialtyLeagues.setHistoryEpoch(epoch)) failures.push('specialty league history epoch stamp');
+                } else failures.push('specialty league engine not loaded — history epoch not stamped');
+            } catch (e) { failures.push('specialty league epoch: ' + (e.message || e)); }
+
+            // 3) Standings + playoffs (modules hydrate on demand and persist
+            //    themselves — fixes the empty-registry and lost-save bugs).
+            try { window.LeaguesAPI?.resetStandingsAndPlayoffs?.(); }
+            catch (e) { failures.push('league standings reset: ' + (e.message || e)); }
+            try { window.SpecialtyLeaguesAPI?.resetStandingsAndPlayoffs?.(); }
+            catch (e) { failures.push('specialty standings reset: ' + (e.message || e)); }
+
+            // 4) One-time clears of the counter stores that have no usable
+            //    date keys. Post-epoch days re-derive via the epoch-filtered
+            //    rebuilders; pre-epoch days stay out by the read filters.
+            //    NOTE: leagueHistory/specialtyLeagueHistory localStorage keys
+            //    are deliberately NOT removed — they now carry the epoch stamp.
+            try {
+                window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
+                ['historicalCounts', 'historicalCountedDates', 'historicalCountsByDate',
+                 'manualUsageOffsets', 'smartTileHistory', 'swimRotationHistory',
+                 'activityHistory'].forEach(function (k) {
+                    try { window.saveGlobalSettings?.(k, {}); } catch (_) {}
+                });
+            } catch (e) { failures.push('counter clears: ' + (e.message || e)); }
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
-            localStorage.removeItem(LEAGUE_HISTORY_KEY);
-            localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
-            localStorage.removeItem(DAILY_DATA_KEY);
+            localStorage.removeItem('campistry_swimRotationHistory');
+            localStorage.removeItem('campistry_activityHistory');
+            localStorage.removeItem('camp_league_round_state');
+            localStorage.removeItem('camp_league_sport_rotation');
 
-            // ★★★ CRITICAL: Directly delete all daily_schedules records from Supabase ★★★
-            {
-                const client = window.CampistryDB?.getClient?.() || window.supabase;
-                const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
-                if (client && campId) {
-                    console.log("🗑️ New half: deleting all daily_schedules from Supabase...");
-                    const { error } = await client
-                        .from('daily_schedules')
-                        .delete()
-                        .eq('camp_id', campId);
-                    if (error) console.error('🗑️ New half: Supabase delete error:', error);
-                    else console.log("🗑️ New half: Supabase daily_schedules cleared");
-                }
+            // Round pointers restart (in memory too — F6 bug class).
+            window.leagueRoundState = {};
+            try { window.saveGlobalSettings?.('leagueRoundState', {}); } catch (_) {}
+            try { window.RotationEngine?.clearAllHistory?.(); } catch (_) {}
+            // ★ CB-90 carried over: completion stamps are counter-like state
+            // that nothing re-derives from schedules — clear for the new half.
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { failures.push('rotation-event completions: ' + (e.message || e)); }
+
+            // NOT done here (on purpose): no daily_schedules deletion, no
+            // campDailyData_v1 removal, no RotationCloud.clearAll() — the
+            // rotation_counts rows stay as pre-epoch history behind the
+            // epoch-filtered loader; clearing them would be both destructive
+            // and pointless (the daily backfill would re-derive them).
+
+            // 5) Push and verify BEFORE reload.
+            if (typeof window.forceSyncToCloud === 'function') {
+                var ok = false;
+                try { ok = await window.forceSyncToCloud(); } catch (e) { failures.push('cloud sync: ' + (e.message || e)); }
+                if (!ok && failures.indexOf('cloud sync did not confirm') === -1) failures.push('cloud sync did not confirm');
             }
 
-            // ★★★ CRITICAL: Clear ALL cloud keys including new league history keys ★★★
-            if (typeof window.clearCloudKeys === 'function') {
-                console.log("☁️ Clearing cloud keys for new half...");
-                await window.clearCloudKeys([
-                    'leagueRoundState',
-                    'leagueHistory',
-                    'specialtyLeagueHistory',
-                    'daily_schedules',
-                    'manualUsageOffsets',
-                    'historicalCounts',
-                    'historicalCountedDates',
-                    'smartTileHistory',
-                    'rotationHistory'
-                ]);
-                console.log("☁️ Cloud keys cleared");
+            console.log('⭐ NEW HALF RESET COMPLETE ⭐ epoch =', epoch, failures.length ? ('warnings: ' + failures.join('; ')) : '');
+            if (failures.length) {
+                alert(
+                    '⚠️ New Half started from ' + epoch + ' — with warnings:\n\n- ' + failures.join('\n- ') +
+                    '\n\nNo schedules were deleted. Reloading; if warnings persist, run Start New Half again.'
+                );
             } else {
-                window.saveGlobalSettings?.('leagueRoundState', {});
-                window.saveGlobalSettings?.('leagueHistory', {});
-                window.saveGlobalSettings?.('specialtyLeagueHistory', {});
-                window.saveGlobalSettings?.('daily_schedules', {});
-                window.saveGlobalSettings?.('manualUsageOffsets', {});
-                window.saveGlobalSettings?.('historicalCounts', {});
-                window.saveGlobalSettings?.('historicalCountedDates', {});
-                window.saveGlobalSettings?.('smartTileHistory', {});
-                window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
-
-                if (typeof window.forceSyncToCloud === 'function') {
-                    await window.forceSyncToCloud();
-                }
+                alert(
+                    '✅ New Half Started!\n\n' +
+                    'Counting restarts from ' + epoch + '.\n' +
+                    'The next league game generated will be Game 1.\n' +
+                    'All previous schedules remain saved as an archive.\n\n' +
+                    'Reloading page...'
+                );
             }
-
-            // Clear rotation_counts table in Supabase
-            await window.RotationCloud?.clearAll?.();
-
-            // ★★★ CB-90: wipe rotation-event completion stamps for the new half too
-            // (otherwise a regenerated event skips every bunk marked done last half).
-            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { /* non-fatal */ }
-
-            // Reset league standings and playoff state
-            try {
-                const _leagues = window.leaguesByName || {};
-                Object.values(_leagues).forEach(function(lg) {
-                    if (lg) { lg.standings = {}; if (lg.playoff) lg.playoff = { enabled: false, rounds: [] }; }
-                });
-                if (typeof window.saveLeaguesData === 'function') window.saveLeaguesData();
-                const _specLeagues = window.specialtyLeagues || {};
-                Object.values(_specLeagues).forEach(function(lg) {
-                    if (lg) { lg.standings = {}; if (lg.playoff) lg.playoff = { enabled: false, rounds: [] }; }
-                });
-                if (typeof window.saveSpecialtyLeaguesData === 'function') window.saveSpecialtyLeaguesData();
-            } catch (e) { console.warn('[startNewHalf] league standings reset failed:', e); }
-
-            console.log("⭐ NEW HALF RESET COMPLETE ⭐");
-
-            alert(
-                "✅ New Half Started!\n\n" +
-                "All activity and league counters have been reset.\n" +
-                "The first game generated will now be Game 1.\n\n" +
-                "Reloading page..."
-            );
             window.location.reload();
         } catch (e) {
-            console.error("Failed to start new half:", e);
-            alert("Error starting new half. Check console for details.");
+            console.error('Failed to start new half:', e);
+            alert('Error starting new half: ' + (e.message || e) + '\n\nNo schedules were deleted. Check console for details.');
+        } finally {
+            window._newHalfInProgress = false;
         }
     };
     

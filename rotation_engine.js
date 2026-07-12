@@ -197,9 +197,13 @@ var _todayCacheGeneration = 0;
             const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
             // Get sorted dates (most recent first), excluding today
+            // ★ HR-14: COMPLETE reset — bunks get new campers at the half, so
+            // even the 14-day recency/streak/coverage window must not look
+            // across the rotation epoch. Pre-epoch days are invisible here.
+            const _hrEp14 = _hrRotationEpoch();
             const _dateRe = /^\d{4}-\d{2}-\d{2}$/;
             const sortedDates = Object.keys(allDaily)
-                .filter(function(d) { return _dateRe.test(d) && d < today; })
+                .filter(function(d) { return _dateRe.test(d) && d < today && (!_hrEp14 || d >= _hrEp14); })
                 .sort(function(a, b) { return b.localeCompare(a); });
             
             // Process last 14 days
@@ -499,6 +503,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 String(yesterday.getMonth() + 1).padStart(2, '0') + '-' + 
                 String(yesterday.getDate()).padStart(2, '0');
 
+            // ★ HR-15: COMPLETE reset — a pre-epoch yesterday is treated as
+            // empty (mirrors Utils.getActivitiesDoneYesterday HR-13).
+            var _hrEp15 = _hrRotationEpoch();
+            if (_hrEp15 && yesterdayStr < _hrEp15) return activities;
+
             var yesterdayData = allDaily[yesterdayStr];
             if (!yesterdayData || !yesterdayData.scheduleAssignments || !yesterdayData.scheduleAssignments[bunkName]) {
                 return activities;
@@ -516,6 +525,22 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         }
         return activities;
     };
+
+    // ★ HR-9: rotation-epoch reader (Half Reset watermark). COMPLETE reset:
+    // bunks get new campers at the half, so ALL history — cooldowns, counts,
+    // multiPart gaps, AND the 14-day recency/streak/yesterday heuristics —
+    // ignores pre-epoch dates (HR-13/14/15).
+    // Local fallback because load order may precede scheduler_core_utils.
+    function _hrRotationEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            var d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
 
     /**
      * Get the last time a bunk did a specific activity (days ago)
@@ -551,6 +576,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
         var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
         var lastTimestamp = bunkHistory && (bunkHistory[activityName] || bunkHistory[actLower]);
+        // ★ HR-9: a rotationHistory timestamp from before epoch midnight is
+        // invisible (bookkeeping resets at the epoch; the schedule-scan path
+        // above is the recency source and stays unfiltered).
+        try {
+            var _hrEp9 = _hrRotationEpoch();
+            if (_hrEp9 && lastTimestamp && lastTimestamp < new Date(_hrEp9 + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
         if (lastTimestamp) {
             var now = Date.now();
             var daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
@@ -564,6 +598,67 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         }
 
         return null; // Never done
+    };
+
+    /**
+     * ★ HR-10: epoch-floored daysSince for COOLDOWN/GAP gates.
+     * Cooldowns (frequencyDays) and multiPart daysBetween reset at the
+     * rotation epoch — a pre-epoch occurrence must never block placement.
+     * (Since HR-14 the shared 14-day history is itself epoch-filtered, so
+     * this is belt-and-braces for cached histories built pre-filter; the
+     * per-date entries carry dateKeys, so we can filter them here without
+     * touching the shared history cache.)
+     */
+    RotationEngine.getDaysSinceActivityForCooldown = function(bunkName, activityName, beforeSlotIndex) {
+        var epoch = _hrRotationEpoch();
+        if (!epoch) return RotationEngine.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+
+        var actLower = (activityName || '').toLowerCase().trim();
+
+        // Today's draft occurrences are the active generation — never pre-epoch.
+        var todayActivities = RotationEngine.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        if (todayActivities.has(actLower)) return 0;
+
+        // 14-day schedule scan: only post-epoch dates may trigger a cooldown.
+        var history = RotationEngine.getBunkHistory(bunkName);
+        var actHistory = history.byActivity[actLower];
+        if (actHistory) {
+            var best = null, minAll = null;
+            var dates = actHistory.dates || [];
+            for (var i = 0; i < dates.length; i++) {
+                var d = dates[i];
+                if (!d || typeof d.daysAgo !== 'number') continue;
+                if (minAll === null || d.daysAgo < minAll) minAll = d.daysAgo;
+                if (d.dateKey && String(d.dateKey) >= epoch && (best === null || d.daysAgo < best)) best = d.daysAgo;
+            }
+            // A daysSinceLast fresher than every scanned date came from the
+            // cloud lastDone overlay (mergeCloudData) — post-epoch by
+            // construction, since RotationCloud.load is epoch-filtered (HR-7).
+            var dsl = actHistory.daysSinceLast;
+            if (dsl != null && (minAll === null || dsl < minAll) && (best === null || dsl < best)) best = dsl;
+            if (best !== null) return best;
+        }
+
+        // Utils fallback — HR-6 already epoch-floors its timestamp and its
+        // count fallback reads epoch-scoped historicalCounts.
+        if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDaysSinceActivity) {
+            var utilsDays = window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            if (utilsDays !== null && utilsDays !== undefined) return utilsDays;
+        }
+
+        // rotationHistory timestamp fallback — epoch-floored (HR-9 semantics).
+        var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
+        var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
+        var lastTimestamp = bunkHistory && (bunkHistory[activityName] || bunkHistory[actLower]);
+        if (lastTimestamp && lastTimestamp >= new Date(epoch + 'T00:00:00').getTime()) {
+            return Math.max(1, Math.floor((Date.now() - lastTimestamp) / (1000 * 60 * 60 * 24)));
+        }
+
+        // Count fallback — epoch-scoped after HR-4/HR-7, so a positive count
+        // means a real post-epoch occurrence.
+        if (RotationEngine.getActivityCount(bunkName, activityName) > 0) return 14;
+
+        return null; // Never done (since the epoch)
     };
 
     /**
@@ -1078,7 +1173,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // Skip daysSince=0 (same-day; variety score handles intra-day dup).
         // Skip null/undefined (never done; nothing to cooldown from).
         if (_cdForEsc > 0) {
-            var _daysSinceCD = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+            // ★ HR-11: cooldowns reset at the rotation epoch — use the
+            // epoch-floored variant so a pre-epoch visit can never block.
+            var _daysSinceCD = RotationEngine.getDaysSinceActivityForCooldown(bunkName, activityName);
             // ★ A cooldown requires an ACTUAL prior occurrence. Guard on getActivityCount > 0
             //   (the schedule-derived count the user sees) so a stale lastDone with a zero
             //   count — cloud rotation_counts diverging from the rebuilt history — can never
@@ -1117,7 +1214,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             // daysBetween: minimum gap since the previous part must elapse.
             var _mpGap = parseInt(_mp.daysBetween) || 0;
             if (_mpGap > 0) {
-                var _mpSince = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+                // ★ HR-12: multiPart sequences restart at part 1 at the epoch —
+                // the gap gate must not see pre-epoch parts.
+                var _mpSince = RotationEngine.getDaysSinceActivityForCooldown(bunkName, activityName);
                 if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return _blk(bunkName, activityName, 'multiPart-daysBetween', { daysSince: _mpSince, daysBetween: _mpGap });
             }
         }

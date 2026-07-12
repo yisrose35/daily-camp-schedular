@@ -14,6 +14,19 @@
     // HELPERS — fall back to locally-computed values when SDK utils are absent
     // ========================================================================
 
+    // ★ HR-34: rotation-epoch watermark reader (non-deleting half reset) —
+    //   COMPLETE reset: bunks get new campers at the half, so counts, lastDone
+    //   AND recency/yesterday checks all ignore dates before this dateKey.
+    function _getRotationEpoch() {
+        try {
+            const U = window.SchedulerCoreUtils || window.Utils;
+            if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+
     function getDivision(bunk) {
         if (window.SchedulerCoreUtils?.getDivisionForBunk) return window.SchedulerCoreUtils.getDivisionForBunk(bunk);
         const divs = window.divisions || {};
@@ -488,8 +501,12 @@
         });
 
         // Historical data (skip today — we use live data above)
+        // ★ HR-35: COMPLETE reset — bunks get new campers at the half, so
+        //   pre-epoch days are invisible to counts AND lastDone/recency alike.
+        const _epoch = _getRotationEpoch();
         Object.keys(allDaily).sort().forEach(dateKey => {
             if (dateKey === today) return;
+            if (_epoch && dateKey < _epoch) return; // ★ HR-35
             const sched = allDaily[dateKey]?.scheduleAssignments?.[bunk] || [];
             sched.forEach(e => {
                 if (!e || e.continuation || e._isTransition) return;
@@ -506,6 +523,7 @@
         Object.keys(bh).forEach(act => {
             try {
                 const d = new Date(bh[act]).toISOString().split('T')[0];
+                if (_epoch && d < _epoch) return; // ★ HR-35: pre-epoch timestamps invisible
                 if (!lastDoneByAct[act] || d > lastDoneByAct[act]) lastDoneByAct[act] = d;
             } catch (_) {}
         });

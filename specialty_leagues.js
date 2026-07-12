@@ -2001,6 +2001,23 @@
             const divisions = window.divisions || {};
             const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
+            // ★ HR-67: pre-epoch (archive) dates must not be imported into the
+            // results store — their games belong to the previous half.
+            const _hrEpImp = (function () {
+                try {
+                    const U = window.SchedulerCoreUtils || window.Utils;
+                    if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const d = (typeof e === 'string') ? e : (e && e.date);
+                    return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+                } catch (_) { return null; }
+            })();
+            if (_hrEpImp && currentDate < _hrEpImp) {
+                alert('This date is before the current half (counting restarted ' + _hrEpImp + ').\nIts games are archive and cannot be imported into the results.');
+                console.warn('[SPECIALTY_LEAGUES] Import blocked: ' + currentDate + ' predates the rotation epoch ' + _hrEpImp);
+                return;
+            }
+
             console.log('[SPECIALTY_LEAGUES] Import: Looking for games for league "' + league.name + '"');
 
             // Use smart division matching
@@ -2272,8 +2289,21 @@
 
             let gamesProcessed = 0;
             let matchesProcessed = 0;
-            
+
+            // ★ HR-65: rotation epoch (non-deleting half reset) — standings show
+            // the new half only; pre-epoch games stay as the results archive.
+            const _hrEpSt = (function () {
+                try {
+                    const U = window.SchedulerCoreUtils || window.Utils;
+                    if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const d = (typeof e === 'string') ? e : (e && e.date);
+                    return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+                } catch (_) { return null; }
+            })();
+
             (league.games || []).forEach(g => {
+                if (_hrEpSt && g && typeof g.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(g.date) && g.date < _hrEpSt) return; // ★ HR-65
                 gamesProcessed++;
                 (g.matches || []).forEach(m => {
                     matchesProcessed++;
@@ -2443,6 +2473,30 @@
     function _slIsAutoGame(g) { return g && (g.importedFrom === 'auto' || g.importedFrom === 'schedule'); }
 
     window.SpecialtyLeaguesAPI = window.SpecialtyLeaguesAPI || {};
+
+    // ★ HR-66: standings + playoff reset for the non-deleting half reset.
+    // Hydrates on demand (LG-4 pattern) so it works from a session that never
+    // opened the Specialty tab — the empty-registry no-op was audit finding F9.
+    // league.games is KEPT (results archive); recalcStandings is epoch-
+    // filtered (HR-65), so rebuilt standings reflect only the new half.
+    window.SpecialtyLeaguesAPI.resetStandingsAndPlayoffs = function () {
+        let n = 0;
+        try {
+            if (Object.keys(specialtyLeagues).length === 0) { try { loadData(); } catch (_e) {} }
+            Object.values(specialtyLeagues || {}).forEach(function (lg) {
+                if (!lg) return;
+                lg.standings = {};
+                lg.playoff = { enabled: false, rounds: [] };
+                try { recalcStandings(lg); } catch (_e) {}
+                n++;
+            });
+            saveData(true);
+            console.log('[SpecialtyLeagues] ★ HR-66: standings + playoffs reset for ' + n + ' league(s) (games kept as archive).');
+        } catch (e) {
+            console.error('[SpecialtyLeagues] resetStandingsAndPlayoffs failed:', e);
+        }
+        return n;
+    };
 
     window.SpecialtyLeaguesAPI.syncGamesFromGeneration = function (leagueId, dateKey, gameEntries) {
         try {

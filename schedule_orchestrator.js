@@ -325,7 +325,21 @@
             if (!window.ScheduleDB?.loadDateRange || !navigator.onLine) return;
             const d = new Date(todayKey + 'T12:00:00');
             d.setDate(d.getDate() - 14);
-            const startDate = d.toISOString().split('T')[0];
+            let startDate = d.toISOString().split('T')[0];
+            // ★ HR-39: rotation-purpose hydration stops at the rotation epoch —
+            // pre-epoch days are invisible to all history logic (complete half
+            // reset), so pulling them here would only waste quota. Normal
+            // calendar viewing of pre-epoch dates loads elsewhere and is
+            // unaffected.
+            try {
+                const U = window.SchedulerCoreUtils || window.Utils;
+                const _hrEp = (U && typeof U.getRotationEpoch === 'function') ? U.getRotationEpoch() : (function() {
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const dd = (typeof e === 'string') ? e : (e && e.date);
+                    return (dd && /^\d{4}-\d{2}-\d{2}$/.test(dd)) ? dd : null;
+                })();
+                if (_hrEp && startDate < _hrEp) startDate = _hrEp;
+            } catch (_) {}
 
             const allDaily = JSON.parse(localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY) || '{}');
             const pastDates = Object.keys(allDaily).filter(k => k < todayKey && k >= startDate && allDaily[k]?.scheduleAssignments && Object.keys(allDaily[k].scheduleAssignments).length > 0);

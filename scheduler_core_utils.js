@@ -2411,6 +2411,12 @@
 
             const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
+            // ★ HR-13: COMPLETE reset — bunks get new campers at the half, so
+            // even the yesterday-repeat variety check must not look across the
+            // rotation epoch. A pre-epoch yesterday is treated as empty.
+            const _hrEpY = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+            if (_hrEpY && yesterdayStr < _hrEpY) return activities;
+
             const yesterdayData = allDaily[yesterdayStr];
             if (!yesterdayData?.scheduleAssignments?.[bunkName]) return activities;
 
@@ -2447,7 +2453,18 @@
         // Check rotation history for timestamps
         const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
         const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
-        const lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
+        let lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
+
+        // ★ HR-6: cooldowns reset at the rotation epoch — a timestamp from
+        // before epoch midnight is invisible (pre-epoch visits never block).
+        // The historicalCounts fallback below stays unfiltered: HR-4 makes
+        // those counts epoch-scoped, so it can't leak pre-epoch usage.
+        try {
+            const _hrEp = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+            if (_hrEp && lastTimestamp && lastTimestamp < new Date(_hrEp + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
 
         if (lastTimestamp) {
             const now = Date.now();
@@ -2526,6 +2543,22 @@
     };
 
     /**
+     * ★ HR-1: canonical rotation-epoch reader (Half Reset watermark).
+     * Returns the ISO dateKey ('YYYY-MM-DD') before which all rotation
+     * bookkeeping (counts, caps, cooldowns, multiPart, fair-share) is
+     * invisible — schedules themselves are never deleted. Tolerates both
+     * the object form { date, setAt, prevEpoch } and the legacy plain
+     * string form. Returns null when no epoch is set.
+     */
+    Utils.getRotationEpoch = function() {
+        try {
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            var d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    };
+
+    /**
      * Compute the start date of the current N-week period, anchored to camp
      * start date if configured, else rolling calendar windows.
      * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
@@ -2537,12 +2570,22 @@
             ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
             : new Date().toISOString().slice(0, 10));
         var cd = Utils.getCampDates();
+        // ★ HR-2: rotation-epoch floor — every period start is clamped to the
+        // epoch so per-period counts/caps never look before the watermark.
+        // A null (= lifetime) result becomes the epoch itself when one is set.
+        // ISO dateKeys compare lexicographically, so max() is a string compare.
+        var _hrEpoch = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+        var _hrClamp = function(v) {
+            if (!_hrEpoch) return v;
+            if (!v) return _hrEpoch;
+            return (v >= _hrEpoch) ? v : _hrEpoch;
+        };
 
         if (period === 'half' || (!period)) {
             if (cd) {
                 var curParts = today.split('-').map(Number);
                 var curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
-                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return cd.half2Start;
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return _hrClamp(cd.half2Start);
                 // ★ FIX: if refDate is BEFORE camp startDate (e.g. pre-camp
                 // staging/test runs), returning cd.startDate causes
                 // getPeriodActivityCount to filter out ALL historical dates
@@ -2554,13 +2597,15 @@
                 // history, which is the conservative, safe behavior).
                 if (cd.startDate) {
                     var _startD = new Date(cd.startDate + 'T00:00:00');
-                    if (curD >= _startD) return cd.startDate;
+                    if (curD >= _startD) return _hrClamp(cd.startDate);
                     // fall through to local settings fallback below
                 }
             }
             var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
             var s = gs.app1 || gs;
-            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null;
+            // ★ HR-2: the null branch means "lifetime" — with an epoch set that
+            // must become the epoch, or lifetime caps would count pre-epoch days.
+            return _hrClamp(s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null);
         }
 
         // ★ FIX: accept 'week' as an alias for '1week'. Several specials in
@@ -2574,7 +2619,8 @@
                    : period === '3weeks' ? 3
                    : period === '4weeks' ? 4
                    : 0;
-        if (nWeeks === 0) return null;
+        // ★ HR-2: unknown period = lifetime → epoch floor when set.
+        if (nWeeks === 0) return _hrClamp(null);
 
         if (cd && cd.startDate) {
             var campStart = new Date(cd.startDate + 'T00:00:00');
@@ -2587,7 +2633,7 @@
                 var periodStartDay = periodIndex * nWeeks * 7;
                 var periodDate = new Date(campStart);
                 periodDate.setDate(periodDate.getDate() + periodStartDay);
-                return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+                return _hrClamp(periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0'));
             }
         }
 
@@ -2597,7 +2643,7 @@
         var dow = d.getDay();
         var daysToMon = dow === 0 ? 6 : dow - 1;
         d.setDate(d.getDate() - daysToMon - ((nWeeks - 1) * 7));
-        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        return _hrClamp(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
     };
 
     /**
@@ -2614,10 +2660,14 @@
             ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
             : new Date().toISOString().slice(0, 10));
         var periodStart = Utils.getPeriodStartDate(period, today);
+        // ★ HR-3: belt-and-braces epoch skip — HR-2 already floors periodStart,
+        // but the periodStart==null path counts everything, so filter here too.
+        var _hrEpoch3 = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
         var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
         var count = 0;
         Object.keys(allDaily).forEach(function(dateKey) {
             if (dateKey >= today) return;
+            if (_hrEpoch3 && dateKey < _hrEpoch3) return;
             if (periodStart && dateKey < periodStart) return;
             var slots = allDaily[dateKey]?.scheduleAssignments?.[bunk];
             if (!Array.isArray(slots)) return;
@@ -2638,6 +2688,7 @@
                 var _cloudCount66 = 0;
                 Object.keys(_cbd66).forEach(function(dateKey) {
                     if (dateKey >= today) return;
+                    if (_hrEpoch3 && dateKey < _hrEpoch3) return; // ★ HR-3: cloud overlay must not reintroduce pre-epoch dates
                     if (periodStart && dateKey < periodStart) return;
                     var _byB = _cbd66[dateKey] && _cbd66[dateKey][bunk];
                     if (_byB && (_byB[activityName] || 0) > 0) _cloudCount66++;
@@ -2786,8 +2837,12 @@
         const countsByDate = {}; // per-date breakdown → lets a regen authoritatively replace one date
         let totalActivities = 0;
         let datesProcessed = 0;
+        // ★ HR-4: rotation-epoch fence — pre-epoch schedules stay saved but are
+        // invisible to the count rebuild, so kept history can't resurrect counts.
+        const _hrEpoch4 = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
 
         Object.entries(allDaily).forEach(([dateKey, dayData]) => {
+            if (_hrEpoch4 && dateKey < _hrEpoch4) return; // ★ HR-4
             const sched = dayData?.scheduleAssignments || {};
             datesProcessed++;
             const dayCounts = (countsByDate[dateKey] = {});
@@ -2835,14 +2890,24 @@
             let _finalCounts = counts;
             let _finalByDate = countsByDate; // full scan → per-date is authoritative
             const _countedDates = {};
-            Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            Object.keys(allDaily).forEach(function (dk) {
+                if (_hrEpoch4 && dk < _hrEpoch4) return; // ★ HR-4: pre-epoch dates are never "counted"
+                _countedDates[dk] = true;
+            });
             try {
                 const _gs = window.loadGlobalSettings?.() || {};
                 const _prevCounts = _gs.historicalCounts || {};
                 const _prevDates = _gs.historicalCountedDates || {};
                 const _prevByDate = _gs.historicalCountsByDate || {};
                 const _scanned = new Set(Object.keys(allDaily));
-                const _partial = Object.keys(_prevDates).some(dk => !_scanned.has(dk));
+                // ★ HR-4: raise-only merge is only safe when the stored baselines
+                // were built under the SAME epoch — otherwise the previous counts
+                // carry pre-epoch floors that this rebuild must not preserve.
+                // On epoch change, prefer full-recount semantics (fresh scan wins).
+                const _hrPrevEpoch = _prevByDate._epochUsed || null;
+                const _hrEpochChanged = (_hrPrevEpoch !== (_hrEpoch4 || null));
+                const _partial = !_hrEpochChanged &&
+                    Object.keys(_prevDates).some(dk => !_scanned.has(dk) && !(_hrEpoch4 && dk < _hrEpoch4));
                 if (_partial && Object.keys(_prevCounts).length > 0) {
                     // A partial local scan (near-quota browser keeps most dates in the
                     // cloud) can't lower the shared totals for the dates it can't see —
@@ -2900,12 +2965,18 @@
                         _finalCounts = _merged;
                     }
                     // keep previously-counted dates too
-                    Object.keys(_prevDates).forEach(function (dk) { _countedDates[dk] = true; });
+                    Object.keys(_prevDates).forEach(function (dk) {
+                        if (_hrEpoch4 && dk < _hrEpoch4) return; // ★ HR-4: never re-adopt pre-epoch dates
+                        _countedDates[dk] = true;
+                    });
                 }
             } catch (_e) { /* fall back to authoritative overwrite */ }
             window.saveGlobalSettings('historicalCounts', _finalCounts);
             // Per-date breakdown of the locally-scanned dates — the baseline that lets
             // the NEXT regen of any of these dates be authoritative (bounded to local dates).
+            // ★ HR-4: stamp the epoch these baselines were built under, so a future
+            // rebuild after an epoch change forces full-recount semantics.
+            try { _finalByDate._epochUsed = _hrEpoch4 || null; } catch (_) {}
             window.saveGlobalSettings('historicalCountsByDate', _finalByDate);
             // Rebuild historicalCountedDates to match so incrementHistoricalCounts
             // guards stay consistent after a full rebuild.
@@ -3190,7 +3261,11 @@ const validActivities = Utils.getValidActivityNames();
 
         const allDaily = window.loadAllDailyData?.() || {};
         const countedDates = {};
+        // ★ HR-5: cloud rebuild honors the rotation epoch too — hydrated
+        // pre-epoch schedules must not be marked as counted.
+        const _hrEpoch5 = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
         Object.keys(allDaily).forEach(dk => {
+            if (_hrEpoch5 && dk < _hrEpoch5) return; // ★ HR-5
             if (/^\d{4}-\d{2}-\d{2}$/.test(dk) && allDaily[dk]?.scheduleAssignments) {
                 countedDates[dk] = Date.now();
             }

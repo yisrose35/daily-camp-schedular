@@ -25,6 +25,36 @@
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
 
     // =========================================================================
+    // ★ HR-41: ROTATION EPOCH (non-deleting half reset)
+    // =========================================================================
+    // history._epochDate is an ISO dateKey stamped by Start New Half. Every
+    // league READ (game numbering, matchup/sport fairness, adjacency guards,
+    // chinuch ledger) treats dates before it as nonexistent — the entries
+    // themselves stay in the blob as an archive, so the reset is reversible
+    // and nothing is deleted. The field is merge-surviving (adopt-max), which
+    // is what a bare {} clear could never be: any stale device copy would win
+    // the LG-8 merge and resurrect last half. Effective epoch = max of the
+    // blob stamp and the global rotationEpoch setting.
+    function _getGlobalEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+    function _effectiveEpoch(history) {
+        const blobEpoch = (history && typeof history._epochDate === 'string'
+            && /^\d{4}-\d{2}-\d{2}$/.test(history._epochDate)) ? history._epochDate : '';
+        const globalEpoch = _getGlobalEpoch() || '';
+        const eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        return eff || null;
+    }
+    Leagues.getEffectiveEpoch = _effectiveEpoch; // diagnostics + tests
+
+    // =========================================================================
     // ★ LG-8: (LEAGUE, DATE)-GRANULAR HISTORY MERGE
     // =========================================================================
     // leagueHistory used to be resolved WHOLESALE — whichever copy (cloud row
@@ -67,6 +97,8 @@
             };
             if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
             if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
+            // ★ HR-41: the epoch dateKey must survive normalization
+            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) out._epochDate = h._epochDate;
             return out;
         };
         if (!a) return b ? norm(b) : norm(null);
@@ -110,6 +142,14 @@
         // days whose data predates it.
         const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
         if (countersResetAt) merged._countersResetAt = countersResetAt;
+        // ★ HR-41: rotation epoch — adopt-MAX across lineages so a stale copy
+        // (older or missing stamp) can never un-reset the half. ISO dateKeys
+        // compare lexicographically.
+        (function () {
+            const ea = (A._epochDate || ''), eb = (B._epochDate || '');
+            const em = ea >= eb ? ea : eb;
+            if (em) merged._epochDate = em;
+        })();
         const tombTs = function (lg, d) {
             return Math.max(
                 merged._tombstones[lg + '|' + d] || 0,
@@ -171,13 +211,17 @@
         // records so they can never diverge from them (regen-inflation class);
         // leagues with no per-day record (pure legacy) keep the fresher copy's
         // flat entries.
+        // ★ HR-52: epoch-scoped — pre-epoch trips stay recorded (archive) but
+        // never count toward away-trip fairness in the new half.
         (function () {
+            const _hrEpOc = merged._epochDate || _getGlobalEpoch() || '';
             const ocLeagues = new Set(Object.keys(merged.ocTripsByDate));
             Object.keys(F.offCampusCounts).forEach(function (k) {
                 if (!ocLeagues.has(k.split('|')[0])) merged.offCampusCounts[k] = F.offCampusCounts[k];
             });
             ocLeagues.forEach(function (lg) {
                 Object.keys(merged.ocTripsByDate[lg]).forEach(function (d) {
+                    if (_hrEpOc && d < _hrEpOc) return; // ★ HR-52
                     (merged.ocTripsByDate[lg][d] || []).forEach(function (t) {
                         if (!t) return;
                         const k = lg + '|' + t;
@@ -205,6 +249,11 @@
         // Rebuild the flat aggregates from the merged log (date order) so they
         // can never diverge from it again; pure-legacy leagues (no gameLog)
         // keep the fresher copy's aggregate entries.
+        // ★ HR-42: the rebuild is EPOCH-SCOPED — pre-epoch gameLog days stay in
+        // the blob as archive but must not flow into the flat matchup/sport
+        // aggregates (the legacy fallback read path), or every merge would
+        // resurrect last half's matchup counts.
+        const _hrEpM = merged._epochDate || _getGlobalEpoch() || '';
         const loggedLeagues = new Set(Object.keys(merged.gameLog));
         Object.keys(F.teamSports).forEach(function (k) {
             if (!loggedLeagues.has(k.split('|')[0])) merged.teamSports[k] = F.teamSports[k];
@@ -214,6 +263,7 @@
         });
         loggedLeagues.forEach(function (lg) {
             Object.keys(merged.gameLog[lg]).sort().forEach(function (d) {
+                if (_hrEpM && d < _hrEpM) return; // ★ HR-42
                 (merged.gameLog[lg][d] || []).forEach(function (e) {
                     if (!e) return;
                     if (e.t1 && e.t2) {
@@ -444,10 +494,15 @@
         if (!history.gamesPerDate[leagueName]) history.gamesPerDate[leagueName] = {};
         
         const gamesMap = history.gamesPerDate[leagueName];
-        
+
         // Sum games from all dates BEFORE currentDate (chronologically)
+        // ★ HR-43: game numbering restarts at the rotation epoch — pre-epoch
+        // days stay recorded (archive) but never count, so the first game of
+        // the new half is Game 1.
+        const _hrEp = _effectiveEpoch(history);
         let total = 0;
         for (const date of Object.keys(gamesMap)) {
+            if (_hrEp && date < _hrEp) continue; // ★ HR-43
             if (date < currentDate) {
                 total += gamesMap[date];
             }
@@ -487,10 +542,14 @@
         const allDailyData = window.loadAllDailyData?.() || {};
         
         // Filter to only valid date keys (YYYY-MM-DD format) that are after currentDate
+        // ★ HR-44: never renumber pre-epoch archived schedules — their Game N
+        // labels are frozen history from the previous half.
+        const _hrEpUF = _effectiveEpoch(history);
         const futureDates = Object.keys(allDailyData)
             .filter(date => {
                 // Must be a valid date format
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+                if (_hrEpUF && date < _hrEpUF) return false; // ★ HR-44
                 // Must be after current date
                 return date > currentDate;
             })
@@ -519,8 +578,9 @@
                 // ★★★ CRITICAL: Count games from all dates BEFORE this future date ★★★
                 const gamesPerDateMap = history.gamesPerDate[leagueName] || {};
                 let gamesBeforeThisDate = 0;
-                
+
                 for (const histDate of Object.keys(gamesPerDateMap)) {
+                    if (_hrEpUF && histDate < _hrEpUF) continue; // ★ HR-44: pre-epoch games never count
                     if (histDate < futureDate) {
                         gamesBeforeThisDate += gamesPerDateMap[histDate];
                     }
@@ -717,7 +777,11 @@
         const gl = history.gameLog && history.gameLog[leagueName];
         if (!gl) return getTeamSportHistory(leagueName, team, history);
         const out = [];
+        // ★ HR-45: sport fairness restarts at the rotation epoch — pre-epoch
+        // games stay in the gameLog (archive) but are invisible here.
+        const _hrEp = _effectiveEpoch(history);
         Object.keys(gl).sort().forEach(function (d) {
+            if (_hrEp && d < _hrEp) return; // ★ HR-45
             if (beforeDate && d >= beforeDate) return;
             (gl[d] || []).forEach(function (e) {
                 if (e && e.sport && (e.t1 === team || e.t2 === team)) out.push(e.sport);
@@ -813,13 +877,21 @@
         if (!dayId) return out;
         if (typeof window !== 'undefined' && window.__leagueAdjacentDaySportGuard === false) return out;
         try {
+            // ★ HR-46: COMPLETE reset — regenerating a pre-epoch (archive) date
+            // must not read the new half's days as "next", and vice versa the
+            // forward guard never crosses the epoch boundary.
+            const _hrEp = _effectiveEpoch(history);
             const gl = (history.gameLog && history.gameLog[leagueName]) || {};
             let next = null;
             Object.keys(gl).forEach(function (d) {
+                if (_hrEp && d >= _hrEp && dayId < _hrEp) return; // ★ HR-46: pre-epoch day never looks forward into the new half
+                if (_hrEp && d < _hrEp && dayId >= _hrEp) return; // ★ HR-46: post-epoch day never looks back across the boundary
                 if (d <= dayId || !(gl[d] || []).length) return;
                 if (!next || d < next) next = d;
             });
             dailyDataDates().forEach(function (d) {
+                if (_hrEp && d >= _hrEp && dayId < _hrEp) return; // ★ HR-46
+                if (_hrEp && d < _hrEp && dayId >= _hrEp) return; // ★ HR-46
                 if (d <= dayId) return;
                 if (next && d >= next) return;
                 if (dailyDataLeagueGames(leagueName, d).length) next = d;
@@ -868,11 +940,18 @@
             history.matchupHistory = history.matchupHistory || {};
             const tombs = history._tombstones || {};
             const resetAt = Number(history._resetAt) || 0;
+            // ★ HR-47: THE reconcile fence for the non-deleting half reset —
+            // pre-epoch saved schedules are archive and must NEVER be rebuilt
+            // into the gameLog/aggregates/counters (they would resurrect last
+            // half's matchups and game numbers). Post-epoch days keep healing
+            // normally — unlike the all-or-nothing _resetAt guard.
+            const _hrEpRec = _effectiveEpoch(history);
             leagues.forEach(function (league) {
                 if (!league || !league.name) return;
                 const teamSet = new Set(league.teams || []);
                 if (teamSet.size < 2) return;
                 dates.forEach(function (d) {
+                    if (_hrEpRec && d < _hrEpRec) return;                         // ★ HR-47
                     if (d === skipDate) return;                                   // the day being generated is reset/re-recorded by this run
                     if ((history.gameLog[league.name] || {})[d] && history.gameLog[league.name][d].length) return;
                     if ((tombs[`${league.name}|${d}`] || 0) > 0 || (tombs[`*|${d}`] || 0) > 0 || resetAt > 0) return;
@@ -933,8 +1012,12 @@
         const gl = history.gameLog && history.gameLog[leagueName];
         if (!gl) return getMatchupCount(leagueName, team1, team2, history);
         const key = getMatchupKey(team1, team2);
+        // ★ HR-48: who-played-who restarts at the rotation epoch — pre-epoch
+        // meetings stay logged (archive) but never count toward fairness.
+        const _hrEp = _effectiveEpoch(history);
         let n = 0;
         Object.keys(gl).forEach(function (d) {
+            if (_hrEp && d < _hrEp) return;                // ★ HR-48
             if (asOfDate && d > asOfDate) return;          // ignore strictly-future dates
             (gl[d] || []).forEach(function (e) {
                 if (e && getMatchupKey(e.t1, e.t2) === key) n++;
@@ -1057,7 +1140,10 @@
         const gl = history.gameLog?.[leagueName];
         if (!gl) return out;
         const key = getMatchupKey(team1, team2);
+        // ★ HR-49: pair-sport caveat restarts at the rotation epoch.
+        const _hrEp = _effectiveEpoch(history);
         Object.keys(gl).forEach(function (d) {
+            if (_hrEp && d < _hrEp) return; // ★ HR-49
             (gl[d] || []).forEach(function (e) {
                 if (e && e.sport && getMatchupKey(e.t1, e.t2) === key) out.push(e.sport);
             });
@@ -1130,7 +1216,10 @@
     // yesterday. Derived from the date-keyed gameLog (regen/delete-safe).
     function makePairRecency(leagueName, history, dayId) {
         const gl = (history.gameLog && history.gameLog[leagueName]) || {};
-        const dates = Object.keys(gl).filter(function (d) { return !dayId || d <= dayId; }).sort();
+        // ★ HR-50: pair recency restarts at the rotation epoch — pre-epoch
+        // meetings are invisible (0 = never met, as far as the new half knows).
+        const _hrEp = _effectiveEpoch(history);
+        const dates = Object.keys(gl).filter(function (d) { return (!dayId || d <= dayId) && (!_hrEp || d >= _hrEp); }).sort();
         const denom = dates.length + 1;
         const cache = {};
         return function (a, b) {
@@ -1374,6 +1463,15 @@
                 const gl = (history.gameLog && history.gameLog[leagueName]) || {};
                 let prev = null, next = null;
                 if (dayId) {
+                    // ★ HR-51: COMPLETE reset — the adjacent-day rematch guard never
+                    // crosses the rotation epoch: a Game-1 rematch of last half's
+                    // finale is legitimate (new campers, void history). A pre-epoch
+                    // (archive) day likewise never reads the new half as adjacent.
+                    const _hrEp = _effectiveEpoch(history);
+                    const _sameSide = function (d) {
+                        if (!_hrEp) return true;
+                        return (d < _hrEp) === (dayId < _hrEp);
+                    };
                     const seen = new Set(Object.keys(gl).filter(function (d) { return (gl[d] || []).length; }));
                     dailyDataDates().forEach(function (d) {
                         if (seen.has(d)) return;
@@ -1381,6 +1479,7 @@
                     });
                     seen.forEach(function (d) {
                         if (d === dayId) return;
+                        if (!_sameSide(d)) return; // ★ HR-51
                         if (d < dayId) { if (!prev || d > prev) prev = d; }
                         else { if (!next || d < next) next = d; }
                     });
@@ -3249,9 +3348,14 @@
                 const _chCounts = {};
                 teams.forEach(function (t) { _chCounts[t] = 0; });
                 try {
+                    // ★ HR-53: chinuch attendance fairness restarts at the rotation
+                    // epoch — pre-epoch attendance stays recorded but never biases
+                    // the new half's pick order.
+                    const _hrEpCh = _effectiveEpoch(history);
                     const _cbd = (history.chinuchByDate && history.chinuchByDate[league.name]) || {};
                     Object.keys(_cbd).forEach(function (d) {
                         if (d === dayId) return;   // today's own (pre-regen) record must not bias today
+                        if (_hrEpCh && d < _hrEpCh) return; // ★ HR-53
                         (_cbd[d] || []).forEach(function (t) { if (_chCounts[t] != null) _chCounts[t]++; });
                     });
                 } catch (_eCbd) {}
@@ -4830,6 +4934,72 @@ window._debugLeagueTimeData = timeData;
             }
             _pushLeagueHistoryToCloud(resetHistory);
             console.log("League history reset (reset marker synced).");
+        }
+    };
+
+    // =========================================================================
+    // ★ HR-54: EPOCH STAMP — the non-deleting half reset's league entry point.
+    // =========================================================================
+    // Called by startNewHalf (calendar.js). Stamps the merge-surviving
+    // _epochDate into the history blob (adopt-max, so no stale device copy can
+    // un-reset it), restarts away-trip fairness, and rebuilds the flat
+    // matchup/sport aggregates epoch-scoped so the legacy fallback reads can't
+    // leak last half. The gameLog / gamesPerDate / chinuch / trip records are
+    // all KEPT — they are the archive, and every read is epoch-filtered.
+    Leagues.setHistoryEpoch = function (dateKey) {
+        try {
+            if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))) return false;
+            const h = loadLeagueHistory();
+            const prev = (typeof h._epochDate === 'string') ? h._epochDate : '';
+            h._epochDate = (prev && prev > dateKey) ? prev : String(dateKey);
+            // Away-trip fairness restarts: rebuild flat counters from post-epoch
+            // trips only (mirrors the HR-52 merge rebuild; records stay).
+            h.ocTripsByDate = h.ocTripsByDate || {};
+            h.offCampusCounts = {};
+            Object.keys(h.ocTripsByDate).forEach(function (lg) {
+                Object.keys(h.ocTripsByDate[lg] || {}).forEach(function (d) {
+                    if (d < h._epochDate) return;
+                    (h.ocTripsByDate[lg][d] || []).forEach(function (t) {
+                        if (!t) return;
+                        const k = lg + '|' + t;
+                        h.offCampusCounts[k] = (h.offCampusCounts[k] || 0) + 1;
+                    });
+                });
+            });
+            h._ocResetAt = h._ocResetAt || {};
+            h._ocResetAt['*'] = Date.now();
+            // Flat matchup/sport aggregates: rebuild epoch-scoped from the
+            // gameLog (mirrors the HR-42 merge rebuild). Pure-legacy leagues
+            // (no gameLog) have undated aggregates that cannot be filtered —
+            // a complete reset zeroes them; the archive for logged leagues is
+            // the gameLog itself.
+            h.matchupHistory = {};
+            h.teamSports = {};
+            Object.keys(h.gameLog || {}).forEach(function (lg) {
+                Object.keys(h.gameLog[lg] || {}).sort().forEach(function (d) {
+                    if (d < h._epochDate) return;
+                    (h.gameLog[lg][d] || []).forEach(function (e) {
+                        if (!e) return;
+                        if (e.t1 && e.t2) {
+                            const mk = lg + ':' + getMatchupKey(e.t1, e.t2);
+                            h.matchupHistory[mk] = (h.matchupHistory[mk] || 0) + 1;
+                        }
+                        if (e.sport) {
+                            [e.t1, e.t2].forEach(function (t) {
+                                if (!t) return;
+                                const tk = lg + '|' + t;
+                                (h.teamSports[tk] = h.teamSports[tk] || []).push(e.sport);
+                            });
+                        }
+                    });
+                });
+            });
+            saveLeagueHistory(h);
+            console.log('[RegularLeagues] ★ HR-54: rotation epoch stamped at ' + h._epochDate + ' — game numbering, matchups, sport and trip fairness restart there (records kept as archive).');
+            return true;
+        } catch (e) {
+            console.error('[RegularLeagues] setHistoryEpoch failed:', e);
+            return false;
         }
     };
 
