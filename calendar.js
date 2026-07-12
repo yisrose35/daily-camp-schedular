@@ -572,11 +572,12 @@ all[date].updated_at = new Date().toISOString();
     }
 
     window.startNewHalf = async function() {
-        // ★ HR-62: owner-only (product decision). The old scheduler-scoped
-        // destructive variant is retired along with schedule deletion.
+        // ★ HR-62: owner/admin only (product decision — schedulers never; the
+        // old scheduler-scoped destructive variant is retired along with
+        // schedule deletion).
         var _role = window.AccessControl?.getCurrentRole?.();
-        if (_role !== 'owner') {
-            window.AccessControl?.showPermissionDenied?.('start a new half (owner only)');
+        if (_role !== 'owner' && _role !== 'admin') {
+            window.AccessControl?.showPermissionDenied?.('start a new half (owner/admin only)');
             return;
         }
         if (window._newHalfInProgress) return; // ★ HR-63: re-entrancy guard

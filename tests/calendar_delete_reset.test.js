@@ -686,7 +686,20 @@ describe('startNewHalf (non-deleting epoch reset)', () => {
         assert.equal(reloadCalled, false);
     });
 
-    it('scheduler: permission denied (owner-only feature)', async () => {
+    it('admin: allowed — epoch stamped', async () => {
+        resetStorage({});
+        setupMocks('admin');
+        setupEpochMocks();
+        reloadCalled = false;
+
+        await global.startNewHalf();
+
+        const epochCall = findSetting('rotationEpoch');
+        assert.ok(epochCall, 'admin can stamp the epoch');
+        assert.ok(reloadCalled, 'reset ran to completion');
+    });
+
+    it('scheduler: permission denied (owner/admin-only feature)', async () => {
         resetStorage({
             'campRotationHistory_v1': JSON.stringify({ data: true }),
             'campDailyData_v1': JSON.stringify({ '2026-07-01': {} })
