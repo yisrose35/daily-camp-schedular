@@ -2550,13 +2550,39 @@
      * the object form { date, setAt, prevEpoch } and the legacy plain
      * string form. Returns null when no epoch is set.
      */
+    // ★ HR-71: multi-source with a short cache. Live verification showed the
+    // settings-blob copy can lose a hydration race while the league blobs'
+    // verified-pushed _epochDate stamps survive — so the epoch is resolved as
+    // the MAX of: the KV key, the dedicated localStorage backstop written at
+    // reset time, and the two league-history stamps. Cached ~10s because this
+    // sits inside per-candidate scoring loops (blob JSON.parse is not free).
+    var _hrEpochCache = { at: 0, val: null };
     Utils.getRotationEpoch = function() {
+        var now = Date.now();
+        if (now - _hrEpochCache.at < 10000) return _hrEpochCache.val;
+        var best = '';
+        var _consider = function (d) {
+            if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
+        };
         try {
             var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
-            var d = (typeof e === 'string') ? e : (e && e.date);
-            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
-        } catch (_) { return null; }
+            _consider((typeof e === 'string') ? e : (e && e.date));
+        } catch (_) {}
+        try { _consider(localStorage.getItem('campistry_rotationEpoch')); } catch (_) {}
+        try {
+            var lh = JSON.parse(localStorage.getItem('campLeagueHistory_v2') || 'null');
+            _consider(lh && lh._epochDate);
+            var sh = JSON.parse(localStorage.getItem('campSpecialtyLeagueHistory_v1') || 'null');
+            _consider(sh && sh._epochDate);
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            _consider(gs.leagueHistory && gs.leagueHistory._epochDate);
+            _consider(gs.specialtyLeagueHistory && gs.specialtyLeagueHistory._epochDate);
+        } catch (_) {}
+        _hrEpochCache = { at: now, val: best || null };
+        return _hrEpochCache.val;
     };
+    // Reset paths / tests can drop the cache after changing the epoch.
+    Utils.invalidateRotationEpochCache = function () { _hrEpochCache = { at: 0, val: null }; };
 
     /**
      * Compute the start date of the current N-week period, anchored to camp

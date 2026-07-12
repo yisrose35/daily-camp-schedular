@@ -571,6 +571,35 @@ all[date].updated_at = new Date().toISOString();
         return { date: _hrAddDays(todayKey, ahead), reason: (ahead === 0 ? 'today — start of the week' : 'the next start of week (Monday)') };
     }
 
+    // ★ HR-70: DIRECT VERIFIED KV PUSH for the reset's critical keys.
+    // Live verification (2026-07-12) showed the reset's saveGlobalSettings
+    // writes ride the DEBOUNCED batch sync and can silently lose the reload
+    // race (forceSyncToCloud returns true without syncing pre-hydration, and
+    // batch upsert failures are swallowed) — after reload, hydration restored
+    // the old cloud values and the epoch read null, which also disarmed every
+    // epoch fence. The league blobs survived the same reset because their
+    // savers push camp_state_kv rows directly and verify — so the reset now
+    // does the same for every key it owns: upsert, read back, compare, retry.
+    async function _hrPushKvVerified(client, campId, key, value) {
+        for (var attempt = 1; attempt <= 3; attempt++) {
+            try {
+                var res = await client.from('camp_state_kv').upsert({
+                    camp_id: campId, key: key, value: value,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'camp_id,key' });
+                if (!res || !res.error) {
+                    var r = await client.from('camp_state_kv').select('value')
+                        .eq('camp_id', campId).eq('key', key).maybeSingle();
+                    if (r && !r.error && JSON.stringify(r.data && r.data.value) === JSON.stringify(value)) {
+                        return true;
+                    }
+                }
+            } catch (_e) { /* retry */ }
+            await new Promise(function (r2) { setTimeout(r2, 500 * attempt); });
+        }
+        return false;
+    }
+
     window.startNewHalf = async function() {
         // ★ HR-62: owner/admin only (product decision — schedulers never; the
         // old scheduler-scoped destructive variant is retired along with
@@ -682,11 +711,56 @@ all[date].updated_at = new Date().toISOString();
             // epoch-filtered loader; clearing them would be both destructive
             // and pointless (the daily backfill would re-derive them).
 
-            // 5) Push and verify BEFORE reload.
+            // 5) ★ HR-70: DIRECT VERIFIED cloud pushes for every reset-owned key
+            //    (the batch queue provably loses the reload race — see helper).
+            //    The queue writes above still handle the local mirrors; these
+            //    land the cloud rows immediately and read them back.
+            try {
+                var _hrClient = window.CampistryDB?.getClient?.() || window.supabase;
+                var _hrCampId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (_hrClient && _hrCampId) {
+                    var _hrGsNow = window.loadGlobalSettings?.() || {};
+                    var _hrLeaguesClean = null;
+                    try {
+                        _hrLeaguesClean = JSON.parse(JSON.stringify(window.leaguesByName || _hrGsNow.leaguesByName || {}));
+                        Object.keys(_hrLeaguesClean).forEach(function (k) { if (_hrLeaguesClean[k] && _hrLeaguesClean[k]._h2h) delete _hrLeaguesClean[k]._h2h; });
+                    } catch (_) { _hrLeaguesClean = null; }
+                    var _hrSpecClean = null;
+                    try { _hrSpecClean = JSON.parse(JSON.stringify(window.specialtyLeagues || {})); } catch (_) { _hrSpecClean = null; }
+                    var _hrPushes = [
+                        ['rotationEpoch', { date: epoch, setAt: Date.now(), prevEpoch: prevDate }],
+                        ['rotationHistory', { bunks: {}, leagues: {} }],
+                        ['historicalCounts', {}],
+                        ['historicalCountedDates', {}],
+                        ['historicalCountsByDate', {}],
+                        ['manualUsageOffsets', {}],
+                        ['smartTileHistory', {}],
+                        ['swimRotationHistory', {}],
+                        ['activityHistory', {}],
+                        ['leagueRoundState', {}]
+                    ];
+                    // app1 carries the whole camp config — only push the copy we
+                    // just stamped (never a synthesized fallback that could
+                    // clobber the cloud blob).
+                    if (_hrGsNow.app1 && _hrGsNow.app1.halfStartDate === epoch) _hrPushes.push(['app1', _hrGsNow.app1]);
+                    else failures.push('app1.halfStartDate not verified (local blob unavailable)');
+                    if (_hrLeaguesClean && Object.keys(_hrLeaguesClean).length) _hrPushes.push(['leaguesByName', _hrLeaguesClean]);
+                    if (_hrSpecClean && Object.keys(_hrSpecClean).length) _hrPushes.push(['specialtyLeagues', _hrSpecClean]);
+                    for (var _pi = 0; _pi < _hrPushes.length; _pi++) {
+                        var _pOk = await _hrPushKvVerified(_hrClient, _hrCampId, _hrPushes[_pi][0], _hrPushes[_pi][1]);
+                        if (!_pOk) failures.push('cloud write not verified: ' + _hrPushes[_pi][0]);
+                    }
+                } else {
+                    failures.push('no cloud client — reset is LOCAL ONLY until next sync');
+                }
+            } catch (e) { failures.push('verified cloud push: ' + (e.message || e)); }
+            // ★ HR-70: device-local epoch backstop that no hydration merge can
+            // clobber (plain key outside the settings blob).
+            try { localStorage.setItem('campistry_rotationEpoch', epoch); } catch (_) {}
+
+            // 6) Flush the batched queue too (local mirrors / non-critical keys).
             if (typeof window.forceSyncToCloud === 'function') {
-                var ok = false;
-                try { ok = await window.forceSyncToCloud(); } catch (e) { failures.push('cloud sync: ' + (e.message || e)); }
-                if (!ok && failures.indexOf('cloud sync did not confirm') === -1) failures.push('cloud sync did not confirm');
+                try { await window.forceSyncToCloud(); } catch (e) { failures.push('cloud sync: ' + (e.message || e)); }
             }
 
             console.log('⭐ NEW HALF RESET COMPLETE ⭐ epoch =', epoch, failures.length ? ('warnings: ' + failures.join('; ')) : '');

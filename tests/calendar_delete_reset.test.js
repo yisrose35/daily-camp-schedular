@@ -71,9 +71,11 @@ global.removeEventListener = function() {};
 // --- Supabase mock ---
 let supabaseLog = [];
 let supabaseMockData = {};
+let supabaseKvData = {};   // ★ HR-70: camp_state_kv rows (key → value)
 
 function makeSupabaseMock() {
     supabaseLog = [];
+    supabaseKvData = {};
     return {
         from(table) {
             const chain = {
@@ -84,6 +86,21 @@ function makeSupabaseMock() {
                 select(arg) { chain._action = 'select'; chain._selectArg = arg; return chain; },
                 delete() { chain._action = 'delete'; return chain; },
                 update(payload) { chain._action = 'update'; chain._updatePayload = payload; return chain; },
+                // ★ HR-70: verified KV push support (upsert + read-back)
+                upsert(payload, opts) {
+                    supabaseLog.push({ action: 'upsert', table, payload, opts });
+                    if (table === 'camp_state_kv' && payload && payload.key) {
+                        supabaseKvData[payload.key] = payload.value;
+                    }
+                    return Promise.resolve({ error: null });
+                },
+                maybeSingle() {
+                    const key = chain._filters.key;
+                    return Promise.resolve({
+                        data: { value: Object.prototype.hasOwnProperty.call(supabaseKvData, key) ? supabaseKvData[key] : null },
+                        error: null
+                    });
+                },
                 eq(col, val) {
                     chain._filters[col] = val;
                     // select('*').eq('camp_id', ...) — return a chain-like thenable that
@@ -644,6 +661,17 @@ describe('startNewHalf (non-deleting epoch reset)', () => {
         assert.equal(fakeStorage.hasOwnProperty('smartTileSpecialHistory_v1'), false);
         assert.deepEqual(global.leagueRoundState, {}, 'in-memory round state reset');
         assert.equal(global.RotationEvents.clearAllCompletedCalls.length, 1, 'rotation-event completions wiped');
+
+        // ★ HR-70: the critical keys must land in camp_state_kv via the
+        // VERIFIED direct push (the batch queue loses the reload race).
+        assert.equal(supabaseKvData.rotationEpoch && supabaseKvData.rotationEpoch.date, epochCall.val.date,
+            'rotationEpoch verified-pushed to camp_state_kv');
+        ['rotationHistory', 'historicalCounts', 'historicalCountedDates', 'historicalCountsByDate',
+         'manualUsageOffsets', 'smartTileHistory', 'swimRotationHistory', 'activityHistory',
+         'leagueRoundState'].forEach(k => {
+            assert.ok(Object.prototype.hasOwnProperty.call(supabaseKvData, k), k + ' verified-pushed to camp_state_kv');
+        });
+        assert.equal(fakeStorage['campistry_rotationEpoch'], epochCall.val.date, 'device-local epoch backstop written');
 
         assert.ok(reloadCalled, 'Reload triggered');
     });
