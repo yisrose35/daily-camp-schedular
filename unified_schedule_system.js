@@ -1341,6 +1341,83 @@ function shouldHighlightBunk(bunkName) {
         return name || loc || '';
     }
 
+    // ── APPEND TEXT ("keep the name, add more to it") ────────────────────────
+    // The label a cell would show WITHOUT any appended suffix. Strips a previous
+    // append from the alias; otherwise the alias itself; otherwise the normal
+    // "Activity – Location" label from formatEntry.
+    function _usAppendBase(entry) {
+        if (!entry) return '';
+        if (entry._displayName && entry._appendText) {
+            const suf = ' — ' + entry._appendText;
+            if (String(entry._displayName).endsWith(suf)) {
+                const base = String(entry._displayName).slice(0, -suf.length);
+                // _appendOnly = the alias exists purely to carry the suffix; with
+                // the suffix stripped there is no real alias underneath.
+                return entry._appendOnly ? (base || '') : base;
+            }
+        }
+        if (entry._displayName) return entry._displayName;
+        return formatEntry(entry) || '';
+    }
+
+    // In-place decorate: append `text` to what the cell already shows, across the
+    // slot range, WITHOUT rewriting the entry (activity, field, rotation counts,
+    // pins and solver metadata all stay untouched). Empty text removes a previous
+    // append. Rides the _displayName pipeline so the schedule grid, print center
+    // and live view all show the suffix with no renderer changes.
+    async function applyAppendTextEdit(bunk, startMin, endMin, text) {
+        const divName = getDivisionForBunk(bunk);
+        const hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
+        const row = window.scheduleAssignments?.[bunk];
+        if (!slots.length || !row) { alert('Error: Could not find this block to update.'); return false; }
+        const clean = String(text || '').trim();
+
+        // Undo snapshot BEFORE mutating (counts untouched — label-only edit).
+        if (typeof window.peiSnapshotTransaction === 'function') {
+            window.peiSnapshotTransaction([bunk], 'Added text "' + clean + '" to ' + bunk, { counts: [] });
+        }
+
+        markPostEditInProgress();
+        let touched = 0;
+        slots.forEach(idx => {
+            const entry = row[idx];
+            if (!entry || entry.continuation) return;
+            const base = _usAppendBase(entry);
+            const hadRealAlias = !!entry._displayName && !entry._appendOnly;
+            if (clean) {
+                entry._appendText = clean;
+                entry._displayName = base ? base + ' — ' + clean : clean;
+                entry._appendOnly = !hadRealAlias;
+            } else {
+                // Clearing: restore the pre-append state.
+                if (entry._appendOnly) entry._displayName = null;
+                else if (entry._appendText) entry._displayName = base || null;
+                entry._appendText = null;
+                delete entry._appendOnly;
+            }
+            entry._postEdit = true;
+            entry._editedAt = Date.now();
+            touched++;
+        });
+        if (!touched) { alert('Nothing to add text to in this slot.'); return false; }
+
+        const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        try {
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+        } catch (e) { console.error('[UnifiedSchedule] append-text local save failed:', e); }
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, date: currentDate, source: 'append-text' } }));
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([bunk]);
+        else saveSchedule();
+        updateTable();
+        return true;
+    }
+    window.applyAppendTextEdit = applyAppendTextEdit;
+
     function getEntryBackground(entry, blockEvent) {
         if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
         if (entry._isDismissal) return '#ffebee';
@@ -2082,7 +2159,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     // Apply the primary edit first. Carry the soft-override the caller may have
     // already approved via the in-app gate so applyDirectEdit doesn't re-prompt.
-    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName, customText: !!editData.customText, allowSoftOverride: !!editData._allowSoftOverride });
+    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName, customText: !!editData.customText, appendText: editData.appendText || null, allowSoftOverride: !!editData._allowSoftOverride });
     
     // Lock the field
     if (window.GlobalFieldLocks) {
@@ -2878,7 +2955,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         const leagues = window.leagueAssignments || {};
         if (leagues[divName]?.[slotIdx]) {
             const data = leagues[divName][slotIdx];
-            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '' };
         }
         if (leagues[divName]) {
             // ★ Fuzzy ±2-slot lookup lets a league game that spans a few grid
@@ -2904,7 +2981,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                                : (_dt && _dt[storedSlot] && _dt[storedSlot].endMin != null ? _dt[storedSlot].endMin : null);
                     // Times known on both sides and disjoint → different period, skip.
                     if (qStart != null && qEnd != null && gStart != null && gEnd != null && !(gStart < qEnd && gEnd > qStart)) continue;
-                    return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+                    return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '' };
                 }
             }
         }
@@ -3269,6 +3346,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
+        }
+        // Custom text (post-edit league note) — shown under the matchups.
+        if (leagueInfo.customText) {
+            html += '<div style="margin-top: 5px; padding: 3px 7px; background: #fef9c3; border-radius: 4px; font-size: 0.74rem; color: #713f12; font-weight: 600;">' + escapeHtml(leagueInfo.customText) + '</div>';
         }
         // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
         //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell. Plus an
@@ -4490,6 +4571,10 @@ if (bypassStatus.highlight) {
                 _activity: isClear ? 'Free' : activity,
                 _displayName: _dn,
                 _customText: !isClear && !!opts.customText,
+                // Raw APPEND suffix ("keep the name, add text after it") — _displayName
+                // above already carries the composed "base — suffix" label; this keeps
+                // the suffix on its own so re-editing can prefill just the added part.
+                _appendText: (!isClear && opts.appendText && String(opts.appendText).trim()) ? String(opts.appendText).trim() : null,
                 _location: location,
                 _postEdit: true,
                 _pinned: shouldPin && !isClear,
@@ -5041,7 +5126,7 @@ if (bypassStatus.highlight) {
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText, appendText } = editData;
         const divName = getDivisionForBunk(bunk);
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -5110,12 +5195,12 @@ if (bypassStatus.highlight) {
             if (hasPerBunk && !isClear && startMin != null && endMin != null) {
                 const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
                 if (reshaped.length > 0) {
-                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName, customText, allowSoftOverride: _softOv });
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName, customText, appendText, allowSoftOverride: _softOv });
                 } else {
-                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, allowSoftOverride: _softOv });
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, appendText, allowSoftOverride: _softOv });
                 }
             } else {
-                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, allowSoftOverride: _softOv });
+                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, appendText, allowSoftOverride: _softOv });
             }
         }
 
@@ -5722,7 +5807,7 @@ if (bypassStatus.highlight) {
         const locations = getAllLocations();
         const divName = getDivisionForBunk(bunk);
         const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
-        let currentActivity = currentValue || '', currentField = '', currentDisplayName = '', resolutionChoice = 'notify';
+        let currentActivity = currentValue || '', currentField = '', currentDisplayName = '', currentAppendText = '', resolutionChoice = 'notify';
         // ★ Pass the bunk in auto mode. Without it findSlotsForRange falls through
         //   to DIVISION-level slots and returns an index that points at the WRONG
         //   per-bunk entry — pre-filling the activity box with a stale/foreign
@@ -5736,6 +5821,10 @@ if (bypassStatus.highlight) {
                 currentField = fieldLabel(entry.field);
                 currentActivity = entry._activity || currentField || currentValue;
                 currentDisplayName = entry._displayName || '';
+                // Appended suffix: show ONLY the added part in the text box (with the
+                // append checkbox pre-checked below) — not the composed alias.
+                currentAppendText = entry._appendText || '';
+                if (currentAppendText) currentDisplayName = currentAppendText;
                 // Custom-text block: the "activity" is just the typed text — keep the
                 // dropdown empty and let the custom text box carry it, so re-saving
                 // stays a custom-text write instead of a fake-activity write.
@@ -5796,6 +5885,10 @@ if (bypassStatus.highlight) {
                         placeholder="Type anything — e.g. Color War Breakout!"
                         style="width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;" />
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shows on the schedule, print &amp; live view exactly as typed. With an activity picked above it just renames it (still counts as that activity); with no activity it becomes a free-text block.</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:0.82rem;color:#374151;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="post-edit-append-mode" ${currentAppendText ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;">
+                        Add to the existing name instead of replacing it <span style="color:#9ca3af;">(e.g. "Basketball – Court 1 — bring water")</span>
+                    </label>
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -5996,7 +6089,27 @@ if (bypassStatus.highlight) {
         document.getElementById('post-edit-save').onclick = () => {
             const activity = actInput.value.trim();
             const location = locationSelect.value;
-            const displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
+            let displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
+            const appendMode = !!document.getElementById('post-edit-append-mode')?.checked;
+            let appendText = '';
+            // APPEND mode: keep what the cell already says and add the text after it.
+            if (appendMode && (displayName || currentAppendText)) {
+                const activityChanged = activity && activity.toLowerCase() !== String(currentActivity || '').toLowerCase();
+                const locationChanged = location && location.toLowerCase() !== String(currentField || '').toLowerCase();
+                if (!activityChanged && !locationChanged) {
+                    // Nothing else changed → safe in-place decorate (entry, field,
+                    // rotation counts and solver metadata all stay untouched).
+                    // An emptied box with a previous suffix removes the suffix.
+                    applyAppendTextEdit(bunk, startMin, endMin, displayName);
+                    closeModal();
+                    return;
+                }
+                // Activity/field changed too → normal rewrite, with the composed
+                // "Activity – Location — text" label carried as the alias.
+                appendText = displayName;
+                const base = (location && location.toLowerCase() !== activity.toLowerCase()) ? activity + ' – ' + location : activity;
+                displayName = displayName ? base + ' — ' + displayName : '';
+            }
             // Custom-text-only save: no activity chosen, just free text — place it
             // as a custom text block (no field claim, no rotation credit).
             if (!activity && displayName) {
@@ -6008,13 +6121,13 @@ if (bypassStatus.highlight) {
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, displayName, startMin, endMin, hasConflict: true,
+                onSave({ activity, location, displayName, appendText, startMin, endMin, hasConflict: true,
                     conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, displayName, startMin, endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName, appendText, startMin, endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };
@@ -6894,6 +7007,10 @@ function minutesToTimeString(mins) {
                     <input id="multi-edit-custom-text" type="text" placeholder="Type anything — e.g. Color War Breakout!"
                         style="width: 100%; padding: 10px; border: 1.5px solid #d1d5db; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem;">
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shows on the schedule, print &amp; live view exactly as typed. Leave the activity empty to place just this text on all selected bunks.</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:0.82rem;color:#374151;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="multi-edit-append-mode" style="width:15px;height:15px;cursor:pointer;">
+                        Add to each bunk's existing name instead of replacing it <span style="color:#9ca3af;">(keeps every activity as-is, adds this text after it)</span>
+                    </label>
                 </div>
                 <div id="multi-field-result" style="display:none;"></div>
                 <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -7048,17 +7165,22 @@ function minutesToTimeString(mins) {
 
         // Custom-text-only mode: free text with no activity needs no field search
         // or conflict preview — enable Apply as soon as there's text to place.
+        // Append mode likewise: it decorates each bunk's existing entry in place,
+        // so no activity, field search or preview is needed either.
         const multiCustomText = document.getElementById('multi-edit-custom-text');
+        const multiAppendChk = document.getElementById('multi-edit-append-mode');
         if (multiCustomText) {
             const _syncMultiSubmit = () => {
                 const submitBtn = document.getElementById('multi-edit-submit');
                 if (!submitBtn) return;
                 const hasText = !!multiCustomText.value.trim();
                 const hasActivity = !!(multiActInput && multiActInput.value.trim());
-                if (hasText && !hasActivity) submitBtn.disabled = false;
+                const append = !!(multiAppendChk && multiAppendChk.checked);
+                if (hasText && (append || !hasActivity)) submitBtn.disabled = false;
                 else if (!_multiBunkPreviewResult) submitBtn.disabled = true;
             };
             multiCustomText.addEventListener('input', _syncMultiSubmit);
+            if (multiAppendChk) multiAppendChk.addEventListener('change', _syncMultiSubmit);
             if (multiActInput) multiActInput.addEventListener('change', _syncMultiSubmit);
         }
     }
@@ -7149,9 +7271,16 @@ if (softBlocks.length > 0) {
     }
 
     async function submitMultiBunkEdit() {
-        // Custom-text-only apply: free text with no activity — no cascade plan needed.
         const _mCustomText = document.getElementById('multi-edit-custom-text')?.value.trim() || '';
         const _mActivity = document.getElementById('multi-edit-activity')?.value.trim() || '';
+        // APPEND apply: keep every bunk's existing activity and add the text after
+        // it — pure in-place decorate, no cascade plan, no activity needed.
+        if (_mCustomText && document.getElementById('multi-edit-append-mode')?.checked) {
+            await applyMultiBunkAppendText(_mCustomText);
+            closeIntegratedEditModal();
+            return;
+        }
+        // Custom-text-only apply: free text with no activity — no cascade plan needed.
         if (_mCustomText && !_mActivity) {
             await applyMultiBunkCustomText(_mCustomText);
             closeIntegratedEditModal();
@@ -7702,6 +7831,84 @@ if (softBlocks.length > 0) {
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
         showIntegratedToast('Custom text placed on ' + targets.length + ' bunk(s).', 'success');
+    }
+
+    // =========================================================================
+    // APPLY MULTI-BUNK APPEND TEXT
+    // =========================================================================
+    // "Keep what's there, add more to it" across many bunks at once: every
+    // selected bunk's existing entry in the time range keeps its activity /
+    // field / rotation state, and the text is appended to its displayed label
+    // (e.g. "Basketball – Court 1 — wear white"). Pure in-place decorate — no
+    // legality gates, no rotation changes, no field claims.
+    async function applyMultiBunkAppendText(text) {
+        const ctx = _multiBunkEditContext;
+        if (!ctx) { alert('Edit context lost. Please try again.'); return; }
+        const { bunks, slots, divName, perBunkSlots, isAutoMode, timeStartMin, timeEndMin } = ctx;
+        const clean = String(text || '').trim();
+
+        // Resolve which bunks/slots actually have entries to decorate FIRST, so
+        // the undo snapshot below captures genuinely pre-edit state.
+        const decorable = [];
+        for (const bunk of bunks) {
+            let bunkSlots;
+            if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+                bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+            } else if (isAutoMode && perBunkSlots && perBunkSlots[String(bunk)]) {
+                bunkSlots = perBunkSlots[String(bunk)];
+            } else {
+                bunkSlots = slots;
+            }
+            const row = window.scheduleAssignments?.[bunk];
+            if (!bunkSlots || !bunkSlots.length || !row) continue;
+            const hits = bunkSlots.filter(idx => row[idx] && !row[idx].continuation);
+            if (hits.length) decorable.push({ bunk, row, hits });
+        }
+        if (!decorable.length) { alert('Nothing to add text to — no activities found in that time range.'); return; }
+        const targets = decorable.map(d => d.bunk);
+
+        // Undo snapshot BEFORE mutating (no rotation-count payload — counts are untouched).
+        if (typeof window.peiSnapshotTransaction === 'function') {
+            window.peiSnapshotTransaction(targets, 'Added text "' + clean + '" to ' + targets.length + ' bunks', { counts: [] });
+        }
+
+        markPostEditInProgress();
+        decorable.forEach(({ row, hits }) => {
+            hits.forEach(idx => {
+                const entry = row[idx];
+                const base = _usAppendBase(entry);
+                const hadRealAlias = !!entry._displayName && !entry._appendOnly;
+                if (clean) {
+                    entry._appendText = clean;
+                    entry._displayName = base ? base + ' — ' + clean : clean;
+                    entry._appendOnly = !hadRealAlias;
+                } else {
+                    if (entry._appendOnly) entry._displayName = null;
+                    else if (entry._appendText) entry._displayName = base || null;
+                    entry._appendText = null;
+                    delete entry._appendOnly;
+                }
+                entry._postEdit = true;
+                entry._editedAt = Date.now();
+            });
+        });
+
+        const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        try {
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+        } catch (e) { console.error('[UnifiedSchedule] multi append-text local save failed:', e); }
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+            detail: { bunks: targets, date: currentDate, source: 'multi-bunk-append-text' }
+        }));
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks(targets);
+        else saveSchedule();
+
+        if (typeof renderStaggeredView === 'function') renderStaggeredView();
+        showIntegratedToast((clean ? 'Text added to ' : 'Text removed from ') + targets.length + ' bunk(s).', 'success');
     }
 
     // =========================================================================

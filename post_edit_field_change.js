@@ -387,9 +387,42 @@
       leagueName: leagueName, sportFallback: sportFallback,
       slots: slotIndicesForRange(divName, startMin, endMin, slotIdx),
       games: games,
-      game: null // chosen later
+      game: null, // chosen later
+      // Post-edit CUSTOM TEXT (a free note shown under the game on the schedule,
+      // print & live view). Lives on the leagueAssignments slot record.
+      customText: (laEntry && laEntry.customText) || ''
     };
   }
+
+  // ── CUSTOM TEXT (league note) ─────────────────────────────────────────────
+  // Writes/clears the note on the leagueAssignments slot record and persists.
+  // Returns true when the stored value actually changed.
+  PEFC.applyCustomText = function (ctx, text) {
+    if (!ctx || !ctx.divName) return false;
+    var la = window.leagueAssignments && window.leagueAssignments[ctx.divName];
+    if (!la) return false;
+    var laEntry = la[ctx.slotIdx] || la[String(ctx.slotIdx)];
+    if (!laEntry) return false;
+    var clean = String(text == null ? '' : text).trim();
+    var prev = laEntry.customText || '';
+    if (clean === prev) return false;
+    if (clean) laEntry.customText = clean;
+    else delete laEntry.customText;
+    ctx.customText = clean;
+    try {
+      if (typeof window.saveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments || {});
+      }
+      // Cloud: leagueAssignments rides the bunk save payload — push the
+      // division's bunks so the note syncs to other sessions / the live view.
+      var divBunks = ((window.divisions || {})[ctx.divName] || {}).bunks || [];
+      if (typeof window.bypassSaveAllBunks === 'function' && divBunks.length) {
+        Promise.resolve(window.bypassSaveAllBunks(divBunks.map(String))).catch(function (e) { console.warn('[PEFC] note cloud save:', e); });
+      }
+    } catch (e) { console.warn('[PEFC] note persist:', e); }
+    if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
+    return true;
+  };
 
   // ── APPLY ────────────────────────────────────────────────────────────────
   // Rewrites the field of ctx.game across every store, swaps the field lock,
@@ -804,11 +837,20 @@
         busyReal.map(function (c) { return override ? fieldBtn(c, true) : busyChip(c); }).join('') + '</div>'
       : '';
 
+    // Custom text (league note): free text shown under the game on the schedule,
+    // print center and live view. Survives re-renders via ctx.pendingCustomText.
+    var curNote = (ctx.pendingCustomText != null) ? ctx.pendingCustomText : (ctx.customText || '');
+    var noteHtml = '<div style="margin-bottom:14px;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>' +
+      '<input id="pefc-custom-text" type="text" value="' + esc(curNote) + '" placeholder="Type anything — e.g. Championship game, wear white!"' +
+      ' style="width:100%;padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;background:#fff;">' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Adds a line under this game on the schedule, print &amp; live view. Clear it to remove.</div></div>';
+
     // "Save changes" is ALWAYS available so a teams / sport edit can be committed
     // WITHOUT moving fields (field buttons MOVE the game; this keeps it put).
     // Highlighted when an edit is actually pending.
     var sportChanged = canEditSport && norm(curSport) !== norm(ctx.game.sport || '');
-    var pendingChange = sportChanged || teamsChanged;
+    var pendingChange = sportChanged || teamsChanged || norm(curNote) !== norm(ctx.customText || '');
     var keepFieldHtml =
       '<button id="pefc-keep-field" style="width:100%;margin-top:14px;padding:9px;border:1.5px solid ' + (pendingChange ? '#6366f1' : '#d1d5db') + ';border-radius:8px;background:' + (pendingChange ? '#eef2ff' : '#fff') + ';color:' + (pendingChange ? '#4338ca' : '#6b7280') + ';font-size:0.85rem;font-weight:600;cursor:pointer;">Save changes — keep ' + esc(ctx.game.field || 'current field') + '</button>';
 
@@ -820,6 +862,7 @@
       teamsHtml +
       suggestHtml +
       sportHtml +
+      noteHtml +
       openSection + noFreeNote + overrideHtml + busyHtml + keepFieldHtml +
       '<div style="display:flex;gap:10px;margin-top:18px;">' +
       (ctx.games.length > 1 ? '<button id="pefc-back" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">← Back</button>' : '') +
@@ -836,11 +879,18 @@
       return { teamA: a ? String(a.value || '').trim() : curA, teamB: b ? String(b.value || '').trim() : curB };
     }
 
-    // Capture any pending team / sport edits before a re-render so they survive
-    // it (changing sport re-filters the field list; toggling override re-renders).
+    // Capture any pending team / sport / note edits before a re-render so they
+    // survive it (changing sport re-filters the field list; toggling override
+    // re-renders).
     function captureEdits() {
       var t = readTeams(); ctx.selectedTeamA = t.teamA; ctx.selectedTeamB = t.teamB;
       if (sportSel) ctx.selectedSport = sportSel.value;
+      var noteEl = box.querySelector('#pefc-custom-text');
+      if (noteEl) ctx.pendingCustomText = String(noteEl.value || '');
+    }
+    function readNote() {
+      var noteEl = box.querySelector('#pefc-custom-text');
+      return noteEl ? String(noteEl.value || '').trim() : (ctx.pendingCustomText || '');
     }
 
     var sportSel = box.querySelector('#pefc-sport');
@@ -886,10 +936,13 @@
 
     var keepBtn = box.querySelector('#pefc-keep-field');
     if (keepBtn) keepBtn.onclick = function () {
+      // The note saves independently — a note-only edit must commit even though
+      // applyFieldChange reports "Nothing changed."
+      var noteChanged = PEFC.applyCustomText(ctx, readNote());
       var res = PEFC.applyFieldChange(ctx, ctx.game.field, canEditSport ? curSport : null, readTeams());
-      if (!res.ok) { toast(res.message, 'warning'); return; }
+      if (!res.ok && !noteChanged) { toast(res.message, 'warning'); return; }
       closeModal();
-      toast('Updated: ' + res.message, 'success');
+      toast('Updated: ' + (res.ok ? res.message : 'custom text saved'), 'success');
     };
 
     box.querySelectorAll('.pefc-field').forEach(function (btn) {
@@ -905,10 +958,11 @@
           var ok = (typeof window.confirm === 'function') ? window.confirm(msg) : true;
           if (!ok) return;
         }
+        var noteChanged = PEFC.applyCustomText(ctx, readNote());
         var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport, readTeams(), { override: busy });
-        if (!res.ok) { toast(res.message, 'warning'); return; }
+        if (!res.ok && !noteChanged) { toast(res.message, 'warning'); return; }
         closeModal();
-        toast('Updated: ' + res.message, 'success');
+        toast('Updated: ' + (res.ok ? res.message : 'custom text saved'), 'success');
       };
     });
   }

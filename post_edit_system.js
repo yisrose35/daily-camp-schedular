@@ -418,6 +418,7 @@
                 _activity: isClear ? 'Free' : activity,
                 _displayName: _dn,
                 _customText: !isClear && !!opts.customText,
+                _appendText: (!isClear && opts.appendText && String(opts.appendText).trim()) ? String(opts.appendText).trim() : null,
                 _location: location,
                 _postEdit: true,
                 _editedAt: Date.now(),
@@ -452,6 +453,61 @@
                 window.registerLocationUsage(idx, location, activity, divName2);
             });
         }
+    }
+
+    // =========================================================================
+    // APPEND TEXT ("keep the name, add more to it")
+    // =========================================================================
+    // In-place decorate of the existing entry — nothing else about it changes
+    // (activity, field, rotation, pins). Delegates to the unified system's
+    // implementation when it's loaded; otherwise does the same thing locally.
+    function peiApplyAppendText(bunk, startMin, endMin, text) {
+        if (typeof window.applyAppendTextEdit === 'function') {
+            return window.applyAppendTextEdit(bunk, startMin, endMin, text);
+        }
+        const unifiedTimes = window.unifiedTimes || [];
+        const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
+        const row = window.scheduleAssignments?.[bunk];
+        if (!slots.length || !row) { alert('Error: Could not find this block to update.'); return false; }
+        const clean = String(text || '').trim();
+
+        function baseLabel(entry) {
+            if (entry._displayName && entry._appendText) {
+                const suf = ' — ' + entry._appendText;
+                if (String(entry._displayName).endsWith(suf)) {
+                    const b = String(entry._displayName).slice(0, -suf.length);
+                    return entry._appendOnly ? (b || '') : b;
+                }
+            }
+            if (entry._displayName) return entry._displayName;
+            return window.SchedulerCoreUtils?.formatEntry?.(entry) || entry._activity || entry.field || '';
+        }
+
+        if (typeof window.markPostEditInProgress === 'function') window.markPostEditInProgress();
+        let touched = 0;
+        slots.forEach(idx => {
+            const entry = row[idx];
+            if (!entry || entry.continuation) return;
+            const base = baseLabel(entry);
+            const hadRealAlias = !!entry._displayName && !entry._appendOnly;
+            if (clean) {
+                entry._appendText = clean;
+                entry._displayName = base ? base + ' — ' + clean : clean;
+                entry._appendOnly = !hadRealAlias;
+            } else {
+                if (entry._appendOnly) entry._displayName = null;
+                else if (entry._appendText) entry._displayName = base || null;
+                entry._appendText = null;
+                delete entry._appendOnly;
+            }
+            entry._postEdit = true;
+            entry._editedAt = Date.now();
+            touched++;
+        });
+        if (!touched) { alert('Nothing to add text to in this slot.'); return false; }
+        window.saveSchedule?.();
+        if (typeof window.updateTable === 'function') window.updateTable();
+        return true;
     }
 
     // =========================================================================
@@ -630,7 +686,7 @@
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText, appendText } = editData;
         const unifiedTimes = window.unifiedTimes || [];
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -722,7 +778,7 @@
                 alert('System Error: Conflict resolution module not loaded.');
             }
         } else {
-            applyDirectEdit(bunk, slots, activity, location, isClear, { displayName, customText });
+            applyDirectEdit(bunk, slots, activity, location, isClear, { displayName, customText, appendText });
         }
         
         console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
@@ -1275,6 +1331,7 @@
         let currentActivity = currentValue || '';
         let currentField = '';
         let currentCustomText = '';
+        let currentAppendText = '';
         let resolutionChoice = 'notify';
 
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
@@ -1284,6 +1341,10 @@
                 currentField = typeof entry.field === 'object' ? entry.field?.name : (entry.field || '');
                 currentActivity = entry._activity || currentField || currentValue;
                 currentCustomText = entry._displayName || '';
+                // Appended suffix: show ONLY the added part in the text box (the
+                // append checkbox below is pre-checked for it).
+                currentAppendText = entry._appendText || '';
+                if (currentAppendText) currentCustomText = currentAppendText;
                 // Custom-text block: the "activity" is just the typed text — keep
                 // the activity box empty so re-saving stays a custom-text write.
                 if (entry._customText) { currentActivity = ''; currentField = ''; }
@@ -1359,6 +1420,10 @@
                     <input type="text" id="post-edit-custom-text" value="${escHtml(currentCustomText)}" placeholder="Type anything — e.g. Color War Breakout!"
                         style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Shows on the schedule, print &amp; live view exactly as typed. With an activity above it just renames it; with no activity it becomes a free-text block.</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:0.82rem;color:#374151;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="post-edit-append-mode" ${currentAppendText ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;">
+                        Add to the existing name instead of replacing it <span style="color:#9ca3af;">(e.g. "Basketball – Court 1 — bring water")</span>
+                    </label>
                 </div>
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label>
@@ -1515,10 +1580,30 @@
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
-            const customTextVal = document.getElementById('post-edit-custom-text')?.value.trim() || '';
+            let customTextVal = document.getElementById('post-edit-custom-text')?.value.trim() || '';
+            const appendMode = !!document.getElementById('post-edit-append-mode')?.checked;
+            let appendTextVal = '';
             const times = getEffectiveTimes();
 
             if (times.endMin <= times.startMin) { alert('End time must be after start time.'); return; }
+
+            // APPEND mode: keep what the cell already says and add the text after it.
+            if (appendMode && (customTextVal || currentAppendText)) {
+                const activityChanged = activity && activity.toLowerCase() !== String(currentActivity || '').toLowerCase();
+                const locationChanged = location && location.toLowerCase() !== String(currentField || '').toLowerCase();
+                if (!activityChanged && !locationChanged) {
+                    // Nothing else changed → safe in-place decorate.
+                    peiApplyAppendText(bunk, times.startMin, times.endMin, customTextVal);
+                    closeModal();
+                    return;
+                }
+                // Activity/field changed too → normal rewrite with composed label.
+                appendTextVal = customTextVal;
+                if (activity) {
+                    const base = (location && location.toLowerCase() !== activity.toLowerCase()) ? activity + ' – ' + location : activity;
+                    customTextVal = customTextVal ? base + ' — ' + customTextVal : '';
+                }
+            }
 
             // Custom-text-only save: no activity typed, just free text — place it
             // as a custom text block (no field claim, no rotation credit).
@@ -1535,13 +1620,13 @@
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
 
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, displayName: customTextVal, startMin: times.startMin, endMin: times.endMin,
+                onSave({ activity, location, displayName: customTextVal, appendText: appendTextVal, startMin: times.startMin, endMin: times.endMin,
                     hasConflict: true, conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, displayName: customTextVal, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName: customTextVal, appendText: appendTextVal, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };

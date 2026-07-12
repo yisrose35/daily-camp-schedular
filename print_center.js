@@ -1354,6 +1354,9 @@ function pcLeagueInfoAt(divName, startMin) {
             }
         }
     });
+    // Post-edit custom text (league note) rides along as an extra line so every
+    // consumer (slot print, live view) shows it under the matchups.
+    if (entry.customText) matchups.push(String(entry.customText));
     return { label: label, matchups: matchups };
 }
 
@@ -1378,12 +1381,13 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
     });
     allSlotEntries.sort(function (a, b) { return a.dist - b.dist; });
 
-    var slotSport = '', slotField = '';
+    var slotSport = '', slotField = '', slotNote = '';
     if (allSlotEntries.length > 0 && allSlotEntries[0].data) {
         var best = allSlotEntries[0].data;
         if (best.matchups) raw = best.matchups;
         slotSport = (best.sport || '').toString().trim();
         slotField = (best.field || '').toString().trim();
+        slotNote = (best.customText || '').toString().trim();
     }
     if (!raw.length) {
         var llm = window.lastLeagueMatchups;
@@ -1419,7 +1423,9 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
         infoLines = (mineInfo.length ? mineInfo : (mine.length ? [] : teamInfo)).concat(sectionInfo);
     }
 
-    return parsed.map(pcFormatMatchupLine).concat(infoLines);
+    // Post-edit custom text (league note) — an extra line under the matchups,
+    // for every bunk (it's a note on the whole game block, not one team).
+    return parsed.map(pcFormatMatchupLine).concat(infoLines).concat(slotNote ? [slotNote] : []);
 }
 
 // Parse one matchup (object or string) into { a, b, sport, field }.
@@ -5440,6 +5446,13 @@ function _liveContentSignature(nowMin) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
         parts.push('§' + divName + '#' + bunks.join(','));
+        // League custom text (post-edit note) lives on leagueAssignments, not the
+        // per-bunk entries — fold it in so an edited note refreshes the live view.
+        var _laDivSig = (window.leagueAssignments || {})[divName] || {};
+        Object.keys(_laDivSig).forEach(function (k) {
+            var _n = _laDivSig[k] && _laDivSig[k].customText;
+            if (_n) parts.push('n' + k + ':' + _n);
+        });
         if (isAutoMode()) {
             bunks.forEach(function (bunk) {
                 var slots = getPerBunkSchedule(bunk, divName);
