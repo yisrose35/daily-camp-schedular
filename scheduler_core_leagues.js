@@ -4672,10 +4672,10 @@ window._debugLeagueTimeData = timeData;
         return loadLeagueHistory();
     };
 
-    // ★ Canonical history access for OTHER writers (offpaper_recorder.js).
-    // External modules used to reimplement load/save and drifted behind the
-    // LG-8 hardening (wholesale fresher-wins pick, no verified cloud push,
-    // no tombstone awareness). Route them through the engine's own path.
+    // ★ Canonical history access for external writers. Modules that need to
+    // read AND write the history must use these — reimplementing load/save
+    // drifts behind the LG-8 hardening (wholesale fresher-wins pick, no
+    // verified cloud push, no tombstone awareness).
     Leagues.loadHistory = loadLeagueHistory;
     Leagues.saveHistory = saveLeagueHistory;
 
