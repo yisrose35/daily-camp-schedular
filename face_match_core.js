@@ -179,6 +179,168 @@
         return weak ? 'weak' : 'good';
     }
 
+    // ─── confidence scale ────────────────────────────────────────────────────
+
+    // Human-readable confidence from a raw distance, piecewise-linear so the
+    // scale is intuitive across models:
+    //   dist 0          → 1.00 (perfect)
+    //   dist = autoDist → 0.50 (edge of the engine's auto-tag zone)
+    //   dist = reviewDist → 0.00 (edge of consideration)
+    // Owner-facing thresholds (auto-accept / auto-reject) operate on this scale.
+    function confidenceFor(dist, profile) {
+        if (dist == null || !isFinite(dist)) return 0;
+        var auto = profile.autoDist, review = profile.reviewDist;
+        var c;
+        if (dist <= auto) c = 1 - 0.5 * (dist / auto);
+        else c = 0.5 * (review - dist) / (review - auto);
+        return Math.max(0, Math.min(1, c));
+    }
+
+    // Route a review-band suggestion using the owner's dials.
+    //   conf >= acceptPct → 'accept' (auto-accept: becomes a real tag)
+    //   conf <  rejectPct → 'reject' (auto-reject: silently dropped)
+    //   otherwise         → 'review' (human queue)
+    function routeConfidence(conf, settings) {
+        var accept = (settings && settings.acceptPct != null) ? settings.acceptPct : 1.1;  // 1.1 = never
+        var reject = (settings && settings.rejectPct != null) ? settings.rejectPct : -1;   // -1  = never
+        if (conf >= accept) return 'accept';
+        if (conf < reject) return 'reject';
+        return 'review';
+    }
+
+    // ─── self-learning calibration ───────────────────────────────────────────
+
+    // Learn owner dials from human review decisions.
+    //   samples: [{conf: 0..1, approved: bool}]  (each ~50 bytes — cheap to keep)
+    //   opts: { targetPrecision (0.95), maxFalseAccept... , minN (10) }
+    // acceptPct = lowest confidence cutoff where everything at-or-above it was
+    // approved at >= targetPrecision (so auto-accepting there is safe).
+    // rejectPct = highest confidence cutoff where everything below it was
+    // approved at <= rejectCeiling (so auto-rejecting there loses little).
+    // Returns null when there isn't enough evidence yet.
+    function calibrateFromDecisions(samples, opts) {
+        var o = Object.assign({ targetPrecision: 0.95, rejectCeiling: 0.10, minN: 10 }, opts || {});
+        var valid = (samples || []).filter(function (s) {
+            return s && typeof s.conf === 'number' && typeof s.approved === 'boolean';
+        });
+        if (valid.length < o.minN * 2) return null;
+
+        // Cutoffs may only sit at boundaries between DISTINCT confidence values:
+        // a threshold at conf c includes every sample tied at c, so precision
+        // must be evaluated over the full tie group, not mid-group.
+        var desc = valid.slice().sort(function (a, b) { return b.conf - a.conf; });
+        var acceptPct = null, approvedSoFar = 0;
+        for (var i = 0; i < desc.length; i++) {
+            if (desc[i].approved) approvedSoFar++;
+            var n = i + 1;
+            var boundary = (i === desc.length - 1) || (desc[i + 1].conf < desc[i].conf - 1e-9);
+            if (!boundary || n < o.minN) continue;
+            if (approvedSoFar / n >= o.targetPrecision) acceptPct = desc[i].conf;
+            else break;  // extending the accept zone further only hurts precision
+        }
+
+        var asc = valid.slice().sort(function (a, b) { return a.conf - b.conf; });
+        var rejectPct = null; approvedSoFar = 0;
+        for (var j = 0; j < asc.length; j++) {
+            if (asc[j].approved) approvedSoFar++;
+            var m = j + 1;
+            var rBoundary = (j === asc.length - 1) || (asc[j + 1].conf > asc[j].conf + 1e-9);
+            if (!rBoundary || m < o.minN) continue;
+            if (approvedSoFar / m <= o.rejectCeiling) rejectPct = asc[j].conf + 0.001;  // reject strictly below
+            else break;
+        }
+
+        if (acceptPct == null && rejectPct == null) return null;
+        // safety bounds: never learn absurd dials, keep a review band open
+        if (acceptPct != null) acceptPct = Math.max(0.05, Math.min(0.95, acceptPct));
+        if (rejectPct != null) {
+            rejectPct = Math.max(0, Math.min(0.9, rejectPct));
+            if (acceptPct != null && rejectPct > acceptPct - 0.05) rejectPct = Math.max(0, acceptPct - 0.05);
+        }
+        return { acceptPct: acceptPct, rejectPct: rejectPct, n: valid.length };
+    }
+
+    // ─── burst clustering ────────────────────────────────────────────────────
+
+    // Group photos shot within gapMs of each other (camera bursts / rapid
+    // sequences). photos: [{id, capturedAt (ms epoch)}] → array of id-arrays.
+    function burstClusters(photos, gapMs) {
+        gapMs = gapMs || 15000;
+        var withTime = (photos || []).filter(function (p) { return p && p.capturedAt; })
+            .sort(function (a, b) { return a.capturedAt - b.capturedAt; });
+        var clusters = [], current = [];
+        for (var i = 0; i < withTime.length; i++) {
+            if (current.length && withTime[i].capturedAt - withTime[i - 1].capturedAt > gapMs) {
+                if (current.length > 1) clusters.push(current);
+                current = [];
+            }
+            current.push(withTime[i].id);
+        }
+        if (current.length > 1) clusters.push(current);
+        return clusters;
+    }
+
+    // Propagate confirmed identities across a burst: if camper X was
+    // confidently matched to a face in one frame, and another frame in the
+    // same burst has an unassigned face whose descriptor is very close to
+    // that CONFIRMED FACE (face-to-face, much stronger evidence than
+    // face-to-template), tag it too.
+    //   photos: [{ photoId, faces: [{id, descriptors, tier}],
+    //              assignments: [{faceId, camperName, status}] }]  (one burst)
+    //   opts: { profiles, propagateFactor (0.8 — fraction of autoDist) }
+    // Returns extra assignments [{photoId, faceId, camperName, dist, model,
+    // status:'accept', via:'burst'}]. Respects one-camper-per-photo and
+    // one-name-per-face.
+    function propagateBurstMatches(photos, opts) {
+        var profiles = (opts && opts.profiles) || MODEL_PROFILES;
+        var factor = (opts && opts.propagateFactor) || 0.8;
+
+        // anchor faces: confidently assigned (auto or accepted)
+        var anchors = [];
+        photos.forEach(function (p) {
+            var faceById = {};
+            (p.faces || []).forEach(function (f) { faceById[f.id] = f; });
+            (p.assignments || []).forEach(function (a) {
+                if (a.status !== 'auto' && a.status !== 'accept') return;
+                var f = faceById[a.faceId];
+                if (f && f.descriptors) anchors.push({ camperName: a.camperName, descriptors: f.descriptors });
+            });
+        });
+        if (!anchors.length) return [];
+
+        var extras = [];
+        photos.forEach(function (p) {
+            var assignedFaces = {}, assignedCampers = {};
+            (p.assignments || []).forEach(function (a) {
+                assignedFaces[a.faceId] = true; assignedCampers[a.camperName] = true;
+            });
+            (p.faces || []).forEach(function (f) {
+                if (assignedFaces[f.id] || f.tier === 'reject' || !f.descriptors) return;
+                var best = null;
+                anchors.forEach(function (anchor) {
+                    if (assignedCampers[anchor.camperName]) return;
+                    Object.keys(f.descriptors).forEach(function (model) {
+                        var prof = profiles[model];
+                        if (!prof || !anchor.descriptors[model] || !f.descriptors[model]) return;
+                        var d = distanceFor(prof.metric, f.descriptors[model], anchor.descriptors[model]);
+                        if (d > prof.autoDist * factor) return;
+                        var norm = d / prof.autoDist;
+                        if (!best || norm < best.norm) best = { norm: norm, dist: d, model: model, camperName: anchor.camperName };
+                    });
+                });
+                if (best) {
+                    assignedFaces[f.id] = true; assignedCampers[best.camperName] = true;
+                    extras.push({
+                        photoId: p.photoId, faceId: f.id, camperName: best.camperName,
+                        dist: Math.round(best.dist * 1000) / 1000, model: best.model,
+                        status: 'accept', via: 'burst'
+                    });
+                }
+            });
+        });
+        return extras;
+    }
+
     // ─── per-photo assignment ────────────────────────────────────────────────
 
     // One-to-one assignment of detected faces to campers.
@@ -252,7 +414,12 @@
         buildTemplate: buildTemplate,
         matchDistance: matchDistance,
         qualityTier: qualityTier,
-        assignFaces: assignFaces
+        assignFaces: assignFaces,
+        confidenceFor: confidenceFor,
+        routeConfidence: routeConfidence,
+        calibrateFromDecisions: calibrateFromDecisions,
+        burstClusters: burstClusters,
+        propagateBurstMatches: propagateBurstMatches
     };
 
     if (typeof window !== 'undefined') {

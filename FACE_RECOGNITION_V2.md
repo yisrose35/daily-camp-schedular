@@ -16,13 +16,15 @@ AdaFace/ArcFace low-res gains.
 
 | File | Role |
 |------|------|
-| `face_match_core.js` | Pure matching math: IoU/NMS, tile planning, mean templates, quality tiers, 1:1 assignment. Unit-tested (`tests/face_match_core.test.js`). |
-| `campistry_face_shared.js` | Browser engine: face-api models, **tiled (SAHI-style) detection** at working resolution, per-face high-res re-crop + descriptor, blur/size quality metrics, engine registry. |
-| `campistry_face_engine_v2.js` | Optional modern engine: SCRFD landmarks + 512-D ArcFace (`arc-512`) via onnxruntime-web (WebGPU→WASM). InsightFace buffalo_s ONNX, hosted by Immich on HF. Fails soft → system runs on `faceapi-128`. |
-| `campistry_link_photos.js` | Matcher + review queue + distribution. Multi-model templates, two-threshold auto/review routing, per-photo one-to-one assignment. |
+| `face_match_core.js` | Pure matching math: IoU/NMS, tile planning, mean templates, quality tiers, 1:1 assignment, confidence scale, dial routing, self-tuning calibration, burst clustering/propagation. Unit-tested (`tests/face_match_core.test.js`). |
+| `campistry_face_shared.js` | Browser engine: face-api models, **tiled (SAHI-style) detection** at working resolution, per-face high-res re-crop + descriptor, blur/size quality metrics, engine registry. Environment-agnostic (main thread or Web Worker), self-host-first model loading. |
+| `campistry_face_engine_v2.js` | Optional modern engine: **tiled SCRFD primary detection** + 512-D ArcFace (`arc-512`) via onnxruntime-web (WebGPU→WASM). InsightFace buffalo_s ONNX, self-hosted or Immich's HF mirror. Fails soft → system runs on `faceapi-128`. |
+| `campistry_face_worker.js` | Web Worker wrapper: batch scanning runs off the main thread (OffscreenCanvas + createImageBitmap); inline fallback on old browsers. |
+| `campistry_link_photos.js` | Matcher + auto-triage + review queue + distribution. Multi-model templates, per-photo one-to-one assignment, owner dials, self-learning, burst propagation. |
 | `migrations/029_face_recognition_v2.sql` | Multi-descriptor enrollment table, pending tags, `promote_confirmed_face`, `resolve_photo_tag`, consent purge extended to v2 rows. |
 | `campistry_link_parent.html` | 3-angle enrollment UI (front/left/right per child). |
-| `campistry_link_admin.html` | "Needs Review" queue: approve/reject gray-zone matches. |
+| `campistry_link_admin.html` | "Needs Review" queue + **Auto-Triage** card (accept/reject dials, self-tune toggle, bulk apply). |
+| `models/README.md` | Self-hosting layout for all model files (CDN-block insurance). |
 
 ## Pipeline (per uploaded camp photo)
 
@@ -42,13 +44,41 @@ AdaFace/ArcFace low-res gains.
    descriptor) per model; best model wins (normalized by its review threshold).
 6. **Assign** — greedy one-to-one on ascending distance: a camper is tagged at
    most once per photo, a face gets at most one name.
-7. **Route** — `dist ≤ autoDist` and quality `good` → auto-tag (parent-visible).
-   `dist ≤ reviewDist` → pending tag: stored with `pending=true`, invisible to
-   parents (`get_my_camper_photos` filters), surfaced in the admin review queue.
-8. **Learn** — approving a review suggestion promotes that face's descriptors
-   into the camper's gallery (`promote_confirmed_face`, capped at 10 per model,
-   consent re-checked) and hot-updates the local templates, so accuracy
-   compounds over the summer.
+7. **Route** — everything runs on one confidence scale (1.0 perfect, 0.5 =
+   edge of the engine auto zone, 0 = edge of consideration):
+   - engine-strong + quality `good` → auto-tag (parent-visible)
+   - review band → **owner dials**: `conf ≥ acceptPct` auto-accept,
+     `conf < rejectPct` auto-reject, middle → human queue. Dials are set in
+     the admin Auto-Triage card; "Apply to current queue" re-routes a backlog.
+   - pending tags stay `pending=true` in the cloud — invisible to parents
+     until accepted.
+8. **Burst propagation** — photos captured within ~15s of each other
+   (file modification time) form a burst; a confirmed identity in one frame
+   propagates to a near-identical unassigned face in the neighbors
+   (face-to-face distance ≤ 0.8×autoDist). In-memory only; respects
+   one-camper-per-photo.
+9. **Learn (two loops)** —
+   - *Gallery growth:* approving a review suggestion promotes that face's
+     descriptors into the camper's gallery (`promote_confirmed_face`, capped
+     at 10 per model, consent re-checked) and hot-updates local templates.
+   - *Dial self-tuning:* every human approve/reject is a ~50-byte calibration
+     sample (capped at 500, local only). At 30+ samples, and every ~10
+     decisions after, `calibrateFromDecisions` recomputes where auto-accept
+     can sit at ≥95% precision and where auto-reject loses ≤10% of real
+     matches, and moves the dials (bounded, always keeping a review band).
+     Bulk/auto decisions never feed the log — only humans teach.
+
+## Performance & storage guardrails
+
+- Batch scanning runs in a **Web Worker** (`campistry_face_worker.js`) — the
+  admin UI never freezes; worker init or scan failure falls back to inline.
+- Face descriptors live in memory during a batch and are discarded after
+  routing; only pending-review tags keep theirs (needed for
+  promote-on-approve), and those are deleted at resolution.
+- Review thumbs are 96px JPEGs; the learn log is numbers only (~25 KB max);
+  nothing new is persisted to the cloud beyond the tags that already existed.
+- Model files load self-hosted-first (`models/`, see its README), CDN
+  fallback — camp WiFi content filters can't silently degrade recognition.
 
 ## Enrollment
 

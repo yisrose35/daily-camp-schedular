@@ -623,6 +623,36 @@
         </label>
         <div id="uploadProg" style="display:none;margin-top:10px;"></div>
     </div>
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Auto-Triage</h2><span class="badge" id="triageBadge"></span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">
+            With hundreds of photos, nobody can review every borderline match by hand. Set the dials:
+            suggestions at or above the accept line are tagged automatically; below the reject line they're
+            dropped; only the middle sliver waits for a human. When self-tuning is on, every review decision
+            you do make teaches the system where these lines should sit for your campers.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;">
+            <div>
+                <label style="font-size:.72rem;font-weight:700;color:var(--slate-600);display:block;margin-bottom:4px;">Auto-accept at ≥</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <input type="number" id="triageAccept" min="1" max="99" step="1" style="width:70px;padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:.85rem;" onchange="updateTriageDials()">
+                    <span style="font-size:.8rem;color:var(--text-muted);">% confidence</span>
+                </div>
+            </div>
+            <div>
+                <label style="font-size:.72rem;font-weight:700;color:var(--slate-600);display:block;margin-bottom:4px;">Auto-reject below</label>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <input type="number" id="triageReject" min="0" max="90" step="1" style="width:70px;padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:.85rem;" onchange="updateTriageDials()">
+                    <span style="font-size:.8rem;color:var(--text-muted);">% confidence</span>
+                </div>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--slate-700);cursor:pointer;padding-bottom:6px;">
+                <input type="checkbox" id="triageSelfTune" onchange="updateTriageDials()"> Self-tune from my decisions
+            </label>
+            <button class="btn btn-ghost btn-sm" onclick="applyTriageToQueue()" style="margin-bottom:2px;">Apply to current queue</button>
+        </div>
+        <div id="triageStats" style="font-size:.72rem;color:var(--text-muted);margin-top:10px;"></div>
+    </div>
     <div class="lk-card" id="reviewQueueCard" style="display:none;">
         <div class="lk-card-head">
             <h2>Needs Review</h2>
@@ -2927,7 +2957,7 @@ async function handlePhotos(files) {
     });
     prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged' + (r.needsReview ? ', ' + r.needsReview + ' need review' : '') + '</div>';
     document.getElementById('photoInput').value = '';
-    refreshPhotos(); refreshReviewQueue(); updatePhotoStats();
+    refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI();
 }
 function refreshPhotos() {
     var cp = CP(); if (!cp) return;
@@ -2945,6 +2975,56 @@ function refreshPhotos() {
         return '<div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);overflow:hidden;background:#fff;">' + thumb + '<div style="padding:6px;font-size:.72rem;"><div style="display:flex;flex-wrap:wrap;gap:2px;">' + tagStr + pendStr + '</div></div></div>';
     }).join('');
 }
+// ─── Auto-triage dials ────────────────────────────────────────────────────────
+function refreshTriageUI() {
+    var cp = CP(); if (!cp || !cp.getReviewStats) return;
+    var s = cp.getReviewStats();
+    var a = document.getElementById('triageAccept'), r = document.getElementById('triageReject'),
+        st = document.getElementById('triageSelfTune'), badge = document.getElementById('triageBadge'),
+        stats = document.getElementById('triageStats');
+    if (a && document.activeElement !== a) a.value = Math.round(s.acceptPct * 100);
+    if (r && document.activeElement !== r) r.value = Math.round(s.rejectPct * 100);
+    if (st) st.checked = !!s.selfTune;
+    if (badge) {
+        badge.textContent = s.selfTune ? 'self-tuning' : 'manual';
+        badge.className = 'badge ' + (s.selfTune ? 'badge-ok' : '');
+    }
+    if (stats) {
+        var bits = [];
+        bits.push(s.autoAccepted + ' auto-accepted · ' + s.autoRejected + ' auto-rejected' +
+                  (s.burstTagged ? ' · ' + s.burstTagged + ' from bursts' : ''));
+        if (s.decisions) {
+            bits.push('learned from ' + s.decisions + ' of your review decisions' +
+                (s.tunedAt ? ' — dials last tuned ' + new Date(s.tunedAt).toLocaleDateString() : ' (tunes automatically at 30+)'));
+        } else {
+            bits.push('no review decisions yet — the queue below teaches the system');
+        }
+        if (s.workerActive) bits.push('background scanning active');
+        stats.textContent = bits.join(' · ');
+    }
+}
+function updateTriageDials() {
+    var cp = CP(); if (!cp) return;
+    var a = parseInt(document.getElementById('triageAccept').value, 10);
+    var r = parseInt(document.getElementById('triageReject').value, 10);
+    var st = document.getElementById('triageSelfTune').checked;
+    if (isNaN(a)) a = 35; if (isNaN(r)) r = 8;
+    a = Math.max(1, Math.min(99, a));
+    r = Math.max(0, Math.min(a - 1, r));   // reject line must sit below accept line
+    cp.updateSettings({ acceptPct: a / 100, rejectPct: r / 100, selfTune: st });
+    refreshTriageUI();
+}
+async function applyTriageToQueue() {
+    var cp = CP(); if (!cp || !cp.applyDialsToQueue) return;
+    var r = await cp.applyDialsToQueue();
+    if (r && r.success) {
+        toast(r.accepted + ' accepted, ' + r.rejected + ' rejected, ' + r.remaining + ' left for review');
+    } else {
+        toast((r && r.error) || 'Could not apply');
+    }
+    refreshReviewQueue(); refreshPhotos(); updatePhotoStats(); refreshTriageUI();
+}
+
 // ─── Review queue: gray-zone matches awaiting human confirmation ─────────────
 function refreshReviewQueue() {
     var cp = CP(); if (!cp || !cp.getPendingReview) return;
@@ -2982,7 +3062,7 @@ async function resolveReview(photoId, camperName, approve) {
     } else {
         toast((r && r.error) || 'Could not resolve');
     }
-    refreshReviewQueue(); refreshPhotos(); updatePhotoStats();
+    refreshReviewQueue(); refreshPhotos(); updatePhotoStats(); refreshTriageUI();
 }
 function updatePhotoStats() {
     var cp = CP(); if (!cp) return;
@@ -3750,6 +3830,7 @@ function boot() {
         cp.loadModels();
     }
     refreshReviewQueue();
+    refreshTriageUI();
 
     window.addEventListener('storage', function(e) {
         if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {

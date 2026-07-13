@@ -1,5 +1,5 @@
 // =============================================================================
-// campistry_face_shared.js — shared in-browser face engine for Link (v2)
+// campistry_face_shared.js — shared in-browser face engine for Link (v2.1)
 //
 // Runs face detection + description entirely IN THE BROWSER. Used by:
 //   * the parent portal    → compute reference descriptors for a child's
@@ -10,30 +10,45 @@
 // descriptor arrays are persisted (see migrations 028/029).
 //
 // v2 UPGRADES (research-backed, see FACE_RECOGNITION_V2.md):
-//   * Tiled (SAHI-style) detection: large photos are scanned as overlapping
-//     tiles at full working resolution instead of one shrunken pass, so faces
-//     that are 30-60px in a 20-40-kid group shot are actually found.
-//   * Larger detector input (inputSize 640 whole-image pass, 512 per tile —
-//     a per-call runtime option of TinyFaceDetector, no model change).
-//   * Per-face re-crop: every merged detection is re-run on a high-res crop
-//     for stable landmarks + descriptor, instead of embedding tiny pixels.
-//   * Quality metrics per face (size, detector score, blur via variance of
-//     Laplacian) feeding FaceMatchCore.qualityTier.
-//   * Engine registry: an optional modern ONNX engine (SCRFD + 512-D ArcFace,
-//     campistry_face_engine_v2.js) plugs in via registerEngine() and adds
-//     'arc-512' descriptors alongside the legacy 'faceapi-128' ones.
+//   * Tiled (SAHI-style) detection at full working resolution
+//   * Larger detector input (640 whole-image / 512 per tile)
+//   * Per-face high-res re-crop for stable landmarks + descriptors
+//   * Quality metrics (size / score / blur) feeding FaceMatchCore.qualityTier
+//   * Engine registry — campistry_face_engine_v2.js adds 'arc-512' descriptors
+//     and, when ready, takes over PRIMARY detection with tiled SCRFD
+//
+// v2.1: environment-agnostic — the same file runs on the main thread AND
+// inside a Web Worker (campistry_face_worker.js) using OffscreenCanvas +
+// createImageBitmap, so batch scanning never freezes the admin UI.
+// Model loading tries a SELF-HOSTED path first (models/ next to the app —
+// drop the files there to survive camp WiFi that blocks CDNs), then the CDN.
 //
 // Requires face_match_core.js (FaceMatchCore) for tiling/NMS math.
 // =============================================================================
 (function () {
     'use strict';
-    if (window.CampistryFace) return;
+    var GLOBAL = (typeof self !== 'undefined') ? self : window;
+    if (GLOBAL.CampistryFace) return;
 
-    var FACE_API_SRC = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.min.js';
+    var IS_WORKER = (typeof importScripts === 'function') && (typeof document === 'undefined');
+
+    // Self-hosted model base (override with self.CAMPISTRY_MODEL_BASE before
+    // this script loads). Layout expected:
+    //   <base>/face-api/face-api.min.js
+    //   <base>/face-api/weights/*             (the justadudewhohacks weight files)
+    var LOCAL_BASE = GLOBAL.CAMPISTRY_MODEL_BASE || 'models';
+
+    var FACE_API_SRCS = [
+        LOCAL_BASE + '/face-api/face-api.min.js',
+        'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.min.js'
+    ];
     // Weights: vladmandic's own /model path serves manifests but NOT the weight
     // shards (404) — it hangs forever. The canonical justadudewhohacks weights are
     // format-compatible with the vladmandic runtime and reliably hosted.
-    var MODEL_URL    = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+    var WEIGHT_URLS = [
+        LOCAL_BASE + '/face-api/weights',
+        'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights'
+    ];
 
     var DEFAULTS = {
         maxWorkDim: 2560,      // working-canvas cap: keeps memory bounded but preserves small faces
@@ -50,15 +65,42 @@
     var _modelsPromise = null;
     var _engines = [];         // registered extra engines (e.g. arc-512)
 
-    // ─── loading ─────────────────────────────────────────────────────────────
+    // ─── environment-agnostic primitives ────────────────────────────────────
 
-    function _loadScript(src) {
+    function _makeCanvas(w, h) {
+        if (IS_WORKER || typeof document === 'undefined') {
+            return new OffscreenCanvas(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+        }
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(w));
+        c.height = Math.max(1, Math.round(h));
+        return c;
+    }
+
+    function _loadScriptOnce(src) {
         return new Promise(function (resolve, reject) {
-            if (typeof faceapi !== 'undefined') { resolve(); return; }
+            if (IS_WORKER) {
+                try { importScripts(src); resolve(); }
+                catch (e) { reject(new Error('script load failed: ' + src)); }
+                return;
+            }
             var s = document.createElement('script');
-            s.src = src; s.onload = resolve; s.onerror = function () { reject(new Error('face-api load failed')); };
+            s.src = src; s.onload = resolve;
+            s.onerror = function () { s.remove(); reject(new Error('script load failed: ' + src)); };
             document.head.appendChild(s);
         });
+    }
+
+    // Try sources in order (self-hosted first, CDN fallback).
+    function _loadScriptChain(srcs, check) {
+        var p = Promise.reject();
+        srcs.forEach(function (src) {
+            p = p.catch(function () {
+                if (check && check()) return;   // already present
+                return _loadScriptOnce(src);
+            });
+        });
+        return p;
     }
 
     function _withTimeout(promise, ms, label) {
@@ -70,24 +112,15 @@
         });
     }
 
-    // Loads the face-api script + the three models we need. Idempotent.
-    // Guarded by a timeout so a stalled CDN surfaces an error instead of a
-    // permanent "Analyzing…" hang.
-    function ensureModels() {
-        if (_modelsPromise) return _modelsPromise;
-        _modelsPromise = _withTimeout(_loadScript(FACE_API_SRC), 20000, 'face-api download').then(function () {
-            if (typeof faceapi === 'undefined') throw new Error('face-api unavailable');
-            return _withTimeout(Promise.all([
-                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-                faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
-                faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-            ]), 30000, 'face model download');
-        }).then(function () { return true; })
-          .catch(function (e) { _modelsPromise = null; throw e; });
-        return _modelsPromise;
-    }
-
+    // Load an image source into something drawable (HTMLImageElement on the
+    // main thread, ImageBitmap in a worker). Both expose width/height.
     function _loadImage(src) {
+        if (src && (src.tagName === 'IMG' || (typeof ImageBitmap !== 'undefined' && src instanceof ImageBitmap))) {
+            return Promise.resolve(src);
+        }
+        if (IS_WORKER) {
+            return fetch(src).then(function (r) { return r.blob(); }).then(function (b) { return createImageBitmap(b); });
+        }
         return new Promise(function (resolve, reject) {
             var img = new Image();
             img.crossOrigin = 'anonymous';
@@ -97,21 +130,62 @@
         });
     }
 
+    // toDataURL that works for both canvas kinds (OffscreenCanvas only has
+    // convertToBlob).
+    function _canvasToDataUrl(canvas, quality) {
+        if (typeof canvas.toDataURL === 'function') {
+            return Promise.resolve(canvas.toDataURL('image/jpeg', quality || 0.85));
+        }
+        return canvas.convertToBlob({ type: 'image/jpeg', quality: quality || 0.85 }).then(function (blob) {
+            return blob.arrayBuffer().then(function (buf) {
+                var bytes = new Uint8Array(buf), bin = '';
+                for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                return 'data:image/jpeg;base64,' + btoa(bin);
+            });
+        });
+    }
+
+    // ─── model loading (self-host first, CDN fallback) ──────────────────────
+
+    function _loadWeights(base) {
+        return Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(base),
+            faceapi.nets.faceLandmark68TinyNet.loadFromUri(base),
+            faceapi.nets.faceRecognitionNet.loadFromUri(base)
+        ]);
+    }
+
+    // Loads the face-api script + the three models we need. Idempotent.
+    // Guarded by a timeout so a stalled CDN surfaces an error instead of a
+    // permanent "Analyzing…" hang.
+    function ensureModels() {
+        if (_modelsPromise) return _modelsPromise;
+        _modelsPromise = _withTimeout(
+            _loadScriptChain(FACE_API_SRCS, function () { return typeof faceapi !== 'undefined'; }),
+            25000, 'face-api download'
+        ).then(function () {
+            if (typeof faceapi === 'undefined') throw new Error('face-api unavailable');
+            var p = Promise.reject();
+            WEIGHT_URLS.forEach(function (base) {
+                p = p.catch(function () { return _withTimeout(_loadWeights(base), 30000, 'face model download'); });
+            });
+            return p;
+        }).then(function () { return true; })
+          .catch(function (e) { _modelsPromise = null; throw e; });
+        return _modelsPromise;
+    }
+
     // ─── canvas helpers ──────────────────────────────────────────────────────
 
     function _toCanvas(img, maxDim) {
         var scale = Math.min(1, (maxDim || DEFAULTS.maxWorkDim) / Math.max(img.width, img.height));
-        var canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
+        var canvas = _makeCanvas(img.width * scale, img.height * scale);
         canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
         return { canvas: canvas, scale: scale };
     }
 
     function _cropCanvas(src, x, y, w, h, outW, outH) {
-        var c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(outW || w));
-        c.height = Math.max(1, Math.round(outH || h));
+        var c = _makeCanvas(outW || w, outH || h);
         c.getContext('2d').drawImage(src, x, y, w, h, 0, 0, c.width, c.height);
         return c;
     }
@@ -121,7 +195,7 @@
         maxDim = maxDim || 400; quality = quality || 0.85;
         return _loadImage(src).then(function (img) {
             var r = _toCanvas(img, maxDim);
-            return r.canvas.toDataURL('image/jpeg', quality);
+            return _canvasToDataUrl(r.canvas, quality);
         });
     }
 
@@ -168,59 +242,67 @@
         });
     }
 
+    // faceapi primary detection: whole-image pass + SAHI tiles, merged.
+    function _detectPrimaryFaceapi(work, o, Core) {
+        var passes = [_detectOn(work, o.wholeInputSize)];
+        if (Math.max(work.width, work.height) >= o.tileThreshold) {
+            var tiles = Core.planTiles(work.width, work.height, o.tileSize, o.tileOverlap);
+            tiles.forEach(function (t) {
+                passes.push(Promise.resolve().then(function () {
+                    var tc = _cropCanvas(work, t.x, t.y, t.w, t.h);
+                    return _detectOn(tc, o.tileInputSize).then(function (dets) {
+                        dets.forEach(function (d) { d.box.x += t.x; d.box.y += t.y; });
+                        return dets;
+                    });
+                }));
+            });
+        }
+        return Promise.all(passes).then(function (results) {
+            var all = [];
+            results.forEach(function (dets) { all = all.concat(dets); });
+            return Core.nmsMerge(all, 0.45);
+        });
+    }
+
     /**
      * Full crowd-aware detection + description pipeline.
      *
-     * @param {string|HTMLImageElement} src   image (data URL / URL / element)
-     * @param {object}  opts   overrides for DEFAULTS + {progress: fn}
+     * Primary detection: SCRFD (tiled) when the modern engine is ready — it is
+     * dramatically stronger on small/occluded faces — otherwise tiled
+     * TinyFaceDetector. Either way every face gets a faceapi-128 descriptor
+     * (so legacy galleries keep matching) and, when available, an arc-512 one.
+     *
      * @returns {Promise<{faces: Array, imageSize: {w,h}, engineIds: Array}>}
-     *   faces: [{
-     *     id, box (original-image coords), score,
-     *     sizePx, blurVar, tier ('good'|'weak'|'reject'),
-     *     descriptors: { 'faceapi-128': [...], 'arc-512': [...]? },
-     *     thumb (small jpeg data URL of the face crop — for review UI)
-     *   }]
+     *   faces: [{ id, box (original coords), score, sizePx, blurVar, tier,
+     *             descriptors: {model: [...]}, thumb }]
      */
     function detectFacesForMatching(src, opts) {
         var o = Object.assign({}, DEFAULTS, opts || {});
-        var Core = window.FaceMatchCore;
+        var Core = GLOBAL.FaceMatchCore;
         if (!Core) return Promise.reject(new Error('FaceMatchCore not loaded'));
 
         var img, work, workScale;
         return ensureModels().then(function () {
-            return (src && src.tagName === 'IMG') ? src : _loadImage(src);
+            return _loadImage(src);
         }).then(function (loaded) {
             img = loaded;
             var r = _toCanvas(img, o.maxWorkDim);
             work = r.canvas; workScale = r.scale;   // work = original * workScale
 
-            // Pass A: whole image at a large detector input.
-            var passes = [_detectOn(work, o.wholeInputSize)];
-
-            // Pass B: SAHI-style overlapping tiles when the image is big enough
-            // that small faces vanish in the whole-image pass.
-            if (Math.max(work.width, work.height) >= o.tileThreshold) {
-                var tiles = Core.planTiles(work.width, work.height, o.tileSize, o.tileOverlap);
-                tiles.forEach(function (t) {
-                    passes.push(Promise.resolve().then(function () {
-                        var tc = _cropCanvas(work, t.x, t.y, t.w, t.h);
-                        return _detectOn(tc, o.tileInputSize).then(function (dets) {
-                            dets.forEach(function (d) { d.box.x += t.x; d.box.y += t.y; });
-                            return dets;
-                        });
-                    }));
+            var primary = _engines.find(function (e) { return e.isReady && e.isReady() && e.detectPrimary; });
+            if (primary) {
+                return primary.detectPrimary(work, o).then(function (dets) {
+                    // SCRFD can whiff on stylized shots the tiny detector gets
+                    // (and vice versa) — if it found nothing, fall back.
+                    if (dets && dets.length) return dets;
+                    return _detectPrimaryFaceapi(work, o, Core);
                 });
             }
-            return Promise.all(passes);
-        }).then(function (results) {
-            var all = [];
-            results.forEach(function (dets) { all = all.concat(dets); });
-            var merged = Core.nmsMerge(all, 0.45);
+            return _detectPrimaryFaceapi(work, o, Core);
+        }).then(function (merged) {
             if (typeof o.progress === 'function') o.progress({ phase: 'describe', found: merged.length });
-
-            // Per-face: re-crop at high resolution and re-run detect+landmarks+
-            // descriptor on the crop. This aligns from the best available pixels
-            // (the crop is taken from the working canvas, upscaled if tiny).
+            // Per-face: re-crop at high resolution for the 128-D descriptor +
+            // quality metrics (also filters tile/detector false positives).
             var chain = Promise.resolve([]);
             merged.forEach(function (det) {
                 chain = chain.then(function (acc) {
@@ -254,10 +336,11 @@
 
     // Crop one detection (with margin), re-detect + landmarks + descriptor on
     // the crop, and compute quality. Returns null when the re-detect finds
-    // nothing (the tile pass produced a false positive — this is a feature:
-    // the re-crop acts as a verification stage).
+    // nothing (false-positive filter). If the primary detector supplied 5-point
+    // landmarks (SCRFD), they're carried through in work-canvas coords for the
+    // arc-512 engine to align from directly.
     function _describeCrop(work, workScale, det, o) {
-        var Core = window.FaceMatchCore;
+        var Core = GLOBAL.FaceMatchCore;
         var b = det.box;
         var mx = b.width * o.cropMargin, my = b.height * o.cropMargin;
         var cx = Math.max(0, b.x - mx), cy = Math.max(0, b.y - my);
@@ -288,6 +371,7 @@
                 var face = {
                     box: origBox,
                     workBox: { x: cx + fb.x / scaleUp, y: cy + fb.y / scaleUp, width: fb.width / scaleUp, height: fb.height / scaleUp },
+                    kps: det.kps || null,   // work-canvas coords when SCRFD was primary
                     score: Math.max(det.score || 0, res.detection.score || 0),
                     sizePx: sizePx,
                     blurVar: blurVar,
@@ -295,8 +379,10 @@
                     thumb: null
                 };
                 face.tier = Core.qualityTier({ sizePx: sizePx, detScore: face.score, blurVar: blurVar }, o.quality);
-                try { face.thumb = _cropCanvas(crop, 0, 0, crop.width, crop.height, 96, 96 * crop.height / crop.width).toDataURL('image/jpeg', 0.7); } catch (e) {}
-                return face;
+                var thumbCanvas = _cropCanvas(crop, 0, 0, crop.width, crop.height, 96, 96 * crop.height / crop.width);
+                return _canvasToDataUrl(thumbCanvas, 0.7)
+                    .then(function (t) { face.thumb = t; return face; })
+                    .catch(function () { return face; });
             })
             .catch(function () { return null; });
     }
@@ -324,7 +410,9 @@
 
     // engine = { id, isReady(): bool, init(): Promise,
     //            describeFaces(workCanvas, faces): Promise — adds
-    //            face.descriptors[engine.id] to each face it can embed }
+    //              face.descriptors[engine.id] to each face it can embed,
+    //            detectPrimary(workCanvas, opts)?: Promise<[{box,score,kps}]>
+    //              — optional: take over primary detection (tiled SCRFD) }
     function registerEngine(engine) {
         if (!engine || !engine.id) return;
         if (_engines.some(function (e) { return e.id === engine.id; })) return;
@@ -334,14 +422,19 @@
 
     function getEngines() { return _engines.slice(); }
 
-    window.CampistryFace = {
+    GLOBAL.CampistryFace = {
         ensureModels: ensureModels,
         describeFace: describeFace,
         detectFacesForMatching: detectFacesForMatching,
         makeThumb: makeThumb,
         registerEngine: registerEngine,
         getEngines: getEngines,
-        DEFAULTS: DEFAULTS
+        DEFAULTS: DEFAULTS,
+        // exposed for the engine + worker
+        _makeCanvas: _makeCanvas,
+        _loadScriptChain: _loadScriptChain,
+        _canvasToDataUrl: _canvasToDataUrl,
+        isWorker: IS_WORKER
     };
-    console.log('[CampistryFace] shared face helper v2 ready (tiled detection + engine registry)');
+    console.log('[CampistryFace] shared face helper v2.1 ready (' + (IS_WORKER ? 'worker' : 'main') + ')');
 })();

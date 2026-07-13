@@ -34,28 +34,45 @@
     // =========================================================================
     // STATE
     // =========================================================================
+    // Owner-facing confidence dials operate on the FaceMatchCore confidence
+    // scale (1.0 perfect · 0.5 edge of the engine's auto zone · 0 edge of
+    // consideration). Review-band suggestions at/above acceptPct auto-accept;
+    // below rejectPct they're silently dropped; the middle goes to the human
+    // queue. Self-tuning (learn log of human decisions) moves these dials.
+    const SETTINGS_DEFAULTS = {
+        sendFrequency: 'weekly',    // 'daily' | 'twice_weekly' | 'weekly'
+        sendDay: 'friday',          // day of week for weekly sends
+        autoTag: true,              // auto-scan on upload
+        maxPhotosPerEmail: 20,      // limit photos per parent email
+        tiledDetection: true,       // SAHI-style tiling for large photos
+        minFacePx: 48,              // quality gate: reject below this box size
+        reviewQueue: true,          // keep a human queue for the unresolved middle band
+        acceptPct: 0.35,            // auto-accept review-band suggestions at/above this confidence
+        rejectPct: 0.08,            // auto-reject below this confidence
+        selfTune: true,             // learn the dials from human review decisions
+        burstClustering: true,      // propagate confirmed IDs across rapid photo sequences
+        useWorker: true             // scan in a background Web Worker when supported
+    };
+
     let _store = {
         photos: [],         // { id, dataUrl, uploadDate, tags: [...], pendingTags: [...], week, sent }
         faceIndex: {},      // { camperName: { descriptors: [{descriptor, model, pose, source}], updatedAt } }
-        settings: {
-            sendFrequency: 'weekly',    // 'daily' | 'twice_weekly' | 'weekly'
-            sendDay: 'friday',          // day of week for weekly sends
-            minConfidence: 0.5,         // legacy display knob (1 - autoDist); thresholds live in FaceMatchCore
-            autoTag: true,              // auto-scan on upload
-            maxPhotosPerEmail: 20,      // limit photos per parent email
-            tiledDetection: true,       // SAHI-style tiling for large photos
-            minFacePx: 48,              // quality gate: reject below this box size
-            reviewQueue: true           // gray-zone matches go to review instead of dropping
-        },
+        settings: Object.assign({}, SETTINGS_DEFAULTS),
+        learn: [],          // human review decisions: {c: confidence, a: approved, m: model, t: ts} — ~50B each, capped
+        learnMeta: { lastTuneN: 0, tunedAt: null },
         stats: {
             totalUploaded: 0,
             totalTagged: 0,
             totalSent: 0,
             totalPendingResolved: 0,
+            autoAccepted: 0,
+            autoRejected: 0,
+            burstTagged: 0,
             lastScanDate: null,
             lastSendDate: null
         }
     };
+    const LEARN_CAP = 500;   // plenty for calibration, negligible storage
 
     let _modelsLoaded = false;
     let _indexBuilt = false;
@@ -84,13 +101,12 @@
             if (raw) {
                 var parsed = JSON.parse(raw);
                 _store = Object.assign({}, _store, parsed);
-                _store.settings = Object.assign({
-                    sendFrequency: 'weekly', sendDay: 'friday',
-                    minConfidence: 0.5, autoTag: true, maxPhotosPerEmail: 20,
-                    tiledDetection: true, minFacePx: 48, reviewQueue: true
-                }, parsed.settings || {});
+                _store.settings = Object.assign({}, SETTINGS_DEFAULTS, parsed.settings || {});
+                _store.learn = Array.isArray(parsed.learn) ? parsed.learn : [];
+                _store.learnMeta = Object.assign({ lastTuneN: 0, tunedAt: null }, parsed.learnMeta || {});
                 _store.stats = Object.assign({
                     totalUploaded: 0, totalTagged: 0, totalSent: 0, totalPendingResolved: 0,
+                    autoAccepted: 0, autoRejected: 0, burstTagged: 0,
                     lastScanDate: null, lastSendDate: null
                 }, parsed.stats || {});
                 _store.photos.forEach(function(p) {
@@ -167,11 +183,10 @@
     // template per model plus keep the individuals (FaceMatchCore.matchDistance
     // takes the best of both).
     async function buildFaceIndex(progressCallback) {
-        if (!await loadModels()) {
-            return { indexed: 0, skipped: 0, errors: 0, error: 'Models failed to load' };
-        }
         var core = Core();
         if (!core) return { indexed: 0, skipped: 0, errors: 0, error: 'face_match_core.js not loaded' };
+        // templates are pure math — models load in the background for scanning
+        loadModels();
 
         var db = _db();
         if (!db) {
@@ -277,19 +292,143 @@
     }
 
     // =========================================================================
-    // PHOTO SCANNING — tiled detection + quality gate + 1:1 assignment
+    // SCAN WORKER — heavy ML off the main thread (UI stays responsive)
     // =========================================================================
+    let _worker = null, _workerReady = null, _workerMsgId = 0;
+    const _workerCallbacks = {};
+
+    function _workerSupported() {
+        return _store.settings.useWorker
+            && typeof Worker !== 'undefined'
+            && typeof OffscreenCanvas !== 'undefined'
+            && typeof createImageBitmap !== 'undefined';
+    }
+
+    function _ensureWorker() {
+        if (!_workerSupported()) return Promise.resolve(null);
+        if (_workerReady) return _workerReady;
+        _workerReady = new Promise(function(resolve) {
+            try {
+                var w = new Worker('campistry_face_worker.js');
+                var settled = false;
+                // first init downloads models — generous timeout, then inline fallback
+                var timer = setTimeout(function() {
+                    if (!settled) { settled = true; try { w.terminate(); } catch(e) {} resolve(null); }
+                }, 90000);
+                w.onmessage = function(ev) {
+                    var msg = ev.data || {};
+                    if (msg.type === 'ready') {
+                        if (!settled) { settled = true; clearTimeout(timer); _worker = w; resolve(w); }
+                        return;
+                    }
+                    if (msg.type === 'init_failed') {
+                        console.warn('[LinkPhotos] scan worker init failed:', msg.error);
+                        if (!settled) { settled = true; clearTimeout(timer); try { w.terminate(); } catch(e) {} resolve(null); }
+                        return;
+                    }
+                    if (msg.id && _workerCallbacks[msg.id]) {
+                        _workerCallbacks[msg.id](msg);
+                        delete _workerCallbacks[msg.id];
+                    }
+                };
+                w.onerror = function(e) {
+                    console.warn('[LinkPhotos] scan worker error:', e && e.message);
+                    if (!settled) { settled = true; clearTimeout(timer); resolve(null); }
+                };
+                w.postMessage({ type: 'init', modelBase: window.CAMPISTRY_MODEL_BASE || undefined });
+            } catch(e) { resolve(null); }
+        });
+        return _workerReady;
+    }
+
+    // Detect faces via the worker; null → caller falls back to inline.
+    function _workerDetect(dataUrl, opts) {
+        return _ensureWorker().then(function(w) {
+            if (!w) return null;
+            return new Promise(function(resolve) {
+                var id = 'm' + (++_workerMsgId);
+                var to = setTimeout(function() { delete _workerCallbacks[id]; resolve(null); }, 120000);
+                _workerCallbacks[id] = function(msg) {
+                    clearTimeout(to);
+                    resolve(msg.ok ? msg.result : null);
+                };
+                w.postMessage({ type: 'scan', id: id, dataUrl: dataUrl, opts: opts });
+            });
+        });
+    }
+
+    // =========================================================================
+    // PHOTO SCANNING — tiled detection + quality gate + 1:1 assignment +
+    // owner auto-accept/auto-reject dials
+    // =========================================================================
+
+    function _scanOpts() {
+        var o = { quality: { minFacePx: _store.settings.minFacePx } };
+        if (!_store.settings.tiledDetection) o.tileThreshold = Infinity;
+        return o;
+    }
+
+    // Match already-detected faces against the camper templates and route each
+    // suggestion through the owner's dials. Returns the full routing picture;
+    // `faces`/`routed` are kept in-memory only (burst pass), never persisted.
+    function _matchDetected(faces) {
+        var core = Core();
+        var assignments = core.assignFaces(faces, _camperTemplates);
+        var faceById = {};
+        faces.forEach(function(f) { faceById[f.id] = f; });
+
+        var dials = { acceptPct: _store.settings.acceptPct, rejectPct: _store.settings.rejectPct };
+        var matches = [], pending = [], rejected = 0, routed = [];
+
+        assignments.forEach(function(a) {
+            var f = faceById[a.faceId];
+            var prof = core.MODEL_PROFILES[a.model] || {};
+            var confidence = Math.round(core.confidenceFor(a.dist, prof) * 100) / 100;
+            var rec = {
+                camperName: a.camperName,
+                confidence: confidence,
+                dist: a.dist,
+                model: a.model,
+                box: f ? f.box : null
+            };
+            if (a.status === 'auto') {
+                matches.push(rec);
+                routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'auto' });
+                return;
+            }
+            // review band → owner dials decide
+            var route = core.routeConfidence(confidence, dials);
+            if (route === 'accept') {
+                rec.autoAccepted = true;
+                matches.push(rec);
+                _store.stats.autoAccepted++;
+                routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'accept' });
+            } else if (route === 'reject') {
+                rejected++;
+                _store.stats.autoRejected++;
+            } else if (_store.settings.reviewQueue) {
+                rec.faceThumb = f ? f.thumb : null;
+                rec.descriptors = f ? f.descriptors : null;  // kept for promote-on-approve
+                pending.push(rec);
+                routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'review' });
+            }
+        });
+
+        return {
+            matches: matches,
+            pending: pending,
+            rejected: rejected,
+            facesFound: faces.length,
+            facesRejected: faces.filter(function(f) { return f.tier === 'reject'; }).length,
+            faces: faces,
+            routed: routed
+        };
+    }
 
     /**
      * Scan a single photo and return matched campers.
      * @param {string} imageDataUrl - data URL of the photo (ORIGINAL resolution —
      *        do not pre-shrink; the pipeline manages its own working size)
-     * @returns {Object} {
-     *   matches:  [{ camperName, confidence, dist, model, box }],          // auto-tags
-     *   pending:  [{ camperName, confidence, dist, model, box, faceThumb,
-     *                descriptors }],                                        // review queue
-     *   facesFound, facesRejected
-     * }
      */
     async function scanPhoto(imageDataUrl) {
         if (!_indexBuilt || !_camperTemplates.length) {
@@ -299,46 +438,15 @@
         if (!core || !face) return { matches: [], pending: [], error: 'Face engine not loaded' };
 
         try {
-            var scanOpts = { quality: { minFacePx: _store.settings.minFacePx } };
-            if (!_store.settings.tiledDetection) scanOpts.tileThreshold = Infinity;
-            var result = await face.detectFacesForMatching(imageDataUrl, scanOpts);
-            var faces = result.faces || [];
-            if (!faces.length) return { matches: [], pending: [], facesFound: 0, facesRejected: 0 };
-
-            var assignments = core.assignFaces(faces, _camperTemplates);
-            var faceById = {};
-            faces.forEach(function(f) { faceById[f.id] = f; });
-
-            var matches = [], pending = [];
-            assignments.forEach(function(a) {
-                var f = faceById[a.faceId];
-                var prof = core.MODEL_PROFILES[a.model] || {};
-                // confidence: 0 at the review boundary, 1 at distance 0 — a
-                // human-readable score consistent across models
-                var confidence = Math.max(0, Math.min(1,
-                    1 - a.dist / (prof.reviewDist || 1)));
-                var rec = {
-                    camperName: a.camperName,
-                    confidence: Math.round(confidence * 100) / 100,
-                    dist: a.dist,
-                    model: a.model,
-                    box: f ? f.box : null
-                };
-                if (a.status === 'auto') {
-                    matches.push(rec);
-                } else if (_store.settings.reviewQueue) {
-                    rec.faceThumb = f ? f.thumb : null;
-                    rec.descriptors = f ? f.descriptors : null;  // kept for promote-on-approve
-                    pending.push(rec);
-                }
-            });
-
-            return {
-                matches: matches,
-                pending: pending,
-                facesFound: faces.length,
-                facesRejected: faces.filter(function(f) { return f.tier === 'reject'; }).length
-            };
+            // worker first (keeps the UI thread free); inline fallback
+            var det = await _workerDetect(imageDataUrl, _scanOpts());
+            if (!det) {
+                if (!await loadModels()) return { matches: [], pending: [], error: 'Models failed to load' };
+                det = await face.detectFacesForMatching(imageDataUrl, _scanOpts());
+            }
+            var faces = det.faces || [];
+            if (!faces.length) return { matches: [], pending: [], facesFound: 0, facesRejected: 0, faces: [], routed: [] };
+            return _matchDetected(faces);
         } catch(e) {
             console.warn('[LinkPhotos] Scan error:', e.message);
             return { matches: [], pending: [], error: e.message };
@@ -348,96 +456,136 @@
     /**
      * Batch upload and scan multiple photos.
      * Scans at ORIGINAL resolution (tiled), stores a 1200px copy for display.
+     * After scanning, burst clustering propagates confirmed identities across
+     * photos shot seconds apart (in-memory only — descriptors are discarded
+     * after routing except for pending review tags).
      */
     async function batchUploadAndScan(files, progressCallback) {
         if (!_indexBuilt) {
             return { processed: 0, tagged: 0, untagged: 0, errors: 0, error: 'Build face index first' };
         }
-
-        var processed = 0, tagged = 0, untagged = 0, needsReview = 0, errors = 0;
+        var core = Core();
         var weekKey = _getWeekKey();
+        var processed = 0, tagged = 0, untagged = 0, needsReview = 0, errors = 0, burstExtra = 0;
 
+        // ── phase 1: scan every photo ────────────────────────────────────────
+        var scanned = [];
         for (var i = 0; i < files.length; i++) {
             var file = files[i];
             if (!file.type.startsWith('image/')) { errors++; continue; }
-
             if (progressCallback) {
                 progressCallback({ current: i + 1, total: files.length, name: file.name, phase: 'scanning' });
             }
-
             try {
                 var originalDataUrl = await _fileToDataUrl(file);
-
-                // Scan FIRST at original resolution — the old flow resized to
-                // 1200px before scanning, which is exactly what erased the
-                // small faces in group shots. Storage still gets a 1200px copy.
                 var result = await scanPhoto(originalDataUrl);
                 var displayUrl = await _resizeImage(originalDataUrl, 1200);
-
-                var photoRecord = {
-                    id: 'photo_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                    dataUrl: displayUrl,
+                scanned.push({
+                    idx: scanned.length,
                     fileName: file.name,
-                    uploadDate: new Date().toISOString(),
-                    week: weekKey,
-                    tags: result.matches || [],
-                    pendingTags: result.pending || [],
-                    facesFound: result.facesFound || 0,
-                    facesRejected: result.facesRejected || 0,
-                    sent: false,
-                    manualTags: [] // for manual corrections
-                };
-
-                // Persist to cloud so parents see their child's photos. Pending
-                // tags are stored with pending=true — parents can't see them
-                // until staff approve (RPC filters them out). The RPC also only
-                // keeps tags for consented campers (second line of defence).
-                var db = _db();
-                if (db) {
-                    try {
-                        var cloudTags = photoRecord.tags.map(function(t) {
-                            return { camper_name: t.camperName, confidence: t.confidence, manual: false, pending: false };
-                        }).concat(photoRecord.pendingTags.map(function(t) {
-                            return { camper_name: t.camperName, confidence: t.confidence, manual: false, pending: true };
-                        }));
-                        var saveRes = await db.client.rpc('save_scanned_photo', {
-                            p_camp_id: db.campId,
-                            p_image_data: displayUrl,
-                            p_file_name: file.name,
-                            p_week: weekKey,
-                            p_tags: cloudTags
-                        });
-                        if (saveRes && saveRes.data && saveRes.data.photo_id) {
-                            photoRecord.cloudId = saveRes.data.photo_id;
-                            photoRecord.synced = true;
-                        }
-                    } catch (ce) {
-                        console.warn('[LinkPhotos] Cloud save failed for', file.name, ce.message || ce);
-                    }
-                }
-
-                _store.photos.push(photoRecord);
-                _store.stats.totalUploaded++;
-
-                if (photoRecord.tags.length > 0) {
-                    tagged++;
-                    _store.stats.totalTagged++;
-                } else {
-                    untagged++;
-                }
-                if (photoRecord.pendingTags.length > 0) needsReview++;
-                processed++;
-
+                    capturedAt: file.lastModified || null,   // camera files carry capture time here
+                    displayUrl: displayUrl,
+                    result: result
+                });
             } catch(e) {
                 console.warn('[LinkPhotos] Error processing file:', file.name, e.message);
                 errors++;
             }
         }
 
+        // ── phase 2: burst propagation across rapid sequences ────────────────
+        if (_store.settings.burstClustering && scanned.length > 1) {
+            try {
+                var clusters = core.burstClusters(
+                    scanned.map(function(s) { return { id: s.idx, capturedAt: s.capturedAt }; }));
+                clusters.forEach(function(cluster) {
+                    var photos = cluster.map(function(idx) {
+                        var s = scanned[idx];
+                        return { photoId: idx, faces: s.result.faces || [], assignments: s.result.routed || [] };
+                    });
+                    var extras = core.propagateBurstMatches(photos);
+                    extras.forEach(function(x) {
+                        var s = scanned[x.photoId];
+                        var prof = core.MODEL_PROFILES[x.model] || {};
+                        s.result.matches.push({
+                            camperName: x.camperName,
+                            confidence: Math.round(core.confidenceFor(x.dist, prof) * 100) / 100,
+                            dist: x.dist, model: x.model,
+                            autoAccepted: true, via: 'burst'
+                        });
+                        // a burst tag outranks a pending suggestion for the same camper
+                        s.result.pending = s.result.pending.filter(function(p) { return p.camperName !== x.camperName; });
+                        burstExtra++;
+                        _store.stats.burstTagged++;
+                    });
+                });
+            } catch(e) { console.warn('[LinkPhotos] burst propagation skipped:', e.message); }
+        }
+
+        // ── phase 3: persist (descriptors dropped except pending tags) ───────
+        var db = _db();
+        for (var j = 0; j < scanned.length; j++) {
+            var s = scanned[j];
+            if (progressCallback) {
+                progressCallback({ current: j + 1, total: scanned.length, name: s.fileName, phase: 'saving' });
+            }
+            var photoRecord = {
+                id: 'photo_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                dataUrl: s.displayUrl,
+                fileName: s.fileName,
+                uploadDate: new Date().toISOString(),
+                capturedAt: s.capturedAt,
+                week: weekKey,
+                tags: s.result.matches || [],
+                pendingTags: s.result.pending || [],
+                facesFound: s.result.facesFound || 0,
+                facesRejected: s.result.facesRejected || 0,
+                sent: false,
+                manualTags: []
+            };
+
+            // Persist to cloud so parents see their child's photos. Pending
+            // tags are stored with pending=true — parents can't see them until
+            // staff approve (RPC filters them out). The RPC also only keeps
+            // tags for consented campers (second line of defence).
+            if (db) {
+                try {
+                    var cloudTags = photoRecord.tags.map(function(t) {
+                        return { camper_name: t.camperName, confidence: t.confidence, manual: false, pending: false };
+                    }).concat(photoRecord.pendingTags.map(function(t) {
+                        return { camper_name: t.camperName, confidence: t.confidence, manual: false, pending: true };
+                    }));
+                    var saveRes = await db.client.rpc('save_scanned_photo', {
+                        p_camp_id: db.campId,
+                        p_image_data: s.displayUrl,
+                        p_file_name: s.fileName,
+                        p_week: weekKey,
+                        p_tags: cloudTags
+                    });
+                    if (saveRes && saveRes.data && saveRes.data.photo_id) {
+                        photoRecord.cloudId = saveRes.data.photo_id;
+                        photoRecord.synced = true;
+                    }
+                } catch (ce) {
+                    console.warn('[LinkPhotos] Cloud save failed for', s.fileName, ce.message || ce);
+                }
+            }
+
+            _store.photos.push(photoRecord);
+            _store.stats.totalUploaded++;
+            if (photoRecord.tags.length > 0) { tagged++; _store.stats.totalTagged++; }
+            else untagged++;
+            if (photoRecord.pendingTags.length > 0) needsReview++;
+            processed++;
+            // release scan memory (faces/descriptors) as we go
+            s.result.faces = null; s.result.routed = null;
+        }
+
         _store.stats.lastScanDate = new Date().toISOString();
         saveStore();
 
-        return { processed: processed, tagged: tagged, untagged: untagged, needsReview: needsReview, errors: errors };
+        return { processed: processed, tagged: tagged, untagged: untagged,
+                 needsReview: needsReview, burstTagged: burstExtra, errors: errors };
     }
 
     // =========================================================================
@@ -466,10 +614,37 @@
         return out.sort(function(a, b) { return new Date(b.uploadDate) - new Date(a.uploadDate); });
     }
 
+    // Every HUMAN review decision is a labeled calibration sample (~50 bytes).
+    // Once there's enough evidence, the owner dials retune themselves so the
+    // auto-accept/auto-reject bands match this camp's real photo conditions.
+    function _recordDecision(tag, approved) {
+        if (typeof tag.confidence !== 'number') return;
+        _store.learn.push({ c: tag.confidence, a: !!approved, m: tag.model || null, t: Date.now() });
+        if (_store.learn.length > LEARN_CAP) _store.learn = _store.learn.slice(-LEARN_CAP);
+        _maybeSelfTune();
+    }
+
+    function _maybeSelfTune() {
+        if (!_store.settings.selfTune) return;
+        var core = Core(); if (!core) return;
+        var learn = _store.learn || [];
+        if (learn.length < 30) return;                                  // need real evidence
+        if (learn.length - (_store.learnMeta.lastTuneN || 0) < 10) return;  // retune every ~10 decisions
+        var r = core.calibrateFromDecisions(learn.map(function(s) { return { conf: s.c, approved: s.a }; }));
+        if (!r) return;
+        if (r.acceptPct != null) _store.settings.acceptPct = Math.round(r.acceptPct * 100) / 100;
+        if (r.rejectPct != null) _store.settings.rejectPct = Math.round(r.rejectPct * 100) / 100;
+        _store.learnMeta.lastTuneN = learn.length;
+        _store.learnMeta.tunedAt = new Date().toISOString();
+        console.log('[LinkPhotos] self-tuned dials from ' + learn.length + ' decisions → accept ≥' +
+            Math.round(_store.settings.acceptPct * 100) + '%, reject <' + Math.round(_store.settings.rejectPct * 100) + '%');
+    }
+
     /**
      * Approve or reject a pending suggestion.
      * Approve: tag becomes real (parents see the photo) AND the confirmed
      * descriptor joins the camper's gallery so future matching improves.
+     * Every decision also feeds the self-tuning calibration.
      */
     async function resolvePendingTag(photoId, camperName, approve) {
         var photo = _store.photos.find(function(p) { return p.id === photoId; });
@@ -478,6 +653,7 @@
         if (idx < 0) return { success: false, error: 'tag_not_pending' };
         var tag = photo.pendingTags[idx];
         photo.pendingTags.splice(idx, 1);
+        _recordDecision(tag, approve);
 
         var db = _db();
         if (approve) {
@@ -511,6 +687,67 @@
         _store.stats.totalPendingResolved++;
         saveStore();
         return { success: true, approved: !!approve };
+    }
+
+    /**
+     * Re-route the EXISTING review queue through the current dials — for when
+     * the owner tightens/loosens the accept/reject percentages and wants the
+     * backlog cleared without clicking through each one. Auto-accepted items
+     * become real tags (cloud pending flag cleared) but do NOT feed the
+     * descriptor gallery or the learn log — only human decisions teach.
+     */
+    async function applyDialsToQueue() {
+        var core = Core(); if (!core) return { success: false, error: 'core_not_loaded' };
+        var dials = { acceptPct: _store.settings.acceptPct, rejectPct: _store.settings.rejectPct };
+        var accepted = 0, rejectedN = 0, remaining = 0;
+        var db = _db();
+
+        for (var pi = 0; pi < _store.photos.length; pi++) {
+            var photo = _store.photos[pi];
+            if (!(photo.pendingTags || []).length) continue;
+            var keep = [];
+            for (var ti = 0; ti < photo.pendingTags.length; ti++) {
+                var tag = photo.pendingTags[ti];
+                var route = core.routeConfidence(tag.confidence, dials);
+                if (route === 'accept') {
+                    photo.tags.push({
+                        camperName: tag.camperName, confidence: tag.confidence,
+                        dist: tag.dist, model: tag.model, box: tag.box, autoAccepted: true
+                    });
+                    accepted++; _store.stats.autoAccepted++;
+                    if (db && photo.cloudId) {
+                        try { await db.client.rpc('resolve_photo_tag', { p_photo_id: photo.cloudId, p_camper_name: tag.camperName, p_approve: true }); }
+                        catch(e) { console.warn('[LinkPhotos] bulk resolve failed:', e.message || e); }
+                    }
+                } else if (route === 'reject') {
+                    rejectedN++; _store.stats.autoRejected++;
+                    if (db && photo.cloudId) {
+                        try { await db.client.rpc('resolve_photo_tag', { p_photo_id: photo.cloudId, p_camper_name: tag.camperName, p_approve: false }); }
+                        catch(e) { console.warn('[LinkPhotos] bulk resolve failed:', e.message || e); }
+                    }
+                } else {
+                    keep.push(tag); remaining++;
+                }
+            }
+            photo.pendingTags = keep;
+        }
+        saveStore();
+        return { success: true, accepted: accepted, rejected: rejectedN, remaining: remaining };
+    }
+
+    // Owner-facing snapshot of the triage system for the settings UI.
+    function getReviewStats() {
+        return {
+            acceptPct: _store.settings.acceptPct,
+            rejectPct: _store.settings.rejectPct,
+            selfTune: _store.settings.selfTune,
+            decisions: (_store.learn || []).length,
+            tunedAt: _store.learnMeta ? _store.learnMeta.tunedAt : null,
+            autoAccepted: _store.stats.autoAccepted,
+            autoRejected: _store.stats.autoRejected,
+            burstTagged: _store.stats.burstTagged,
+            workerActive: !!_worker
+        };
     }
 
     // Keep the local matcher in sync with a promoted descriptor without a full
@@ -761,9 +998,11 @@
         scanPhoto: scanPhoto,
         batchUploadAndScan: batchUploadAndScan,
 
-        // Review queue
+        // Review queue + auto-triage
         getPendingReview: getPendingReview,
         resolvePendingTag: resolvePendingTag,
+        applyDialsToQueue: applyDialsToQueue,
+        getReviewStats: getReviewStats,
 
         // Tagging
         manualTag: manualTag,

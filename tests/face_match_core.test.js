@@ -165,6 +165,157 @@ describe('qualityTier', () => {
 });
 
 // ---------------------------------------------------------------------------
+// confidence scale + owner routing
+// ---------------------------------------------------------------------------
+describe('confidenceFor', () => {
+    const prof = Core.MODEL_PROFILES['faceapi-128']; // auto 0.45, review 0.55
+    it('is 1.0 at distance 0', () => {
+        assert.strictEqual(Core.confidenceFor(0, prof), 1);
+    });
+    it('is 0.5 exactly at the auto boundary', () => {
+        assert.ok(Math.abs(Core.confidenceFor(prof.autoDist, prof) - 0.5) < 1e-9);
+    });
+    it('is 0 at the review boundary and beyond', () => {
+        assert.strictEqual(Core.confidenceFor(prof.reviewDist, prof), 0);
+        assert.strictEqual(Core.confidenceFor(prof.reviewDist + 0.2, prof), 0);
+    });
+    it('is monotonically decreasing', () => {
+        let prev = 2;
+        for (let d = 0; d <= 0.6; d += 0.05) {
+            const c = Core.confidenceFor(d, prof);
+            assert.ok(c <= prev, `not monotone at d=${d}`);
+            prev = c;
+        }
+    });
+});
+
+describe('routeConfidence', () => {
+    const dials = { acceptPct: 0.30, rejectPct: 0.15 };
+    it('auto-accepts at or above the accept dial', () => {
+        assert.strictEqual(Core.routeConfidence(0.30, dials), 'accept');
+        assert.strictEqual(Core.routeConfidence(0.9, dials), 'accept');
+    });
+    it('auto-rejects below the reject dial', () => {
+        assert.strictEqual(Core.routeConfidence(0.14, dials), 'reject');
+    });
+    it('sends the middle band to review', () => {
+        assert.strictEqual(Core.routeConfidence(0.2, dials), 'review');
+    });
+    it('defaults to review when dials are unset', () => {
+        assert.strictEqual(Core.routeConfidence(0.99, {}), 'review');
+        assert.strictEqual(Core.routeConfidence(0.01, null), 'review');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// self-learning calibration
+// ---------------------------------------------------------------------------
+describe('calibrateFromDecisions', () => {
+    function mk(conf, approved, n) {
+        return Array.from({ length: n }, () => ({ conf, approved }));
+    }
+    it('returns null with too little data', () => {
+        assert.strictEqual(Core.calibrateFromDecisions(mk(0.5, true, 5)), null);
+    });
+    it('learns an accept cutoff where high-confidence suggestions were approved', () => {
+        // 20 approvals at conf .6, 20 rejections at conf .1
+        const samples = mk(0.6, true, 20).concat(mk(0.1, false, 20));
+        const r = Core.calibrateFromDecisions(samples);
+        assert.ok(r, 'expected a calibration result');
+        assert.ok(r.acceptPct != null && r.acceptPct <= 0.6 && r.acceptPct > 0.1,
+            `acceptPct ${r.acceptPct} should sit at/below the approved cluster`);
+        assert.ok(r.rejectPct != null && r.rejectPct > 0.1 && r.rejectPct < 0.3,
+            `rejectPct ${r.rejectPct} should sit just above the rejected cluster`);
+    });
+    it('does not learn an accept cutoff when approvals are unreliable', () => {
+        // 50/50 approvals everywhere — no confidence level is safe to auto-accept
+        const samples = mk(0.6, true, 10).concat(mk(0.6, false, 10))
+            .concat(mk(0.2, true, 10)).concat(mk(0.2, false, 10));
+        const r = Core.calibrateFromDecisions(samples);
+        assert.ok(!r || r.acceptPct == null, 'must not auto-accept on 50% precision');
+    });
+    it('keeps a gap between accept and reject dials', () => {
+        const samples = mk(0.4, true, 30).concat(mk(0.35, false, 30));
+        const r = Core.calibrateFromDecisions(samples);
+        if (r && r.acceptPct != null && r.rejectPct != null) {
+            assert.ok(r.acceptPct - r.rejectPct >= 0.05 - 1e-9);
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// burst clustering + propagation
+// ---------------------------------------------------------------------------
+describe('burstClusters', () => {
+    it('groups photos shot seconds apart and splits distant ones', () => {
+        const t = 1700000000000;
+        const clusters = Core.burstClusters([
+            { id: 'a', capturedAt: t },
+            { id: 'b', capturedAt: t + 4000 },
+            { id: 'c', capturedAt: t + 9000 },
+            { id: 'd', capturedAt: t + 600000 } // 10 min later — separate
+        ], 15000);
+        assert.deepStrictEqual(clusters, [['a', 'b', 'c']]);
+    });
+    it('ignores photos without capture times', () => {
+        assert.deepStrictEqual(Core.burstClusters([{ id: 'x' }, { id: 'y' }]), []);
+    });
+});
+
+describe('propagateBurstMatches', () => {
+    const D = 128;
+    const aliceFace = Core.l2normalize(axis(D, 0));
+    it('propagates a confirmed identity to a near-identical face in the next frame', () => {
+        const photos = [
+            {
+                photoId: 'p1',
+                faces: [{ id: 'f1', tier: 'good', descriptors: { 'faceapi-128': aliceFace } }],
+                assignments: [{ faceId: 'f1', camperName: 'Alice A', status: 'auto' }]
+            },
+            {
+                photoId: 'p2',
+                faces: [{ id: 'f2', tier: 'weak', descriptors: { 'faceapi-128': near(aliceFace, 0.05) } }],
+                assignments: []
+            }
+        ];
+        const extras = Core.propagateBurstMatches(photos);
+        assert.strictEqual(extras.length, 1);
+        assert.strictEqual(extras[0].photoId, 'p2');
+        assert.strictEqual(extras[0].camperName, 'Alice A');
+        assert.strictEqual(extras[0].via, 'burst');
+    });
+    it('never double-tags a camper already assigned in the frame', () => {
+        const photos = [
+            {
+                photoId: 'p1',
+                faces: [
+                    { id: 'f1', tier: 'good', descriptors: { 'faceapi-128': aliceFace } },
+                    { id: 'f2', tier: 'good', descriptors: { 'faceapi-128': near(aliceFace, 0.03) } }
+                ],
+                assignments: [{ faceId: 'f1', camperName: 'Alice A', status: 'auto' }]
+            }
+        ];
+        // f2 is close to Alice's anchor but Alice is already tagged in p1
+        assert.strictEqual(Core.propagateBurstMatches(photos).length, 0);
+    });
+    it('does not propagate from far descriptors', () => {
+        const photos = [
+            {
+                photoId: 'p1',
+                faces: [{ id: 'f1', tier: 'good', descriptors: { 'faceapi-128': aliceFace } }],
+                assignments: [{ faceId: 'f1', camperName: 'Alice A', status: 'auto' }]
+            },
+            {
+                photoId: 'p2',
+                faces: [{ id: 'f2', tier: 'good', descriptors: { 'faceapi-128': Core.l2normalize(axis(D, 3)) } }],
+                assignments: []
+            }
+        ];
+        assert.strictEqual(Core.propagateBurstMatches(photos).length, 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // assignFaces — the heart of per-photo matching
 // ---------------------------------------------------------------------------
 describe('assignFaces', () => {

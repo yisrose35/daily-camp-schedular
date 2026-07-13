@@ -1,35 +1,46 @@
 // =============================================================================
-// campistry_face_engine_v2.js — modern face embeddings for Link (arc-512)
+// campistry_face_engine_v2.js — modern face engine for Link (arc-512) v2.1
 //
 // Optional progressive enhancement on top of campistry_face_shared.js:
-// loads InsightFace "buffalo_s" ONNX models via onnxruntime-web and adds a
-// 512-D ArcFace-class descriptor to every face the base pipeline detects.
+// loads InsightFace "buffalo_s" ONNX models via onnxruntime-web and provides
+//   * PRIMARY DETECTION (detectPrimary): tiled SCRFD det_500m over the working
+//     canvas — dramatically stronger than TinyFaceDetector on the small /
+//     occluded / crowded faces of group photos (83 vs 64 hard-set AP class)
+//   * 512-D ArcFace-class embeddings (describeFaces): w600k MobileFaceNet on
+//     5-point-aligned 112x112 crops, tagged model 'arc-512'
+//   * runtime: onnxruntime-web — WebGPU when available, WASM fallback
 //
-//   * detection/keypoints: SCRFD det_500m (2.5MB) — used per-face-crop to get
-//     the 5 landmarks needed for proper alignment (the base pipeline already
-//     found the faces via tiled TinyFaceDetector; SCRFD here is a landmark +
-//     verification stage, so its fixed 640x640 input is fine)
-//   * recognition: w600k MobileFaceNet (13.6MB) — 512-D embedding from a
-//     5-point-aligned 112x112 crop; +4.5 rank-1 pts over older nets on the
-//     low-resolution TinyFace benchmark class of problem
-//   * runtime: onnxruntime-web, WebGPU when available, WASM fallback
+// Model loading tries a SELF-HOSTED path first (drop the files under
+// models/ — see FACE_RECOGNITION_V2.md) so camp WiFi that blocks CDNs can't
+// silently degrade recognition; CDN/HuggingFace is the fallback.
 //
-// Everything still runs 100% in the browser — no image leaves the device.
-// If anything here fails (old browser, CDN block, no WebGPU+slow WASM), the
-// engine simply never becomes ready and the system continues on faceapi-128.
+// Runs on the main thread AND inside the scan worker (no DOM dependencies —
+// canvases come from CampistryFace._makeCanvas).
 //
-// Descriptors are tagged model 'arc-512' and are NEVER cross-matched with the
-// legacy 128-D space (see FaceMatchCore.MODEL_PROFILES).
+// Everything runs 100% in the browser — no image leaves the device. If this
+// engine fails to load, the system continues on faceapi-128 alone.
 // =============================================================================
 (function () {
     'use strict';
-    if (window.CampistryFaceEngineV2) return;
+    var GLOBAL = (typeof self !== 'undefined') ? self : window;
+    if (GLOBAL.CampistryFaceEngineV2) return;
 
-    var ORT_SRC   = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js';
-    var ORT_WASM  = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
+    var LOCAL_BASE = GLOBAL.CAMPISTRY_MODEL_BASE || 'models';
+
+    var ORT_SRCS = [
+        { src: LOCAL_BASE + '/ort/ort.min.js',                                     wasmPath: LOCAL_BASE + '/ort/' },
+        { src: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js',
+          wasmPath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/' }
+    ];
     // InsightFace buffalo_s ONNX models, maintained + hosted by the Immich project
-    var DET_URL   = 'https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx';
-    var REC_URL   = 'https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx';
+    var DET_URLS = [
+        LOCAL_BASE + '/insightface/det_500m.onnx',
+        'https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx'
+    ];
+    var REC_URLS = [
+        LOCAL_BASE + '/insightface/w600k_mbf.onnx',
+        'https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx'
+    ];
 
     var DET_SIZE  = 640;            // SCRFD letterbox input (fixed-shape safe)
     var DET_THRESH = 0.35;
@@ -47,34 +58,47 @@
     var _detSession = null, _recSession = null;
     var _ep = null;
 
+    function _face() { return GLOBAL.CampistryFace; }
+    function _core() { return GLOBAL.FaceMatchCore; }
+    function _makeCanvas(w, h) { return _face()._makeCanvas(w, h); }
+
     // ─── bootstrap ───────────────────────────────────────────────────────────
 
-    function _loadScript(src) {
-        return new Promise(function (resolve, reject) {
-            if (typeof ort !== 'undefined') { resolve(); return; }
-            var s = document.createElement('script');
-            s.src = src; s.onload = resolve;
-            s.onerror = function () { reject(new Error('onnxruntime-web load failed')); };
-            document.head.appendChild(s);
+    function _createSessionChain(urls, eps) {
+        var p = Promise.reject();
+        urls.forEach(function (url) {
+            p = p.catch(function () {
+                return ort.InferenceSession.create(url, {
+                    executionProviders: eps,
+                    graphOptimizationLevel: 'all'
+                });
+            });
         });
-    }
-
-    function _createSession(url, eps) {
-        return ort.InferenceSession.create(url, {
-            executionProviders: eps,
-            graphOptimizationLevel: 'all'
-        });
+        return p;
     }
 
     function init() {
         if (_initPromise) return _initPromise;
-        _initPromise = _loadScript(ORT_SRC).then(function () {
+        var face = _face();
+        if (!face) return Promise.reject(new Error('campistry_face_shared.js not loaded'));
+
+        var wasmPath = null;
+        var chain = Promise.reject();
+        ORT_SRCS.forEach(function (entry) {
+            chain = chain.catch(function () {
+                if (typeof ort !== 'undefined') return;         // already loaded
+                return face._loadScriptChain([entry.src], function () { return typeof ort !== 'undefined'; })
+                    .then(function () { wasmPath = entry.wasmPath; });
+            });
+        });
+
+        _initPromise = chain.then(function () {
             if (typeof ort === 'undefined') throw new Error('onnxruntime unavailable');
-            ort.env.wasm.wasmPaths = ORT_WASM;
-            // WebGPU when the browser has it, else WASM (SIMD auto-detected)
-            var eps = (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']);
-            _ep = navigator.gpu ? 'webgpu' : 'wasm';
-            return Promise.all([_createSession(DET_URL, eps), _createSession(REC_URL, eps)]);
+            if (wasmPath) ort.env.wasm.wasmPaths = wasmPath;
+            // WebGPU when the environment has it, else WASM (SIMD auto-detected)
+            var eps = (typeof navigator !== 'undefined' && navigator.gpu) ? ['webgpu', 'wasm'] : ['wasm'];
+            _ep = eps[0];
+            return Promise.all([_createSessionChain(DET_URLS, eps), _createSessionChain(REC_URLS, eps)]);
         }).then(function (sessions) {
             _detSession = sessions[0];
             _recSession = sessions[1];
@@ -91,12 +115,11 @@
 
     function isReady() { return _ready; }
 
-    // ─── SCRFD detection (per-crop landmark stage) ───────────────────────────
+    // ─── SCRFD detection ─────────────────────────────────────────────────────
 
     function _blobFromCanvas(canvas, size, mean, std) {
         // letterbox top-left onto size×size, then NCHW float32 RGB
-        var c = document.createElement('canvas');
-        c.width = size; c.height = size;
+        var c = _makeCanvas(size, size);
         var ctx = c.getContext('2d');
         ctx.fillStyle = '#000'; ctx.fillRect(0, 0, size, size);
         var scale = Math.min(size / canvas.width, size / canvas.height);
@@ -167,20 +190,59 @@
         return dets;
     }
 
-    // Detect the most confident face (+5 keypoints) on a canvas.
-    function _detectBest(canvas) {
+    // All SCRFD detections on a canvas, coords back in canvas space.
+    function _detectAll(canvas) {
         var prep = _blobFromCanvas(canvas, DET_SIZE, 127.5, 128);
         var feeds = {};
         feeds[_detSession.inputNames[0]] = prep.tensor;
         return _detSession.run(feeds).then(function (results) {
-            var dets = _decodeScrfd(results, DET_SIZE);
-            if (!dets.length) return null;
-            var best = dets.reduce(function (a, b) { return b.score > a.score ? b : a; });
-            // undo the letterbox scale back to canvas coordinates
             var s = prep.scale;
-            best.box = { x: best.box.x / s, y: best.box.y / s, width: best.box.width / s, height: best.box.height / s };
-            if (best.kps) best.kps = best.kps.map(function (p) { return [p[0] / s, p[1] / s]; });
-            return best;
+            return _decodeScrfd(results, DET_SIZE).map(function (d) {
+                return {
+                    score: d.score,
+                    box: { x: d.box.x / s, y: d.box.y / s, width: d.box.width / s, height: d.box.height / s },
+                    kps: d.kps ? d.kps.map(function (p) { return [p[0] / s, p[1] / s]; }) : null
+                };
+            });
+        });
+    }
+
+    function _detectBest(canvas) {
+        return _detectAll(canvas).then(function (dets) {
+            if (!dets.length) return null;
+            return dets.reduce(function (a, b) { return b.score > a.score ? b : a; });
+        });
+    }
+
+    // PRIMARY detection for CampistryFace: tiled SCRFD over the working canvas.
+    // 640px tiles run at native scale (no letterbox shrink), which is exactly
+    // where SCRFD's small-face advantage lives; a whole-image pass catches the
+    // faces larger than a tile. Returns [{box, score, kps}] in work coords.
+    function detectPrimary(work, opts) {
+        if (!_ready) return Promise.resolve([]);
+        var Core = _core();
+        var passes = [_detectAll(work)];
+        var tileOn = !opts || opts.tileThreshold == null || Math.max(work.width, work.height) >= opts.tileThreshold;
+        if (tileOn && Math.max(work.width, work.height) > DET_SIZE) {
+            var tiles = Core.planTiles(work.width, work.height, DET_SIZE, 0.25);
+            tiles.forEach(function (t) {
+                passes.push(Promise.resolve().then(function () {
+                    var tc = _makeCanvas(t.w, t.h);
+                    tc.getContext('2d').drawImage(work, t.x, t.y, t.w, t.h, 0, 0, t.w, t.h);
+                    return _detectAll(tc).then(function (dets) {
+                        dets.forEach(function (d) {
+                            d.box.x += t.x; d.box.y += t.y;
+                            if (d.kps) d.kps = d.kps.map(function (p) { return [p[0] + t.x, p[1] + t.y]; });
+                        });
+                        return dets;
+                    });
+                }));
+            });
+        }
+        return Promise.all(passes).then(function (results) {
+            var all = [];
+            results.forEach(function (dets) { all = all.concat(dets); });
+            return Core.nmsMerge(all, 0.45);
         });
     }
 
@@ -229,8 +291,7 @@
     function _alignFace(canvas, kps) {
         var T = _similarityTransform(kps, ARC_TEMPLATE);
         if (!T) return null;
-        var c = document.createElement('canvas');
-        c.width = 112; c.height = 112;
+        var c = _makeCanvas(112, 112);
         var ctx = c.getContext('2d');
         ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 112, 112);
         // dst = [a -b; b a] * src + t  ⇔  ctx.setTransform(a, b, -b, a, tx, ty)
@@ -265,15 +326,24 @@
 
     // ─── CampistryFace engine contract ───────────────────────────────────────
 
-    // For each already-detected face: crop around it (margin), find the 5
-    // keypoints with SCRFD on the crop, align to 112x112, embed. Adds
-    // face.descriptors['arc-512']. Faces where SCRFD finds nothing keep only
-    // their faceapi-128 descriptor.
+    // Add face.descriptors['arc-512'] to each face.
+    //   * face.kps present (SCRFD was primary) → align straight from the work
+    //     canvas — no extra detection round.
+    //   * otherwise → crop around the box, SCRFD the crop for keypoints, align.
     function describeFaces(workCanvas, faces) {
         if (!_ready) return Promise.resolve();
         var chain = Promise.resolve();
         faces.forEach(function (face) {
             chain = chain.then(function () {
+                if (face.kps) {
+                    var aligned = _alignFace(workCanvas, face.kps);
+                    if (!aligned) return;
+                    return _embed(aligned).then(function (vec) {
+                        face.descriptors['arc-512'] = vec;
+                    }).catch(function (e) {
+                        console.warn('[FaceEngineV2] embed failed:', e && e.message);
+                    });
+                }
                 var b = face.workBox || face.box;
                 if (!b) return;
                 var mx = b.width * 0.5, my = b.height * 0.5;
@@ -281,10 +351,9 @@
                 var cw = Math.min(workCanvas.width - cx, b.width + 2 * mx);
                 var ch = Math.min(workCanvas.height - cy, b.height + 2 * my);
                 if (cw < 12 || ch < 12) return;
-                var crop = document.createElement('canvas');
                 // upscale small crops so SCRFD + alignment see enough pixels
                 var up = Math.max(1, 160 / Math.min(cw, ch));
-                crop.width = Math.round(cw * up); crop.height = Math.round(ch * up);
+                var crop = _makeCanvas(cw * up, ch * up);
                 crop.getContext('2d').drawImage(workCanvas, cx, cy, cw, ch, 0, 0, crop.width, crop.height);
 
                 return _detectBest(crop).then(function (det) {
@@ -308,18 +377,20 @@
         init: init,
         isReady: isReady,
         describeFaces: describeFaces,
+        detectPrimary: detectPrimary,
         getExecutionProvider: function () { return _ep; }
     };
 
-    window.CampistryFaceEngineV2 = engine;
-    if (window.CampistryFace && window.CampistryFace.registerEngine) {
-        window.CampistryFace.registerEngine(engine);
-    } else {
-        document.addEventListener('DOMContentLoaded', function () {
-            if (window.CampistryFace && window.CampistryFace.registerEngine) {
-                window.CampistryFace.registerEngine(engine);
-            }
-        });
+    GLOBAL.CampistryFaceEngineV2 = engine;
+    function _register() {
+        if (GLOBAL.CampistryFace && GLOBAL.CampistryFace.registerEngine) {
+            GLOBAL.CampistryFace.registerEngine(engine);
+            return true;
+        }
+        return false;
+    }
+    if (!_register() && typeof document !== 'undefined') {
+        document.addEventListener('DOMContentLoaded', _register);
     }
     console.log('[FaceEngineV2] arc-512 engine registered (lazy — call init() to load models)');
 })();
