@@ -1841,7 +1841,7 @@ function submitPickup(type) {
         fields.notes = (form.querySelector('textarea')||{}).value||'';
     }
 
-    // Write to shared store (read by Campistry Live)
+    // Local echo (same-device fallback / instant history)
     try {
         var store = JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]');
         store.unshift(Object.assign({
@@ -1851,6 +1851,24 @@ function submitPickup(type) {
         }, fields));
         localStorage.setItem(PARENT_REQ_KEY, JSON.stringify(store));
     } catch(e){}
+
+    // Cloud write so it reaches Campistry Live across devices (migration 025).
+    // Without this the request only ever lived in this browser's localStorage.
+    try {
+        var db = window._parentDB;
+        if (db && db.rpc) {
+            var details = Object.assign({ childBunk: child.bunk||'' }, fields);
+            db.rpc('submit_pickup_request', {
+                p_type: type, p_camper_name: child.name||'',
+                p_details: details, p_label: labels[type],
+                p_camp_id: (parent && parent.campId) || null
+            }).then(function(res){
+                if (res.error || !res.data || !res.data.success) {
+                    console.warn('[Parent] pickup request cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+                }
+            });
+        }
+    } catch(e){ console.warn('[Parent] pickup cloud submit error:', e); }
 
     pickupRequests.unshift({id:reqId,type:type,label:labels[type],icon:icons[type],time:timeStr,status:'Pending'});
     renderPickupHistory();
