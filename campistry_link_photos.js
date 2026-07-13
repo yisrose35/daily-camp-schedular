@@ -1,52 +1,57 @@
 // =============================================================================
-// campistry_link_photos.js — Photo Recognition & Distribution Engine v1.0
+// campistry_link_photos.js — Photo Recognition & Distribution Engine v2.0
 //
 // ARCHITECTURE:
-//   1. FACE INDEX: Reads headshot photoUrl from Me roster → builds face
-//      descriptor index using face-api.js (runs in-browser, no server)
-//   2. BATCH SCAN: Staff upload camp photos → each photo scanned against
-//      the face index → matched campers tagged on the photo record
-//   3. DISTRIBUTION: Admin sends "Photo Roundup" → each parent gets only
-//      the photos their child appears in, personalized via Link messaging
+//   1. FACE INDEX: cloud descriptors (parents opt in + upload up to 3 pose-
+//      diverse reference photos per child) → per-camper mean templates
+//      (AWS Rekognition "user vector" prior art), per model
+//   2. BATCH SCAN: staff upload camp photos → tiled (SAHI-style) detection at
+//      full working resolution via CampistryFace → quality gate → one-to-one
+//      assignment (a camper appears at most once per photo, a face gets at
+//      most one name) → strong matches auto-tag, gray-zone matches queue for
+//      human review and are INVISIBLE to parents until approved
+//   3. REVIEW: staff approve/reject queued suggestions; approvals feed the
+//      confirmed descriptor back into the camper's gallery (capped), so
+//      recognition improves as the summer progresses
+//   4. DISTRIBUTION: admin sends "Photo Roundup" → each parent gets only the
+//      photos their child was confirmed in, personalized via Link messaging
 //
 // DEPENDENCIES:
-//   - face-api.js (loaded from CDN, ~6MB models)
+//   - face_match_core.js    (FaceMatchCore — pure matching math, unit-tested)
+//   - campistry_face_shared.js (CampistryFace — models + tiled detection)
 //   - campistry_link_data.js (data bridge for roster + parent lookup)
+//   - campistry_face_engine_v2.js (optional — adds 512-D arc embeddings)
 //
 // DATA STORE:
 //   campistry_link_photos_v1 → { photos: [...], faceIndex: {...}, settings: {...} }
-//
-// face-api.js models used:
-//   - tinyFaceDetector (fast face detection, ~190KB)
-//   - faceLandmark68TinyNet (landmark points, ~80KB)  
-//   - faceRecognitionNet (128-dim descriptor, ~6.2MB)
 // =============================================================================
 (function() {
     'use strict';
-    console.log('[LinkPhotos] Photo Recognition Engine v1.0 loading...');
+    console.log('[LinkPhotos] Photo Recognition Engine v2.0 loading...');
 
     const PHOTO_STORE = 'campistry_link_photos_v1';
-    // vladmandic's /model path 404s on weight shards (hangs). Use the canonical
-    // justadudewhohacks weights, which are format-compatible and reliably hosted.
-    const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 
     // =========================================================================
     // STATE
     // =========================================================================
     let _store = {
-        photos: [],         // { id, dataUrl, uploadDate, uploadedBy, tags: [{camperName, confidence}], week, sent }
-        faceIndex: {},      // { camperName: { descriptor: Float32Array serialized, updatedAt } }
+        photos: [],         // { id, dataUrl, uploadDate, tags: [...], pendingTags: [...], week, sent }
+        faceIndex: {},      // { camperName: { descriptors: [{descriptor, model, pose, source}], updatedAt } }
         settings: {
             sendFrequency: 'weekly',    // 'daily' | 'twice_weekly' | 'weekly'
             sendDay: 'friday',          // day of week for weekly sends
-            minConfidence: 0.5,         // minimum match confidence (0-1, lower = more permissive)
+            minConfidence: 0.5,         // legacy display knob (1 - autoDist); thresholds live in FaceMatchCore
             autoTag: true,              // auto-scan on upload
-            maxPhotosPerEmail: 20       // limit photos per parent email
+            maxPhotosPerEmail: 20,      // limit photos per parent email
+            tiledDetection: true,       // SAHI-style tiling for large photos
+            minFacePx: 48,              // quality gate: reject below this box size
+            reviewQueue: true           // gray-zone matches go to review instead of dropping
         },
         stats: {
             totalUploaded: 0,
             totalTagged: 0,
             totalSent: 0,
+            totalPendingResolved: 0,
             lastScanDate: null,
             lastSendDate: null
         }
@@ -54,9 +59,10 @@
 
     let _modelsLoaded = false;
     let _indexBuilt = false;
-    let _labeledDescriptors = []; // face-api.js LabeledFaceDescriptors array
-    let _scanQueue = [];
-    let _scanning = false;
+    let _camperTemplates = [];  // [{ name, templates: {model: {mean, all}} }] — FaceMatchCore shape
+
+    const Core = function() { return window.FaceMatchCore || null; };
+    const Face = function() { return window.CampistryFace || null; };
 
     // Cloud access — the admin console authenticates as owner/staff via CampistryDB.
     function _db() {
@@ -80,12 +86,17 @@
                 _store = Object.assign({}, _store, parsed);
                 _store.settings = Object.assign({
                     sendFrequency: 'weekly', sendDay: 'friday',
-                    minConfidence: 0.5, autoTag: true, maxPhotosPerEmail: 20
+                    minConfidence: 0.5, autoTag: true, maxPhotosPerEmail: 20,
+                    tiledDetection: true, minFacePx: 48, reviewQueue: true
                 }, parsed.settings || {});
                 _store.stats = Object.assign({
-                    totalUploaded: 0, totalTagged: 0, totalSent: 0,
+                    totalUploaded: 0, totalTagged: 0, totalSent: 0, totalPendingResolved: 0,
                     lastScanDate: null, lastSendDate: null
                 }, parsed.stats || {});
+                _store.photos.forEach(function(p) {
+                    if (!p.pendingTags) p.pendingTags = [];
+                    if (!p.manualTags) p.manualTags = [];
+                });
             }
         } catch(e) { console.warn('[LinkPhotos] Store load error:', e); }
     }
@@ -121,36 +132,23 @@
     }
 
     // =========================================================================
-    // MODEL LOADING
+    // MODEL LOADING — delegated to the shared engine
     // =========================================================================
-
-    /**
-     * Load face-api.js models from CDN
-     * Returns a promise that resolves when models are ready
-     */
     async function loadModels() {
         if (_modelsLoaded) return true;
-
-        // Check if face-api is available
-        if (typeof faceapi === 'undefined') {
-            console.log('[LinkPhotos] Loading face-api.js from CDN...');
-            await _loadScript('https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.min.js');
-        }
-
-        if (typeof faceapi === 'undefined') {
-            console.error('[LinkPhotos] face-api.js failed to load');
-            return false;
-        }
-
-        console.log('[LinkPhotos] Loading face detection models...');
+        var face = Face();
+        if (!face) { console.error('[LinkPhotos] campistry_face_shared.js not loaded'); return false; }
         try {
-            await Promise.all([
-                faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-                faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
-                faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-            ]);
+            await face.ensureModels();
             _modelsLoaded = true;
-            console.log('[LinkPhotos] ✅ All face models loaded');
+            console.log('[LinkPhotos] ✅ Face models loaded');
+            // kick off the optional modern engine in the background — scanning
+            // works without it and picks it up when ready
+            if (window.CampistryFaceEngineV2 && window.CampistryFaceEngineV2.init) {
+                window.CampistryFaceEngineV2.init().catch(function(e) {
+                    console.log('[LinkPhotos] arc-512 engine unavailable (fallback to faceapi-128):', e && e.message);
+                });
+            }
             return true;
         } catch(e) {
             console.error('[LinkPhotos] Model load error:', e);
@@ -158,33 +156,22 @@
         }
     }
 
-    function _loadScript(src) {
-        return new Promise(function(resolve, reject) {
-            var s = document.createElement('script');
-            s.src = src;
-            s.onload = resolve;
-            s.onerror = reject;
-            document.head.appendChild(s);
-        });
-    }
-
     // =========================================================================
-    // FACE INDEX — Build from Me roster headshots
+    // FACE INDEX — cloud descriptors → per-camper multi-model templates
     // =========================================================================
 
-    /**
-     * Build face descriptor index from all campers who have photoUrl in roster
-     * This is the "reference library" that camp photos are matched against.
-     * 
-     * Returns { indexed: number, skipped: number, errors: number }
-     */
     // Build the matcher from the CLOUD face index: descriptors that parents
-    // computed in-browser for their consented children (migration 028). No
-    // headshot image processing happens here — the descriptors already exist.
+    // computed in-browser for their consented children (migrations 028/029).
+    // Each camper may have several descriptors (front/left/right poses +
+    // staff-confirmed matches) across one or more models. We build a mean
+    // template per model plus keep the individuals (FaceMatchCore.matchDistance
+    // takes the best of both).
     async function buildFaceIndex(progressCallback) {
         if (!await loadModels()) {
             return { indexed: 0, skipped: 0, errors: 0, error: 'Models failed to load' };
         }
+        var core = Core();
+        if (!core) return { indexed: 0, skipped: 0, errors: 0, error: 'face_match_core.js not loaded' };
 
         var db = _db();
         if (!db) {
@@ -206,24 +193,41 @@
 
         if (!faces.length) {
             return { indexed: 0, skipped: 0, errors: 0, total: 0,
-                     error: 'No consented reference faces yet. Parents opt in and upload a photo of each child in the Link parent app.' };
+                     error: 'No consented reference faces yet. Parents opt in and upload photos of each child in the Link parent app.' };
         }
 
-        console.log('[LinkPhotos] Building matcher from ' + faces.length + ' cloud descriptors...');
+        console.log('[LinkPhotos] Building matcher from ' + faces.length + ' campers...');
         var indexed = 0, skipped = 0, errors = 0;
-        _labeledDescriptors = [];
+        _camperTemplates = [];
         _store.faceIndex = {};
 
         for (var i = 0; i < faces.length; i++) {
             var name = faces[i].camper_name;
-            var desc = faces[i].descriptor;
+            // v2 shape: descriptors: [{descriptor, model, pose, source}]
+            // legacy shape (pre-029 RPC): descriptor: [128 floats]
+            var descList = faces[i].descriptors;
+            if (!Array.isArray(descList) && Array.isArray(faces[i].descriptor)) {
+                descList = [{ descriptor: faces[i].descriptor, model: 'faceapi-128', pose: 'front', source: 'parent' }];
+            }
             if (progressCallback) progressCallback({ current: i + 1, total: faces.length, name: name, phase: 'indexing' });
 
             try {
-                if (Array.isArray(desc) && desc.length === 128) {
-                    var f32 = new Float32Array(desc);
-                    _labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [f32]));
-                    _store.faceIndex[name] = { descriptor: desc, updatedAt: new Date().toISOString() };
+                var byModel = {};
+                (descList || []).forEach(function(d) {
+                    if (!d || !Array.isArray(d.descriptor)) return;
+                    var model = d.model || 'faceapi-128';
+                    var prof = core.MODEL_PROFILES[model];
+                    if (!prof || d.descriptor.length !== prof.dims) return;
+                    (byModel[model] = byModel[model] || []).push(d.descriptor);
+                });
+                var templates = {};
+                Object.keys(byModel).forEach(function(model) {
+                    var tpl = core.buildTemplate(byModel[model]);
+                    if (tpl) templates[model] = tpl;
+                });
+                if (Object.keys(templates).length) {
+                    _camperTemplates.push({ name: name, templates: templates });
+                    _store.faceIndex[name] = { descriptors: descList, updatedAt: new Date().toISOString() };
                     indexed++;
                 } else {
                     skipped++;
@@ -237,97 +241,120 @@
         _indexBuilt = indexed > 0;
         saveStore();
 
-        console.log('[LinkPhotos] ✅ Matcher built:', indexed, 'faces,', skipped, 'skipped,', errors, 'errors');
+        console.log('[LinkPhotos] ✅ Matcher built:', indexed, 'campers,', skipped, 'skipped,', errors, 'errors');
         return { indexed: indexed, skipped: skipped, errors: errors, total: faces.length };
     }
 
     /**
-     * Rebuild index from persisted descriptors (fast, no image processing)
+     * Rebuild index from persisted descriptors (fast, no cloud round trip)
      */
     function restoreIndexFromStore() {
-        if (!_modelsLoaded || typeof faceapi === 'undefined') return false;
-
+        var core = Core();
+        if (!core) return false;
         var entries = Object.entries(_store.faceIndex);
         if (!entries.length) return false;
 
-        _labeledDescriptors = [];
+        _camperTemplates = [];
         entries.forEach(function(e) {
             var name = e[0], data = e[1];
-            if (data.descriptor) {
-                var desc = new Float32Array(data.descriptor);
-                _labeledDescriptors.push(
-                    new faceapi.LabeledFaceDescriptors(name, [desc])
-                );
-            }
+            var descList = data.descriptors
+                || (data.descriptor ? [{ descriptor: data.descriptor, model: 'faceapi-128' }] : []);
+            var byModel = {};
+            descList.forEach(function(d) {
+                if (!d || !Array.isArray(d.descriptor)) return;
+                (byModel[d.model || 'faceapi-128'] = byModel[d.model || 'faceapi-128'] || []).push(d.descriptor);
+            });
+            var templates = {};
+            Object.keys(byModel).forEach(function(model) {
+                var tpl = core.buildTemplate(byModel[model]);
+                if (tpl) templates[model] = tpl;
+            });
+            if (Object.keys(templates).length) _camperTemplates.push({ name: name, templates: templates });
         });
-        _indexBuilt = _labeledDescriptors.length > 0;
-        console.log('[LinkPhotos] Restored ' + _labeledDescriptors.length + ' face descriptors from store');
+        _indexBuilt = _camperTemplates.length > 0;
+        console.log('[LinkPhotos] Restored ' + _camperTemplates.length + ' camper templates from store');
         return _indexBuilt;
     }
 
     // =========================================================================
-    // PHOTO SCANNING — Match camp photos against the face index
+    // PHOTO SCANNING — tiled detection + quality gate + 1:1 assignment
     // =========================================================================
 
     /**
-     * Scan a single photo and return matched campers
-     * @param {string} imageDataUrl - base64 data URL of the photo
-     * @returns {Array} - [{ camperName, confidence, box: {x,y,width,height} }]
+     * Scan a single photo and return matched campers.
+     * @param {string} imageDataUrl - data URL of the photo (ORIGINAL resolution —
+     *        do not pre-shrink; the pipeline manages its own working size)
+     * @returns {Object} {
+     *   matches:  [{ camperName, confidence, dist, model, box }],          // auto-tags
+     *   pending:  [{ camperName, confidence, dist, model, box, faceThumb,
+     *                descriptors }],                                        // review queue
+     *   facesFound, facesRejected
+     * }
      */
     async function scanPhoto(imageDataUrl) {
-        if (!_indexBuilt || !_labeledDescriptors.length) {
-            return { matches: [], error: 'Face index not built. Run buildFaceIndex() first.' };
+        if (!_indexBuilt || !_camperTemplates.length) {
+            return { matches: [], pending: [], error: 'Face index not built. Run buildFaceIndex() first.' };
         }
-
-        var matcher = new faceapi.FaceMatcher(_labeledDescriptors, 1 - _store.settings.minConfidence);
+        var core = Core(), face = Face();
+        if (!core || !face) return { matches: [], pending: [], error: 'Face engine not loaded' };
 
         try {
-            var img = await _loadImage(imageDataUrl);
-            var detections = await faceapi
-                .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 }))
-                .withFaceLandmarks(true)
-                .withFaceDescriptors();
+            var scanOpts = { quality: { minFacePx: _store.settings.minFacePx } };
+            if (!_store.settings.tiledDetection) scanOpts.tileThreshold = Infinity;
+            var result = await face.detectFacesForMatching(imageDataUrl, scanOpts);
+            var faces = result.faces || [];
+            if (!faces.length) return { matches: [], pending: [], facesFound: 0, facesRejected: 0 };
 
-            if (!detections.length) {
-                return { matches: [], facesFound: 0 };
-            }
+            var assignments = core.assignFaces(faces, _camperTemplates);
+            var faceById = {};
+            faces.forEach(function(f) { faceById[f.id] = f; });
 
-            var matches = [];
-            detections.forEach(function(det) {
-                var bestMatch = matcher.findBestMatch(det.descriptor);
-                if (bestMatch.label !== 'unknown') {
-                    matches.push({
-                        camperName: bestMatch.label,
-                        confidence: Math.round((1 - bestMatch.distance) * 100) / 100,
-                        box: {
-                            x: Math.round(det.detection.box.x),
-                            y: Math.round(det.detection.box.y),
-                            width: Math.round(det.detection.box.width),
-                            height: Math.round(det.detection.box.height)
-                        }
-                    });
+            var matches = [], pending = [];
+            assignments.forEach(function(a) {
+                var f = faceById[a.faceId];
+                var prof = core.MODEL_PROFILES[a.model] || {};
+                // confidence: 0 at the review boundary, 1 at distance 0 — a
+                // human-readable score consistent across models
+                var confidence = Math.max(0, Math.min(1,
+                    1 - a.dist / (prof.reviewDist || 1)));
+                var rec = {
+                    camperName: a.camperName,
+                    confidence: Math.round(confidence * 100) / 100,
+                    dist: a.dist,
+                    model: a.model,
+                    box: f ? f.box : null
+                };
+                if (a.status === 'auto') {
+                    matches.push(rec);
+                } else if (_store.settings.reviewQueue) {
+                    rec.faceThumb = f ? f.thumb : null;
+                    rec.descriptors = f ? f.descriptors : null;  // kept for promote-on-approve
+                    pending.push(rec);
                 }
             });
 
-            return { matches: matches, facesFound: detections.length };
+            return {
+                matches: matches,
+                pending: pending,
+                facesFound: faces.length,
+                facesRejected: faces.filter(function(f) { return f.tier === 'reject'; }).length
+            };
         } catch(e) {
             console.warn('[LinkPhotos] Scan error:', e.message);
-            return { matches: [], error: e.message };
+            return { matches: [], pending: [], error: e.message };
         }
     }
 
     /**
-     * Batch upload and scan multiple photos
-     * @param {FileList|Array} files - image files to process
-     * @param {Function} progressCallback - called with { current, total, name, phase }
-     * @returns {Object} - { processed, tagged, untagged, errors }
+     * Batch upload and scan multiple photos.
+     * Scans at ORIGINAL resolution (tiled), stores a 1200px copy for display.
      */
     async function batchUploadAndScan(files, progressCallback) {
         if (!_indexBuilt) {
             return { processed: 0, tagged: 0, untagged: 0, errors: 0, error: 'Build face index first' };
         }
 
-        var processed = 0, tagged = 0, untagged = 0, errors = 0;
+        var processed = 0, tagged = 0, untagged = 0, needsReview = 0, errors = 0;
         var weekKey = _getWeekKey();
 
         for (var i = 0; i < files.length; i++) {
@@ -335,45 +362,47 @@
             if (!file.type.startsWith('image/')) { errors++; continue; }
 
             if (progressCallback) {
-                progressCallback({
-                    current: i + 1,
-                    total: files.length,
-                    name: file.name,
-                    phase: 'scanning'
-                });
+                progressCallback({ current: i + 1, total: files.length, name: file.name, phase: 'scanning' });
             }
 
             try {
-                var dataUrl = await _fileToDataUrl(file);
-                
-                // Resize if too large (keep under 1200px for faster processing)
-                dataUrl = await _resizeImage(dataUrl, 1200);
+                var originalDataUrl = await _fileToDataUrl(file);
 
-                var result = await scanPhoto(dataUrl);
-                
+                // Scan FIRST at original resolution — the old flow resized to
+                // 1200px before scanning, which is exactly what erased the
+                // small faces in group shots. Storage still gets a 1200px copy.
+                var result = await scanPhoto(originalDataUrl);
+                var displayUrl = await _resizeImage(originalDataUrl, 1200);
+
                 var photoRecord = {
                     id: 'photo_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                    dataUrl: dataUrl,
+                    dataUrl: displayUrl,
                     fileName: file.name,
                     uploadDate: new Date().toISOString(),
                     week: weekKey,
                     tags: result.matches || [],
+                    pendingTags: result.pending || [],
                     facesFound: result.facesFound || 0,
+                    facesRejected: result.facesRejected || 0,
                     sent: false,
                     manualTags: [] // for manual corrections
                 };
 
-                // Persist to cloud so parents see their child's photos. The RPC
-                // only keeps tags for consented campers (second line of defence).
+                // Persist to cloud so parents see their child's photos. Pending
+                // tags are stored with pending=true — parents can't see them
+                // until staff approve (RPC filters them out). The RPC also only
+                // keeps tags for consented campers (second line of defence).
                 var db = _db();
                 if (db) {
                     try {
-                        var cloudTags = (photoRecord.tags || []).map(function(t) {
-                            return { camper_name: t.camperName, confidence: t.confidence, manual: false };
-                        });
+                        var cloudTags = photoRecord.tags.map(function(t) {
+                            return { camper_name: t.camperName, confidence: t.confidence, manual: false, pending: false };
+                        }).concat(photoRecord.pendingTags.map(function(t) {
+                            return { camper_name: t.camperName, confidence: t.confidence, manual: false, pending: true };
+                        }));
                         var saveRes = await db.client.rpc('save_scanned_photo', {
                             p_camp_id: db.campId,
-                            p_image_data: dataUrl,
+                            p_image_data: displayUrl,
                             p_file_name: file.name,
                             p_week: weekKey,
                             p_tags: cloudTags
@@ -396,6 +425,7 @@
                 } else {
                     untagged++;
                 }
+                if (photoRecord.pendingTags.length > 0) needsReview++;
                 processed++;
 
             } catch(e) {
@@ -407,8 +437,110 @@
         _store.stats.lastScanDate = new Date().toISOString();
         saveStore();
 
-        return { processed: processed, tagged: tagged, untagged: untagged, errors: errors };
+        return { processed: processed, tagged: tagged, untagged: untagged, needsReview: needsReview, errors: errors };
     }
+
+    // =========================================================================
+    // REVIEW QUEUE — approve/reject gray-zone suggestions
+    // =========================================================================
+
+    /**
+     * All pending suggestions across photos (newest first).
+     * [{ photoId, photoThumb, camperName, confidence, faceThumb }]
+     */
+    function getPendingReview() {
+        var out = [];
+        _store.photos.forEach(function(p) {
+            (p.pendingTags || []).forEach(function(t) {
+                out.push({
+                    photoId: p.id,
+                    photoThumb: p.dataUrl,
+                    uploadDate: p.uploadDate,
+                    camperName: t.camperName,
+                    confidence: t.confidence,
+                    model: t.model,
+                    faceThumb: t.faceThumb || null
+                });
+            });
+        });
+        return out.sort(function(a, b) { return new Date(b.uploadDate) - new Date(a.uploadDate); });
+    }
+
+    /**
+     * Approve or reject a pending suggestion.
+     * Approve: tag becomes real (parents see the photo) AND the confirmed
+     * descriptor joins the camper's gallery so future matching improves.
+     */
+    async function resolvePendingTag(photoId, camperName, approve) {
+        var photo = _store.photos.find(function(p) { return p.id === photoId; });
+        if (!photo) return { success: false, error: 'photo_not_found' };
+        var idx = (photo.pendingTags || []).findIndex(function(t) { return t.camperName === camperName; });
+        if (idx < 0) return { success: false, error: 'tag_not_pending' };
+        var tag = photo.pendingTags[idx];
+        photo.pendingTags.splice(idx, 1);
+
+        var db = _db();
+        if (approve) {
+            photo.tags.push({
+                camperName: tag.camperName, confidence: tag.confidence,
+                dist: tag.dist, model: tag.model, box: tag.box, confirmed: true
+            });
+            // grow the camper's descriptor gallery from the confirmed face
+            // (every model we captured for that face), then refresh templates
+            if (db && photo.cloudId) {
+                try { await db.client.rpc('resolve_photo_tag', { p_photo_id: photo.cloudId, p_camper_name: camperName, p_approve: true }); }
+                catch(e) { console.warn('[LinkPhotos] resolve_photo_tag failed:', e.message || e); }
+            }
+            if (db && tag.descriptors) {
+                for (var model in tag.descriptors) {
+                    if (!tag.descriptors[model]) continue;
+                    try {
+                        await db.client.rpc('promote_confirmed_face', {
+                            p_camp_id: db.campId, p_camper_name: camperName,
+                            p_descriptor: Array.from(tag.descriptors[model]), p_model: model
+                        });
+                    } catch(e) { console.warn('[LinkPhotos] promote_confirmed_face failed:', e.message || e); }
+                }
+                _appendLocalDescriptors(camperName, tag.descriptors);
+            }
+        } else if (db && photo.cloudId) {
+            try { await db.client.rpc('resolve_photo_tag', { p_photo_id: photo.cloudId, p_camper_name: camperName, p_approve: false }); }
+            catch(e) { console.warn('[LinkPhotos] resolve_photo_tag failed:', e.message || e); }
+        }
+
+        _store.stats.totalPendingResolved++;
+        saveStore();
+        return { success: true, approved: !!approve };
+    }
+
+    // Keep the local matcher in sync with a promoted descriptor without a full
+    // cloud rebuild.
+    function _appendLocalDescriptors(camperName, descriptors) {
+        var core = Core(); if (!core) return;
+        var entry = _store.faceIndex[camperName];
+        if (!entry) return;
+        if (!entry.descriptors) entry.descriptors = [];
+        for (var model in descriptors) {
+            if (!descriptors[model]) continue;
+            entry.descriptors.push({ descriptor: Array.from(descriptors[model]), model: model, pose: 'confirmed', source: 'confirmed' });
+        }
+        var camper = _camperTemplates.find(function(c) { return c.name === camperName; });
+        if (camper) {
+            var byModel = {};
+            entry.descriptors.forEach(function(d) {
+                if (!Array.isArray(d.descriptor)) return;
+                (byModel[d.model || 'faceapi-128'] = byModel[d.model || 'faceapi-128'] || []).push(d.descriptor);
+            });
+            Object.keys(byModel).forEach(function(model) {
+                var tpl = core.buildTemplate(byModel[model]);
+                if (tpl) camper.templates[model] = tpl;
+            });
+        }
+    }
+
+    // =========================================================================
+    // MANUAL TAGGING
+    // =========================================================================
 
     /**
      * Manually tag a camper on a photo (for corrections / unrecognized faces)
@@ -432,16 +564,17 @@
         if (!photo) return false;
         photo.tags = photo.tags.filter(function(t) { return t.camperName !== camperName; });
         photo.manualTags = photo.manualTags.filter(function(t) { return t.camperName !== camperName; });
+        photo.pendingTags = (photo.pendingTags || []).filter(function(t) { return t.camperName !== camperName; });
         saveStore();
         return true;
     }
 
     // =========================================================================
-    // PHOTO DISTRIBUTION — Send roundups to parents
+    // PHOTO DISTRIBUTION — Send roundups to parents (confirmed tags only)
     // =========================================================================
 
     /**
-     * Get all photos for a specific camper (auto + manual tags)
+     * Get all photos for a specific camper (auto + manual tags; NOT pending)
      */
     function getPhotosForCamper(camperName, weekKey) {
         return _store.photos.filter(function(p) {
@@ -458,6 +591,7 @@
         weekKey = weekKey || _getWeekKey();
         var weekPhotos = _store.photos.filter(function(p) { return p.week === weekKey; });
         var summary = {};
+        var pendingCount = 0;
 
         weekPhotos.forEach(function(p) {
             var allTags = (p.tags || []).concat(p.manualTags || []);
@@ -466,6 +600,7 @@
                 summary[t.camperName].count++;
                 if (p.sent) summary[t.camperName].sent = true;
             });
+            pendingCount += (p.pendingTags || []).length;
         });
 
         return {
@@ -473,6 +608,7 @@
             totalPhotos: weekPhotos.length,
             taggedPhotos: weekPhotos.filter(function(p) { return (p.tags||[]).length + (p.manualTags||[]).length > 0; }).length,
             untaggedPhotos: weekPhotos.filter(function(p) { return (p.tags||[]).length + (p.manualTags||[]).length === 0; }).length,
+            pendingReview: pendingCount,
             camperCounts: summary,
             uniqueCampers: Object.keys(summary).length
         };
@@ -576,16 +712,6 @@
     // HELPERS
     // =========================================================================
 
-    function _loadImage(src) {
-        return new Promise(function(resolve, reject) {
-            var img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = function() { resolve(img); };
-            img.onerror = function() { reject(new Error('Image load failed')); };
-            img.src = src;
-        });
-    }
-
     function _fileToDataUrl(file) {
         return new Promise(function(resolve, reject) {
             var reader = new FileReader();
@@ -635,6 +761,10 @@
         scanPhoto: scanPhoto,
         batchUploadAndScan: batchUploadAndScan,
 
+        // Review queue
+        getPendingReview: getPendingReview,
+        resolvePendingTag: resolvePendingTag,
+
         // Tagging
         manualTag: manualTag,
         removeTag: removeTag,
@@ -658,10 +788,10 @@
         // Status
         isModelsLoaded: function() { return _modelsLoaded; },
         isIndexBuilt: function() { return _indexBuilt; },
-        getIndexSize: function() { return _labeledDescriptors.length; },
+        getIndexSize: function() { return _camperTemplates.length; },
         getStore: function() { return _store; }
     };
 
-    console.log('[LinkPhotos] Photo engine ready. Stored photos:', _store.photos.length, '| Face index:', Object.keys(_store.faceIndex).length);
+    console.log('[LinkPhotos] Photo engine v2 ready. Stored photos:', _store.photos.length, '| Face index:', Object.keys(_store.faceIndex).length);
 
 })();

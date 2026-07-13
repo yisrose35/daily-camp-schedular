@@ -1037,6 +1037,30 @@ body {
 .lk-ref-photo-slot.uploaded .lk-ref-photo-slot-status { color: var(--green-600); font-weight: 600; }
 .lk-ref-photo-slot input[type="file"] { display: none; }
 
+/* Multi-pose enrollment (front / left / right) — pose diversity drives
+   recognition accuracy far more than photo count */
+.lk-ref-photo-slot { cursor: default; }
+.lk-ref-pose-row { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.lk-ref-pose-slot {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    cursor: pointer; padding: 4px; border-radius: var(--radius-sm);
+    transition: background 0.15s ease;
+}
+.lk-ref-pose-slot:hover { background: var(--link-tint); }
+.lk-ref-pose-thumb {
+    width: 40px; height: 40px; border-radius: 10px;
+    border: 2px dashed var(--slate-300); background: var(--slate-50);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem; font-weight: 600; color: var(--slate-400);
+    overflow: hidden;
+}
+.lk-ref-pose-slot.uploaded .lk-ref-pose-thumb {
+    border: 2px solid var(--link-color); color: var(--link-color); background: var(--link-tint);
+}
+.lk-ref-pose-label { font-size: .6rem; font-weight: 600; color: var(--slate-500); }
+.lk-ref-pose-slot.uploaded .lk-ref-pose-label { color: var(--link-color); }
+.lk-ref-pose-slot input[type="file"] { display: none; }
+
 /* HEALTH DOC ITEMS */
 .lk-health-doc {
     display: flex; align-items: center; gap: 12px;

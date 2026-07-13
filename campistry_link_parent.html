@@ -962,9 +962,26 @@ function init(){
         if(fs){fs.textContent=fc>0?fc+' need attention':'All up to date';}
     })();
 
-    // Reference photo slots
+    // Reference photo slots — up to 3 pose-diverse photos per child (front +
+    // each side). More angles = far better matching in candid group photos;
+    // the front photo doubles as the avatar/headshot.
     var rg=document.getElementById('refPhotoGrid');if(rg){rg.innerHTML='';
-    children.forEach(function(c){rg.innerHTML+='<label class="lk-ref-photo-slot" for="refPhoto_'+c.id+'" id="refSlot_'+c.id+'"><div class="lk-ref-photo-slot-avatar" id="refAvatar_'+c.id+'">'+c.initials+'</div><div class="lk-ref-photo-slot-name">'+c.name.split(' ')[0]+'</div><div class="lk-ref-photo-slot-status" id="refStatus_'+c.id+'">Tap to upload photo</div><input type="file" id="refPhoto_'+c.id+'" accept="image/*" onchange="handleRefPhoto(\''+c.id+'\',this)"></label>';});}
+    children.forEach(function(c){
+        var poses=[{key:'front',label:'Front'},{key:'left',label:'Left side'},{key:'right',label:'Right side'}];
+        var poseHtml=poses.map(function(p){
+            return '<label class="lk-ref-pose-slot" for="refPhoto_'+c.id+'_'+p.key+'" id="refPose_'+c.id+'_'+p.key+'">'+
+                '<div class="lk-ref-pose-thumb" id="refPoseThumb_'+c.id+'_'+p.key+'">+</div>'+
+                '<div class="lk-ref-pose-label">'+p.label+'</div>'+
+                '<input type="file" id="refPhoto_'+c.id+'_'+p.key+'" accept="image/*" onchange="handleRefPhoto(\''+c.id+'\',\''+p.key+'\',this)">'+
+            '</label>';
+        }).join('');
+        rg.innerHTML+='<div class="lk-ref-photo-slot" id="refSlot_'+c.id+'">'+
+            '<div class="lk-ref-photo-slot-avatar" id="refAvatar_'+c.id+'">'+c.initials+'</div>'+
+            '<div class="lk-ref-photo-slot-name">'+c.name.split(' ')[0]+'</div>'+
+            '<div class="lk-ref-photo-slot-status" id="refStatus_'+c.id+'">Add photos from 3 angles</div>'+
+            '<div class="lk-ref-pose-row">'+poseHtml+'</div>'+
+        '</div>';
+    });}
 
     renderMsgs();
 }
@@ -1065,45 +1082,81 @@ function switchHealth(id,btn){
     var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=c.name+' · '+camperNum;
 }
 
-function handleRefPhoto(id,input){
+// One RPC per (pose, model): 128-D always, 512-D added when the modern engine
+// loaded. All descriptors are computed in-browser — the photo never leaves the
+// device for compute; only the thumbnail (front pose) and descriptor arrays go up.
+function _submitHeadshot(child,pose,model,descriptor,thumb){
+    var payload={p_camper_name:child.name,p_headshot_data:thumb,p_descriptor:descriptor,p_pose:pose,p_model:model};
+    var call=window._pRpc
+        ? window._pRpc('submit_camper_headshot',payload)
+        : (window._parentDB&&window._parentDB.rpc('submit_camper_headshot',Object.assign({p_camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null},payload)));
+    return Promise.resolve(call);
+}
+
+function handleRefPhoto(id,pose,input){
     if(!input.files||!input.files[0])return;
+    pose=pose||'front';
     var file=input.files[0];
     var slot=document.getElementById('refSlot_'+id);
     var avatar=document.getElementById('refAvatar_'+id);
     var status=document.getElementById('refStatus_'+id);
+    var poseSlot=document.getElementById('refPose_'+id+'_'+pose);
+    var poseThumb=document.getElementById('refPoseThumb_'+id+'_'+pose);
     var child=(typeof children!=='undefined')?children.find(function(k){return k.id===id;}):null;
     if(!child){toast('Camper not found');return;}
     if(!window.CampistryFace){if(status)status.textContent='Face engine unavailable';toast('Face engine not loaded');return;}
     if(status)status.textContent='Reading photo…';
 
+    // Best-effort: warm up the modern 512-D engine so this enrollment also
+    // gets an arc-512 descriptor. Fully optional — enrollment works without it.
+    var enginePromise=(window.CampistryFaceEngineV2&&window.CampistryFaceEngineV2.init)
+        ? window.CampistryFaceEngineV2.init().catch(function(){})
+        : Promise.resolve();
+
     var reader=new FileReader();
     reader.onload=function(e){
         var dataUrl=e.target.result;
         if(status)status.textContent='Analyzing face…';
-        // Compute the 128-float descriptor + a small thumbnail, both in-browser.
-        CampistryFace.describeFace(dataUrl).then(function(descriptor){
-            if(!descriptor){
-                if(status)status.textContent='No face detected — try a clearer, front-facing photo';
-                if(slot)slot.classList.remove('uploaded');
+        enginePromise.then(function(){
+            return CampistryFace.describeFace(dataUrl);
+        }).then(function(result){
+            if(!result||!result.descriptors||!result.descriptors['faceapi-128']){
+                if(status)status.textContent='No face detected — try a clearer photo';
+                input.value='';
+                return;
+            }
+            if(result.quality&&result.quality.tier==='reject'){
+                if(status)status.textContent='Photo too small/blurry — try a closer, sharper photo';
                 input.value='';
                 return;
             }
             CampistryFace.makeThumb(dataUrl,400,0.85).then(function(thumb){
                 if(status)status.textContent='Saving…';
-                var call=window._pRpc
-                    ? window._pRpc('submit_camper_headshot',{p_camper_name:child.name,p_headshot_data:thumb,p_descriptor:descriptor})
-                    : (window._parentDB&&window._parentDB.rpc('submit_camper_headshot',{p_camper_name:child.name,p_headshot_data:thumb,p_descriptor:descriptor,p_camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null}));
-                Promise.resolve(call).then(function(res){
-                    var ok=res&&res.data&&res.data.success;
+                var models=Object.keys(result.descriptors);
+                var chain=Promise.resolve(null),firstRes=null;
+                models.forEach(function(model){
+                    chain=chain.then(function(){
+                        return _submitHeadshot(child,pose,model,result.descriptors[model],thumb).then(function(res){
+                            if(!firstRes)firstRes=res;
+                            return res;
+                        });
+                    });
+                });
+                chain.then(function(){
+                    var ok=firstRes&&firstRes.data&&firstRes.data.success;
                     if(!ok){
-                        if(status)status.textContent=(res&&res.data&&res.data.error)?('Error: '+res.data.error):'Save failed — try again';
+                        if(status)status.textContent=(firstRes&&firstRes.data&&firstRes.data.error)?('Error: '+firstRes.data.error):'Save failed — try again';
                         toast('Could not save reference photo');
                         return;
                     }
-                    if(slot)slot.classList.add('uploaded');
-                    if(avatar)avatar.innerHTML='<img src="'+thumb+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
-                    if(status)status.textContent='Reference photo set ✓';
-                    toast('Reference photo saved for '+child.name.split(' ')[0]+'!');
+                    if(poseSlot)poseSlot.classList.add('uploaded');
+                    if(poseThumb)poseThumb.innerHTML='<img src="'+thumb+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
+                    if(pose==='front'){
+                        if(slot)slot.classList.add('uploaded');
+                        if(avatar)avatar.innerHTML='<img src="'+thumb+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
+                    }
+                    _updateRefStatusText(id);
+                    toast(pose.charAt(0).toUpperCase()+pose.slice(1)+' photo saved for '+child.name.split(' ')[0]+'!');
                 }).catch(function(){if(status)status.textContent='Save failed — check connection';});
             });
         }).catch(function(err){
@@ -1115,6 +1168,18 @@ function handleRefPhoto(id,input){
     reader.readAsDataURL(file);
 }
 
+// Status line reflects pose coverage ("2 of 3 angles added").
+function _updateRefStatusText(id){
+    var status=document.getElementById('refStatus_'+id); if(!status)return;
+    var done=['front','left','right'].filter(function(p){
+        var el=document.getElementById('refPose_'+id+'_'+p);
+        return el&&el.classList.contains('uploaded');
+    }).length;
+    if(done>=3)status.textContent='All 3 angles set ✓ — best recognition';
+    else if(done>0)status.textContent=done+' of 3 angles added — more angles = better matching';
+    else status.textContent='Add photos from 3 angles';
+}
+
 // Load each child's saved reference-face state from the cloud and reflect it.
 function _loadCamperFaceStatus(){
     var db=window._parentDB; if(!db||typeof parent==='undefined'||!parent||!parent.campId||typeof children==='undefined')return;
@@ -1124,12 +1189,20 @@ function _loadCamperFaceStatus(){
         (res.data.campers||[]).forEach(function(f){
             var c=children.find(function(k){return k.name===f.camper_name;}); if(!c)return;
             var slot=document.getElementById('refSlot_'+c.id),avatar=document.getElementById('refAvatar_'+c.id),status=document.getElementById('refStatus_'+c.id);
+            var poses=Array.isArray(f.poses)?f.poses:(f.has_face?['front']:[]);
+            poses.forEach(function(p){
+                var el=document.getElementById('refPose_'+c.id+'_'+p);
+                if(el)el.classList.add('uploaded');
+                var pt=document.getElementById('refPoseThumb_'+c.id+'_'+p);
+                if(pt&&p==='front'&&f.headshot)pt.innerHTML='<img src="'+f.headshot+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
+                else if(pt&&el&&el.classList.contains('uploaded')&&!pt.querySelector('img'))pt.textContent='✓';
+            });
             if(f.has_face){
                 if(slot)slot.classList.add('uploaded');
                 if(avatar&&f.headshot)avatar.innerHTML='<img src="'+f.headshot+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
-                if(status)status.textContent='Reference photo set ✓';
+                _updateRefStatusText(c.id);
             }else if(f.consent){
-                if(status)status.textContent='Consented — upload a photo';
+                if(status)status.textContent='Consented — add photos from 3 angles';
             }
         });
     }).catch(function(){});
@@ -2143,7 +2216,9 @@ window.addEventListener('storage', function(e) {
 </script>
 <script src="campistry_notes_quick.js"></script>
 <script src="campistry_link_capacitor.js"></script>
+<script src="face_match_core.js"></script>
 <script src="campistry_face_shared.js"></script>
+<script src="campistry_face_engine_v2.js"></script>
 <script src="supabase-js@2.js"></script>
 <script src="config.js"></script>
 <script>
