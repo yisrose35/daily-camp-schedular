@@ -2560,26 +2560,44 @@
     Utils.getRotationEpoch = function() {
         var now = Date.now();
         if (now - _hrEpochCache.at < 10000) return _hrEpochCache.val;
-        var best = '';
-        var _consider = function (d) {
-            if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
+        // ★ HR-41 v2: among all surviving copies of the stamp, the one from the
+        // NEWEST reset action (setAt) wins — so a deliberate re-run of Start
+        // New Half can move the epoch backward (test/mistake recovery) while
+        // stale devices still lose. Legacy stamps without setAt rank at 0 and
+        // tie-break by max date.
+        var bestDate = '', bestAt = -1;
+        var _consider = function (d, at) {
+            if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+            at = Number(at) || 0;
+            if (at > bestAt || (at === bestAt && d > bestDate)) { bestAt = at; bestDate = d; }
         };
         try {
             var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
-            _consider((typeof e === 'string') ? e : (e && e.date));
+            if (typeof e === 'string') _consider(e, 0);
+            else if (e) _consider(e.date, e.setAt);
         } catch (_) {}
-        try { _consider(localStorage.getItem('campistry_rotationEpoch')); } catch (_) {}
+        try {
+            var ls = localStorage.getItem('campistry_rotationEpoch');
+            if (ls && ls[0] === '{') { var lsp = JSON.parse(ls); _consider(lsp.date, lsp.setAt); }
+            else _consider(ls, 0);
+        } catch (_) {}
         try {
             var lh = JSON.parse(localStorage.getItem('campLeagueHistory_v2') || 'null');
-            _consider(lh && lh._epochDate);
+            if (lh) _consider(lh._epochDate, lh._epochSetAt);
             var sh = JSON.parse(localStorage.getItem('campSpecialtyLeagueHistory_v1') || 'null');
-            _consider(sh && sh._epochDate);
+            if (sh) _consider(sh._epochDate, sh._epochSetAt);
             var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            _consider(gs.leagueHistory && gs.leagueHistory._epochDate);
-            _consider(gs.specialtyLeagueHistory && gs.specialtyLeagueHistory._epochDate);
+            if (gs.leagueHistory) _consider(gs.leagueHistory._epochDate, gs.leagueHistory._epochSetAt);
+            if (gs.specialtyLeagueHistory) _consider(gs.specialtyLeagueHistory._epochDate, gs.specialtyLeagueHistory._epochSetAt);
         } catch (_) {}
-        _hrEpochCache = { at: now, val: best || null };
+        _hrEpochCache = { at: now, val: bestDate || null, setAt: Math.max(0, bestAt) };
         return _hrEpochCache.val;
+    };
+    // ★ HR-41 v2: winning stamp WITH its reset-action time — lets the league
+    // engines' _effectiveEpoch compare blob vs global by recency, not max-date.
+    Utils.getRotationEpochInfo = function () {
+        var d = Utils.getRotationEpoch();
+        return { date: d, setAt: d ? (_hrEpochCache.setAt || 0) : 0 };
     };
     // Reset paths / tests can drop the cache after changing the epoch.
     Utils.invalidateRotationEpochCache = function () { _hrEpochCache = { at: 0, val: null }; };

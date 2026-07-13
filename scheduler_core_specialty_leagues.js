@@ -55,8 +55,26 @@
     function _effectiveEpoch(history) {
         const blobEpoch = (history && typeof history._epochDate === 'string'
             && /^\d{4}-\d{2}-\d{2}$/.test(history._epochDate)) ? history._epochDate : '';
-        const globalEpoch = _getGlobalEpoch() || '';
-        const eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        const blobSetAt = Number(history && history._epochSetAt) || 0;
+        // ★ HR-55 v2: prefer the stamp from the NEWEST reset action (mirrors
+        // HR-41 v2); legacy stamps keep the original max-date behavior.
+        let globalEpoch = '', globalSetAt = 0;
+        try {
+            const U = window.SchedulerCoreUtils;
+            if (U && typeof U.getRotationEpochInfo === 'function') {
+                const gi = U.getRotationEpochInfo();
+                globalEpoch = gi.date || '';
+                globalSetAt = Number(gi.setAt) || 0;
+            } else {
+                globalEpoch = _getGlobalEpoch() || '';
+            }
+        } catch (_) { globalEpoch = _getGlobalEpoch() || ''; }
+        let eff;
+        if (blobSetAt || globalSetAt) {
+            eff = (blobSetAt >= globalSetAt) ? (blobEpoch || globalEpoch) : (globalEpoch || blobEpoch);
+        } else {
+            eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        }
         return eff || null;
     }
     SpecialtyLeagues.getEffectiveEpoch = _effectiveEpoch; // diagnostics + tests
@@ -76,8 +94,11 @@
             };
             if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
             if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
-            // ★ HR-55: the epoch dateKey must survive normalization
-            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) out._epochDate = h._epochDate;
+            // ★ HR-55: the epoch stamp must survive normalization
+            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) {
+                out._epochDate = h._epochDate;
+                out._epochSetAt = Number(h._epochSetAt) || 0;
+            }
             return out;
         };
         if (!a) return b ? norm(b) : norm(null);
@@ -107,11 +128,20 @@
         if (merged._resetAt === undefined) delete merged._resetAt;
         const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
         if (countersResetAt) merged._countersResetAt = countersResetAt;
-        // ★ HR-55: rotation epoch — adopt-MAX across lineages (mirrors HR-41).
+        // ★ HR-55 (v2): rotation epoch — adopt the stamp from the NEWEST reset
+        // action (mirrors HR-41 v2); legacy stamps fall back to max-date.
         (function () {
-            const ea = (A._epochDate || ''), eb = (B._epochDate || '');
-            const em = ea >= eb ? ea : eb;
-            if (em) merged._epochDate = em;
+            const sa = A._epochSetAt || 0, sb = B._epochSetAt || 0;
+            let pick = null;
+            if (sa || sb) pick = (sa >= sb) ? A : B;
+            else {
+                const ea = (A._epochDate || ''), eb = (B._epochDate || '');
+                pick = (ea >= eb) ? A : B;
+            }
+            if (pick && pick._epochDate) {
+                merged._epochDate = pick._epochDate;
+                if (pick._epochSetAt) merged._epochSetAt = pick._epochSetAt;
+            }
         })();
         const tombTs = function (lg, d) {
             return Math.max(
@@ -2154,8 +2184,9 @@ if (_playoffRoundNum) {
         try {
             if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))) return false;
             const h = loadSpecialtyHistory();
-            const prev = (typeof h._epochDate === 'string') ? h._epochDate : '';
-            h._epochDate = (prev && prev > dateKey) ? prev : String(dateKey);
+            // ★ HR-55 v2: deliberate reset is authoritative (exact date + setAt).
+            h._epochDate = String(dateKey);
+            h._epochSetAt = Date.now();
             // Rebuild derived stores epoch-scoped (mirrors the HR-56 merge
             // rebuild). Pure-legacy leagues without a gameLog have undated
             // entries that cannot be filtered — a complete reset zeroes them.

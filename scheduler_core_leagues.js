@@ -48,8 +48,26 @@
     function _effectiveEpoch(history) {
         const blobEpoch = (history && typeof history._epochDate === 'string'
             && /^\d{4}-\d{2}-\d{2}$/.test(history._epochDate)) ? history._epochDate : '';
-        const globalEpoch = _getGlobalEpoch() || '';
-        const eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        const blobSetAt = Number(history && history._epochSetAt) || 0;
+        // ★ HR-41 v2: prefer the stamp from the NEWEST reset action; legacy
+        // stamps (no setAt anywhere) keep the original max-date behavior.
+        let globalEpoch = '', globalSetAt = 0;
+        try {
+            const U = window.SchedulerCoreUtils;
+            if (U && typeof U.getRotationEpochInfo === 'function') {
+                const gi = U.getRotationEpochInfo();
+                globalEpoch = gi.date || '';
+                globalSetAt = Number(gi.setAt) || 0;
+            } else {
+                globalEpoch = _getGlobalEpoch() || '';
+            }
+        } catch (_) { globalEpoch = _getGlobalEpoch() || ''; }
+        let eff;
+        if (blobSetAt || globalSetAt) {
+            eff = (blobSetAt >= globalSetAt) ? (blobEpoch || globalEpoch) : (globalEpoch || blobEpoch);
+        } else {
+            eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        }
         return eff || null;
     }
     Leagues.getEffectiveEpoch = _effectiveEpoch; // diagnostics + tests
@@ -97,8 +115,11 @@
             };
             if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
             if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
-            // ★ HR-41: the epoch dateKey must survive normalization
-            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) out._epochDate = h._epochDate;
+            // ★ HR-41: the epoch stamp must survive normalization
+            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) {
+                out._epochDate = h._epochDate;
+                out._epochSetAt = Number(h._epochSetAt) || 0;
+            }
             return out;
         };
         if (!a) return b ? norm(b) : norm(null);
@@ -142,13 +163,23 @@
         // days whose data predates it.
         const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
         if (countersResetAt) merged._countersResetAt = countersResetAt;
-        // ★ HR-41: rotation epoch — adopt-MAX across lineages so a stale copy
-        // (older or missing stamp) can never un-reset the half. ISO dateKeys
-        // compare lexicographically.
+        // ★ HR-41 (v2): rotation epoch — adopt the stamp from the NEWEST reset
+        // action (_epochSetAt wall-clock), so a stale device can never un-reset
+        // the half, while a deliberate re-run of Start New Half can move the
+        // epoch in EITHER direction. Legacy stamps without _epochSetAt fall
+        // back to max-date (the original HR-41 semantics).
         (function () {
-            const ea = (A._epochDate || ''), eb = (B._epochDate || '');
-            const em = ea >= eb ? ea : eb;
-            if (em) merged._epochDate = em;
+            const sa = A._epochSetAt || 0, sb = B._epochSetAt || 0;
+            let pick = null;
+            if (sa || sb) pick = (sa >= sb) ? A : B;
+            else {
+                const ea = (A._epochDate || ''), eb = (B._epochDate || '');
+                pick = (ea >= eb) ? A : B;
+            }
+            if (pick && pick._epochDate) {
+                merged._epochDate = pick._epochDate;
+                if (pick._epochSetAt) merged._epochSetAt = pick._epochSetAt;
+            }
         })();
         const tombTs = function (lg, d) {
             return Math.max(
@@ -4950,8 +4981,11 @@ window._debugLeagueTimeData = timeData;
         try {
             if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))) return false;
             const h = loadLeagueHistory();
-            const prev = (typeof h._epochDate === 'string') ? h._epochDate : '';
-            h._epochDate = (prev && prev > dateKey) ? prev : String(dateKey);
+            // ★ HR-41 v2: a deliberate reset is authoritative — set the exact
+            // date and stamp _epochSetAt so it wins merges by recency (moving
+            // the epoch backward after a mistaken/test reset is legitimate).
+            h._epochDate = String(dateKey);
+            h._epochSetAt = Date.now();
             // Away-trip fairness restarts: rebuild flat counters from post-epoch
             // trips only (mirrors the HR-52 merge rebuild; records stay).
             h.ocTripsByDate = h.ocTripsByDate || {};

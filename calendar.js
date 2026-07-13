@@ -758,8 +758,9 @@ all[date].updated_at = new Date().toISOString();
                 }
             } catch (e) { failures.push('verified cloud push: ' + (e.message || e)); }
             // ★ HR-70: device-local epoch backstop that no hydration merge can
-            // clobber (plain key outside the settings blob).
-            try { localStorage.setItem('campistry_rotationEpoch', epoch); } catch (_) {}
+            // clobber (plain key outside the settings blob). JSON form carries
+            // setAt so newest-reset-wins resolution (HR-41 v2) ranks it.
+            try { localStorage.setItem('campistry_rotationEpoch', JSON.stringify({ date: epoch, setAt: Date.now() })); } catch (_) {}
 
             // 6) Flush the batched queue too (local mirrors / non-critical keys).
             if (typeof window.forceSyncToCloud === 'function') {

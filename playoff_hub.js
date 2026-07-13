@@ -177,14 +177,24 @@
             // so the hub must count the same window or rounds derail.
             var _hrEp = (function () {
                 try {
+                    // ★ HR-41 v2: newest reset action wins (legacy stamps → max-date).
                     var be = (hist && typeof hist._epochDate === 'string') ? hist._epochDate : '';
+                    var bs = Number(hist && hist._epochSetAt) || 0;
+                    var ge = '', gs2 = 0;
                     var U = window.SchedulerCoreUtils || window.Utils;
-                    var ge = (U && typeof U.getRotationEpoch === 'function') ? (U.getRotationEpoch() || '') : (function () {
+                    if (U && typeof U.getRotationEpochInfo === 'function') {
+                        var gi = U.getRotationEpochInfo();
+                        ge = gi.date || ''; gs2 = Number(gi.setAt) || 0;
+                    } else if (U && typeof U.getRotationEpoch === 'function') {
+                        ge = U.getRotationEpoch() || '';
+                    } else {
                         var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
                         var d = (typeof e === 'string') ? e : (e && e.date);
-                        return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : '';
-                    })();
-                    var eff = be >= ge ? be : ge;
+                        ge = (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : '';
+                    }
+                    var eff = (bs || gs2)
+                        ? ((bs >= gs2) ? (be || ge) : (ge || be))
+                        : (be >= ge ? be : ge);
                     return /^\d{4}-\d{2}-\d{2}$/.test(eff) ? eff : null;
                 } catch (_) { return null; }
             })();

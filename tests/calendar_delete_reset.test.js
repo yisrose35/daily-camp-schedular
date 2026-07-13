@@ -671,7 +671,9 @@ describe('startNewHalf (non-deleting epoch reset)', () => {
          'leagueRoundState'].forEach(k => {
             assert.ok(Object.prototype.hasOwnProperty.call(supabaseKvData, k), k + ' verified-pushed to camp_state_kv');
         });
-        assert.equal(fakeStorage['campistry_rotationEpoch'], epochCall.val.date, 'device-local epoch backstop written');
+        const _backstop = JSON.parse(fakeStorage['campistry_rotationEpoch'] || 'null');
+        assert.equal(_backstop && _backstop.date, epochCall.val.date, 'device-local epoch backstop written');
+        assert.ok(_backstop && _backstop.setAt > 0, 'backstop carries the reset-action time (newest-wins resolution)');
 
         assert.ok(reloadCalled, 'Reload triggered');
     });
