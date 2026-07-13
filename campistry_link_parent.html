@@ -1852,17 +1852,30 @@ function submitPickup(type) {
         localStorage.setItem(PARENT_REQ_KEY, JSON.stringify(store));
     } catch(e){}
 
-    // Cloud write so it reaches Campistry Live across devices (migration 025).
-    // Without this the request only ever lived in this browser's localStorage.
+    // Cloud write so it reaches Campistry Live across devices. A late/pickup
+    // request IS a notification to the camp office, so it rides the existing
+    // parent->office message channel (link_messages, submit_message_reply).
+    // Live reads link_messages and surfaces the pickup-typed ones on its Parent
+    // Requests page; the office also sees it in the Link inbox. The subject is
+    // "<Label> — <Camper>" so Live can recognise and parse it. (No new table
+    // needed — works today; migration 025 is an optional dedicated channel.)
     try {
         var db = window._parentDB;
         if (db && db.rpc) {
-            var details = Object.assign({ childBunk: child.bunk||'' }, fields);
-            db.rpc('submit_pickup_request', {
-                p_type: type, p_camper_name: child.name||'',
-                p_details: details, p_label: labels[type],
-                p_camp_id: (parent && parent.campId) || null
-            }).then(function(res){
+            var _fieldLabels = {
+                pickupTime:'Pickup time', pickupBy:'Picked up by', relationship:'Relationship',
+                newPickupPerson:'New pickup person', phone:'Phone',
+                friendName:'Going with friend', friendParentName:"Friend's parent", friendParentPhone:"Friend's parent phone",
+                arrivalTime:'Arriving at', reason:'Reason', notes:'Notes'
+            };
+            var lines = [];
+            Object.keys(fields).forEach(function(k){ if(fields[k]) lines.push((_fieldLabels[k]||k)+': '+fields[k]); });
+            var body = labels[type] + ' request for ' + (child.name||'') + (child.bunk?(' ('+child.bunk+')'):'') + '.'
+                       + (lines.length ? '\n\n' + lines.join('\n') : '');
+            var subject = labels[type] + ' — ' + (child.name||'');
+            var send = window._pRpc ? window._pRpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body })
+                                    : db.rpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body, p_camp_id:(parent&&parent.campId)||null });
+            send.then(function(res){
                 if (res.error || !res.data || !res.data.success) {
                     console.warn('[Parent] pickup request cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
                 }

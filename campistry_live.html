@@ -347,23 +347,33 @@ var ParentRequests = (function(){
     function saveReqs(arr){try{localStorage.setItem(PKEY,JSON.stringify(arr));}catch(e){}}
     function _db(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{client:c,campId:id}:null; }
 
-    // Pull cloud pickup/late requests (migration 025) and merge into the local
-    // store by id, so requests submitted from a parent's OWN device show up here.
+    // Parent late/pickup/dismissal requests ride the parent->office message
+    // channel (link_messages, direction 'in'), subject "<Label> — <Camper>".
+    // Pull those, recognise the pickup labels, and merge into the local store so
+    // a request submitted from a parent's OWN device shows up here cross-device.
+    var _LABEL_TYPE = { 'Early Pickup':'early', 'Pickup Change':'change', 'Going With Friend':'friend', 'Late Arrival':'late' };
     function syncFromCloud(cb){
         var db=_db(); if(!db){ if(cb)cb(); return; }
-        db.client.from('parent_pickup_requests').select('*').eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(200)
+        db.client.from('link_messages').select('id,subject,body,parent_name,parent_email,direction,created_at')
+            .eq('camp_id',db.campId).eq('direction','in').order('created_at',{ascending:false}).limit(300)
             .then(function(res){
-                if(res.error){ console.warn('[Live] parent_pickup_requests load:',res.error.message); if(cb)cb(); return; }
+                if(res.error){ console.warn('[Live] parent requests (link_messages) load:',res.error.message); if(cb)cb(); return; }
                 var local=getReqs(), byId={}; local.forEach(function(r){ byId[r.id]=r; });
-                (res.data||[]).forEach(function(row){
-                    var mapped=Object.assign({
-                        id:row.id, type:row.type, label:row.label||row.type,
-                        childName:row.camper_name, childBunk:row.camper_bunk||'',
-                        parentName:row.parent_name||'', parentEmail:row.parent_email||'',
-                        submittedAt:new Date(row.created_at).getTime(), status:row.status||'Pending'
-                    }, row.details||{});
-                    if(byId[row.id]){ Object.assign(byId[row.id], mapped); }
-                    else { local.unshift(mapped); byId[row.id]=mapped; }
+                (res.data||[]).forEach(function(m){
+                    var subj=String(m.subject||''); var dash=subj.indexOf(' — ');
+                    var label=dash>=0?subj.slice(0,dash).trim():subj.trim();
+                    var type=_LABEL_TYPE[label]; if(!type) return; // not a pickup/late request
+                    var camper=dash>=0?subj.slice(dash+3).trim():'';
+                    var bodyLines=String(m.body||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
+                    var detailLines=bodyLines.slice(1); // first line is the summary
+                    var mapped={
+                        id:m.id, type:type, label:label, childName:camper, childBunk:'',
+                        parentName:m.parent_name||'', parentEmail:m.parent_email||'',
+                        submittedAt:new Date(m.created_at).getTime(),
+                        status:(byId[m.id]&&byId[m.id].status)||'Pending', _detailLines:detailLines
+                    };
+                    if(byId[m.id]){ Object.assign(byId[m.id], mapped, {status:byId[m.id].status||'Pending'}); }
+                    else { local.unshift(mapped); byId[m.id]=mapped; }
                 });
                 saveReqs(local);
                 if(cb)cb();
@@ -414,11 +424,14 @@ var ParentRequests = (function(){
         reqs.forEach(function(r,i){
             var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
             var details=[];
-            if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
-            else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
-            else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
-            else if(r.type==='late'){if(r.arrivalTime)details.push('Arriving: '+r.arrivalTime);if(r.reason)details.push(r.reason);}
-            if(r.notes)details.push('“'+r.notes+'”');
+            if(r._detailLines&&r._detailLines.length){ details=r._detailLines.slice(); }
+            else {
+                if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+                else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
+                else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
+                else if(r.type==='late'){if(r.arrivalTime)details.push('Arriving: '+r.arrivalTime);if(r.reason)details.push(r.reason);}
+                if(r.notes)details.push('“'+r.notes+'”');
+            }
             var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
             var actions=r.status==='Pending'?
                 '<div style="display:flex;gap:6px;margin-top:6px;">'+
@@ -445,7 +458,9 @@ var ParentRequests = (function(){
         body.innerHTML=html;
     }
 
-    function _cloudStatus(id,status){ var db=_db(); if(db&&id){ db.client.from('parent_pickup_requests').update({status:status,reviewed_at:new Date().toISOString()}).eq('id',id).then(function(res){ if(res.error)console.warn('[Live] pickup status update:',res.error.message); }); } }
+    // These requests are link_messages rows; acknowledging = mark the office
+    // message read. Status itself stays in Live's local store.
+    function _cloudStatus(id,status){ var db=_db(); if(db&&id){ db.client.from('link_messages').update({read:true}).eq('id',id).then(function(res){ if(res.error)console.warn('[Live] pickup ack:',res.error.message); }); } }
 
     function confirm(i){
         var reqs=getReqs(),r=reqs[i];
