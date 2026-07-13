@@ -102,6 +102,42 @@ a small labeled set of real camp photos** — children's faces are
 underrepresented in the training sets of every available model, so expect to
 tune (likely tighten) after the first real batch.
 
+## v2.2 — leader-technique adoptions (deep-research pass 2, verified vs NIST/Apple)
+
+- **arc-512 is preferred** in matching whenever both a face and a camper have
+  it — the legacy 128-D space can no longer outvote the modern embedding
+  (NIST: algorithm generation dominates; ~20× 1:N gains 2014→2018).
+- **Strict (youngest) divisions** — owner flags them in Auto-Triage; those
+  campers need dist ≤ 0.85×autoDist for engine-auto and +12 pts confidence to
+  dial-auto-accept (NIST FRVT pt.3: child false-match rates highest at 3–5).
+- **Enrollment freshness** (migration 030): descriptors carry `created_at`;
+  parent photos older than ~300 days are excluded when fresh ones exist, and
+  campers with only stale enrollment are flagged in admin + prompted in the
+  parent portal (YFA: 98.5% TAR at 2-yr gap → 71% at 8 yrs on children).
+- **Gallery hygiene**: `pruneGallery` dedupes near-identical members and
+  ejects outliers before templates are built (NIST: weak multi-image fusion
+  RAISES false positives).
+- **Torso/clothing cue** (Apple's upper-body embeddings, camp-safe version):
+  48-bin HSV histogram of the region below each face; within a burst, same
+  clothing recovers turned-away kids — but torso evidence alone only ever
+  creates a REVIEW suggestion (camp uniforms), never an auto-tag, and is
+  blocked when face evidence contradicts.
+- **Unknown-person clusters** (Apple's two-pass clustering, batch-scoped):
+  unmatched faces agglomerate across the batch; ≥3 sightings of the same
+  unknown person become one admin card — name them once, every photo tags,
+  and the centroid joins their gallery. Capped at 12 stored clusters.
+- **Measured accuracy line**: `evalReport` scores the current dials against
+  the human decision log (precision-of-auto-accepts / real-kids-lost-below-
+  reject — FNIR/FPIR analogues) and shows it in the Auto-Triage card.
+
+Explicitly NOT adopted, per verified evidence: large-gallery machinery (score
+normalization, sharded ANN — camp galleries are 4–5 orders of magnitude below
+NIST's easiest condition), training-data-scale chasing (refuted as the
+leaders' differentiator), and outside APIs (≈$35/season but breaks the
+no-image-leaves-device consent architecture; no verified accuracy win).
+Deferred: child-focused fine-tuning (YLFW / Inter-Prototype loss) — the only
+technique requiring GPU training; revisit after the engineering wins settle.
+
 ## Known limits / next steps
 
 - SCRFD fixed 640×640 letterbox is used per-face-crop (landmark stage), not as

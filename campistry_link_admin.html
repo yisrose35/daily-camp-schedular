@@ -651,7 +651,26 @@
             </label>
             <button class="btn btn-ghost btn-sm" onclick="applyTriageToQueue()" style="margin-bottom:2px;">Apply to current queue</button>
         </div>
+        <div style="margin-top:12px;">
+            <label style="font-size:.72rem;font-weight:700;color:var(--slate-600);display:block;margin-bottom:4px;">
+                Extra-careful divisions <span style="font-weight:400;color:var(--text-muted);">(youngest campers — face matching is hardest on little kids, so these need more confidence to auto-tag)</span>
+            </label>
+            <div id="strictDivChips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+        </div>
         <div id="triageStats" style="font-size:.72rem;color:var(--text-muted);margin-top:10px;"></div>
+        <div id="staleEnrollNote" style="display:none;font-size:.74rem;color:var(--amber-700,#b45309);margin-top:6px;"></div>
+    </div>
+    <div class="lk-card" id="unknownFacesCard" style="display:none;">
+        <div class="lk-card-head">
+            <h2>Unknown Faces</h2>
+            <span class="badge badge-warn" id="unknownBadge">0</span>
+        </div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">
+            The same unrecognized person appearing in several photos. Put a name to them once and
+            every photo gets tagged — and the engine learns their face for future batches.
+            (Often a camper without a reference photo yet, or a staff member — dismiss those.)
+        </p>
+        <div id="unknownFacesList"></div>
     </div>
     <div class="lk-card" id="reviewQueueCard" style="display:none;">
         <div class="lk-card-head">
@@ -2940,7 +2959,7 @@ async function buildIndex() {
     });
     if (r.error && !r.indexed) prog.innerHTML = '<div style="color:var(--red-500);font-size:.82rem;">Error: ' + esc(r.error) + '</div>';
     else {
-        prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.indexed + ' campers indexed</div>';
+        prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.indexed + ' campers indexed' + ((r.staleCampers && r.staleCampers.length) ? ' · <span style="color:var(--amber-700,#b45309);">' + r.staleCampers.length + ' need fresh photos</span>' : '') + '</div>';
         document.getElementById('indexBadge').textContent = r.indexed + ' campers';
         document.getElementById('indexBadge').className = 'badge badge-ok';
     }
@@ -2957,7 +2976,7 @@ async function handlePhotos(files) {
     });
     prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged' + (r.needsReview ? ', ' + r.needsReview + ' need review' : '') + '</div>';
     document.getElementById('photoInput').value = '';
-    refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI();
+    refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI(); refreshUnknownFaces();
 }
 function refreshPhotos() {
     var cp = CP(); if (!cp) return;
@@ -2999,9 +3018,93 @@ function refreshTriageUI() {
         } else {
             bits.push('no review decisions yet — the queue below teaches the system');
         }
+        // measured accuracy at the current dials (the NIST-style honesty line)
+        if (s.eval && s.eval.n >= 10 && s.eval.precisionAtAccept != null) {
+            bits.push('measured: ' + Math.round(s.eval.precisionAtAccept * 100) + '% of auto-accepts were right' +
+                (s.eval.missedBelowReject != null ? ', ' + Math.round(s.eval.missedBelowReject * 100) + '% of auto-rejects were real kids' : '') +
+                ' (over ' + s.eval.n + ' labeled decisions)');
+        }
         if (s.workerActive) bits.push('background scanning active');
         stats.textContent = bits.join(' · ');
     }
+    // strict-division chips from the camp structure
+    var chipBox = document.getElementById('strictDivChips');
+    if (chipBox && window.CampistryLink && CampistryLink.data.getCampStructure) {
+        var divs = [];
+        try { divs = Object.keys(CampistryLink.data.getCampStructure() || {}); } catch(e) {}
+        var selected = s.strictDivisions || [];
+        chipBox.innerHTML = divs.length ? divs.map(function(d) {
+            var on = selected.indexOf(d) >= 0;
+            return '<button class="badge ' + (on ? 'badge-warn' : '') + '" style="cursor:pointer;border:1px solid var(--border-light);" ' +
+                'onclick="toggleStrictDivision(\'' + esc(d).replace(/'/g, "\\'") + '\')">' + (on ? '✓ ' : '') + esc(d) + '</button>';
+        }).join('') : '<span style="font-size:.72rem;color:var(--text-muted);">No divisions found — set up camp structure in Me.</span>';
+    }
+    // stale enrollments (multi-season-old reference photos degrade on kids)
+    var staleNote = document.getElementById('staleEnrollNote');
+    if (staleNote) {
+        var stale = s.staleCampers || [];
+        if (stale.length) {
+            staleNote.style.display = '';
+            staleNote.textContent = '⚠ ' + stale.length + ' camper' + (stale.length === 1 ? "'s" : "s'") +
+                ' reference photos are from a previous season — recognition degrades on old photos of kids. Ask parents to re-upload: ' +
+                stale.slice(0, 5).join(', ') + (stale.length > 5 ? ' +' + (stale.length - 5) + ' more' : '');
+        } else {
+            staleNote.style.display = 'none';
+        }
+    }
+}
+function toggleStrictDivision(divName) {
+    var cp = CP(); if (!cp) return;
+    var list = (cp.getSettings().strictDivisions || []).slice();
+    var i = list.indexOf(divName);
+    if (i >= 0) list.splice(i, 1); else list.push(divName);
+    cp.updateSettings({ strictDivisions: list });
+    cp.restoreIndex();   // re-mark strict campers on the live matcher
+    refreshTriageUI();
+}
+// ─── Unknown-person clusters ─────────────────────────────────────────────────
+function refreshUnknownFaces() {
+    var cp = CP(); if (!cp || !cp.getUnknownClusters) return;
+    var items = cp.getUnknownClusters();
+    var card = document.getElementById('unknownFacesCard');
+    var list = document.getElementById('unknownFacesList');
+    var badge = document.getElementById('unknownBadge');
+    if (!card || !list) return;
+    if (badge) badge.textContent = items.length;
+    if (!items.length) { card.style.display = 'none'; list.innerHTML = ''; return; }
+    card.style.display = '';
+    var names = Object.keys((cp.getStore() || {}).faceIndex || {}).sort();
+    var options = '<option value="">Who is this?</option>' + names.map(function(n) {
+        return '<option value="' + esc(n) + '">' + esc(n) + '</option>';
+    }).join('');
+    list.innerHTML = items.map(function(it) {
+        var face = it.thumb
+            ? '<img src="' + it.thumb + '" style="width:56px;height:56px;object-fit:cover;border-radius:8px;border:1px solid var(--border-light);">'
+            : '<div style="width:56px;height:56px;border-radius:8px;background:var(--slate-100);"></div>';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--slate-100);">' +
+            face +
+            '<div style="flex:1;min-width:0;font-size:.8rem;">Seen in <strong>' + it.count + '</strong> face' + (it.count === 1 ? '' : 's') +
+            ' across ' + it.photoIds.length + ' photo' + (it.photoIds.length === 1 ? '' : 's') + '</div>' +
+            '<select id="unknownSel_' + it.id + '" style="padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:.8rem;max-width:180px;">' + options + '</select>' +
+            '<button class="btn btn-primary btn-sm" onclick="assignUnknown(\'' + it.id + '\')">Tag all</button>' +
+            '<button class="btn btn-ghost btn-sm" onclick="dismissUnknown(\'' + it.id + '\')">✗</button>' +
+        '</div>';
+    }).join('');
+}
+async function assignUnknown(clusterId) {
+    var cp = CP(); if (!cp) return;
+    var sel = document.getElementById('unknownSel_' + clusterId);
+    var name = sel ? sel.value : '';
+    if (!name) { toast('Pick a camper first'); return; }
+    var r = await cp.assignUnknownCluster(clusterId, name);
+    if (r && r.success) toast('Tagged ' + name + ' on ' + r.tagged + ' photos — engine updated');
+    else toast((r && r.error) || 'Could not assign');
+    refreshUnknownFaces(); refreshPhotos(); updatePhotoStats();
+}
+function dismissUnknown(clusterId) {
+    var cp = CP(); if (!cp) return;
+    cp.dismissUnknownCluster(clusterId);
+    refreshUnknownFaces();
 }
 function updateTriageDials() {
     var cp = CP(); if (!cp) return;
@@ -3831,6 +3934,7 @@ function boot() {
     }
     refreshReviewQueue();
     refreshTriageUI();
+    refreshUnknownFaces();
 
     window.addEventListener('storage', function(e) {
         if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {

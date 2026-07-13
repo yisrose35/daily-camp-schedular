@@ -141,10 +141,51 @@
         return metric === 'cosine' ? cosineDistance(a, b) : euclidean(a, b);
     }
 
+    // Gallery hygiene (NIST IR 8271: weak multi-image fusion RAISES false
+    // positives — only clean galleries help). Two passes over one camper's
+    // descriptors of one model:
+    //   1. dedupe near-identical members (keeps the template from being
+    //      dominated by burst-frame repeats) — keeps the LAST of a dupe pair
+    //   2. eject outliers: members whose mean distance to the others is both
+    //      far in absolute terms and >> the group's typical spread (a wrongly
+    //      confirmed face dragging the template sideways)
+    // Never prunes below 2 members — with tiny galleries there's no "typical
+    // spread" to trust.
+    function pruneGallery(descriptors, metric, opts) {
+        var o = Object.assign({ dupeDist: 0.05, outlierAbs: 0.9, outlierFactor: 1.8 }, opts || {});
+        var list = (descriptors || []).filter(function (d) { return d && d.length; });
+        if (!list.length) return list;
+
+        // dedupe (applies at any gallery size)
+        var kept = [];
+        list.forEach(function (d) {
+            var dup = kept.some(function (k) { return distanceFor(metric, d, k) < o.dupeDist; });
+            if (dup) return;
+            kept.push(d);
+        });
+        // outlier ejection needs enough members to define a "typical spread"
+        if (kept.length <= 2) return kept;
+
+        // outlier ejection
+        var meanDists = kept.map(function (d, i) {
+            var s = 0, n = 0;
+            kept.forEach(function (k, j) { if (i !== j) { s += distanceFor(metric, d, k); n++; } });
+            return s / n;
+        });
+        var sorted = meanDists.slice().sort(function (a, b) { return a - b; });
+        var median = sorted[Math.floor(sorted.length / 2)];
+        var out = kept.filter(function (d, i) {
+            return !(meanDists[i] > o.outlierAbs && meanDists[i] > median * o.outlierFactor);
+        });
+        return out.length >= 2 ? out : kept;
+    }
+
     // Build a camper template from enrollment descriptors of ONE model:
-    // { mean, all } — see matchDistance.
-    function buildTemplate(descriptors) {
+    // { mean, all } — see matchDistance. Pass opts.metric to enable gallery
+    // pruning (dedupe + outlier ejection); omit for the raw legacy behavior.
+    function buildTemplate(descriptors, opts) {
         var valid = (descriptors || []).filter(function (d) { return d && d.length; });
+        if (opts && opts.metric) valid = pruneGallery(valid, opts.metric, opts);
         if (!valid.length) return null;
         return { mean: meanDescriptor(valid), all: valid };
     }
@@ -280,20 +321,32 @@
         return clusters;
     }
 
-    // Propagate confirmed identities across a burst: if camper X was
-    // confidently matched to a face in one frame, and another frame in the
-    // same burst has an unassigned face whose descriptor is very close to
-    // that CONFIRMED FACE (face-to-face, much stronger evidence than
-    // face-to-template), tag it too.
-    //   photos: [{ photoId, faces: [{id, descriptors, tier}],
+    // Similarity of two normalized histograms (torso/clothing descriptors):
+    // histogram intersection, 0 (disjoint) … 1 (identical).
+    function histogramIntersection(a, b) {
+        if (!a || !b || a.length !== b.length) return 0;
+        var s = 0;
+        for (var i = 0; i < a.length; i++) s += Math.min(a[i], b[i]);
+        return s;
+    }
+
+    // Propagate confirmed identities across a burst (Apple's "moment" idea):
+    // if camper X was confidently matched to a face in one frame, look for the
+    // same person in the neighboring frames two ways —
+    //   FACE:  unassigned face whose descriptor is very close to the CONFIRMED
+    //          face (face-to-face beats face-to-template) → status 'accept'
+    //   TORSO: same clothing (histogram intersection ≥ torsoMin) when the face
+    //          descriptor is missing/turned away → status 'review' ONLY. Camp
+    //          uniforms make clothing ambiguous between kids, so torso evidence
+    //          alone never auto-tags — it surfaces a suggestion to a human.
+    //   photos: [{ photoId, faces: [{id, descriptors, torso?, tier}],
     //              assignments: [{faceId, camperName, status}] }]  (one burst)
-    //   opts: { profiles, propagateFactor (0.8 — fraction of autoDist) }
-    // Returns extra assignments [{photoId, faceId, camperName, dist, model,
-    // status:'accept', via:'burst'}]. Respects one-camper-per-photo and
-    // one-name-per-face.
+    //   opts: { profiles, propagateFactor (0.8), torsoMin (0.62) }
+    // Respects one-camper-per-photo and one-name-per-face.
     function propagateBurstMatches(photos, opts) {
         var profiles = (opts && opts.profiles) || MODEL_PROFILES;
         var factor = (opts && opts.propagateFactor) || 0.8;
+        var torsoMin = (opts && opts.torsoMin) || 0.62;
 
         // anchor faces: confidently assigned (auto or accepted)
         var anchors = [];
@@ -303,7 +356,7 @@
             (p.assignments || []).forEach(function (a) {
                 if (a.status !== 'auto' && a.status !== 'accept') return;
                 var f = faceById[a.faceId];
-                if (f && f.descriptors) anchors.push({ camperName: a.camperName, descriptors: f.descriptors });
+                if (f && f.descriptors) anchors.push({ camperName: a.camperName, descriptors: f.descriptors, torso: f.torso || null });
             });
         });
         if (!anchors.length) return [];
@@ -315,18 +368,38 @@
                 assignedFaces[a.faceId] = true; assignedCampers[a.camperName] = true;
             });
             (p.faces || []).forEach(function (f) {
-                if (assignedFaces[f.id] || f.tier === 'reject' || !f.descriptors) return;
-                var best = null;
+                if (assignedFaces[f.id] || f.tier === 'reject') return;
+                var best = null, torsoBest = null;
                 anchors.forEach(function (anchor) {
                     if (assignedCampers[anchor.camperName]) return;
-                    Object.keys(f.descriptors).forEach(function (model) {
-                        var prof = profiles[model];
-                        if (!prof || !anchor.descriptors[model] || !f.descriptors[model]) return;
-                        var d = distanceFor(prof.metric, f.descriptors[model], anchor.descriptors[model]);
-                        if (d > prof.autoDist * factor) return;
-                        var norm = d / prof.autoDist;
-                        if (!best || norm < best.norm) best = { norm: norm, dist: d, model: model, camperName: anchor.camperName };
-                    });
+                    // face-to-face path
+                    if (f.descriptors) {
+                        Object.keys(f.descriptors).forEach(function (model) {
+                            var prof = profiles[model];
+                            if (!prof || !anchor.descriptors[model] || !f.descriptors[model]) return;
+                            var d = distanceFor(prof.metric, f.descriptors[model], anchor.descriptors[model]);
+                            if (d > prof.autoDist * factor) return;
+                            var norm = d / prof.autoDist;
+                            if (!best || norm < best.norm) best = { norm: norm, dist: d, model: model, camperName: anchor.camperName };
+                        });
+                    }
+                    // torso path — same clothing, face inconclusive
+                    if (!best && anchor.torso && f.torso) {
+                        var sim = histogramIntersection(anchor.torso, f.torso);
+                        if (sim >= torsoMin && (!torsoBest || sim > torsoBest.sim)) {
+                            // face evidence must not CONTRADICT: if both have a
+                            // shared model, the distance can't be beyond review
+                            var contradicts = false;
+                            if (f.descriptors) {
+                                Object.keys(f.descriptors).forEach(function (model) {
+                                    var prof = profiles[model];
+                                    if (!prof || !anchor.descriptors[model]) return;
+                                    if (distanceFor(prof.metric, f.descriptors[model], anchor.descriptors[model]) > prof.reviewDist * 1.15) contradicts = true;
+                                });
+                            }
+                            if (!contradicts) torsoBest = { sim: sim, camperName: anchor.camperName };
+                        }
+                    }
                 });
                 if (best) {
                     assignedFaces[f.id] = true; assignedCampers[best.camperName] = true;
@@ -335,41 +408,149 @@
                         dist: Math.round(best.dist * 1000) / 1000, model: best.model,
                         status: 'accept', via: 'burst'
                     });
+                } else if (torsoBest) {
+                    assignedFaces[f.id] = true; assignedCampers[torsoBest.camperName] = true;
+                    extras.push({
+                        photoId: p.photoId, faceId: f.id, camperName: torsoBest.camperName,
+                        torsoSim: Math.round(torsoBest.sim * 100) / 100,
+                        status: 'review', via: 'torso'
+                    });
                 }
             });
         });
         return extras;
     }
 
+    // ─── unknown-face clustering (Apple's second pass, batch-scoped) ─────────
+
+    // Greedy agglomerative clustering of UNMATCHED faces across a batch: the
+    // same unknown kid appearing in many photos becomes ONE review item
+    // ("seen 6 times — who is this?") instead of six invisible misses.
+    //   faces: [{ id, photoId, descriptors, tier, thumb? }]
+    //   opts:  { profiles, model ('arc-512' w/ faceapi fallback per face),
+    //            linkFactor (0.9 × autoDist), minSize (3) }
+    // Returns [{ faceIds, photoIds, count, meanDescriptor, model, thumb }].
+    function clusterUnmatched(faces, opts) {
+        var profiles = (opts && opts.profiles) || MODEL_PROFILES;
+        var linkFactor = (opts && opts.linkFactor) || 0.9;
+        var minSize = (opts && opts.minSize) || 3;
+
+        var usable = (faces || []).filter(function (f) {
+            return f && f.tier !== 'reject' && f.descriptors &&
+                   (f.descriptors['arc-512'] || f.descriptors['faceapi-128']);
+        });
+
+        var clusters = [];
+        usable.forEach(function (f) {
+            var model = f.descriptors['arc-512'] ? 'arc-512' : 'faceapi-128';
+            var desc = f.descriptors[model];
+            var prof = profiles[model];
+            var best = null;
+            clusters.forEach(function (c) {
+                if (c.model !== model) return;
+                var d = distanceFor(prof.metric, desc, c.centroid);
+                if (d <= prof.autoDist * linkFactor && (!best || d < best.d)) best = { d: d, c: c };
+            });
+            if (best) {
+                var c = best.c;
+                c.members.push(f);
+                // incremental centroid update, re-normalized
+                var n = c.members.length;
+                for (var i = 0; i < c.centroid.length; i++) c.centroid[i] = (c.centroid[i] * (n - 1) + desc[i]) / n;
+                c.centroid = l2normalize(c.centroid);
+            } else {
+                clusters.push({ model: model, centroid: desc.slice(), members: [f] });
+            }
+        });
+
+        return clusters.filter(function (c) { return c.members.length >= minSize; })
+            .map(function (c) {
+                return {
+                    faceIds: c.members.map(function (m) { return m.id; }),
+                    photoIds: c.members.map(function (m) { return m.photoId; }),
+                    count: c.members.length,
+                    meanDescriptor: l2normalize(c.centroid),
+                    model: c.model,
+                    thumb: (c.members.find(function (m) { return m.thumb; }) || {}).thumb || null
+                };
+            })
+            .sort(function (a, b) { return b.count - a.count; });
+    }
+
+    // ─── measurement (NIST-style: miss rate at an operating point) ───────────
+
+    // Empirical performance of the CURRENT dials against the human-labeled
+    // decision log. Precision-at-accept ≈ 1-FPIR analogue for the auto-accept
+    // zone; missedBelowReject ≈ FNIR analogue for the auto-reject zone.
+    function evalReport(samples, dials) {
+        var valid = (samples || []).filter(function (s) {
+            return s && typeof s.conf === 'number' && typeof s.approved === 'boolean';
+        });
+        if (!valid.length) return { n: 0 };
+        var accept = dials && dials.acceptPct != null ? dials.acceptPct : 1.1;
+        var reject = dials && dials.rejectPct != null ? dials.rejectPct : -1;
+
+        var acc = valid.filter(function (s) { return s.conf >= accept; });
+        var rej = valid.filter(function (s) { return s.conf < reject; });
+        var mid = valid.length - acc.length - rej.length;
+
+        return {
+            n: valid.length,
+            // of what the dials would auto-accept, how much did humans approve?
+            precisionAtAccept: acc.length ? acc.filter(function (s) { return s.approved; }).length / acc.length : null,
+            acceptedShare: acc.length / valid.length,
+            // of what the dials would auto-reject, how much was actually real?
+            missedBelowReject: rej.length ? rej.filter(function (s) { return s.approved; }).length / rej.length : null,
+            rejectedShare: rej.length / valid.length,
+            reviewShare: mid / valid.length
+        };
+    }
+
     // ─── per-photo assignment ────────────────────────────────────────────────
 
     // One-to-one assignment of detected faces to campers.
     //   faces:   [{ id, descriptors: {model: vec}, tier }]   (tier from qualityTier)
-    //   campers: [{ name, templates: {model: {mean, all}} }]
-    //   opts:    { profiles } — per-model {metric, autoDist, reviewDist}
-    // A face and camper are compared on every model BOTH sides have; the best
-    // (lowest, threshold-scaled) model wins. Pairs are assigned greedily by
-    // ascending normalized distance; each face and each camper used at most once.
+    //   campers: [{ name, templates: {model: {mean, all}}, strict? }]
+    //   opts:    { profiles,            — per-model {metric, autoDist, reviewDist}
+    //              preferModels,        — when BOTH sides have one of these, use
+    //                                     only it (default ['arc-512']: never let
+    //                                     a lucky legacy-128 distance outvote the
+    //                                     modern embedding)
+    //              strictFactor }       — campers marked strict (young ages have
+    //                                     elevated child-child false-match rates,
+    //                                     NIST FRVT pt.3) only reach 'auto' at
+    //                                     autoDist × strictFactor (default 0.85)
+    // Pairs are assigned greedily by ascending normalized distance; each face
+    // and each camper used at most once.
     // Returns [{ faceId, camperName, dist, model, status: 'auto'|'review' }].
     function assignFaces(faces, campers, opts) {
         var profiles = (opts && opts.profiles) || MODEL_PROFILES;
+        var prefer = (opts && opts.preferModels) || ['arc-512'];
+        var strictFactor = (opts && opts.strictFactor) || 0.85;
         var pairs = [];
 
         faces.forEach(function (face) {
             if (!face || face.tier === 'reject' || !face.descriptors) return;
             campers.forEach(function (camper) {
                 if (!camper || !camper.templates) return;
+                // restrict to preferred models when both sides share one
+                var models = Object.keys(face.descriptors).filter(function (m) {
+                    return profiles[m] && camper.templates[m] && face.descriptors[m];
+                });
+                var preferred = models.filter(function (m) { return prefer.indexOf(m) >= 0; });
+                if (preferred.length) models = preferred;
+
                 var best = null;
-                Object.keys(face.descriptors).forEach(function (model) {
+                models.forEach(function (model) {
                     var prof = profiles[model], tpl = camper.templates[model];
-                    if (!prof || !tpl || !face.descriptors[model]) return;
                     var dist = matchDistance(face.descriptors[model], tpl, prof.metric);
                     if (dist > prof.reviewDist) return;
                     // normalize across metrics so greedy ordering is comparable:
                     // 0 = perfect, 1 = at the review boundary
                     var norm = dist / prof.reviewDist;
                     if (!best || norm < best.norm) {
-                        best = { norm: norm, dist: dist, model: model, auto: dist <= prof.autoDist };
+                        var autoLimit = camper.strict ? prof.autoDist * strictFactor : prof.autoDist;
+                        best = { norm: norm, dist: dist, model: model, auto: dist <= autoLimit };
                     }
                 });
                 if (best) {
@@ -412,6 +593,7 @@
         cosineDistance: cosineDistance,
         distanceFor: distanceFor,
         buildTemplate: buildTemplate,
+        pruneGallery: pruneGallery,
         matchDistance: matchDistance,
         qualityTier: qualityTier,
         assignFaces: assignFaces,
@@ -419,7 +601,10 @@
         routeConfidence: routeConfidence,
         calibrateFromDecisions: calibrateFromDecisions,
         burstClusters: burstClusters,
-        propagateBurstMatches: propagateBurstMatches
+        propagateBurstMatches: propagateBurstMatches,
+        histogramIntersection: histogramIntersection,
+        clusterUnmatched: clusterUnmatched,
+        evalReport: evalReport
     };
 
     if (typeof window !== 'undefined') {

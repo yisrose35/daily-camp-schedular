@@ -199,6 +199,38 @@
         });
     }
 
+    // Coarse HSV color histogram (4H × 3S × 4V = 48 bins, L1-normalized) of a
+    // region — the torso/clothing cue (Apple's upper-body idea, camp-safe
+    // version). Only ever used WITHIN a burst and only as review-level
+    // evidence: camp uniforms make clothing ambiguous between kids.
+    function _hsvHistogram(src, x, y, w, h) {
+        try {
+            var S = 32;
+            var c = _cropCanvas(src, x, y, w, h, S, S);
+            var data = c.getContext('2d').getImageData(0, 0, S, S).data;
+            var hist = new Array(48);
+            for (var i = 0; i < 48; i++) hist[i] = 0;
+            for (var p = 0; p < S * S; p++) {
+                var r = data[p * 4] / 255, g = data[p * 4 + 1] / 255, b = data[p * 4 + 2] / 255;
+                var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+                var hDeg = 0;
+                if (d > 0) {
+                    if (max === r) hDeg = 60 * (((g - b) / d) % 6);
+                    else if (max === g) hDeg = 60 * ((b - r) / d + 2);
+                    else hDeg = 60 * ((r - g) / d + 4);
+                    if (hDeg < 0) hDeg += 360;
+                }
+                var s = max > 0 ? d / max : 0;
+                var hBin = Math.min(3, Math.floor(hDeg / 90));
+                var sBin = Math.min(2, Math.floor(s * 3));
+                var vBin = Math.min(3, Math.floor(max * 4));
+                hist[hBin * 12 + sBin * 4 + vBin]++;
+            }
+            for (var k = 0; k < 48; k++) hist[k] = Math.round(hist[k] / (S * S) * 1000) / 1000;
+            return hist;
+        } catch (e) { return null; }
+    }
+
     // Variance of Laplacian on a small grayscale copy — cheap blur estimate.
     // Higher = sharper. Computed at a fixed 96px scale so the threshold in
     // FaceMatchCore.QUALITY_DEFAULTS means the same thing for every face size.
@@ -379,6 +411,13 @@
                     thumb: null
                 };
                 face.tier = Core.qualityTier({ sizePx: sizePx, detScore: face.score, blurVar: blurVar }, o.quality);
+                // torso/clothing histogram from the region below the face (work coords)
+                var wb = face.workBox;
+                var tx = Math.max(0, wb.x - wb.width * 0.5);
+                var ty = Math.min(work.height - 1, wb.y + wb.height * 1.05);
+                var tw = Math.min(work.width - tx, wb.width * 2);
+                var th = Math.min(work.height - ty, wb.height * 1.8);
+                if (tw > 8 && th > 8) face.torso = _hsvHistogram(work, tx, ty, tw, th);
                 var thumbCanvas = _cropCanvas(crop, 0, 0, crop.width, crop.height, 96, 96 * crop.height / crop.width);
                 return _canvasToDataUrl(thumbCanvas, 0.7)
                     .then(function (t) { face.thumb = t; return face; })

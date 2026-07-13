@@ -51,7 +51,10 @@
         rejectPct: 0.08,            // auto-reject below this confidence
         selfTune: true,             // learn the dials from human review decisions
         burstClustering: true,      // propagate confirmed IDs across rapid photo sequences
-        useWorker: true             // scan in a background Web Worker when supported
+        useWorker: true,            // scan in a background Web Worker when supported
+        strictDivisions: [],        // youngest divisions: stricter auto-tagging (NIST: child false-match risk)
+        strictDelta: 0.12,          // extra confidence required to auto-accept a strict camper
+        staleDays: 300              // parent enrollment photos older than this = flag for re-enrollment
     };
 
     let _store = {
@@ -60,6 +63,8 @@
         settings: Object.assign({}, SETTINGS_DEFAULTS),
         learn: [],          // human review decisions: {c: confidence, a: approved, m: model, t: ts} — ~50B each, capped
         learnMeta: { lastTuneN: 0, tunedAt: null },
+        unknownClusters: [],// unresolved "who is this?" groups (capped at 12)
+        staleCampers: [],   // campers whose enrollment photos predate this season
         stats: {
             totalUploaded: 0,
             totalTagged: 0,
@@ -104,6 +109,8 @@
                 _store.settings = Object.assign({}, SETTINGS_DEFAULTS, parsed.settings || {});
                 _store.learn = Array.isArray(parsed.learn) ? parsed.learn : [];
                 _store.learnMeta = Object.assign({ lastTuneN: 0, tunedAt: null }, parsed.learnMeta || {});
+                _store.unknownClusters = Array.isArray(parsed.unknownClusters) ? parsed.unknownClusters : [];
+                _store.staleCampers = Array.isArray(parsed.staleCampers) ? parsed.staleCampers : [];
                 _store.stats = Object.assign({
                     totalUploaded: 0, totalTagged: 0, totalSent: 0, totalPendingResolved: 0,
                     autoAccepted: 0, autoRejected: 0, burstTagged: 0,
@@ -215,10 +222,18 @@
         var indexed = 0, skipped = 0, errors = 0;
         _camperTemplates = [];
         _store.faceIndex = {};
+        _store.staleCampers = [];
+        var staleCutoff = Date.now() - (_store.settings.staleDays || 300) * 86400000;
+
+        // young/strict campers: divisions the owner flagged (NIST FRVT pt.3 —
+        // elevated child-child false matches, worst in the youngest)
+        var roster = {};
+        try { roster = (window.CampistryLink && CampistryLink.data.getRoster) ? (CampistryLink.data.getRoster() || {}) : {}; } catch(e) {}
+        var strictDivs = _store.settings.strictDivisions || [];
 
         for (var i = 0; i < faces.length; i++) {
             var name = faces[i].camper_name;
-            // v2 shape: descriptors: [{descriptor, model, pose, source}]
+            // v2 shape: descriptors: [{descriptor, model, pose, source, created_at?}]
             // legacy shape (pre-029 RPC): descriptor: [128 floats]
             var descList = faces[i].descriptors;
             if (!Array.isArray(descList) && Array.isArray(faces[i].descriptor)) {
@@ -227,21 +242,41 @@
             if (progressCallback) progressCallback({ current: i + 1, total: faces.length, name: name, phase: 'indexing' });
 
             try {
+                // enrollment freshness: a parent descriptor from a past season is
+                // excluded when a fresh one of the same model exists; a camper
+                // with ONLY stale parent photos still matches but gets flagged.
+                var parentRows = descList.filter(function(d) { return d && d.source !== 'confirmed'; });
+                var hasFresh = {};
+                parentRows.forEach(function(d) {
+                    if (d.created_at && new Date(d.created_at).getTime() >= staleCutoff) hasFresh[d.model || 'faceapi-128'] = true;
+                });
+                var allParentStale = parentRows.length > 0 && parentRows.every(function(d) {
+                    return d.created_at && new Date(d.created_at).getTime() < staleCutoff;
+                });
+                if (allParentStale) _store.staleCampers.push(name);
+
                 var byModel = {};
                 (descList || []).forEach(function(d) {
                     if (!d || !Array.isArray(d.descriptor)) return;
                     var model = d.model || 'faceapi-128';
                     var prof = core.MODEL_PROFILES[model];
                     if (!prof || d.descriptor.length !== prof.dims) return;
+                    var isStaleParent = d.source !== 'confirmed' && d.created_at &&
+                        new Date(d.created_at).getTime() < staleCutoff;
+                    if (isStaleParent && hasFresh[model]) return;   // fresh replaces stale
                     (byModel[model] = byModel[model] || []).push(d.descriptor);
                 });
                 var templates = {};
                 Object.keys(byModel).forEach(function(model) {
-                    var tpl = core.buildTemplate(byModel[model]);
+                    // pruning: dedupe + outlier ejection (NIST: weak fusion raises FPIR)
+                    var tpl = core.buildTemplate(byModel[model], { metric: core.MODEL_PROFILES[model].metric });
                     if (tpl) templates[model] = tpl;
                 });
                 if (Object.keys(templates).length) {
-                    _camperTemplates.push({ name: name, templates: templates });
+                    var entry = { name: name, templates: templates };
+                    var div = roster[name] && roster[name].division;
+                    if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
+                    _camperTemplates.push(entry);
                     _store.faceIndex[name] = { descriptors: descList, updatedAt: new Date().toISOString() };
                     indexed++;
                 } else {
@@ -256,8 +291,10 @@
         _indexBuilt = indexed > 0;
         saveStore();
 
-        console.log('[LinkPhotos] ✅ Matcher built:', indexed, 'campers,', skipped, 'skipped,', errors, 'errors');
-        return { indexed: indexed, skipped: skipped, errors: errors, total: faces.length };
+        console.log('[LinkPhotos] ✅ Matcher built:', indexed, 'campers,', skipped, 'skipped,', errors, 'errors,',
+                    _store.staleCampers.length, 'need fresh enrollment');
+        return { indexed: indexed, skipped: skipped, errors: errors, total: faces.length,
+                 staleCampers: _store.staleCampers.slice() };
     }
 
     /**
@@ -268,6 +305,10 @@
         if (!core) return false;
         var entries = Object.entries(_store.faceIndex);
         if (!entries.length) return false;
+
+        var roster = {};
+        try { roster = (window.CampistryLink && CampistryLink.data.getRoster) ? (CampistryLink.data.getRoster() || {}) : {}; } catch(err) {}
+        var strictDivs = _store.settings.strictDivisions || [];
 
         _camperTemplates = [];
         entries.forEach(function(e) {
@@ -281,10 +322,16 @@
             });
             var templates = {};
             Object.keys(byModel).forEach(function(model) {
-                var tpl = core.buildTemplate(byModel[model]);
+                var prof = core.MODEL_PROFILES[model];
+                var tpl = core.buildTemplate(byModel[model], prof ? { metric: prof.metric } : undefined);
                 if (tpl) templates[model] = tpl;
             });
-            if (Object.keys(templates).length) _camperTemplates.push({ name: name, templates: templates });
+            if (Object.keys(templates).length) {
+                var entry = { name: name, templates: templates };
+                var div = roster[name] && roster[name].division;
+                if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
+                _camperTemplates.push(entry);
+            }
         });
         _indexBuilt = _camperTemplates.length > 0;
         console.log('[LinkPhotos] Restored ' + _camperTemplates.length + ' camper templates from store');
@@ -376,8 +423,9 @@
         var assignments = core.assignFaces(faces, _camperTemplates);
         var faceById = {};
         faces.forEach(function(f) { faceById[f.id] = f; });
+        var strictByName = {};
+        _camperTemplates.forEach(function(c) { if (c.strict) strictByName[c.name] = true; });
 
-        var dials = { acceptPct: _store.settings.acceptPct, rejectPct: _store.settings.rejectPct };
         var matches = [], pending = [], rejected = 0, routed = [];
 
         assignments.forEach(function(a) {
@@ -396,7 +444,12 @@
                 routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'auto' });
                 return;
             }
-            // review band → owner dials decide
+            // review band → owner dials decide; strict (youngest) campers need
+            // extra confidence to auto-accept — more of them reach a human
+            var dials = {
+                acceptPct: _store.settings.acceptPct + (strictByName[a.camperName] ? _store.settings.strictDelta : 0),
+                rejectPct: _store.settings.rejectPct
+            };
             var route = core.routeConfidence(confidence, dials);
             if (route === 'accept') {
                 rec.autoAccepted = true;
@@ -506,6 +559,20 @@
                     var extras = core.propagateBurstMatches(photos);
                     extras.forEach(function(x) {
                         var s = scanned[x.photoId];
+                        var xf = (s.result.faces || []).find(function(f) { return f.id === x.faceId; });
+                        if (x.via === 'torso') {
+                            // same clothing, face inconclusive → human suggestion only
+                            // (camp uniforms make clothing ambiguous between kids)
+                            if (s.result.pending.some(function(p) { return p.camperName === x.camperName; })) return;
+                            s.result.pending.push({
+                                camperName: x.camperName,
+                                confidence: x.torsoSim != null ? Math.round(x.torsoSim * 0.4 * 100) / 100 : 0.2,
+                                model: null, via: 'torso',
+                                faceThumb: xf ? xf.thumb : null,
+                                descriptors: xf ? xf.descriptors : null
+                            });
+                            return;
+                        }
                         var prof = core.MODEL_PROFILES[x.model] || {};
                         s.result.matches.push({
                             camperName: x.camperName,
@@ -522,8 +589,22 @@
             } catch(e) { console.warn('[LinkPhotos] burst propagation skipped:', e.message); }
         }
 
+        // ── phase 2.5: collect unmatched faces for unknown-person clustering ─
+        // (Apple's second-pass idea, batch-scoped: the same untagged kid in 6
+        // photos becomes ONE "who is this?" review item instead of 6 misses)
+        var unknownFaces = [];
+        scanned.forEach(function(s) {
+            var routedIds = {};
+            (s.result.routed || []).forEach(function(r) { routedIds[r.faceId] = true; });
+            (s.result.faces || []).forEach(function(f) {
+                if (routedIds[f.id] || f.tier === 'reject') return;
+                unknownFaces.push({ id: s.idx + ':' + f.id, photoId: s.idx, descriptors: f.descriptors, tier: f.tier, thumb: f.thumb });
+            });
+        });
+
         // ── phase 3: persist (descriptors dropped except pending tags) ───────
         var db = _db();
+        var recordByIdx = {};
         for (var j = 0; j < scanned.length; j++) {
             var s = scanned[j];
             if (progressCallback) {
@@ -572,6 +653,7 @@
             }
 
             _store.photos.push(photoRecord);
+            recordByIdx[s.idx] = photoRecord;
             _store.stats.totalUploaded++;
             if (photoRecord.tags.length > 0) { tagged++; _store.stats.totalTagged++; }
             else untagged++;
@@ -581,11 +663,98 @@
             s.result.faces = null; s.result.routed = null;
         }
 
+        // ── phase 4: unknown-person clusters → review items ──────────────────
+        var unknownClusters = 0;
+        if (unknownFaces.length >= 3) {
+            try {
+                var clusters = core.clusterUnmatched(unknownFaces, { minSize: 3 });
+                clusters.slice(0, 8).forEach(function(c) {
+                    var photoIds = [], cloudIds = [];
+                    c.photoIds.forEach(function(idx) {
+                        var rec = recordByIdx[idx];
+                        if (rec && photoIds.indexOf(rec.id) < 0) {
+                            photoIds.push(rec.id);
+                            if (rec.cloudId) cloudIds.push(rec.cloudId);
+                        }
+                    });
+                    if (!photoIds.length) return;
+                    _store.unknownClusters.push({
+                        id: 'uc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+                        createdAt: new Date().toISOString(),
+                        count: c.count, thumb: c.thumb, model: c.model,
+                        meanDescriptor: c.meanDescriptor,
+                        photoIds: photoIds, cloudIds: cloudIds
+                    });
+                    unknownClusters++;
+                });
+                // cap total stored clusters (each carries one descriptor + thumb)
+                if (_store.unknownClusters.length > 12) {
+                    _store.unknownClusters = _store.unknownClusters.slice(-12);
+                }
+            } catch(e) { console.warn('[LinkPhotos] unknown clustering skipped:', e.message); }
+        }
+
         _store.stats.lastScanDate = new Date().toISOString();
         saveStore();
 
         return { processed: processed, tagged: tagged, untagged: untagged,
-                 needsReview: needsReview, burstTagged: burstExtra, errors: errors };
+                 needsReview: needsReview, burstTagged: burstExtra,
+                 unknownClusters: unknownClusters, errors: errors };
+    }
+
+    // =========================================================================
+    // UNKNOWN-PERSON CLUSTERS — "seen N times, who is this?"
+    // =========================================================================
+
+    function getUnknownClusters() {
+        return (_store.unknownClusters || []).map(function(c) {
+            return { id: c.id, count: c.count, thumb: c.thumb, photoIds: c.photoIds.slice(), createdAt: c.createdAt };
+        });
+    }
+
+    // Staff put a name to an unknown cluster: tags every photo in it (local +
+    // cloud) and promotes the cluster centroid into the camper's gallery so
+    // the kid stops being unknown next batch. Consent is enforced server-side
+    // by promote_confirmed_face and the RLS on link_photo_tags.
+    async function assignUnknownCluster(clusterId, camperName) {
+        var idx = (_store.unknownClusters || []).findIndex(function(c) { return c.id === clusterId; });
+        if (idx < 0) return { success: false, error: 'cluster_not_found' };
+        var cluster = _store.unknownClusters[idx];
+        var db = _db();
+
+        cluster.photoIds.forEach(function(pid) { manualTag(pid, camperName); });
+
+        if (db) {
+            for (var i = 0; i < cluster.cloudIds.length; i++) {
+                try {
+                    await db.client.from('link_photo_tags').insert({
+                        photo_id: cluster.cloudIds[i], camp_id: db.campId,
+                        camper_name: camperName, confidence: null, manual: true, pending: false
+                    });
+                } catch(e) { /* duplicate or consent-filtered — fine */ }
+            }
+            if (cluster.meanDescriptor && cluster.model) {
+                try {
+                    await db.client.rpc('promote_confirmed_face', {
+                        p_camp_id: db.campId, p_camper_name: camperName,
+                        p_descriptor: cluster.meanDescriptor, p_model: cluster.model
+                    });
+                    var descs = {}; descs[cluster.model] = cluster.meanDescriptor;
+                    _appendLocalDescriptors(camperName, descs);
+                } catch(e) { console.warn('[LinkPhotos] cluster promote failed:', e.message || e); }
+            }
+        }
+
+        _store.unknownClusters.splice(idx, 1);
+        saveStore();
+        return { success: true, tagged: cluster.photoIds.length };
+    }
+
+    function dismissUnknownCluster(clusterId) {
+        var before = (_store.unknownClusters || []).length;
+        _store.unknownClusters = (_store.unknownClusters || []).filter(function(c) { return c.id !== clusterId; });
+        saveStore();
+        return _store.unknownClusters.length < before;
     }
 
     // =========================================================================
@@ -737,6 +906,11 @@
 
     // Owner-facing snapshot of the triage system for the settings UI.
     function getReviewStats() {
+        var core = Core();
+        var evalR = core ? core.evalReport(
+            (_store.learn || []).map(function(s) { return { conf: s.c, approved: s.a }; }),
+            { acceptPct: _store.settings.acceptPct, rejectPct: _store.settings.rejectPct }
+        ) : { n: 0 };
         return {
             acceptPct: _store.settings.acceptPct,
             rejectPct: _store.settings.rejectPct,
@@ -746,7 +920,11 @@
             autoAccepted: _store.stats.autoAccepted,
             autoRejected: _store.stats.autoRejected,
             burstTagged: _store.stats.burstTagged,
-            workerActive: !!_worker
+            workerActive: !!_worker,
+            eval: evalR,                                       // measured precision at current dials
+            staleCampers: (_store.staleCampers || []).slice(), // need fresh enrollment photos
+            unknownClusters: (_store.unknownClusters || []).length,
+            strictDivisions: (_store.settings.strictDivisions || []).slice()
         };
     }
 
@@ -1003,6 +1181,11 @@
         resolvePendingTag: resolvePendingTag,
         applyDialsToQueue: applyDialsToQueue,
         getReviewStats: getReviewStats,
+
+        // Unknown-person clusters
+        getUnknownClusters: getUnknownClusters,
+        assignUnknownCluster: assignUnknownCluster,
+        dismissUnknownCluster: dismissUnknownCluster,
 
         // Tagging
         manualTag: manualTag,

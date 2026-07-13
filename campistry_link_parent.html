@@ -1189,18 +1189,26 @@ function _loadCamperFaceStatus(){
         (res.data.campers||[]).forEach(function(f){
             var c=children.find(function(k){return k.name===f.camper_name;}); if(!c)return;
             var slot=document.getElementById('refSlot_'+c.id),avatar=document.getElementById('refAvatar_'+c.id),status=document.getElementById('refStatus_'+c.id);
-            var poses=Array.isArray(f.poses)?f.poses:(f.has_face?['front']:[]);
-            poses.forEach(function(p){
-                var el=document.getElementById('refPose_'+c.id+'_'+p);
+            // poses: [{pose, at}] since migration 030; plain strings before
+            var rawPoses=Array.isArray(f.poses)?f.poses:(f.has_face?['front']:[]);
+            var staleCut=Date.now()-300*86400000; // ~a season old → prompt re-upload
+            var anyStale=false;
+            rawPoses.forEach(function(p){
+                var poseName=(typeof p==='string')?p:p.pose;
+                var poseAt=(typeof p==='object'&&p&&p.at)?new Date(p.at).getTime():null;
+                var isStale=poseAt!=null&&poseAt<staleCut;
+                if(isStale)anyStale=true;
+                var el=document.getElementById('refPose_'+c.id+'_'+poseName);
                 if(el)el.classList.add('uploaded');
-                var pt=document.getElementById('refPoseThumb_'+c.id+'_'+p);
-                if(pt&&p==='front'&&f.headshot)pt.innerHTML='<img src="'+f.headshot+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
-                else if(pt&&el&&el.classList.contains('uploaded')&&!pt.querySelector('img'))pt.textContent='✓';
+                var pt=document.getElementById('refPoseThumb_'+c.id+'_'+poseName);
+                if(pt&&poseName==='front'&&f.headshot)pt.innerHTML='<img src="'+f.headshot+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;'+(isStale?'opacity:.45;':'')+'">';
+                else if(pt&&el&&el.classList.contains('uploaded')&&!pt.querySelector('img'))pt.textContent=isStale?'⟳':'✓';
             });
             if(f.has_face){
                 if(slot)slot.classList.add('uploaded');
                 if(avatar&&f.headshot)avatar.innerHTML='<img src="'+f.headshot+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">';
-                _updateRefStatusText(c.id);
+                if(anyStale&&status){status.textContent='Photos are from last season — tap each angle to update for this summer';}
+                else _updateRefStatusText(c.id);
             }else if(f.consent){
                 if(status)status.textContent='Consented — add photos from 3 angles';
             }

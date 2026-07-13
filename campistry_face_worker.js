@@ -66,7 +66,7 @@ self.onmessage = function (ev) {
                 return {
                     id: f.id, box: f.box, score: f.score,
                     sizePx: f.sizePx, blurVar: f.blurVar, tier: f.tier,
-                    descriptors: f.descriptors, thumb: f.thumb
+                    descriptors: f.descriptors, torso: f.torso || null, thumb: f.thumb
                 };
             });
             self.postMessage({ id: msg.id, ok: true, result: { faces: faces, imageSize: result.imageSize, engineIds: result.engineIds } });

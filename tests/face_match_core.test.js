@@ -298,6 +298,47 @@ describe('propagateBurstMatches', () => {
         // f2 is close to Alice's anchor but Alice is already tagged in p1
         assert.strictEqual(Core.propagateBurstMatches(photos).length, 0);
     });
+    it('suggests (review, never accept) a torso-only match for a turned-away kid', () => {
+        const shirt = [0.5, 0.3, 0.2, 0];
+        const photos = [
+            {
+                photoId: 'p1',
+                faces: [{ id: 'f1', tier: 'good', descriptors: { 'faceapi-128': aliceFace }, torso: shirt }],
+                assignments: [{ faceId: 'f1', camperName: 'Alice A', status: 'auto' }]
+            },
+            {
+                photoId: 'p2',
+                // no face descriptor at all — kid facing away, only torso visible
+                faces: [{ id: 'f2', tier: 'weak', descriptors: {}, torso: [0.48, 0.32, 0.2, 0] }],
+                assignments: []
+            }
+        ];
+        const extras = Core.propagateBurstMatches(photos);
+        assert.strictEqual(extras.length, 1);
+        assert.strictEqual(extras[0].via, 'torso');
+        assert.strictEqual(extras[0].status, 'review');
+        assert.strictEqual(extras[0].camperName, 'Alice A');
+    });
+
+    it('blocks a torso match when face evidence contradicts', () => {
+        const shirt = [0.5, 0.3, 0.2, 0];
+        const otherKid = Core.l2normalize(axis(D, 9));
+        const photos = [
+            {
+                photoId: 'p1',
+                faces: [{ id: 'f1', tier: 'good', descriptors: { 'faceapi-128': aliceFace }, torso: shirt }],
+                assignments: [{ faceId: 'f1', camperName: 'Alice A', status: 'auto' }]
+            },
+            {
+                photoId: 'p2',
+                // same shirt but the face clearly is NOT Alice
+                faces: [{ id: 'f2', tier: 'good', descriptors: { 'faceapi-128': otherKid }, torso: shirt.slice() }],
+                assignments: []
+            }
+        ];
+        assert.strictEqual(Core.propagateBurstMatches(photos).length, 0);
+    });
+
     it('does not propagate from far descriptors', () => {
         const photos = [
             {
@@ -312,6 +353,114 @@ describe('propagateBurstMatches', () => {
             }
         ];
         assert.strictEqual(Core.propagateBurstMatches(photos).length, 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// gallery hygiene
+// ---------------------------------------------------------------------------
+describe('pruneGallery', () => {
+    const D = 32;
+    const base = Core.l2normalize(axis(D, 0));
+    it('dedupes near-identical members', () => {
+        const out = Core.pruneGallery([base, near(base, 0.01), near(base, 0.3, 2)], 'euclidean');
+        assert.strictEqual(out.length, 2);
+    });
+    it('ejects a far outlier from a coherent gallery', () => {
+        const gallery = [base, near(base, 0.2, 1), near(base, 0.2, 2), near(base, 0.25, 3),
+                         Core.l2normalize(axis(D, 9))]; // orthogonal — a wrong confirmation
+        const out = Core.pruneGallery(gallery, 'euclidean');
+        assert.strictEqual(out.length, 4);
+        // the survivor set must not contain the orthogonal outlier
+        out.forEach(d => assert.ok(Core.euclidean(d, base) < 1));
+    });
+    it('never prunes tiny galleries', () => {
+        const two = [base, Core.l2normalize(axis(D, 9))];
+        assert.strictEqual(Core.pruneGallery(two, 'euclidean').length, 2);
+    });
+    it('buildTemplate applies pruning only when metric passed', () => {
+        const withDupes = [base, near(base, 0.01)];
+        assert.strictEqual(Core.buildTemplate(withDupes).all.length, 2);
+        assert.strictEqual(Core.buildTemplate(withDupes, { metric: 'euclidean' }).all.length, 1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// torso histograms
+// ---------------------------------------------------------------------------
+describe('histogramIntersection', () => {
+    it('is 1 for identical normalized histograms and 0 for disjoint', () => {
+        assert.strictEqual(Core.histogramIntersection([0.5, 0.5, 0], [0.5, 0.5, 0]), 1);
+        assert.strictEqual(Core.histogramIntersection([1, 0], [0, 1]), 0);
+    });
+    it('handles mismatched/missing inputs safely', () => {
+        assert.strictEqual(Core.histogramIntersection(null, [1]), 0);
+        assert.strictEqual(Core.histogramIntersection([1, 0], [1]), 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// unknown-face clustering
+// ---------------------------------------------------------------------------
+describe('clusterUnmatched', () => {
+    const D = 128;
+    const kidA = Core.l2normalize(axis(D, 0));
+    const kidB = Core.l2normalize(axis(D, 5));
+    function face(id, photoId, desc, thumb) {
+        return { id, photoId, tier: 'good', descriptors: { 'faceapi-128': desc }, thumb: thumb || null };
+    }
+    it('groups the same unknown kid across photos and skips singletons', () => {
+        const faces = [
+            face('f1', 'p1', near(kidA, 0.02)),
+            face('f2', 'p2', near(kidA, 0.04, 2), 'thumb2'),
+            face('f3', 'p3', near(kidA, 0.03, 3)),
+            face('f4', 'p4', kidB)   // singleton — dropped by minSize
+        ];
+        const clusters = Core.clusterUnmatched(faces, { minSize: 3 });
+        assert.strictEqual(clusters.length, 1);
+        assert.strictEqual(clusters[0].count, 3);
+        assert.deepStrictEqual(clusters[0].photoIds.sort(), ['p1', 'p2', 'p3']);
+        assert.strictEqual(clusters[0].thumb, 'thumb2');
+        assert.strictEqual(clusters[0].model, 'faceapi-128');
+        // centroid is normalized
+        const n = Math.sqrt(clusters[0].meanDescriptor.reduce((s, v) => s + v * v, 0));
+        assert.ok(Math.abs(n - 1) < 1e-6);
+    });
+    it('keeps different kids in different clusters', () => {
+        const faces = [
+            face('a1', 'p1', near(kidA, 0.02)), face('a2', 'p2', near(kidA, 0.03, 2)), face('a3', 'p3', near(kidA, 0.02, 3)),
+            face('b1', 'p1', near(kidB, 0.02)), face('b2', 'p2', near(kidB, 0.03, 2)), face('b3', 'p3', near(kidB, 0.02, 3))
+        ];
+        const clusters = Core.clusterUnmatched(faces, { minSize: 3 });
+        assert.strictEqual(clusters.length, 2);
+    });
+    it('ignores rejected-tier faces', () => {
+        const faces = [
+            { id: 'r1', photoId: 'p1', tier: 'reject', descriptors: { 'faceapi-128': kidA } },
+            face('f1', 'p1', kidA), face('f2', 'p2', near(kidA, 0.02))
+        ];
+        assert.strictEqual(Core.clusterUnmatched(faces, { minSize: 3 }).length, 0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// eval report
+// ---------------------------------------------------------------------------
+describe('evalReport', () => {
+    it('measures precision at the accept dial and misses below reject', () => {
+        const samples = [
+            { conf: 0.6, approved: true }, { conf: 0.55, approved: true },
+            { conf: 0.5, approved: false },                                   // 1 bad in accept zone
+            { conf: 0.2, approved: false }, { conf: 0.05, approved: true }    // 1 real below reject
+        ];
+        const r = Core.evalReport(samples, { acceptPct: 0.5, rejectPct: 0.1 });
+        assert.strictEqual(r.n, 5);
+        assert.ok(Math.abs(r.precisionAtAccept - 2 / 3) < 1e-9);
+        assert.strictEqual(r.missedBelowReject, 1);       // the 0.05 approved sample
+        assert.ok(Math.abs(r.reviewShare - 1 / 5) < 1e-9);
+    });
+    it('returns n:0 for empty logs', () => {
+        assert.deepStrictEqual(Core.evalReport([], {}), { n: 0 });
     });
 });
 
@@ -405,6 +554,40 @@ describe('assignFaces', () => {
         assert.strictEqual(out.length, 1);
         assert.strictEqual(out[0].model, 'arc-512');
         assert.strictEqual(out[0].status, 'auto');
+    });
+
+    it('marks strict campers review instead of auto at the loose end of the auto zone', () => {
+        // craft a distance between autoDist*0.85 (0.3825) and autoDist (0.45)
+        const probe = Core.l2normalize(alice.map((v, i) => v + (i === 5 ? 0.43 : 0)));
+        const d = Core.euclidean(probe, alice);
+        assert.ok(d > 0.3825 && d < 0.45, `probe distance ${d} not in the strict band`);
+        const faces = [{ id: 'f1', tier: 'good', descriptors: { 'faceapi-128': probe } }];
+        const normal = Core.assignFaces(faces, [{ name: 'Alice A', templates: { 'faceapi-128': Core.buildTemplate([alice]) } }]);
+        const strict = Core.assignFaces(faces, [{ name: 'Alice A', strict: true, templates: { 'faceapi-128': Core.buildTemplate([alice]) } }]);
+        assert.strictEqual(normal[0].status, 'auto');
+        assert.strictEqual(strict[0].status, 'review');
+    });
+
+    it('strict campers still auto-tag on very close matches', () => {
+        const faces = [{ id: 'f1', tier: 'good', descriptors: { 'faceapi-128': near(alice, 0.02) } }];
+        const out = Core.assignFaces(faces, [{ name: 'Alice A', strict: true, templates: { 'faceapi-128': Core.buildTemplate([alice]) } }]);
+        assert.strictEqual(out[0].status, 'auto');
+    });
+
+    it('restricts to the preferred model when both sides have it (no lucky 128-D outvote)', () => {
+        const a512 = Core.l2normalize(axis(512, 3));
+        // 128-D says VERY close to Bob, arc-512 says Alice — arc must win
+        const faces = [{
+            id: 'f1', tier: 'good',
+            descriptors: { 'faceapi-128': near(bob, 0.01), 'arc-512': near(a512, 0.02) }
+        }];
+        const campers2 = [
+            { name: 'Alice A', templates: { 'faceapi-128': Core.buildTemplate([alice]), 'arc-512': Core.buildTemplate([a512]) } },
+            { name: 'Bob B', templates: { 'faceapi-128': Core.buildTemplate([bob]), 'arc-512': Core.buildTemplate([Core.l2normalize(axis(512, 7))]) } }
+        ];
+        const out = Core.assignFaces(faces, campers2);
+        assert.strictEqual(out[0].camperName, 'Alice A');
+        assert.strictEqual(out[0].model, 'arc-512');
     });
 
     it('matches campers that only have legacy 128-D templates when the face has both models', () => {
