@@ -333,13 +333,8 @@
         <div id="msgComposeView" style="display:none;margin-bottom:16px;">
             <div class="lk-card">
                 <div class="lk-card-head"><h2>New Message</h2><button class="btn btn-ghost btn-sm" onclick="toggleCompose(false)">Cancel</button></div>
-                <div class="lk-field"><label>To</label>
-                    <select class="lk-select" id="composeTO">
-                        <option>Camp Director</option>
-                        <option>Camp Office</option>
-                        <option>Head Counselor</option>
-                        <option>Nurse Station</option>
-                    </select>
+                <div class="lk-field"><label>To <span style="font-weight:400;color:var(--text-muted);font-size:.75rem;">— pick one or more; multiple becomes a group message</span></label>
+                    <div id="composeRecipients" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
                 </div>
                 <div class="lk-field"><label>Subject</label><input type="text" class="lk-input" id="composeSubject" placeholder="What's this about?"></div>
                 <div class="lk-field"><label>Message</label><textarea class="lk-textarea" id="composeBody" placeholder="Write your message..." style="min-height:100px;"></textarea></div>
@@ -1307,31 +1302,76 @@ function sendMsgReply(threadId, subject){
 }
 function toggleCompose(show){
     document.getElementById('msgComposeView').style.display=show?'block':'none';
-    if(show){document.getElementById('composeSubject').value='';document.getElementById('composeBody').value='';}
+    if(show){document.getElementById('composeSubject').value='';document.getElementById('composeBody').value='';_loadCampContacts();}
 }
+// Load the camp's parent-contactable staff (migration 027) and render the "To"
+// picker. Always offers "Camp Office" (default) plus each staff member with
+// their department label, so a parent can message e.g. "Rabbi A — Bussing".
+window._campContacts = [];
+function _loadCampContacts(){
+    var el=document.getElementById('composeRecipients'); if(!el) return;
+    function paint(){
+        var html='<button type="button" class="lk-recip selected" data-uid="" data-label="Camp Office" onclick="_toggleRecip(this)" style="'+_recipStyle(true)+'">Camp Office</button>';
+        (window._campContacts||[]).forEach(function(c){
+            var label=(c.department? c.department+' — ':'')+c.name;
+            html+='<button type="button" class="lk-recip" data-uid="'+_pEsc(c.user_id)+'" data-label="'+_pEsc(label)+'" onclick="_toggleRecip(this)" style="'+_recipStyle(false)+'">'+_pEsc(label)+'</button>';
+        });
+        el.innerHTML=html;
+    }
+    paint();
+    var db=window._parentDB;
+    if(db&&db.rpc&&parent&&parent.campId){
+        db.rpc('get_camp_contacts',{p_camp_id:parent.campId}).then(function(res){
+            if(!res.error&&res.data&&res.data.success){ window._campContacts=res.data.contacts||[]; paint(); }
+        });
+    }
+}
+function _recipStyle(on){ return 'padding:6px 13px;font-size:.8rem;font-weight:600;border-radius:999px;cursor:pointer;border:1.5px solid '+(on?'var(--link-color)':'var(--slate-200)')+';background:'+(on?'var(--link-tint)':'#fff')+';color:'+(on?'var(--link-color)':'var(--slate-600)')+';'; }
+function _toggleRecip(el){
+    // "Camp Office" is exclusive with specific staff (routing to office OR people)
+    var isOffice=!el.dataset.uid;
+    var all=[].slice.call(document.querySelectorAll('#composeRecipients .lk-recip'));
+    var willSelect=!el.classList.contains('selected');
+    if(isOffice&&willSelect){ all.forEach(function(b){ b.classList.remove('selected'); b.setAttribute('style',_recipStyle(false)); }); }
+    else if(!isOffice&&willSelect){ var off=document.querySelector('#composeRecipients .lk-recip[data-uid=""]'); if(off){off.classList.remove('selected');off.setAttribute('style',_recipStyle(false));} }
+    el.classList.toggle('selected',willSelect);
+    el.setAttribute('style',_recipStyle(el.classList.contains('selected')));
+    // Never leave nothing selected — fall back to Camp Office.
+    if(!document.querySelector('#composeRecipients .lk-recip.selected')){ var o=document.querySelector('#composeRecipients .lk-recip[data-uid=""]'); if(o){o.classList.add('selected');o.setAttribute('style',_recipStyle(true));} }
+}
+
 function sendComposedMsg(){
-    var to=document.getElementById('composeTO').value;
     var subj=document.getElementById('composeSubject').value.trim();
     var body=document.getElementById('composeBody').value.trim();
     if(!subj||!body){toast('Please fill in subject and message.');return;}
-    if(typeof window._submitMessageReplyCloud!=='function'){toast('Connection not ready — try again in a moment.');return;}
-    window._submitMessageReplyCloud(null,subj,body,function(res){
-        if(res.error||!res.data||!res.data.success){
-            toast('Could not send message — please try again.');
-            return;
-        }
+    var chosen=[].slice.call(document.querySelectorAll('#composeRecipients .lk-recip.selected'));
+    var recipients=chosen.filter(function(b){return b.dataset.uid;}).map(function(b){return {user_id:b.dataset.uid,label:b.dataset.label};});
+    var toLabel=chosen.map(function(b){return b.dataset.label;}).join(', ')||'Camp Office';
+    var db=window._parentDB;
+    var _afterSend=function(res){
+        if(res.error||!res.data||!res.data.success){ toast('Could not send message — please try again.'); return; }
         var now=new Date();
-        var msg={id:res.data.id,direction:'in',from:parent.name||'Parent',to:to||'Camp Office',toType:'individual',
-            subject:subj,body:body,channels:['app'],date:now.toISOString(),read:true,replied:false,threadId:res.data.thread_id,
-            metadata:{parentEmail:parent.email}};
-        var store=_readLinkStore();
-        if(!store.messages)store.messages=[];
-        store.messages.unshift(msg);
+        var store=_readLinkStore(); if(!store.messages)store.messages=[];
+        store.messages.unshift({id:res.data.id||('m_'+now.getTime()),direction:'in',from:parent.name||'Parent',to:toLabel,toType:recipients.length>1?'group':'individual',
+            subject:subj,body:body,channels:['app'],date:now.toISOString(),read:true,replied:false,threadId:res.data.thread_id,metadata:{parentEmail:parent.email}});
         _writeLinkStore(store);
-        toggleCompose(false);
-        renderMsgs(); // reloads from store, will show sent message
-        toast('Message sent to '+to+'!');
-    });
+        toggleCompose(false); renderMsgs();
+        toast('Message sent to '+toLabel+'!');
+    };
+    // Route to specific staff when chosen; else fall back to the office channel.
+    if(db&&db.rpc&&recipients.length&&parent&&parent.campId){
+        db.rpc('submit_parent_message',{p_camp_id:parent.campId,p_subject:subj,p_body:body,p_recipients:recipients}).then(function(res){
+            var emsg=res.error&&res.error.message||'';
+            if(res.error&&/PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)){
+                // migration 027 not applied yet -> office fallback
+                if(window._submitMessageReplyCloud) window._submitMessageReplyCloud(null,subj,body,_afterSend); else toast('Messaging not ready yet.');
+                return;
+            }
+            _afterSend(res);
+        });
+    } else if(typeof window._submitMessageReplyCloud==='function'){
+        window._submitMessageReplyCloud(null,subj,body,_afterSend);
+    } else { toast('Connection not ready — try again in a moment.'); }
 }
 
 // Schedule date navigation
