@@ -583,6 +583,22 @@ all[date].updated_at = new Date().toISOString();
     // epoch fence. The league blobs survived the same reset because their
     // savers push camp_state_kv rows directly and verify — so the reset now
     // does the same for every key it owns: upsert, read back, compare, retry.
+    // ★ HR-73: ORDER-INSENSITIVE canonical stringify for the read-back compare.
+    // Postgres jsonb normalizes object key order, so a byte-for-byte
+    // JSON.stringify comparison false-flags every large payload (observed
+    // live 2026-07-13: app1 + leaguesByName reported "not verified" while the
+    // rows had in fact stored correctly — the small payloads only passed
+    // because their key order coincidentally survived normalization).
+    function _hrCanon(v) {
+        if (v === undefined) return 'null';
+        if (Array.isArray(v)) return '[' + v.map(_hrCanon).join(',') + ']';
+        if (v && typeof v === 'object') {
+            return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort()
+                .map(function (k) { return JSON.stringify(k) + ':' + _hrCanon(v[k]); }).join(',') + '}';
+        }
+        return JSON.stringify(v);
+    }
+
     async function _hrPushKvVerified(client, campId, key, value) {
         for (var attempt = 1; attempt <= 3; attempt++) {
             try {
@@ -593,7 +609,7 @@ all[date].updated_at = new Date().toISOString();
                 if (!res || !res.error) {
                     var r = await client.from('camp_state_kv').select('value')
                         .eq('camp_id', campId).eq('key', key).maybeSingle();
-                    if (r && !r.error && JSON.stringify(r.data && r.data.value) === JSON.stringify(value)) {
+                    if (r && !r.error && _hrCanon(r.data && r.data.value) === _hrCanon(value)) { // ★ HR-73
                         return true;
                     }
                 }

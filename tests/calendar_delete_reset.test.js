@@ -86,11 +86,24 @@ function makeSupabaseMock() {
                 select(arg) { chain._action = 'select'; chain._selectArg = arg; return chain; },
                 delete() { chain._action = 'delete'; return chain; },
                 update(payload) { chain._action = 'update'; chain._updatePayload = payload; return chain; },
-                // ★ HR-70: verified KV push support (upsert + read-back)
+                // ★ HR-70: verified KV push support (upsert + read-back).
+                // ★ HR-73: stored values emulate Postgres jsonb key-order
+                // normalization (keys re-sorted) — a byte-for-byte stringify
+                // compare on the read-back MUST fail here, exactly as it did
+                // live for the large app1/leaguesByName payloads.
                 upsert(payload, opts) {
                     supabaseLog.push({ action: 'upsert', table, payload, opts });
                     if (table === 'camp_state_kv' && payload && payload.key) {
-                        supabaseKvData[payload.key] = payload.value;
+                        const normalize = (v) => {
+                            if (Array.isArray(v)) return v.map(normalize);
+                            if (v && typeof v === 'object') {
+                                const out = {};
+                                Object.keys(v).sort().reverse().forEach(k => { out[k] = normalize(v[k]); });
+                                return out;
+                            }
+                            return v;
+                        };
+                        supabaseKvData[payload.key] = normalize(JSON.parse(JSON.stringify(payload.value)));
                     }
                     return Promise.resolve({ error: null });
                 },
