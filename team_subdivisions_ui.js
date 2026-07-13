@@ -378,7 +378,12 @@
         return `
             <div class="team-member-item ${isPending ? 'pending' : ''}">
                 <div class="member-info">
-                    <div class="member-email">${member.email}${isPending ? '<span class="pending-badge">Pending</span>' : ''}</div>
+                    <div class="member-email">${(member.display_name ? _tsuEsc(member.display_name) + ' · ' : '')}${member.email}${isPending ? '<span class="pending-badge">Pending</span>' : ''}</div>
+                    ${(member.department || (member.product_access && member.product_access.length) || member.parent_contactable) ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:0.72rem;">
+                        ${member.department ? `<span style="background:var(--slate-100);color:var(--slate-600);border-radius:999px;padding:2px 9px;font-weight:600;">${_tsuEsc(member.department)}</span>` : ''}
+                        ${(member.product_access || []).map(p => `<span style="background:#EEF2FF;color:#4F46E5;border-radius:999px;padding:2px 8px;text-transform:uppercase;letter-spacing:.03em;">${_tsuEsc(p)}</span>`).join('')}
+                        ${member.parent_contactable ? `<span style="background:#F0FDF4;color:#16A34A;border-radius:999px;padding:2px 8px;font-weight:600;">Parents ✓</span>` : ''}
+                    </div>` : ''}
                     ${memberSubsHtml ? `<div class="member-subdivisions" style="margin-top: 4px;">${memberSubsHtml}</div>` : ''}
                 </div>
                 <div class="member-actions">
@@ -540,6 +545,31 @@
                             </label>`;
                         }).join('')}</div>` : '<p style="color: var(--slate-500);">No division groups available</p>'}
                     </div>
+                    <div class="form-group">
+                        <label for="edit-display-name">Display name <span style="font-weight:400;color:var(--slate-400);">— shown to parents</span></label>
+                        <input type="text" id="edit-display-name" value="${_tsuEsc(member.display_name || member.name || '')}" placeholder="e.g. Rabbi A">
+                    </div>
+                    <div class="form-group">
+                        <label for="edit-department">Department / title <span style="font-weight:400;color:var(--slate-400);">— e.g. Bussing, Nurse, Head Counselor</span></label>
+                        <input type="text" id="edit-department" value="${_tsuEsc(member.department || '')}" placeholder="e.g. Bussing">
+                    </div>
+                    <div class="form-group">
+                        <label class="checkbox-item" style="cursor:pointer;"><input type="checkbox" id="edit-contactable" ${member.parent_contactable ? 'checked' : ''}> <span>Parents can message this person</span></label>
+                    </div>
+                    <div class="form-group">
+                        <label>Access to (the parts of Campistry this person can open)</label>
+                        <div class="subdivision-checkboxes">
+                            ${[
+                                { key: 'me', label: 'Me — camper management' },
+                                { key: 'flow', label: 'Flow — scheduling' },
+                                { key: 'go', label: 'Go — bussing / transport' },
+                                { key: 'health', label: 'Health — nurse station' },
+                                { key: 'snacks', label: 'Snacks — canteen / POS' },
+                                { key: 'live', label: 'Live — attendance / ops' },
+                                { key: 'link', label: 'Link — parent communication' }
+                            ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
+                        </div>
+                    </div>
                     <div id="edit-member-error" class="form-error"></div>
                     <div class="form-actions"><button type="button" class="btn-secondary" id="cancel-edit">Cancel</button><button type="submit" class="btn-primary">Save Changes</button></div>
                 </form>
@@ -559,8 +589,12 @@
             const role = document.getElementById('edit-role').value;
             const errorEl = document.getElementById('edit-member-error');
             const subdivisionIds = [...modal.querySelectorAll('input[name="subdivision"]:checked')].map(cb => cb.value);
+            const display_name = document.getElementById('edit-display-name').value.trim() || null;
+            const department = document.getElementById('edit-department').value.trim() || null;
+            const parent_contactable = document.getElementById('edit-contactable').checked;
+            const product_access = [...modal.querySelectorAll('input[name="product"]:checked')].map(cb => cb.value);
             try {
-                const result = await window.AccessControl.updateTeamMember(member.id, { role, subdivision_ids: subdivisionIds });
+                const result = await window.AccessControl.updateTeamMember(member.id, { role, subdivision_ids: subdivisionIds, display_name, department, parent_contactable, product_access });
                 if (result.error) { errorEl.textContent = result.error; return; }
                 closeModal(); await refreshData();
                 const c = document.getElementById('team-card'); if (c) renderTeamCard(c);
