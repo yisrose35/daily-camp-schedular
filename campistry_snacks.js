@@ -112,9 +112,65 @@ function saveSnacksData(data) {
     cloudSaveSnacks(data);
 }
 
-// Cloud write — prefer the full hooks bridge when present, otherwise upsert
-// the campistrySnacks key into camp_state_kv directly via the Supabase client.
+// Signature used to dedupe transactions across the stale-local vs fresh-cloud
+// merge (transactions carry no id).
+function _txSig(t) {
+    return [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
+}
+
+// Recompute every account's balance from the (append-only) transaction ledger,
+// which is the durable record. Preserves dailyLimit/spentToday/etc.
+function _reconcileBalances(data) {
+    if (!data || !data.accounts) return data;
+    var byCamper = {};
+    (data.transactions || []).forEach(function(t) {
+        if (!t || !t.camper) return;
+        var amt = parseFloat(t.amount) || 0;
+        byCamper[t.camper] = (byCamper[t.camper] || 0) + (t.type === 'credit' ? amt : -amt);
+    });
+    Object.keys(data.accounts).forEach(function(name) {
+        if (byCamper[name] != null) data.accounts[name].balance = Math.round(byCamper[name] * 100) / 100;
+    });
+    return data;
+}
+
+// Cloud write. campistrySnacks is a shared blob that a parent's SECURITY DEFINER
+// deposit (migration 019, FOR UPDATE + merge) and the admin manager both write.
+// The manager loads from possibly-stale LOCAL storage, so a naive full-blob
+// upsert here can clobber a parent deposit that landed on the cloud after this
+// tab cached its copy. Fetch the CURRENT cloud value first, union the
+// transaction ledgers, then recompute balances from the union — so no deposit
+// or purchase is ever lost, regardless of write order.
 function cloudSaveSnacks(data) {
+    try {
+        const db = window.CampistryDB;
+        const client = db && db.client;
+        const campId = db && db.getCampId && db.getCampId();
+        if (!client || !campId) { _cloudUpsertSnacks(data); return; }
+        client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
+            .then(function(res) {
+                var cloud = (res && res.data && res.data.value) || null;
+                var merged = data;
+                if (cloud && typeof cloud === 'object') {
+                    // Union transactions (cloud + local), deduped by signature.
+                    var seen = {}, tx = [];
+                    (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) {
+                        var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t);
+                    });
+                    merged = Object.assign({}, cloud, data);          // local wins for inventory/config
+                    merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
+                    merged.transactions = tx;
+                    _reconcileBalances(merged);                        // balance := ledger truth
+                }
+                _cloudUpsertSnacks(merged);
+                // Keep local mirror consistent with what we just wrote.
+                try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
+                snacks = merged;
+            }, function() { _cloudUpsertSnacks(data); });
+    } catch (e) { console.warn('[Snacks] Cloud save error:', e); _cloudUpsertSnacks(data); }
+}
+
+function _cloudUpsertSnacks(data) {
     if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
         window.saveGlobalSettings('campistrySnacks', data);
         return;
