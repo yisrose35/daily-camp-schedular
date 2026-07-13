@@ -331,6 +331,7 @@
     <div class="lk-tabs" id="msgTopTabs" style="margin-bottom:18px;">
         <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
         <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Sent</button>
+        <button class="lk-tab" data-msgtab="myinbox" onclick="switchMsgTab('myinbox',this)" id="msgTabMyInboxBtn" style="display:none;">Assigned to me <span id="myInboxCount" style="display:none;background:var(--link-color);color:#fff;border-radius:999px;font-size:.62rem;padding:1px 6px;margin-left:2px;"></span></button>
     </div>
 
     <!-- ── INBOX ─────────────────────────────────────── -->
@@ -389,6 +390,12 @@
             <button class="btn btn-ghost btn-sm" onclick="closeSentDetail()" style="margin-bottom:10px;">&larr; Back</button>
             <div class="lk-card"><div id="sentDetail"></div></div>
         </div>
+    </div>
+
+    <!-- ── ASSIGNED TO ME (staff routed inbox) ──────────── -->
+    <div id="msgTabMyInbox" style="display:none;">
+        <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 12px;">Messages parents sent directly to you.</p>
+        <div class="lk-card" style="padding:0;overflow:hidden;"><div id="myInboxList"></div></div>
     </div>
 
 </div>
@@ -1078,7 +1085,7 @@ function nav(p) {
     window.scrollTo(0, 0);
     if (p === 'dashboard') renderDash();
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
-    if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
+    if (p === 'messages') { switchMsgTab(currentMsgTab || 'inbox'); _loadStaffInbox(); }
     if (p === 'forms') {
         _loadFormSubmissions();
         switchFormsTab(_currentFormsTab || 'sent');
@@ -1099,8 +1106,59 @@ function switchMsgTab(tab, btn) {
     });
     document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
+    var mi = document.getElementById('msgTabMyInbox'); if (mi) mi.style.display = tab === 'myinbox' ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
+    if (tab === 'myinbox'){ renderMyStaffInbox(); }
+}
+
+// ─── STAFF INBOX: messages a parent routed to this specific user (migration 027) ─
+function _dbc2(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient&&d.getClient(), id=d.getCampId&&d.getCampId(); return (c&&id&&c.rpc)?{client:c,campId:id}:null; }
+window._staffInbox = [];
+function _loadStaffInbox(cb){
+    var db=_dbc2(); if(!db){ if(cb)cb(); return; }
+    db.client.rpc('get_staff_messages',{p_camp_id:db.campId}).then(function(res){
+        window._staffInbox = (!res.error && res.data && res.data.success) ? (res.data.messages||[]) : [];
+        // Reveal the tab + unread count only when there's something addressed to me.
+        var btn=document.getElementById('msgTabMyInboxBtn'), cnt=document.getElementById('myInboxCount');
+        if(btn) btn.style.display = window._staffInbox.length ? '' : 'none';
+        var unread = window._staffInbox.filter(function(m){return !m.read;}).length;
+        if(cnt){ cnt.textContent=unread; cnt.style.display=unread?'':'none'; }
+        if(cb)cb();
+    }, function(){ if(cb)cb(); });
+}
+function renderMyStaffInbox(){
+    var el=document.getElementById('myInboxList'); if(!el) return;
+    _loadStaffInbox(function(){
+        var msgs=window._staffInbox||[];
+        if(!msgs.length){ el.innerHTML='<div class="lk-empty" style="padding:36px 20px;"><h3>Nothing assigned to you</h3><p>Messages a parent sends directly to you show up here.</p></div>'; return; }
+        el.innerHTML = msgs.map(function(m){
+            var initials=(m.parent_name||'?').split(' ').map(function(w){return w[0]||'';}).join('').toUpperCase().slice(0,2);
+            return '<div class="msg-item'+(m.read?'':' unread')+'" style="cursor:default;">'+
+                '<div style="width:34px;height:34px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:var(--slate-600);flex-shrink:0;">'+esc(initials)+'</div>'+
+                '<div class="msg-body">'+
+                    '<div class="msg-subj">'+esc(m.subject||'(No subject)')+(m.recipient_label?' <span style="font-weight:500;color:var(--link-color);font-size:.72rem;">· '+esc(m.recipient_label)+'</span>':'')+'</div>'+
+                    '<div class="msg-preview">'+esc((m.body||'').slice(0,120))+'</div>'+
+                    '<div class="msg-from">From '+esc(m.parent_name||'Parent')+'</div>'+
+                    '<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">'+
+                        '<input type="text" class="lk-input" id="sr_'+esc(m.id)+'" placeholder="Reply to '+esc((m.parent_name||'parent').split(" ")[0])+'…" style="flex:1;height:auto;padding:6px 10px;font-size:.8rem;">'+
+                        '<button class="btn btn-primary btn-sm" onclick="_staffReply(\''+esc(m.id)+'\',\''+esc(m.parent_name||'')+'\',\''+esc(m.parent_email||'')+'\',\''+esc(m.thread_id||'')+'\')">Reply</button>'+
+                    '</div>'+
+                '</div>'+
+            '</div>';
+        }).join('');
+    });
+}
+function _staffReply(msgId, parentName, parentEmail, threadId){
+    var inp=document.getElementById('sr_'+msgId); var body=(inp&&inp.value||'').trim();
+    if(!body){ toast('Write a reply first'); return; }
+    var cl=CL();
+    if(cl&&cl.msg&&cl.msg.send){
+        cl.msg.send({ to:parentName||parentEmail, toType:'individual', subject:'Reply from Camp', body:body,
+            channels:['app'], threadId:threadId||null, metadata:{parentEmail:parentEmail} });
+        if(inp) inp.value='';
+        toast('Reply sent to '+(parentName||'parent'));
+    } else { toast('Messaging not ready'); }
 }
 
 // ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
