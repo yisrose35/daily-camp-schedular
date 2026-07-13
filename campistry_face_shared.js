@@ -14,7 +14,10 @@
     if (window.CampistryFace) return;
 
     var FACE_API_SRC = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.min.js';
-    var MODEL_URL    = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
+    // Weights: vladmandic's own /model path serves manifests but NOT the weight
+    // shards (404) — it hangs forever. The canonical justadudewhohacks weights are
+    // format-compatible with the vladmandic runtime and reliably hosted.
+    var MODEL_URL    = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 
     var _modelsPromise = null;
 
@@ -27,16 +30,27 @@
         });
     }
 
+    function _withTimeout(promise, ms, label) {
+        return new Promise(function (resolve, reject) {
+            var done = false;
+            var t = setTimeout(function () { if (!done) { done = true; reject(new Error((label || 'operation') + ' timed out')); } }, ms);
+            promise.then(function (v) { if (!done) { done = true; clearTimeout(t); resolve(v); } },
+                         function (e) { if (!done) { done = true; clearTimeout(t); reject(e); } });
+        });
+    }
+
     // Loads the face-api script + the three models we need. Idempotent.
+    // Guarded by a timeout so a stalled CDN surfaces an error instead of a
+    // permanent "Analyzing…" hang.
     function ensureModels() {
         if (_modelsPromise) return _modelsPromise;
-        _modelsPromise = _loadScript(FACE_API_SRC).then(function () {
+        _modelsPromise = _withTimeout(_loadScript(FACE_API_SRC), 20000, 'face-api download').then(function () {
             if (typeof faceapi === 'undefined') throw new Error('face-api unavailable');
-            return Promise.all([
+            return _withTimeout(Promise.all([
                 faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
                 faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
                 faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-            ]);
+            ]), 30000, 'face model download');
         }).then(function () { return true; })
           .catch(function (e) { _modelsPromise = null; throw e; });
         return _modelsPromise;

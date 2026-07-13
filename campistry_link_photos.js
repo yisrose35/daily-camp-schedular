@@ -26,7 +26,9 @@
     console.log('[LinkPhotos] Photo Recognition Engine v1.0 loading...');
 
     const PHOTO_STORE = 'campistry_link_photos_v1';
-    const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model';
+    // vladmandic's /model path 404s on weight shards (hangs). Use the canonical
+    // justadudewhohacks weights, which are format-compatible and reliably hosted.
+    const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 
     // =========================================================================
     // STATE
