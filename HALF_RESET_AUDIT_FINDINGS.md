@@ -5,8 +5,10 @@
 > Owner decisions locked during implementation:
 > 1. **Cooldowns reset** at the epoch (pre-epoch visits never block).
 > 2. **Multi-part sequences restart** at part 1.
-> 3. **Epoch snaps to a period boundary** — configured Half-2 start when the
->    reset happens near it, else the next camp-week boundary, else next Monday.
+> 3. **Epoch = going-forward date** (revised 2026-07-13 from boundary snapping):
+>    if a schedule already exists for TODAY at reset time (local or cloud),
+>    today is pushed back into the previous half → counting restarts TOMORROW;
+>    otherwise (first-morning reset) counting restarts TODAY.
 > 4. **COMPLETE reset** (revised from the §5.4 recommendation): bunks get new
 >    campers at the half, so even the short-term variety heuristics
 >    (yesterday-repeat, 14-day recency/streak, league adjacent-day rematch and

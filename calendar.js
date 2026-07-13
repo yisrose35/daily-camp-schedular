@@ -533,42 +533,45 @@ all[date].updated_at = new Date().toISOString();
         d.setDate(d.getDate() + n);
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
-    // days from a to b (b - a)
-    function _hrDayDiff(a, b) {
-        var pa = a.split('-').map(Number), pb = b.split('-').map(Number);
-        return Math.round((new Date(pb[0], pb[1] - 1, pb[2]) - new Date(pa[0], pa[1] - 1, pa[2])) / 86400000);
-    }
-
-    // ★ HR-61: epoch date snaps to a period boundary (product decision) so
-    // per-week / per-half caps never double-dose across a mid-week reset.
-    // Priority: configured half-2 start (when the reset happens near it) →
-    // next camp-week boundary on the campDates.startDate weekly grid →
-    // next Monday. Today itself is used when it IS the boundary.
-    function _hrComputeEpochDate() {
+    // ★ HR-61 (v2 — GOING-FORWARD rule, supersedes the boundary snap):
+    // resets happen either the NIGHT before the new half's first day (today's
+    // schedule already ran — it belongs to the OLD half) or on the first
+    // MORNING (today has no schedule yet — the new half starts today). So:
+    //   • a schedule exists for today (local or cloud) → epoch = TOMORROW,
+    //     today's schedule is pushed back into the previous half;
+    //   • no schedule for today → epoch = TODAY.
+    async function _hrComputeEpochDate() {
         var todayKey = _hrTodayKey();
-        var cd = null;
-        try { cd = window.Utils?.getCampDates?.() || window.loadGlobalSettings?.('campDates') || null; } catch (_) {}
-
-        if (cd && cd.half2Start && /^\d{4}-\d{2}-\d{2}$/.test(cd.half2Start)) {
-            var diff = _hrDayDiff(todayKey, cd.half2Start);
-            // clicked up to 13 days after the boundary, or up to 28 before it
-            if (diff >= -13 && diff <= 28) return { date: cd.half2Start, reason: 'your configured Half 2 start date' };
+        var hasToday = false;
+        // Local check
+        try {
+            var _td = (window.loadAllDailyData?.() || {})[todayKey];
+            var _sa = _td && _td.scheduleAssignments;
+            var _la = _td && _td.leagueAssignments;
+            hasToday = !!((_sa && Object.keys(_sa).some(function (b) {
+                var s = _sa[b]; return Array.isArray(s) && s.some(Boolean);
+            })) || (_la && Object.keys(_la).length > 0));
+        } catch (_) {}
+        // Cloud check — another device/scheduler may have generated today
+        // without this device having synced it yet.
+        if (!hasToday) {
+            try {
+                var client = window.CampistryDB?.getClient?.() || window.supabase;
+                var campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (client && campId) {
+                    var r = await client.from('daily_schedules').select('*')
+                        .eq('camp_id', campId).eq('date_key', todayKey);
+                    hasToday = !!(r && !r.error && Array.isArray(r.data) && r.data.length > 0);
+                }
+            } catch (_) {}
         }
-        if (cd && cd.startDate && /^\d{4}-\d{2}-\d{2}$/.test(cd.startDate)) {
-            var since = _hrDayDiff(cd.startDate, todayKey);
-            if (since >= 0) {
-                var rem = since % 7;
-                var next = (rem === 0) ? todayKey : _hrAddDays(todayKey, 7 - rem);
-                return { date: next, reason: (rem === 0 ? 'today — a camp-week boundary' : 'the next camp-week boundary') };
-            }
+        if (hasToday) {
+            return {
+                date: _hrAddDays(todayKey, 1),
+                reason: "today already has a schedule — it stays in the previous half; counting restarts tomorrow"
+            };
         }
-        // Fallback: next Monday (today if Monday) — matches the rolling
-        // weekly window used by getPeriodStartDate when no camp dates exist.
-        var p = todayKey.split('-').map(Number);
-        var d = new Date(p[0], p[1] - 1, p[2]);
-        var dow = d.getDay();
-        var ahead = (dow === 1) ? 0 : ((8 - dow) % 7);
-        return { date: _hrAddDays(todayKey, ahead), reason: (ahead === 0 ? 'today — start of the week' : 'the next start of week (Monday)') };
+        return { date: todayKey, reason: 'no schedule for today yet — the new half starts today' };
     }
 
     // ★ HR-70: DIRECT VERIFIED KV PUSH for the reset's critical keys.
@@ -610,7 +613,7 @@ all[date].updated_at = new Date().toISOString();
             return;
         }
         if (window._newHalfInProgress) return; // ★ HR-63: re-entrancy guard
-        var picked = _hrComputeEpochDate();
+        var picked = await _hrComputeEpochDate();
         var epoch = picked.date;
 
         if (!confirm(

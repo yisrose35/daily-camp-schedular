@@ -676,22 +676,44 @@ describe('startNewHalf (non-deleting epoch reset)', () => {
         assert.ok(reloadCalled, 'Reload triggered');
     });
 
-    it('epoch snaps to configured half-2 start date when reset happens near it', async () => {
+    // ★ HR-61 v2 helpers: local-timezone dateKeys (match _hrTodayKey)
+    function localKey(offsetDays) {
+        const d = new Date();
+        d.setDate(d.getDate() + (offsetDays || 0));
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    it('epoch = TODAY when no schedule exists for today (first-morning reset)', async () => {
         resetStorage({});
+        supabaseMockData = {};
+        global.supabase = makeSupabaseMock();
         setupMocks('owner');
         setupEpochMocks();
-        const half2 = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
-        global.loadGlobalSettings = function(key) {
-            if (key === 'campDates') return { startDate: '2026-06-01', half2Start: half2 };
-            return undefined;
-        };
         reloadCalled = false;
 
         await global.startNewHalf();
 
         const epochCall = findSetting('rotationEpoch');
-        assert.equal(epochCall.val.date, half2, 'epoch snapped to campDates.half2Start');
-        delete global.loadGlobalSettings;
+        assert.equal(epochCall.val.date, localKey(0), 'new half starts today');
+    });
+
+    it("epoch = TOMORROW when today's schedule exists — today is pushed to the previous half (night-before reset)", async () => {
+        resetStorage({});
+        supabaseMockData = {
+            [localKey(0)]: [{ id: 'r-today', schedule_data: { scheduleAssignments: { 'Bunk 1': [{ _activity: 'Art' }] } } }]
+        };
+        global.supabase = makeSupabaseMock();
+        setupMocks('owner');
+        setupEpochMocks();
+        reloadCalled = false;
+
+        await global.startNewHalf();
+
+        const epochCall = findSetting('rotationEpoch');
+        assert.equal(epochCall.val.date, localKey(1), "today's schedule stays in the old half; counting restarts tomorrow");
+        // and today's schedule must not have been touched
+        const del = supabaseLog.find(e => e.action === 'delete' && e.table === 'daily_schedules');
+        assert.equal(del, undefined, 'no deletion of today');
     });
 
     it('user cancels: nothing written, nothing cleared', async () => {
