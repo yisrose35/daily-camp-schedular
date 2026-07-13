@@ -603,6 +603,108 @@ all[date].updated_at = new Date().toISOString();
         return false;
     }
 
+    // ★ HR-72: in-app reset dialog — confirmation, LIVE PROGRESS and results
+    // render inside the app instead of browser popups (the verified cloud
+    // pushes take a few seconds; a silent native confirm reads as a hang).
+    // Returns null when no real DOM exists (node test harness) — callers then
+    // fall back to native confirm/alert, which keeps the test suite exact.
+    function _hrModal() {
+        try {
+            if (typeof document === 'undefined' || !document.documentElement || !document.body || !document.createElement) return null;
+            var _stale = document.getElementById && document.getElementById('hrResetOverlay');
+            if (_stale) { try { _stale.remove(); } catch (_) {} }
+            if (!document.getElementById('hrResetStyle')) {
+                var st = document.createElement('style');
+                st.id = 'hrResetStyle';
+                st.textContent = '@keyframes hrspin{to{transform:rotate(360deg)}}' +
+                    '#hrResetOverlay{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;}' +
+                    '#hrResetCard{background:#fff;color:#1e293b;max-width:470px;width:100%;border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.35);padding:22px 24px;font-family:inherit;max-height:85vh;overflow:auto;}' +
+                    '#hrResetCard h3{margin:0 0 10px;font-size:1.15em;}' +
+                    '#hrResetCard ul{margin:6px 0 12px;padding-left:8px;list-style:none;}' +
+                    '#hrResetCard li{margin:2px 0;font-size:.92em;}' +
+                    '.hr-btn{border:none;border-radius:8px;padding:9px 16px;font-size:.95em;cursor:pointer;font-weight:600;}' +
+                    '.hr-btn-go{background:#0d9488;color:#fff;}' +
+                    '.hr-btn-cancel{background:#e2e8f0;color:#334155;margin-right:8px;}' +
+                    '.hr-spin{width:24px;height:24px;border:3px solid #ccfbf1;border-top-color:#0d9488;border-radius:50%;animation:hrspin .8s linear infinite;display:inline-block;flex:none;}';
+                (document.head || document.documentElement).appendChild(st);
+            }
+            var overlay = document.createElement('div');
+            overlay.id = 'hrResetOverlay';
+            var card = document.createElement('div');
+            card.id = 'hrResetCard';
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+            var esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+            var api = {
+                loading: function (text) {
+                    card.innerHTML = '<h3>🏕️ Start New Half</h3>' +
+                        '<div style="display:flex;align-items:center;gap:12px;padding:8px 0 4px;">' +
+                        '<span class="hr-spin"></span><span id="hrResetStatus">' + esc(text) + '</span></div>' +
+                        '<div style="font-size:.85em;color:#94a3b8;margin-top:10px;">Please keep this page open — saving &amp; verifying in the cloud takes a few seconds.</div>';
+                },
+                status: function (text) {
+                    var el = document.getElementById('hrResetStatus');
+                    if (el) el.textContent = text; else api.loading(text);
+                },
+                confirm: function (epoch, reason) {
+                    return new Promise(function (resolve) {
+                        card.innerHTML = '<h3>🏕️ Start New Half</h3>' +
+                            '<p style="margin:4px 0 10px;">Counting will restart from <b>' + esc(epoch) + '</b><br>' +
+                            '<span style="color:#64748b;font-size:.9em;">(' + esc(reason) + ')</span></p>' +
+                            '<div style="font-weight:600;margin-top:6px;">From that date the camp behaves like day 1:</div>' +
+                            '<ul>' +
+                            '<li>✓ Activity rotation &amp; usage counters restart</li>' +
+                            '<li>✓ Cooldowns and multi-part sequences restart</li>' +
+                            '<li>✓ League games renumber from Game 1</li>' +
+                            '<li>✓ Matchup history, standings &amp; playoffs reset</li>' +
+                            '</ul>' +
+                            '<div style="font-weight:600;">Nothing is deleted:</div>' +
+                            '<ul>' +
+                            '<li>• All previous schedules stay saved &amp; viewable</li>' +
+                            '<li>• Past game results remain as an archive</li>' +
+                            '<li>• Fields, activities, divisions &amp; templates unchanged</li>' +
+                            '</ul>' +
+                            '<div style="text-align:right;margin-top:14px;">' +
+                            '<button class="hr-btn hr-btn-cancel" id="hrResetCancel">Cancel</button>' +
+                            '<button class="hr-btn hr-btn-go" id="hrResetGo">Start New Half</button></div>';
+                        document.getElementById('hrResetCancel').onclick = function () { api.close(); resolve(false); };
+                        document.getElementById('hrResetGo').onclick = function () { resolve(true); };
+                    });
+                },
+                success: function (epoch) {
+                    card.innerHTML = '<h3>✅ New Half Started</h3>' +
+                        '<p>Counting restarts from <b>' + esc(epoch) + '</b>.<br>' +
+                        'The next league game generated will be Game 1.<br>' +
+                        'All previous schedules remain saved as an archive.</p>' +
+                        '<div style="display:flex;align-items:center;gap:10px;color:#64748b;"><span class="hr-spin"></span> Reloading…</div>';
+                },
+                warnings: function (epoch, failures) {
+                    return new Promise(function (resolve) {
+                        card.innerHTML = '<h3>⚠️ New Half started — with warnings</h3>' +
+                            '<p>Counting restarts from <b>' + esc(epoch) + '</b>. No schedules were deleted.</p>' +
+                            '<ul style="color:#b45309;">' + failures.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
+                            '<p style="font-size:.9em;color:#64748b;">If these persist after the reload, run Start New Half again.</p>' +
+                            '<div style="text-align:right;margin-top:12px;"><button class="hr-btn hr-btn-go" id="hrResetReload">Reload now</button></div>';
+                        document.getElementById('hrResetReload').onclick = function () { resolve(true); };
+                    });
+                },
+                error: function (msg) {
+                    return new Promise(function (resolve) {
+                        card.innerHTML = '<h3>❌ Error starting new half</h3>' +
+                            '<p>' + esc(msg) + '</p>' +
+                            '<p style="font-size:.9em;color:#64748b;">No schedules were deleted. Check the console for details.</p>' +
+                            '<div style="text-align:right;margin-top:12px;"><button class="hr-btn hr-btn-cancel" id="hrResetClose">Close</button></div>';
+                        document.getElementById('hrResetClose').onclick = function () { api.close(); resolve(); };
+                    });
+                },
+                close: function () {
+                    try { overlay.remove(); } catch (_) { try { document.body.removeChild(overlay); } catch (__) {} }
+                }
+            };
+            return api;
+        } catch (_) { return null; }
+    }
+
     window.startNewHalf = async function() {
         // ★ HR-62: owner/admin only (product decision — schedulers never; the
         // old scheduler-scoped destructive variant is retired along with
@@ -613,23 +715,37 @@ all[date].updated_at = new Date().toISOString();
             return;
         }
         if (window._newHalfInProgress) return; // ★ HR-63: re-entrancy guard
+        // ★ HR-72: a dialog is already open (double-click on the button)
+        try { if (typeof document !== 'undefined' && document.getElementById && document.getElementById('hrResetOverlay')) return; } catch (_) {}
+
+        // ★ HR-72: in-app dialog when a real DOM exists; native fallback keeps
+        // the node test harness behavior identical.
+        var _ui = _hrModal();
+        if (_ui) _ui.loading("Checking today's schedule…");
         var picked = await _hrComputeEpochDate();
         var epoch = picked.date;
 
-        if (!confirm(
-            "🏕️ START NEW HALF\n\n" +
-            "Counting will restart from " + epoch + "\n(" + picked.reason + ").\n\n" +
-            "From that date the camp behaves like day 1:\n" +
-            "  ✓ Activity rotation & usage counters restart\n" +
-            "  ✓ Cooldowns and multi-part sequences restart\n" +
-            "  ✓ League games renumber from Game 1\n" +
-            "  ✓ Matchup history, standings & playoffs reset\n\n" +
-            "Nothing is deleted:\n" +
-            "  • All previous schedules stay saved & viewable\n" +
-            "  • Past game results remain as an archive\n" +
-            "  • Fields, activities, divisions & templates unchanged\n\n" +
-            "Start the new half?"
-        )) return;
+        var _confirmed;
+        if (_ui) {
+            _confirmed = await _ui.confirm(epoch, picked.reason);
+        } else {
+            _confirmed = confirm(
+                "🏕️ START NEW HALF\n\n" +
+                "Counting will restart from " + epoch + "\n(" + picked.reason + ").\n\n" +
+                "From that date the camp behaves like day 1:\n" +
+                "  ✓ Activity rotation & usage counters restart\n" +
+                "  ✓ Cooldowns and multi-part sequences restart\n" +
+                "  ✓ League games renumber from Game 1\n" +
+                "  ✓ Matchup history, standings & playoffs reset\n\n" +
+                "Nothing is deleted:\n" +
+                "  • All previous schedules stay saved & viewable\n" +
+                "  • Past game results remain as an archive\n" +
+                "  • Fields, activities, divisions & templates unchanged\n\n" +
+                "Start the new half?"
+            );
+        }
+        if (!_confirmed) { if (_ui) _ui.close(); return; }
+        if (_ui) _ui.loading('Starting the new half…');
 
         window._newHalfInProgress = true;
         logAuditEvent('start_new_half_epoch', { epoch: epoch });
@@ -639,6 +755,7 @@ all[date].updated_at = new Date().toISOString();
 
             // 1) Write the epoch: canonical KV key + the app1.halfStartDate
             //    hook that getPeriodStartDate('half')/getHalfStartDate read.
+            if (_ui) _ui.status('Stamping the new half date (' + epoch + ')…');
             var prevE = null;
             try { prevE = window.loadGlobalSettings?.('rotationEpoch') || null; } catch (_) {}
             var prevDate = (typeof prevE === 'string') ? prevE : ((prevE && prevE.date) || null);
@@ -661,6 +778,7 @@ all[date].updated_at = new Date().toISOString();
             // 2) Stamp the merge-surviving _epochDate into BOTH league history
             //    blobs (a bare {} clear loses newest-wins merges to stale
             //    devices — the F2 bug class; the stamp wins them instead).
+            if (_ui) _ui.status('Restarting league history & game numbering…');
             try {
                 if (window.SchedulerCoreLeagues?.setHistoryEpoch) {
                     if (!window.SchedulerCoreLeagues.setHistoryEpoch(epoch)) failures.push('regular league history epoch stamp');
@@ -674,6 +792,7 @@ all[date].updated_at = new Date().toISOString();
 
             // 3) Standings + playoffs (modules hydrate on demand and persist
             //    themselves — fixes the empty-registry and lost-save bugs).
+            if (_ui) _ui.status('Resetting standings & playoffs…');
             try { window.LeaguesAPI?.resetStandingsAndPlayoffs?.(); }
             catch (e) { failures.push('league standings reset: ' + (e.message || e)); }
             try { window.SpecialtyLeaguesAPI?.resetStandingsAndPlayoffs?.(); }
@@ -684,6 +803,7 @@ all[date].updated_at = new Date().toISOString();
             //    rebuilders; pre-epoch days stay out by the read filters.
             //    NOTE: leagueHistory/specialtyLeagueHistory localStorage keys
             //    are deliberately NOT removed — they now carry the epoch stamp.
+            if (_ui) _ui.status('Clearing rotation counters & ledgers…');
             try {
                 window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
                 ['historicalCounts', 'historicalCountedDates', 'historicalCountsByDate',
@@ -750,6 +870,7 @@ all[date].updated_at = new Date().toISOString();
                     if (_hrLeaguesClean && Object.keys(_hrLeaguesClean).length) _hrPushes.push(['leaguesByName', _hrLeaguesClean]);
                     if (_hrSpecClean && Object.keys(_hrSpecClean).length) _hrPushes.push(['specialtyLeagues', _hrSpecClean]);
                     for (var _pi = 0; _pi < _hrPushes.length; _pi++) {
+                        if (_ui) _ui.status('Saving to cloud & verifying (' + (_pi + 1) + ' of ' + _hrPushes.length + ')…');
                         var _pOk = await _hrPushKvVerified(_hrClient, _hrCampId, _hrPushes[_pi][0], _hrPushes[_pi][1]);
                         if (!_pOk) failures.push('cloud write not verified: ' + _hrPushes[_pi][0]);
                     }
@@ -763,18 +884,25 @@ all[date].updated_at = new Date().toISOString();
             try { localStorage.setItem('campistry_rotationEpoch', JSON.stringify({ date: epoch, setAt: Date.now() })); } catch (_) {}
 
             // 6) Flush the batched queue too (local mirrors / non-critical keys).
+            if (_ui) _ui.status('Finishing sync…');
             if (typeof window.forceSyncToCloud === 'function') {
                 try { await window.forceSyncToCloud(); } catch (e) { failures.push('cloud sync: ' + (e.message || e)); }
             }
 
             console.log('⭐ NEW HALF RESET COMPLETE ⭐ epoch =', epoch, failures.length ? ('warnings: ' + failures.join('; ')) : '');
             if (failures.length) {
-                alert(
+                // ★ HR-72: warnings render in the app; the user acknowledges
+                // before the reload so they can actually be read.
+                if (_ui) await _ui.warnings(epoch, failures);
+                else alert(
                     '⚠️ New Half started from ' + epoch + ' — with warnings:\n\n- ' + failures.join('\n- ') +
                     '\n\nNo schedules were deleted. Reloading; if warnings persist, run Start New Half again.'
                 );
             } else {
-                alert(
+                if (_ui) {
+                    _ui.success(epoch);
+                    await new Promise(function (r) { setTimeout(r, 1400); });
+                } else alert(
                     '✅ New Half Started!\n\n' +
                     'Counting restarts from ' + epoch + '.\n' +
                     'The next league game generated will be Game 1.\n' +
@@ -785,7 +913,8 @@ all[date].updated_at = new Date().toISOString();
             window.location.reload();
         } catch (e) {
             console.error('Failed to start new half:', e);
-            alert('Error starting new half: ' + (e.message || e) + '\n\nNo schedules were deleted. Check console for details.');
+            if (_ui) await _ui.error(e.message || e);
+            else alert('Error starting new half: ' + (e.message || e) + '\n\nNo schedules were deleted. Check console for details.');
         } finally {
             window._newHalfInProgress = false;
         }
