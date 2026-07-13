@@ -813,7 +813,7 @@ function addFunds(){
     if(!db){toast('Connection not ready — try again in a moment.');return;}
     var btn=document.getElementById('canteenAddBtn');
     if(btn){btn.disabled=true;btn.textContent='Adding…';}
-    db.rpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt}).then(function(res){
+    (window._pRpc?window._pRpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt}):db.rpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt})).then(function(res){
         if(btn){btn.disabled=false;btn.textContent='Add Funds';}
         if(res.error){
             console.error('[Parent] submit_canteen_deposit error:',res.error.message,res.error);
@@ -2077,8 +2077,25 @@ window.addEventListener('storage', function(e) {
     // Before this, Messages had no cloud path at all in either direction — a
     // message sent by the admin, or a reply sent from another device, could
     // never appear here. Same pattern as forms/mail/tips above.
+    // Camp-aware RPC wrapper. The parent write-RPCs resolve "the caller's invite"
+    // as the single most-recent one, which is wrong when a parent has invites on
+    // multiple camps. Migration 024 adds an optional p_camp_id; we pass the camp
+    // this portal is on. To stay safe BEFORE that migration is applied (older
+    // signature has no p_camp_id → PostgREST can't find the function), we retry
+    // once without p_camp_id on a function-resolution error.
+    window._pRpc = function(name, args) {
+        var dbc = window._parentDB || db;
+        var campId = (typeof parent !== 'undefined' && parent) ? parent.campId : null;
+        return dbc.rpc(name, Object.assign({}, args, { p_camp_id: campId })).then(function(res) {
+            if (res.error && /p_camp_id|PGRST202|could not find|schema cache|does not exist|no function/i.test(res.error.message || '')) {
+                return dbc.rpc(name, args);
+            }
+            return res;
+        });
+    };
+    var _pRpc = window._pRpc;
     window._submitMessageReplyCloud = function(threadId, subject, body, done) {
-        db.rpc('submit_message_reply', { p_thread_id: threadId || null, p_subject: subject || '', p_body: body || '' }).then(function(res) {
+        _pRpc('submit_message_reply', { p_thread_id: threadId || null, p_subject: subject || '', p_body: body || '' }).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] Message reply cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
             }
@@ -2086,7 +2103,7 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._markMessageReadCloud = function(messageId) {
-        db.rpc('mark_message_read', { p_message_id: messageId }).then(function(res) {
+        _pRpc('mark_message_read', { p_message_id: messageId }).then(function(res) {
             if (res.error) console.warn('[Parent] mark_message_read failed:', res.error.message);
         });
     };
@@ -2101,7 +2118,7 @@ window.addEventListener('storage', function(e) {
         var campId = (typeof parent !== 'undefined' && parent) ? parent.campId : null;
         var pEmail = (typeof parent !== 'undefined' && parent) ? parent.email : null;
         var _fallback = function() {
-            db.rpc('get_my_messages').then(function(res) {
+            (window._pRpc ? window._pRpc('get_my_messages', {}) : db.rpc('get_my_messages')).then(function(res) {
                 window._cloudMessages = (!res.error && res.data && res.data.success) ? (res.data.messages || []) : [];
                 if (cb) cb();
             });
@@ -2127,7 +2144,7 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._deleteMyMessageCloud = function(messageId, done) {
-        db.rpc('delete_my_message', { p_message_id: messageId }).then(function(res) {
+        _pRpc('delete_my_message', { p_message_id: messageId }).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] delete_my_message failed:', res.error ? res.error.message : (res.data||{}).error);
             }
@@ -2135,7 +2152,7 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._setMyMessageArchivedCloud = function(messageId, archived, done) {
-        db.rpc('set_my_message_archived', { p_message_id: messageId, p_archived: !!archived }).then(function(res) {
+        _pRpc('set_my_message_archived', { p_message_id: messageId, p_archived: !!archived }).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] set_my_message_archived failed:', res.error ? res.error.message : (res.data||{}).error);
             }
