@@ -56,6 +56,17 @@
     let _scanQueue = [];
     let _scanning = false;
 
+    // Cloud access — the admin console authenticates as owner/staff via CampistryDB.
+    function _db() {
+        if (!window.CampistryDB) return null;
+        try {
+            var client = CampistryDB.getClient();
+            var campId = CampistryDB.getCampId();
+            if (!client || !campId) return null;
+            return { client: client, campId: campId };
+        } catch (e) { return null; }
+    }
+
     // =========================================================================
     // PERSISTENCE
     // =========================================================================
@@ -165,65 +176,58 @@
      * 
      * Returns { indexed: number, skipped: number, errors: number }
      */
+    // Build the matcher from the CLOUD face index: descriptors that parents
+    // computed in-browser for their consented children (migration 028). No
+    // headshot image processing happens here — the descriptors already exist.
     async function buildFaceIndex(progressCallback) {
         if (!await loadModels()) {
             return { indexed: 0, skipped: 0, errors: 0, error: 'Models failed to load' };
         }
 
-        var roster = {};
-        if (window.CampistryLink) {
-            roster = CampistryLink.data.getRoster();
-        } else {
-            try { roster = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}').campistryMe?.roster || {}; }
-            catch(e) {}
+        var db = _db();
+        if (!db) {
+            return { indexed: 0, skipped: 0, errors: 0, error: 'Not signed in — cannot reach the camp face index.' };
         }
 
-        var campers = Object.entries(roster).filter(function(e) { return e[1].photoUrl; });
-        
-        if (!campers.length) {
-            return { indexed: 0, skipped: Object.keys(roster).length, errors: 0, error: 'No campers have headshot photos. Upload photos in Campistry Me first.' };
+        if (progressCallback) progressCallback({ current: 0, total: 0, name: 'Fetching consented faces…', phase: 'indexing' });
+
+        var faces = [];
+        try {
+            var res = await db.client.rpc('get_camp_face_index', { p_camp_id: db.campId });
+            if (res.error) throw res.error;
+            if (!res.data || !res.data.success) throw new Error((res.data && res.data.error) || 'index_fetch_failed');
+            faces = res.data.faces || [];
+        } catch (e) {
+            console.warn('[LinkPhotos] Cloud face index error:', e.message || e);
+            return { indexed: 0, skipped: 0, errors: 0, error: 'Could not load face index: ' + (e.message || e) };
         }
 
-        console.log('[LinkPhotos] Building face index from ' + campers.length + ' headshots...');
+        if (!faces.length) {
+            return { indexed: 0, skipped: 0, errors: 0, total: 0,
+                     error: 'No consented reference faces yet. Parents opt in and upload a photo of each child in the Link parent app.' };
+        }
+
+        console.log('[LinkPhotos] Building matcher from ' + faces.length + ' cloud descriptors...');
         var indexed = 0, skipped = 0, errors = 0;
         _labeledDescriptors = [];
+        _store.faceIndex = {};
 
-        for (var i = 0; i < campers.length; i++) {
-            var name = campers[i][0];
-            var photoUrl = campers[i][1].photoUrl;
-
-            if (progressCallback) {
-                progressCallback({
-                    current: i + 1,
-                    total: campers.length,
-                    name: name,
-                    phase: 'indexing'
-                });
-            }
+        for (var i = 0; i < faces.length; i++) {
+            var name = faces[i].camper_name;
+            var desc = faces[i].descriptor;
+            if (progressCallback) progressCallback({ current: i + 1, total: faces.length, name: name, phase: 'indexing' });
 
             try {
-                var img = await _loadImage(photoUrl);
-                var detection = await faceapi
-                    .detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
-                    .withFaceLandmarks(true)
-                    .withFaceDescriptor();
-
-                if (detection) {
-                    _labeledDescriptors.push(
-                        new faceapi.LabeledFaceDescriptors(name, [detection.descriptor])
-                    );
-                    // Store serialized descriptor for persistence
-                    _store.faceIndex[name] = {
-                        descriptor: Array.from(detection.descriptor),
-                        updatedAt: new Date().toISOString()
-                    };
+                if (Array.isArray(desc) && desc.length === 128) {
+                    var f32 = new Float32Array(desc);
+                    _labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [f32]));
+                    _store.faceIndex[name] = { descriptor: desc, updatedAt: new Date().toISOString() };
                     indexed++;
                 } else {
-                    console.warn('[LinkPhotos] No face found in headshot for:', name);
                     skipped++;
                 }
             } catch(e) {
-                console.warn('[LinkPhotos] Error processing headshot for:', name, e.message);
+                console.warn('[LinkPhotos] Descriptor error for:', name, e.message);
                 errors++;
             }
         }
@@ -231,8 +235,8 @@
         _indexBuilt = indexed > 0;
         saveStore();
 
-        console.log('[LinkPhotos] ✅ Face index built:', indexed, 'indexed,', skipped, 'skipped,', errors, 'errors');
-        return { indexed: indexed, skipped: skipped, errors: errors, total: campers.length };
+        console.log('[LinkPhotos] ✅ Matcher built:', indexed, 'faces,', skipped, 'skipped,', errors, 'errors');
+        return { indexed: indexed, skipped: skipped, errors: errors, total: faces.length };
     }
 
     /**
@@ -356,6 +360,30 @@
                     sent: false,
                     manualTags: [] // for manual corrections
                 };
+
+                // Persist to cloud so parents see their child's photos. The RPC
+                // only keeps tags for consented campers (second line of defence).
+                var db = _db();
+                if (db) {
+                    try {
+                        var cloudTags = (photoRecord.tags || []).map(function(t) {
+                            return { camper_name: t.camperName, confidence: t.confidence, manual: false };
+                        });
+                        var saveRes = await db.client.rpc('save_scanned_photo', {
+                            p_camp_id: db.campId,
+                            p_image_data: dataUrl,
+                            p_file_name: file.name,
+                            p_week: weekKey,
+                            p_tags: cloudTags
+                        });
+                        if (saveRes && saveRes.data && saveRes.data.photo_id) {
+                            photoRecord.cloudId = saveRes.data.photo_id;
+                            photoRecord.synced = true;
+                        }
+                    } catch (ce) {
+                        console.warn('[LinkPhotos] Cloud save failed for', file.name, ce.message || ce);
+                    }
+                }
 
                 _store.photos.push(photoRecord);
                 _store.stats.totalUploaded++;
