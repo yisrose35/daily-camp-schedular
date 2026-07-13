@@ -847,12 +847,31 @@ function saveSpendingControls(){
     var lim=parseFloat((document.getElementById('limRange')||{}).value||'5');
     var credit=parseFloat((document.getElementById('creditRange')||{}).value||'0');
     var floor=parseFloat((document.getElementById('floorRange')||{}).value||'0');
+    // Local echo (instant UI)
     _mutateSnacks(function(s){
         var a=s.accounts[c.name]||(s.accounts[c.name]={balance:0,dailyLimit:10,spentToday:0});
         a.dailyLimit=lim;a.creditLimit=credit;a.balanceFloor=floor;
     });
     _loadSnacksData(children);
-    toast('Spending controls saved for '+c.name.split(' ')[0]);
+    c.dailyLimit=lim;c.creditLimit=credit;c.balanceFloor=floor;
+    // Persist to the cloud so the caps actually reach the register/POS. Without
+    // this the parent's daily limit / overdraft never leaves this device and is
+    // never enforced when the camp charges a purchase.
+    var db=window._parentDB;
+    if(db&&db.rpc){
+        var send = window._pRpc ? window._pRpc('set_canteen_limits',{p_camper_name:c.name,p_daily_limit:lim,p_credit_limit:credit,p_balance_floor:floor})
+                                : db.rpc('set_canteen_limits',{p_camper_name:c.name,p_daily_limit:lim,p_credit_limit:credit,p_balance_floor:floor,p_camp_id:(parent&&parent.campId)||null});
+        send.then(function(res){
+            if(res.error||!res.data||!res.data.success){
+                console.warn('[Parent] set_canteen_limits failed:',res.error?res.error.message:(res.data||{}).error);
+                toast('Saved on this device — reconnect to sync your spending limits',true);
+            } else {
+                toast('Spending controls saved for '+c.name.split(' ')[0]);
+            }
+        });
+    } else {
+        toast('Spending controls saved for '+c.name.split(' ')[0]);
+    }
 }
 
 // RENDER

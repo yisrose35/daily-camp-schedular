@@ -81,13 +81,44 @@ function saveSnacksData(data) {
     cloudSaveSnacks(data);
 }
 
-// Cloud write — prefer the full hooks bridge when present, otherwise upsert
-// the campistrySnacks key into camp_state_kv directly via the Supabase client.
+function _txSig(t) { return [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|'); }
+function _reconcileBalances(data) {
+    if (!data || !data.accounts) return data;
+    var byCamper = {};
+    (data.transactions || []).forEach(function(t) { if (!t || !t.camper) return; var amt = parseFloat(t.amount) || 0; byCamper[t.camper] = (byCamper[t.camper] || 0) + (t.type === 'credit' ? amt : -amt); });
+    Object.keys(data.accounts).forEach(function(name) { if (byCamper[name] != null) data.accounts[name].balance = Math.round(byCamper[name] * 100) / 100; });
+    return data;
+}
+// Cloud write. Fetch-merge so a POS write never clobbers a parent deposit or a
+// server-side purchase (submit_canteen_purchase) that hit the cloud after this
+// tab cached its copy — union the transaction ledgers and recompute balances
+// from the union (the ledger is the source of truth).
 function cloudSaveSnacks(data) {
-    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
-        window.saveGlobalSettings('campistrySnacks', data);
-        return;
-    }
+    try {
+        const db = window.CampistryDB;
+        const client = db && db.getClient ? db.getClient() : (db && db.client);
+        const campId = db && db.getCampId && db.getCampId();
+        if (!client || !campId || !client.from) { _cloudUpsertSnacks(data); return; }
+        client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
+            .then(function(res) {
+                var cloud = (res && res.data && res.data.value) || null;
+                var merged = data;
+                if (cloud && typeof cloud === 'object') {
+                    var seen = {}, tx = [];
+                    (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) { var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t); });
+                    merged = Object.assign({}, cloud, data);
+                    merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
+                    merged.transactions = tx;
+                    _reconcileBalances(merged);
+                }
+                _cloudUpsertSnacks(merged);
+                try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
+                snacks = merged;
+            }, function() { _cloudUpsertSnacks(data); });
+    } catch (e) { console.warn('[Snacks POS] Cloud save error:', e); _cloudUpsertSnacks(data); }
+}
+function _cloudUpsertSnacks(data) {
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) { window.saveGlobalSettings('campistrySnacks', data); return; }
     try {
         const db = window.CampistryDB;
         if (!db || !db.client) return;
@@ -301,58 +332,70 @@ function updateChargeBtn() {
 window.charge = function() {
     if (!sel || !cart.length) return;
     const a = getAccount(sel);
-    const total = cart.reduce((s, ci) => {
+    const total = Math.round(cart.reduce((s, ci) => {
         const item = snacks.inventory.find(i => i.id === ci.id);
         return s + (item ? item.price * ci.qty : 0);
-    }, 0);
-    const rem = a.dailyLimit - a.spentToday;
-    if (total > rem) { toast('Exceeds daily limit ($' + rem.toFixed(2) + ' left)', true); return; }
-    // Parents can set a balance floor (stop before $0) and a credit limit (spend past $0)
-    const spendable = a.balance - (a.balanceFloor || 0) + (a.creditLimit || 0);
-    if (total > spendable) { toast('Insufficient balance ($' + spendable.toFixed(2) + ' spendable)', true); return; }
-
-    // Process
-    a.balance -= total;
-    a.spentToday += total;
+    }, 0) * 100) / 100;
     const itemNames = cart.map(ci => {
         const item = snacks.inventory.find(i => i.id === ci.id);
         if (!item) return '';
-        item.stock -= ci.qty;
-        item.soldToday = (item.soldToday || 0) + ci.qty;
-        item.totalSold = (item.totalSold || 0) + ci.qty;
         return ci.qty > 1 ? item.name + ' ×' + ci.qty : item.name;
     }).filter(Boolean).join(', ');
 
-    // Log transaction
+    // Fast client-side PRE-check (UX only — the server RPC is the authority).
+    const rem = a.dailyLimit - a.spentToday;
+    if (a.dailyLimit > 0 && total > rem) { toast('Exceeds daily limit ($' + Math.max(rem,0).toFixed(2) + ' left)', true); return; }
+    const spendable = a.balance - (a.balanceFloor || 0) + (a.creditLimit || 0);
+    if (total > spendable) { toast('Insufficient balance ($' + spendable.toFixed(2) + ' spendable)', true); return; }
+
+    // ── AUTHORITATIVE PATH: submit_canteen_purchase enforces the parent's daily
+    // limit + overdraft atomically under a row lock (migration 026). This is the
+    // ONE place caps are guaranteed — a client bypass or a race can't overspend.
+    const _cdb = window.CampistryDB;
+    const client = _cdb && _cdb.getClient && _cdb.getClient();
+    const campId = _cdb && _cdb.getCampId && _cdb.getCampId();
+    const finish = () => {
+        // Inventory + activity are POS-local; the RPC already logged the debit
+        // transaction and the new balance, so we do NOT add a transaction here.
+        cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
+        if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
+        const hr = new Date().getHours(); snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
+        saveSnacksData(snacks); // fetch-merges: pulls the RPC's debit into the ledger, reconciles balance
+        const cp = document.querySelector('.cart-panel'); if (cp) { cp.classList.add('flash'); setTimeout(() => cp.classList.remove('flash'), 600); }
+        toast('✓ $' + total.toFixed(2) + ' charged to ' + sel);
+        cart = []; sel = null;
+        renderCampers(); renderItems(); renderCart(); updateCamperBar();
+        var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); }
+    };
+
+    if (client && campId && client.rpc) {
+        const camperName = sel;
+        client.rpc('submit_canteen_purchase', { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() })
+            .then(res => {
+                const d = res && res.data;
+                if (res.error || !d || !d.success) {
+                    const err = (d && d.error) || (res.error && res.error.message) || 'charge_failed';
+                    const msg = err === 'daily_limit_exceeded' ? 'Blocked — over daily limit ($' + (Number((d && d.remaining) || 0)).toFixed(2) + ' left today)'
+                              : err === 'insufficient_balance' ? 'Blocked — insufficient balance ($' + (Number((d && d.spendable) || 0)).toFixed(2) + ' spendable)'
+                              : err === 'not_authorized' ? 'Not authorized to charge this camp'
+                              : 'Charge failed (' + err + ')';
+                    toast(msg, true);
+                    return;
+                }
+                a.balance = Number(d.balance); a.spentToday = Number(d.spentToday); a.lastSpendDate = todayStr();
+                finish();
+            }, e => { toast('Charge failed — connection error', true); });
+        return;
+    }
+
+    // ── OFFLINE FALLBACK (no cloud client): best-effort local enforcement +
+    // ledger, reconciled when the connection returns. Documented limitation.
+    a.balance = Math.round((a.balance - total) * 100) / 100;
+    a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
+    a.lastSpendDate = todayStr();
     if (!snacks.transactions) snacks.transactions = [];
-    snacks.transactions.unshift({
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        camper: sel,
-        items: itemNames,
-        amount: total,
-        date: todayStr()
-    });
-
-    // Track hourly activity
-    if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
-    const hr = new Date().getHours();
-    snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
-
-    // Save
-    saveSnacksData(snacks);
-
-    // Flash success
-    document.querySelector('.cart-panel').classList.add('flash');
-    setTimeout(() => document.querySelector('.cart-panel').classList.remove('flash'), 600);
-
-    toast('✓ $' + total.toFixed(2) + ' charged to ' + sel);
-
-    // Reset
-    cart = [];
-    sel = null;
-    renderCampers(); renderItems(); renderCart(); updateCamperBar();
-    document.getElementById('camperSearch').value = '';
-    document.getElementById('camperSearch').focus();
+    snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel, items: itemNames, amount: total, type: 'debit', date: todayStr() });
+    finish();
 };
 
 // ==========================================================================
