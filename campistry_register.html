@@ -188,6 +188,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div style="font-size:48px">🎉</div>
 <h2>Application Submitted!</h2>
 <p id="successTxt">Thank you for registering. We'll review your application and be in touch shortly.</p>
+<div id="cloudSyncNote" style="font-size:.8rem;font-weight:600;margin-top:4px;color:var(--s500)">Sending to the camp…</div>
 <div style="margin-top:16px;padding:14px;background:var(--s50);border-radius:var(--r);text-align:left">
 <div style="font-size:.78rem;font-weight:600;color:var(--s500);margin-bottom:4px">SUMMARY</div>
 <div id="summaryOut" style="font-size:.82rem;color:var(--s700)"></div>
@@ -624,19 +625,19 @@ window.submitApp=function(){
             }catch(ex){}
         },500);
 
-        // Trigger cloud sync if available
-        // integration_hooks.js exposes saveGlobalSettings
-        if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
-            console.log('[Register] Syncing to cloud via integration_hooks');
-            window.saveGlobalSettings('campistryMe',g.campistryMe);
-        }else if(typeof window.forceSyncToCloud==='function'){
-            console.log('[Register] Syncing to cloud via forceSyncToCloud');
-            window.forceSyncToCloud();
-        }else{
-            // If no cloud sync is available on this page, try loading Supabase directly
-            // The admin will pick up the data from localStorage when they open Me
-            console.log('[Register] No cloud sync available on this page — saved locally. Data will sync when admin opens Campistry Me.');
-        }
+        // Persist to the cloud RELIABLY. integration_hooks' batched sync
+        // silently defers/drops the write when the Supabase client isn't ready
+        // yet on this lightweight page (getClient() is null at submit time, so
+        // executeBatchSync bails at "client not ready" and the retry dies when
+        // the page is left). We do a direct, awaited, fetch-merged upsert so the
+        // application actually reaches the camp — and surface the result.
+        _flushEnrollmentsToCloud(g.campistryMe).then(function(res){
+            var el=document.getElementById('cloudSyncNote'); if(!el)return;
+            if(res&&res.ok){ el.textContent='✓ Received by the camp'; el.style.color='var(--ok)'; }
+            else{ el.textContent='⚠ Saved on this device — reconnect to finish sending your application'; el.style.color='var(--me)'; }
+        });
+        // Belt-and-suspenders: also nudge integration_hooks if it's authoritative.
+        try{ if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler) window.saveGlobalSettings('campistryMe',g.campistryMe); }catch(_){}
     }catch(e){
         console.error('[Register] Save error:',e);
         return showErr('Error submitting. Please try again.');
@@ -656,6 +657,35 @@ window.submitApp=function(){
 };
 
 function showErr(m){var el=document.getElementById('formErr');el.textContent=m;el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}
+
+// Reliably push the new application(s) to the cloud. Waits for the Supabase
+// client to finish initializing (it is often null at submit time on this
+// lightweight page), then fetch-merges the new enrollments into the camp's
+// campistryMe row so nothing existing is clobbered.
+async function _flushEnrollmentsToCloud(campistryMe){
+    try{
+        var client=null, campId=null;
+        for(var i=0;i<48;i++){ // up to ~12s
+            client = (window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient()) || (window.supabase&&typeof window.supabase.from==='function'?window.supabase:null);
+            campId = (window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId()) || localStorage.getItem('campistry_camp_id');
+            if(client&&typeof client.from==='function'&&campId) break;
+            await new Promise(function(r){setTimeout(r,250);});
+        }
+        if(!client||typeof client.from!=='function'||!campId){
+            console.warn('[Register] Cloud client unavailable — application saved locally only');
+            return {ok:false,reason:'no-client'};
+        }
+        // Fetch-merge so we never drop cloud-only enrollments/families.
+        var cur=await client.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
+        var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:{};
+        var merged=Object.assign({},cloudMe,campistryMe);
+        merged.enrollments=Object.assign({},cloudMe.enrollments||{},campistryMe.enrollments||{});
+        var up=await client.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
+        if(up&&up.error){ console.warn('[Register] Cloud upsert failed:',up.error.message); return {ok:false,reason:up.error.message}; }
+        console.log('[Register] ✓ Application synced to cloud — '+Object.keys(merged.enrollments||{}).length+' enrollment(s)');
+        return {ok:true};
+    }catch(e){ console.warn('[Register] Cloud flush error:',e&&e.message); return {ok:false,reason:e&&e.message}; }
+}
 
 load();
 })();
