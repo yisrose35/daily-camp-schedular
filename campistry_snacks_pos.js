@@ -368,13 +368,28 @@ window.charge = function() {
         var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); }
     };
 
+    // Best-effort local charge (offline, or before the purchase RPC exists).
+    // Enforcement is the client pre-check above; the ledger reconciles later.
+    const localCharge = () => {
+        a.balance = Math.round((a.balance - total) * 100) / 100;
+        a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
+        a.lastSpendDate = todayStr();
+        if (!snacks.transactions) snacks.transactions = [];
+        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel, items: itemNames, amount: total, type: 'debit', date: todayStr() });
+        finish();
+    };
+
     if (client && campId && client.rpc) {
         const camperName = sel;
         client.rpc('submit_canteen_purchase', { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() })
             .then(res => {
                 const d = res && res.data;
+                const emsg = (res.error && res.error.message) || '';
+                // Migration 026 not applied yet → RPC doesn't exist → don't break
+                // the register; fall back to the local path.
+                if (res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { localCharge(); return; }
                 if (res.error || !d || !d.success) {
-                    const err = (d && d.error) || (res.error && res.error.message) || 'charge_failed';
+                    const err = (d && d.error) || emsg || 'charge_failed';
                     const msg = err === 'daily_limit_exceeded' ? 'Blocked — over daily limit ($' + (Number((d && d.remaining) || 0)).toFixed(2) + ' left today)'
                               : err === 'insufficient_balance' ? 'Blocked — insufficient balance ($' + (Number((d && d.spendable) || 0)).toFixed(2) + ' spendable)'
                               : err === 'not_authorized' ? 'Not authorized to charge this camp'
@@ -388,14 +403,7 @@ window.charge = function() {
         return;
     }
 
-    // ── OFFLINE FALLBACK (no cloud client): best-effort local enforcement +
-    // ledger, reconciled when the connection returns. Documented limitation.
-    a.balance = Math.round((a.balance - total) * 100) / 100;
-    a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
-    a.lastSpendDate = todayStr();
-    if (!snacks.transactions) snacks.transactions = [];
-    snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel, items: itemNames, amount: total, type: 'debit', date: todayStr() });
-    finish();
+    localCharge();
 };
 
 // ==========================================================================
