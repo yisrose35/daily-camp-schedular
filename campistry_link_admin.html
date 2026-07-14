@@ -3028,6 +3028,7 @@ function refreshTriageUI() {
                 (s.eval.missedBelowReject != null ? ', ' + Math.round(s.eval.missedBelowReject * 100) + '% of auto-rejects were real kids' : '') +
                 ' (over ' + s.eval.n + ' labeled decisions)');
         }
+        if (s.siblingStrict) bits.push(s.siblingStrict + ' enrolled siblings auto-protected (stricter matching)');
         if (s.workerActive) bits.push('background scanning active');
         stats.textContent = bits.join(' · ');
     }

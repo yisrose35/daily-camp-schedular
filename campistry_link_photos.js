@@ -304,6 +304,12 @@
         try { roster = (window.CampistryLink && CampistryLink.data.getRoster) ? (CampistryLink.data.getRoster() || {}) : {}; } catch(e) {}
         var strictDivs = _store.settings.strictDivisions || [];
 
+        // siblings: enrolled kids from the same family are each other's most
+        // confusable impostors (shared genetics + same photos). When 2+ kids
+        // of one family are enrolled, all of them get the strict treatment
+        // automatically — sibling-grade matches go to review, not auto-tag.
+        var siblingSet = _siblingEnrolledSet(faces.map(function(f) { return f.camper_name; }));
+
         for (var i = 0; i < faces.length; i++) {
             var name = faces[i].camper_name;
             // v2 shape: descriptors: [{descriptor, model, pose, source, created_at?}]
@@ -349,6 +355,7 @@
                     var entry = { name: name, templates: templates };
                     var div = roster[name] && roster[name].division;
                     if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
+                    if (siblingSet[name]) { entry.strict = true; entry.sibling = true; }
                     _camperTemplates.push(entry);
                     _store.faceIndex[name] = { descriptors: descList, updatedAt: new Date().toISOString() };
                     indexed++;
@@ -375,6 +382,29 @@
                  staleCampers: _store.staleCampers.slice() };
     }
 
+    // Family lookup: given the enrolled camper names, return {name: true} for
+    // every camper who has an enrolled sibling (same family in the roster —
+    // grouped by shared parent contact). Fail-open to empty on any data issue.
+    function _siblingEnrolledSet(enrolledNames) {
+        var out = {};
+        try {
+            if (!window.CampistryLink || !CampistryLink.data.getCamperParentMap) return out;
+            var map = CampistryLink.data.getCamperParentMap() || {};
+            var byFamily = {};
+            enrolledNames.forEach(function(name) {
+                var info = map[name];
+                if (!info) return;
+                var key = info.familyId || info.parentEmail || info.parentPhone;
+                if (!key) return;
+                (byFamily[key] = byFamily[key] || []).push(name);
+            });
+            Object.keys(byFamily).forEach(function(k) {
+                if (byFamily[k].length >= 2) byFamily[k].forEach(function(n) { out[n] = true; });
+            });
+        } catch(e) {}
+        return out;
+    }
+
     /**
      * Rebuild index from persisted descriptors (fast, no cloud round trip)
      */
@@ -387,6 +417,7 @@
         var roster = {};
         try { roster = (window.CampistryLink && CampistryLink.data.getRoster) ? (CampistryLink.data.getRoster() || {}) : {}; } catch(err) {}
         var strictDivs = _store.settings.strictDivisions || [];
+        var siblingSet = _siblingEnrolledSet(entries.map(function(e) { return e[0]; }));
 
         _camperTemplates = [];
         entries.forEach(function(e) {
@@ -408,6 +439,7 @@
                 var entry = { name: name, templates: templates };
                 var div = roster[name] && roster[name].division;
                 if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
+                if (siblingSet[name]) { entry.strict = true; entry.sibling = true; }
                 _camperTemplates.push(entry);
             }
         });
@@ -1007,7 +1039,8 @@
             eval: evalR,                                       // measured precision at current dials
             staleCampers: (_store.staleCampers || []).slice(), // need fresh enrollment photos
             unknownClusters: (_store.unknownClusters || []).length,
-            strictDivisions: (_store.settings.strictDivisions || []).slice()
+            strictDivisions: (_store.settings.strictDivisions || []).slice(),
+            siblingStrict: _camperTemplates.filter(function(c) { return c.sibling; }).length
         };
     }
 
