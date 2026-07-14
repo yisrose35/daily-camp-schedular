@@ -760,6 +760,22 @@
         <div id="coverageSummary" style="font-size:.8rem;margin-bottom:10px;"></div>
         <div id="coverageList" style="max-height:260px;overflow-y:auto;"></div>
     </div>
+    <div class="lk-card" style="border-color:var(--red-200,#fecaca);">
+        <div class="lk-card-head"><h2>Season Close-Out</h2><span class="badge">owner only</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">
+            When the season ends, destroy all biometric data for this camp: every face descriptor and
+            reference headshot is permanently deleted (the retention promise in your consent language —
+            biometric privacy laws expect this). Parents simply re-enroll next summer, which also gives
+            recognition fresh photos of kids who grew. <strong>Irreversible.</strong>
+        </p>
+        <label style="display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--slate-700);cursor:pointer;margin-bottom:10px;">
+            <input type="checkbox" id="purgePhotosToo"> Also delete the entire photo gallery (otherwise photos + tags stay viewable for parents)
+        </label>
+        <button class="btn btn-sm" style="background:var(--red-500,#ef4444);color:#fff;border:none;" onclick="seasonCloseOut()">
+            Delete All Face Data…
+        </button>
+        <div id="purgeResult" style="font-size:.76rem;margin-top:8px;"></div>
+    </div>
     <div class="lk-card" id="unknownFacesCard" style="display:none;">
         <div class="lk-card-head">
             <h2>Unknown Faces</h2>
@@ -3324,7 +3340,7 @@ async function handlePhotos(files) {
     if (r.error) { prog.innerHTML = '<div style="color:var(--red-500);font-size:.82rem;">' + esc(r.error) + '</div>'; return; }
     document.getElementById('indexBadge').textContent = cp.getIndexSize() + ' campers';
     document.getElementById('indexBadge').className = 'badge badge-ok';
-    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged' + (r.needsReview ? ', ' + r.needsReview + ' need review' : '') + '</div>';
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged' + (r.needsReview ? ', ' + r.needsReview + ' need review' : '') + (r.duplicates ? ', ' + r.duplicates + ' duplicate' + (r.duplicates === 1 ? '' : 's') + ' skipped' : '') + '</div>';
     document.getElementById('photoInput').value = '';
     refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI(); refreshUnknownFaces(); refreshCoverage();
 }
@@ -3375,7 +3391,7 @@ function refreshTriageUI() {
                 ' (over ' + s.eval.n + ' labeled decisions)');
         }
         if (s.siblingStrict) bits.push(s.siblingStrict + ' enrolled siblings auto-protected (stricter matching)');
-        if (s.workerActive) bits.push('background scanning active');
+        if (s.workerActive) bits.push('background scanning active (' + (s.workerCount > 1 ? s.workerCount + ' parallel workers' : '1 worker') + ')');
         stats.textContent = bits.join(' · ');
     }
     // strict-division chips from the camp structure
@@ -3413,6 +3429,30 @@ function toggleStrictDivision(divName) {
     cp.restoreIndex();   // re-mark strict campers on the live matcher
     refreshTriageUI();
 }
+// ─── Season close-out (biometric purge) ──────────────────────────────────────
+async function seasonCloseOut() {
+    var cp = CP(); if (!cp || !cp.purgeSeasonData) return;
+    var deletePhotos = document.getElementById('purgePhotosToo').checked;
+    var typed = prompt(
+        'This permanently deletes every face descriptor and reference headshot for this camp' +
+        (deletePhotos ? ', PLUS the entire photo gallery' : '') +
+        '.\n\nParents will need to re-enroll next season.\n\nType DELETE to confirm:');
+    if (typed !== 'DELETE') { toast('Cancelled'); return; }
+    var out = document.getElementById('purgeResult');
+    out.textContent = 'Purging…';
+    var r = await cp.purgeSeasonData(deletePhotos);
+    if (r && r.success) {
+        out.innerHTML = '<span style="color:var(--green-600);">✓ Purged: ' + r.descriptorsDeleted + ' descriptors, ' +
+            r.campersWiped + ' camper records wiped' + (r.photosDeleted ? ', ' + r.photosDeleted + ' photos deleted' : '') + '</span>';
+        document.getElementById('indexBadge').textContent = 'Not built';
+        document.getElementById('indexBadge').className = 'badge';
+        refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI(); refreshUnknownFaces(); refreshCoverage();
+        toast('All face data destroyed');
+    } else {
+        out.innerHTML = '<span style="color:var(--red-500);">' + esc((r && r.error) || 'Purge failed') + '</span>';
+    }
+}
+
 // ─── Photo coverage ("photo equity") ─────────────────────────────────────────
 function refreshCoverage() {
     var cp = CP(); if (!cp || !cp.getCoverageReport) return;

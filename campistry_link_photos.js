@@ -449,9 +449,15 @@
     }
 
     // =========================================================================
-    // SCAN WORKER — heavy ML off the main thread (UI stays responsive)
+    // SCAN WORKER POOL — heavy ML off the main thread, in parallel
     // =========================================================================
-    let _worker = null, _workerReady = null, _workerMsgId = 0;
+    // 2-3 workers (by device cores) scan photos concurrently: a 300-photo
+    // batch finishes 2-3x faster and the UI thread stays free either way.
+    // Each worker holds its own model copies (~150MB RAM), so the pool is
+    // deliberately small. Browser cache makes the model downloads one-time.
+    let _workerPool = null;          // [{w, busy}] — null until first use
+    let _workerPoolReady = null;
+    let _workerMsgId = 0;
     const _workerCallbacks = {};
 
     function _workerSupported() {
@@ -461,10 +467,13 @@
             && typeof createImageBitmap !== 'undefined';
     }
 
-    function _ensureWorker() {
-        if (!_workerSupported()) return Promise.resolve(null);
-        if (_workerReady) return _workerReady;
-        _workerReady = new Promise(function(resolve) {
+    function _poolSize() {
+        var cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+        return Math.max(1, Math.min(3, cores - 1));
+    }
+
+    function _spawnWorker() {
+        return new Promise(function(resolve) {
             try {
                 var w = new Worker('campistry_face_worker.js');
                 var settled = false;
@@ -475,7 +484,7 @@
                 w.onmessage = function(ev) {
                     var msg = ev.data || {};
                     if (msg.type === 'ready') {
-                        if (!settled) { settled = true; clearTimeout(timer); _worker = w; resolve(w); }
+                        if (!settled) { settled = true; clearTimeout(timer); resolve(w); }
                         return;
                     }
                     if (msg.type === 'init_failed') {
@@ -495,23 +504,52 @@
                 w.postMessage({ type: 'init', modelBase: window.CAMPISTRY_MODEL_BASE || undefined });
             } catch(e) { resolve(null); }
         });
-        return _workerReady;
     }
 
-    // Detect faces via the worker; null → caller falls back to inline.
+    function _ensureWorkerPool() {
+        if (!_workerSupported()) return Promise.resolve([]);
+        if (_workerPoolReady) return _workerPoolReady;
+        _workerPoolReady = (function() {
+            // spawn the first worker alone: if it fails (CSP, model block),
+            // don't burn time spawning more doomed ones
+            return _spawnWorker().then(function(first) {
+                if (!first) { _workerPool = []; return []; }
+                var rest = [];
+                for (var i = 1; i < _poolSize(); i++) rest.push(_spawnWorker());
+                return Promise.all(rest).then(function(others) {
+                    _workerPool = [first].concat(others.filter(Boolean))
+                        .map(function(w) { return { w: w, busy: 0 }; });
+                    console.log('[LinkPhotos] scan worker pool ready: ' + _workerPool.length);
+                    return _workerPool;
+                });
+            });
+        })();
+        return _workerPoolReady;
+    }
+
+    // Detect faces via the least-busy pool worker; null → caller scans inline.
     function _workerDetect(dataUrl, opts) {
-        return _ensureWorker().then(function(w) {
-            if (!w) return null;
+        return _ensureWorkerPool().then(function(pool) {
+            if (!pool || !pool.length) return null;
+            var slot = pool.reduce(function(a, b) { return b.busy < a.busy ? b : a; });
+            slot.busy++;
             return new Promise(function(resolve) {
                 var id = 'm' + (++_workerMsgId);
-                var to = setTimeout(function() { delete _workerCallbacks[id]; resolve(null); }, 120000);
+                var to = setTimeout(function() { delete _workerCallbacks[id]; slot.busy--; resolve(null); }, 120000);
                 _workerCallbacks[id] = function(msg) {
                     clearTimeout(to);
+                    slot.busy--;
                     resolve(msg.ok ? msg.result : null);
                 };
-                w.postMessage({ type: 'scan', id: id, dataUrl: dataUrl, opts: opts });
+                slot.w.postMessage({ type: 'scan', id: id, dataUrl: dataUrl, opts: opts });
             });
         });
+    }
+
+    // How many photos to process concurrently in a batch (pool size, or 1
+    // when scanning falls back to the main thread).
+    function _scanConcurrency() {
+        return (_workerPool && _workerPool.length) ? _workerPool.length : 1;
     }
 
     // =========================================================================
@@ -634,18 +672,31 @@
         }
         var core = Core();
         var weekKey = _getWeekKey();
-        var processed = 0, tagged = 0, untagged = 0, needsReview = 0, errors = 0, burstExtra = 0;
+        var processed = 0, tagged = 0, untagged = 0, needsReview = 0, errors = 0, burstExtra = 0, duplicates = 0;
 
-        // ── phase 1: scan every photo ────────────────────────────────────────
-        var scanned = [];
-        for (var i = 0; i < files.length; i++) {
-            var file = files[i];
-            if (!file.type.startsWith('image/')) { errors++; continue; }
-            if (progressCallback) {
-                progressCallback({ current: i + 1, total: files.length, name: file.name, phase: 'scanning' });
-            }
+        // known content hashes (photos already in this camp's library)
+        var knownHashes = {};
+        _store.photos.forEach(function(p) { if (p.contentHash) knownHashes[p.contentHash] = true; });
+
+        // ── phase 1: scan photos (in parallel across the worker pool) ────────
+        await _ensureWorkerPool();   // spin up before deciding concurrency
+        var validFiles = Array.prototype.filter.call(files, function(f) {
+            if (!f.type.startsWith('image/')) { errors++; return false; }
+            return true;
+        });
+        var scanned = [];            // filled in completion order, idx assigned after
+        var done = 0, cursor = 0;
+        var concurrency = Math.min(_scanConcurrency(), Math.max(1, validFiles.length));
+
+        async function _processOne(file) {
             try {
                 var originalDataUrl = await _fileToDataUrl(file);
+                // duplicate check BEFORE the expensive scan — photographers
+                // re-upload the same batch all the time
+                var hash = _contentHash(originalDataUrl);
+                if (knownHashes[hash]) { duplicates++; return; }
+                knownHashes[hash] = true;
+
                 var result = await scanPhoto(originalDataUrl);
                 var displayUrl = await _resizeImage(originalDataUrl, 1200);
                 // shutter time: EXIF DateTimeOriginal beats file.lastModified
@@ -657,8 +708,8 @@
                     capturedAt = core.exifCaptureTime(head);
                 } catch(xe) {}
                 scanned.push({
-                    idx: scanned.length,
                     fileName: file.name,
+                    contentHash: hash,
                     capturedAt: capturedAt || file.lastModified || null,
                     displayUrl: displayUrl,
                     result: result
@@ -666,8 +717,27 @@
             } catch(e) {
                 console.warn('[LinkPhotos] Error processing file:', file.name, e.message);
                 errors++;
+            } finally {
+                done++;
+                if (progressCallback) {
+                    progressCallback({ current: done, total: validFiles.length, name: file.name, phase: 'scanning' });
+                }
             }
         }
+
+        async function _lane() {
+            while (cursor < validFiles.length) {
+                var file = validFiles[cursor++];
+                await _processOne(file);
+            }
+        }
+        var lanes = [];
+        for (var li = 0; li < concurrency; li++) lanes.push(_lane());
+        await Promise.all(lanes);
+
+        // stable order for burst clustering + persistence
+        scanned.sort(function(a, b) { return (a.capturedAt || 0) - (b.capturedAt || 0); });
+        scanned.forEach(function(s, i) { s.idx = i; });
 
         // ── phase 2: burst propagation across rapid sequences ────────────────
         if (_store.settings.burstClustering && scanned.length > 1) {
@@ -737,6 +807,7 @@
                 id: 'photo_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
                 dataUrl: s.displayUrl,
                 fileName: s.fileName,
+                contentHash: s.contentHash,
                 uploadDate: new Date().toISOString(),
                 capturedAt: s.capturedAt,
                 week: weekKey,
@@ -822,7 +893,52 @@
 
         return { processed: processed, tagged: tagged, untagged: untagged,
                  needsReview: needsReview, burstTagged: burstExtra,
-                 unknownClusters: unknownClusters, errors: errors };
+                 unknownClusters: unknownClusters, duplicates: duplicates, errors: errors };
+    }
+
+    // =========================================================================
+    // SEASON CLOSE-OUT — destroy all biometric data for this camp
+    // =========================================================================
+
+    /**
+     * The retention promise, kept: deletes every face descriptor and reference
+     * headshot for the camp (cloud, owner-only RPC — migration 037), optionally
+     * the photo gallery too, then wipes the local cache. Parents re-enroll
+     * fresh next season (which the child-face aging data says they should
+     * anyway). Irreversible.
+     */
+    async function purgeSeasonData(deletePhotos) {
+        var db = _db();
+        if (!db) return { success: false, error: 'not_signed_in' };
+        var res;
+        try {
+            res = await db.client.rpc('purge_face_data', {
+                p_camp_id: db.campId, p_delete_photos: !!deletePhotos
+            });
+        } catch(e) {
+            return { success: false, error: e.message || 'purge_failed' };
+        }
+        if (!res || !res.data || !res.data.success) {
+            return { success: false, error: (res && res.data && res.data.error) || 'purge_failed' };
+        }
+        // local cache: everything biometric or derived goes
+        _store.faceIndex = {};
+        _store.unknownClusters = [];
+        _store.staleCampers = [];
+        _store.learn = [];
+        _store.learnMeta = { lastTuneN: 0, tunedAt: null };
+        _store.faceIndexVersion = null;
+        _store.photos.forEach(function(p) { p.pendingTags = []; });
+        if (deletePhotos) _store.photos = [];
+        _camperTemplates = [];
+        _indexBuilt = false;
+        saveStore();
+        return {
+            success: true,
+            descriptorsDeleted: res.data.descriptors_deleted,
+            campersWiped: res.data.campers_wiped,
+            photosDeleted: res.data.photos_deleted
+        };
     }
 
     // =========================================================================
@@ -1043,7 +1159,8 @@
             autoAccepted: _store.stats.autoAccepted,
             autoRejected: _store.stats.autoRejected,
             burstTagged: _store.stats.burstTagged,
-            workerActive: !!_worker,
+            workerActive: !!(_workerPool && _workerPool.length),
+            workerCount: (_workerPool && _workerPool.length) || 0,
             eval: evalR,                                       // measured precision at current dials
             staleCampers: (_store.staleCampers || []).slice(), // need fresh enrollment photos
             unknownClusters: (_store.unknownClusters || []).length,
@@ -1294,6 +1411,17 @@
     // HELPERS
     // =========================================================================
 
+    // FNV-1a over the data URL + length — fast, and at camp scale (thousands
+    // of photos) collisions are vanishingly unlikely for dedupe purposes.
+    function _contentHash(str) {
+        var h = 0x811c9dc5;
+        for (var i = 0; i < str.length; i++) {
+            h ^= str.charCodeAt(i);
+            h = (h * 0x01000193) >>> 0;
+        }
+        return h.toString(36) + '_' + str.length.toString(36);
+    }
+
     function _fileToDataUrl(file) {
         return new Promise(function(resolve, reject) {
             var reader = new FileReader();
@@ -1355,6 +1483,9 @@
         getUnknownClusters: getUnknownClusters,
         assignUnknownCluster: assignUnknownCluster,
         dismissUnknownCluster: dismissUnknownCluster,
+
+        // Season close-out
+        purgeSeasonData: purgeSeasonData,
 
         // Tagging
         manualTag: manualTag,
