@@ -231,8 +231,54 @@
 
     // ── Parent-submitted health documents ─────────────────────────────────
     var HSUBMIT_KEY = 'campistry_health_submissions_v1';
-    function getSubmissions(){ try{return JSON.parse(localStorage.getItem(HSUBMIT_KEY)||'[]');}catch(e){return[];} }
-    function saveSubmissions(arr){ try{localStorage.setItem(HSUBMIT_KEY,JSON.stringify(arr));}catch(e){} }
+    var _cloudDocs = null;   // parent-submitted docs pulled from the cloud (migration 037)
+
+    function _hdb(){
+        if(!window.CampistryDB) return null;
+        try{ var c=CampistryDB.getClient(), id=CampistryDB.getCampId(); return (c&&id)?{client:c,campId:id}:null; }catch(e){ return null; }
+    }
+    function _localSubs(){ try{return JSON.parse(localStorage.getItem(HSUBMIT_KEY)||'[]');}catch(e){return[];} }
+
+    // Cloud submissions (authoritative) merged with any legacy localStorage-only rows.
+    function getSubmissions(){
+        var cloud=(_cloudDocs||[]).map(function(d){
+            return { id:d.id, camperName:d.camper_name, fileName:d.file_name, fileType:d.file_type,
+                     fileData:d.file_data, note:d.note, status:d.status, reviewNotes:d.review_notes,
+                     submittedAt:d.created_at?new Date(d.created_at).getTime():0, _cloud:true };
+        });
+        var local=_localSubs().filter(function(l){ return !cloud.some(function(c){return c.id===l.id;}); });
+        return cloud.concat(local);
+    }
+    function saveSubmissions(arr){ try{ localStorage.setItem(HSUBMIT_KEY, JSON.stringify((arr||[]).filter(function(d){return !d._cloud;}))); }catch(e){} }
+
+    // Pull parent-submitted documents from the cloud, then re-render the section.
+    function loadCloudHealthDocs(){
+        var db=_hdb(); if(!db) return;
+        db.client.rpc('get_camp_health_documents',{p_camp_id:db.campId}).then(function(res){
+            if(!res.error && res.data && res.data.success){ _cloudDocs=res.data.documents||[]; renderParentDocs(); }
+        }).catch(function(){});
+    }
+
+    function _setDocStatus(id,status){
+        var db=_hdb(); var doc=getSubmissions().find(function(d){return d.id===id;});
+        if(doc && doc._cloud && db){
+            db.client.rpc('set_health_document_status',{p_id:id,p_status:status,p_notes:null}).then(function(res){
+                if(!res.error && res.data && res.data.success){
+                    (_cloudDocs||[]).forEach(function(d){ if(d.id===id) d.status=status; });
+                    renderParentDocs();
+                }
+            }).catch(function(){});
+        } else {
+            var docs=_localSubs(); var d=docs.find(function(x){return x.id===id;});
+            if(d){ d.status=status; d.reviewedAt=Date.now(); try{localStorage.setItem(HSUBMIT_KEY,JSON.stringify(docs));}catch(e){} }
+            renderParentDocs();
+        }
+    }
+    function viewParentDoc(id){
+        var doc=getSubmissions().find(function(d){return d.id===id;});
+        if(doc&&doc.fileData){ var w=window.open(); if(w){ if(/^data:image/i.test(doc.fileData)){ w.document.write('<img src="'+doc.fileData+'" style="max-width:100%">'); } else { w.location=doc.fileData; } } }
+        else toast('File not available','err');
+    }
 
     function fmtDocTime(ts){
         if(!ts)return'';
@@ -257,10 +303,12 @@
             '</div><table class="data-table"><thead><tr><th>Camper</th><th>File</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>';
         docs.forEach(function(doc){
             var statusBdg=doc.status==='approved'?bdg('Approved','green'):doc.status==='flagged'?bdg('Flagged','red'):bdg('Pending','amber');
+            var viewBtn='<button class="btn btn-sm btn-ghost" onclick="CampistryHealth.viewParentDoc(\''+je(doc.id)+'\')">View</button>';
             var actions=doc.status==='pending'?
+                viewBtn+'&nbsp;'+
                 '<button class="btn btn-sm btn-primary" onclick="CampistryHealth.approveParentDoc(\''+je(doc.id)+'\')">Approve</button>&nbsp;'+
                 '<button class="btn btn-sm btn-danger" onclick="CampistryHealth.flagParentDoc(\''+je(doc.id)+'\')">Flag</button>':
-                '<button class="btn btn-sm btn-ghost">View</button>';
+                viewBtn;
             h+='<tr>'+
                 '<td style="font-weight:700;">'+esc(doc.camperName||'—')+'</td>'+
                 '<td><span style="font-size:.75rem;">'+esc(doc.fileName||'—')+'</span></td>'+
@@ -274,21 +322,15 @@
     }
 
     function approveParentDoc(id){
-        var docs=getSubmissions();
-        var doc=docs.find(function(d){return d.id===id;});
-        if(!doc)return;
-        doc.status='approved'; doc.reviewedAt=Date.now();
-        saveSubmissions(docs); renderParentDocs();
-        toast(doc.camperName+' — document approved','ok');
+        var doc=getSubmissions().find(function(d){return d.id===id;});
+        _setDocStatus(id,'approved');
+        toast((doc?doc.camperName:'Camper')+' — document approved','ok');
     }
 
     function flagParentDoc(id){
-        var docs=getSubmissions();
-        var doc=docs.find(function(d){return d.id===id;});
-        if(!doc)return;
-        doc.status='flagged'; doc.reviewedAt=Date.now();
-        saveSubmissions(docs); renderParentDocs();
-        toast(doc.camperName+' — document flagged','err');
+        var doc=getSubmissions().find(function(d){return d.id===id;});
+        _setDocStatus(id,'flagged');
+        toast((doc?doc.camperName:'Camper')+' — document flagged','err');
     }
 
     function renderIntake() {
@@ -404,13 +446,14 @@
             case 'allergies': renderAllergies(); break;
             case 'nighttime': renderNighttime(); break;
             case 'campers': renderCamperDirectory(); break;
-            case 'intake': renderIntake(); break;
+            case 'intake': renderIntake(); loadCloudHealthDocs(); break;
         }
     }
 
     function init() {
         console.log('💜 [Health] Init — '+Object.keys(getRoster()).length+' campers from Me');
         renderDashboard();
+        loadCloudHealthDocs();   // pull parent-submitted health docs from the cloud
         setupSearch('visitCamperInput');
         setupSearch('medCamperInput');
         document.querySelectorAll('.complaint-preset').forEach(function(b){b.addEventListener('click',function(){b.classList.toggle('selected')})});
@@ -428,6 +471,7 @@
         renderAllergies:renderAllergies, renderNighttime:renderNighttime,
         renderCamperDirectory:renderCamperDirectory, renderIntake:renderIntake,
         renderParentDocs:renderParentDocs, approveParentDoc:approveParentDoc, flagParentDoc:flagParentDoc,
+        viewParentDoc:viewParentDoc, loadCloudHealthDocs:loadCloudHealthDocs,
         logDispensing:logDispensing, saveSickVisit:saveSickVisit, saveDispensing:saveDispensing,
         viewCamper:viewCamper, getRoster:getRoster, getStructure:getStructure,
         getHealth:getHealth, saveHealth:saveHealth,

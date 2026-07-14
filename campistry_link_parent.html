@@ -1269,20 +1269,46 @@ function handleHealthDocUpload(input){
     var activeBadge=document.getElementById('healthCamperBadge');
     var badgeText=activeBadge?activeBadge.textContent:'';
     var camperName=badgeText.split(' · ')[0].trim()||'Unknown';
-    list.insertAdjacentHTML('afterbegin','<div class="lk-health-doc"><div class="lk-health-doc-icon">'+docSvg+'</div><div class="lk-health-doc-info"><div class="lk-health-doc-name">'+f.name+'</div><div class="lk-health-doc-meta">Just uploaded · '+badgeText+'</div></div><button class="btn btn-secondary btn-sm">View</button></div>');
+    if(camperName==='Unknown'||!camperName){ toast('Pick a child first'); return; }
+    if(f.size>4500000){ toast('File too large (max ~4MB)'); input.value=''; return; }
+
+    var rowId='hdoc_'+Date.now();
+    list.insertAdjacentHTML('afterbegin','<div class="lk-health-doc" id="'+rowId+'"><div class="lk-health-doc-icon">'+docSvg+'</div><div class="lk-health-doc-info"><div class="lk-health-doc-name">'+_escHtml(f.name)+'</div><div class="lk-health-doc-meta" id="'+rowId+'_meta">Uploading… · '+_escHtml(badgeText)+'</div></div></div>');
     input.value='';
-    // Write to shared store (read by Campistry Health)
-    try {
-        var hstore=JSON.parse(localStorage.getItem(HEALTH_SUBMIT_KEY)||'[]');
-        hstore.unshift({
-            id:Date.now().toString(36)+Math.random().toString(36).slice(2,5),
-            camperName:camperName, camperBadge:badgeText,
-            fileName:f.name, fileExt:f.name.split('.').pop().toUpperCase(),
-            submittedAt:Date.now(), status:'pending', reviewNotes:''
-        });
-        localStorage.setItem(HEALTH_SUBMIT_KEY,JSON.stringify(hstore));
-    } catch(e){}
-    toast('Document uploaded!');
+
+    // Read the file and send it to the cloud so the camp nurse actually receives it.
+    var reader=new FileReader();
+    reader.onload=function(e){
+        var dataUrl=e.target.result;
+        var meta=document.getElementById(rowId+'_meta');
+        var call=window._pRpc
+            ? window._pRpc('submit_health_document',{p_camper_name:camperName,p_file_name:f.name,p_file_type:f.type||'',p_file_data:dataUrl,p_note:null})
+            : (window._parentDB&&window._parentDB.rpc('submit_health_document',{p_camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null,p_camper_name:camperName,p_file_name:f.name,p_file_type:f.type||'',p_file_data:dataUrl,p_note:null}));
+        Promise.resolve(call).then(function(res){
+            var ok=res&&res.data&&res.data.success;
+            if(meta) meta.textContent=ok?('Sent to camp nurse · '+badgeText):('Upload failed'+((res&&res.data&&res.data.error)?(': '+res.data.error):'')+' · '+badgeText);
+            if(ok) toast('Document sent to the camp nurse!');
+            else toast('Could not send document');
+        }).catch(function(){ if(meta) meta.textContent='Upload failed — check connection'; });
+    };
+    reader.readAsDataURL(f);
+}
+
+// Load this parent's previously-submitted health docs from the cloud so the list
+// persists across devices/sessions.
+function _loadMyHealthDocs(){
+    var db=window._parentDB, list=document.getElementById('healthDocList');
+    if(!list||!db||typeof parent==='undefined'||!parent||!parent.campId)return;
+    var call=window._pRpc?window._pRpc('get_my_health_documents',{}):db.rpc('get_my_health_documents',{p_camp_id:parent.campId});
+    Promise.resolve(call).then(function(res){
+        if(!res||!res.data||!res.data.success)return;
+        var docs=res.data.documents||[]; if(!docs.length)return;
+        var docSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+        list.innerHTML=docs.map(function(d){
+            var st=d.status==='approved'?'Approved ✓':d.status==='flagged'?'Needs attention':'Pending review';
+            return '<div class="lk-health-doc"><div class="lk-health-doc-icon">'+docSvg+'</div><div class="lk-health-doc-info"><div class="lk-health-doc-name">'+_escHtml(d.file_name||'Document')+'</div><div class="lk-health-doc-meta">'+_escHtml(d.camper_name||'')+' · '+st+'</div></div></div>';
+        }).join('');
+    }).catch(function(){});
 }
 
 function showChild(id){
@@ -2216,6 +2242,7 @@ nav = function(p) {
     if (p === 'photos' && photoConsented !== 'yes') { checkPhotoConsent(); return; }
     _origNav(p);
     if (p === 'photos') { _loadCamperFaceStatus(); _loadParentPhotos(); }
+    if (p === 'health') { _loadMyHealthDocs(); }
 };
 
 // Init pickup child tabs
