@@ -628,16 +628,21 @@
     </div>
 
     <div class="lk-card">
-        <div class="lk-card-head"><h2>Step 2: Share the Portal</h2></div>
+        <div class="lk-card-head"><h2>Step 2: Announce It</h2></div>
         <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:10px;">
-            Blast this ONE link to your parent email list or WhatsApp group. A parent who signs up with
-            the <strong>email you have on file</strong> is linked automatically — no code needed.
-            The CSV above has each family's personal link + access code for anyone who used a different email.
+            Send ONE email to your parent list: sign up with <strong>the email you registered with</strong> —
+            children connect automatically. No codes, no personal links. (The CSV above is the fallback for
+            families who used a different email.)
         </p>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
             <code id="portalShareUrl" style="font-size:.75rem;background:var(--slate-50);padding:8px 12px;border-radius:8px;border:1px solid var(--border-light);word-break:break-all;"></code>
             <button class="btn btn-secondary btn-sm" onclick="var b=this;navigator.clipboard.writeText(document.getElementById('portalShareUrl').textContent).then(function(){b.textContent='Copied ✓';setTimeout(function(){b.textContent='Copy link'},2000)})">Copy link</button>
+            <button class="btn btn-primary btn-sm" onclick="copyParentAnnouncement(this)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                Copy announcement email
+            </button>
         </div>
+        <div id="announcePreview" style="display:none;background:var(--slate-50);border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;font-size:.78rem;white-space:pre-wrap;color:var(--text-muted);"></div>
     </div>
 
     <div class="lk-card" id="joinRequestsCard" style="display:none;">
@@ -3215,6 +3220,33 @@ async function resolveJoinReq(reqId, action){
     }
     toast(action === 'approve' ? 'Approved — parent now has access' : 'Request declined');
     refreshParentsPage();
+}
+
+// Ready-to-send announcement email for the camp's parent list. The whole pitch:
+// one shared link, sign up with the email on file, kids connect automatically.
+function copyParentAnnouncement(btn){
+    var db = _dbc2(); if (!db) { toast('Not signed in'); return; }
+    var campName = '';
+    try { campName = (document.getElementById('campNameDisplay') || {}).textContent || ''; } catch(e) {}
+    if (campName === 'Camp') campName = '';   // placeholder, not a real name
+    var url = _pgPortalUrl(null) + '?camp=' + db.campId;
+    var body =
+        'Subject: ' + (campName || 'Camp') + ' is now on Campistry Link!\n\n' +
+        'Dear Parents,\n\n' +
+        'We\'re excited to invite you to our new parent portal, Campistry Link — camp photos of your kids, canteen balances, daily schedules, messaging the office, and more, all in one place.\n\n' +
+        'Getting started takes one minute:\n\n' +
+        '1. Open ' + url + '\n' +
+        '2. Tap "Create account"\n' +
+        '3. Sign up using THE SAME EMAIL ADDRESS you used when registering for camp\n\n' +
+        'That\'s it — your children are connected automatically. No codes, no forms.\n\n' +
+        '(If you\'d like us to use a different email address, just reply to this message and we\'ll update it.)\n\n' +
+        'See you this summer!\n' + (campName || 'The Camp Office');
+    navigator.clipboard.writeText(body).then(function(){
+        if (btn) { var t = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(function(){ btn.textContent = t.trim() ? 'Copy announcement email' : t; }, 2000); }
+        var prev = document.getElementById('announcePreview');
+        if (prev) { prev.textContent = body; prev.style.display = ''; }
+        toast('Announcement copied — paste into your email tool');
+    }).catch(function(){ toast('Could not copy — clipboard blocked'); });
 }
 
 function downloadParentMailMerge(){

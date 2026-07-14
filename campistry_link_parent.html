@@ -2714,8 +2714,8 @@ window.addEventListener('storage', function(e) {
             '<button onclick="parentSignIn()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Sign In</button>' +
             '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
             '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:16px;">' +
-            '<p style="font-size:.78rem;color:#94A3B8;margin:0 0 8px;">First time here? Use your camp invite link, or after signing in you can enter your access code.</p>' +
-            (urlToken ? '<button onclick="parentShowSignup()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:8px 20px;font-size:.82rem;color:#3B82F6;font-weight:600;cursor:pointer;">Create account with invite</button>' : '') +
+            '<p style="font-size:.78rem;color:#94A3B8;margin:0 0 8px;">First time here? Sign up with the <strong>same email you gave your camp</strong> — your children connect automatically.</p>' +
+            '<button onclick="parentShowSignup()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:8px 20px;font-size:.82rem;color:#3B82F6;font-weight:600;cursor:pointer;">' + (urlToken ? 'Create account with invite' : 'Create account') + '</button>' +
             '</div>' +
             '</div>');
         setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
@@ -2725,7 +2725,7 @@ window.addEventListener('storage', function(e) {
         var ev = prefillEmail || (inviteData && inviteData.parent_email) || '';
         var wn = inviteData && inviteData.parent_name ? inviteData.parent_name.split(' ')[0] : '';
         var welcome = wn ? '<p style="font-size:.83rem;color:#64748B;margin:0;">Welcome, <strong>'+_esc(wn)+'</strong>! Create a password to access your portal.</p>'
-                         : '<p style="font-size:.83rem;color:#64748B;margin:0;">Create an account to access your camp portal from any device.</p>';
+                         : '<p style="font-size:.83rem;color:#64748B;margin:0;">Use the <strong>same email address you gave your camp</strong> when you registered — your children will be connected automatically.</p>';
         _showOverlay('parentAuthOverlay',
             '<div style="width:100%;max-width:380px;">' +
             '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 6px;">Create Your Account</h2>'+welcome+'</div>' +
@@ -2744,7 +2744,7 @@ window.addEventListener('storage', function(e) {
         var err = errorMsg ? '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#EF4444;margin-bottom:14px;">'+_esc(errorMsg)+'</div>' : '';
         _showOverlay('parentAuthOverlay',
             '<div style="width:100%;max-width:380px;">' +
-            '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Enter Your Access Code</h2><p style="font-size:.83rem;color:#64748B;margin:0;">Find the 8-character code in your acceptance email from camp</p></div>' +
+            '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Let\'s Find Your Family</h2><p style="font-size:.83rem;color:#64748B;margin:0;">We couldn\'t match your email to a camper. If your camp has a <strong>different email on file</strong>, sign out and sign up with that one — or use an access code from camp below.</p></div>' +
             err +
             '<div style="margin-bottom:18px;">' +
             '<label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Access Code</label>' +
@@ -2843,7 +2843,8 @@ window.addEventListener('storage', function(e) {
             }
             console.log('[Parent] Account created, claiming invite…');
             _showLoading('Setting up your portal…');
-            _claimAndLoad(urlToken);
+            if (urlToken) { _claimAndLoad(urlToken); }
+            else { _loadByUser(); }   // email-first path: auto-claims by matching email
         });
     };
 
@@ -2878,7 +2879,9 @@ window.addEventListener('storage', function(e) {
     window.parentShowSignup = function() {
         if (urlToken && window._parentInviteData) { _showCreateAccount('', window._parentInviteData); }
         else if (urlToken) { _validateThenShowSignup(urlToken); }
-        else { _setMsg('Use your camp invite link to create an account, or enter your access code after signing in.'); }
+        // Open sign-up (email-first onboarding): camps bulk-invite their roster,
+        // so an account created with the on-file email auto-connects on sign-in.
+        else { _showCreateAccount('', null); }
     };
     window.parentSignOut = function() {
         db.auth.signOut().then(function() { window.location.reload(); });
