@@ -614,7 +614,13 @@
 </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Account</h2></div>
         <div class="lk-field"><label>Name</label><input type="text" class="lk-input" id="settingsName" value="" placeholder="Your name"></div>
-        <div class="lk-field"><label>Email</label><input type="email" class="lk-input" id="settingsEmail" value="" placeholder="your@email.com"></div>
+        <div class="lk-field"><label>Login Email</label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="email" class="lk-input" id="settingsEmail" value="" placeholder="your@email.com" style="flex:1;min-width:180px;">
+                <button class="btn btn-secondary btn-sm" onclick="changeParentEmail()">Change email</button>
+            </div>
+            <div id="settingsEmailMsg" style="font-size:.76rem;min-height:15px;margin-top:4px;color:var(--text-muted);"></div>
+        </div>
         <div class="lk-field"><label>Phone</label><input type="tel" class="lk-input" id="settingsPhone" value="" placeholder="(555) 000-0000"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
             <button class="btn btn-primary btn-sm" onclick="saveParentSettings()">Save Changes</button>
@@ -1569,6 +1575,35 @@ function saveParentSettings(silent){
     document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){ prefs[cb.dataset.pref]=cb.checked; });
     try{ localStorage.setItem(PARENT_PREFS_KEY, JSON.stringify(prefs)); }catch(e){}
     if(!silent) toast('Settings saved');
+}
+
+// Change the parent's LOGIN email. Supabase updates the auth account (and,
+// depending on the project's settings, sends a confirmation to the new address);
+// once confirmed, sync_my_invite_email re-points their invites so future
+// auto-claims still match. The family connection itself is by user_id, so it
+// never breaks regardless.
+function changeParentEmail(){
+    var db=window._parentDB;
+    var msg=document.getElementById('settingsEmailMsg');
+    var say=function(t,c){ if(msg){ msg.textContent=t; msg.style.color=c||'var(--text-muted)'; } };
+    var newEmail=((document.getElementById('settingsEmail')||{}).value||'').trim();
+    if(!db){ say('Not signed in.', 'var(--red-500)'); return; }
+    if(!newEmail || newEmail.indexOf('@')<0){ say('Enter a valid email address.', 'var(--red-500)'); return; }
+    var current=(typeof parent!=='undefined'&&parent)?(parent.email||'').toLowerCase():'';
+    if(newEmail.toLowerCase()===current){ say('That is already your login email.'); return; }
+    say('Updating…');
+    db.auth.updateUser({ email:newEmail }).then(function(res){
+        if(res.error){ say('Could not update: '+res.error.message, 'var(--red-500)'); return; }
+        // If the project requires confirmation, the change applies after the
+        // parent clicks the link sent to the NEW address. Try to sync now (works
+        // immediately when confirmations are off); it re-runs harmlessly later.
+        var doSync=window._pRpc?window._pRpc('sync_my_invite_email',{}):db.rpc('sync_my_invite_email',{});
+        Promise.resolve(doSync).then(function(r){
+            var synced=r&&r.data&&r.data.success&&r.data.synced;
+            if(synced){ say('Email changed to '+newEmail+'. ✓', 'var(--green-600)'); if(parent) parent.email=newEmail; }
+            else { say('Check '+newEmail+' for a confirmation link to finish the change.', 'var(--green-600)'); }
+        }).catch(function(){ say('Check '+newEmail+' for a confirmation link to finish the change.', 'var(--green-600)'); });
+    }).catch(function(){ say('Could not update — check your connection.', 'var(--red-500)'); });
 }
 function applyParentPrefs(){
     var prefs=_loadParentPrefs();

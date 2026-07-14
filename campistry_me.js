@@ -876,6 +876,9 @@ function saveCamper(){
     // Reject instead of clobbering an existing record.
     if(editingCamper&&editingCamper!==full&&roster[full]){toast('A camper named "'+full+'" already exists','error');return}
     var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
+    // Capture the parent email BEFORE we overwrite it, so an email change can be
+    // migrated onto the existing invite in place (fix b) rather than orphaning it.
+    var _oldParentEmail=(editingCamper&&roster[editingCamper]&&roster[editingCamper].parent1Email)?String(roster[editingCamper].parent1Email).trim():'';
     // ★ #4 cascade: roster keys are NAMES, and families[].camperIds / bunkAsgn[bunk] /
     // payments[].camper / Campistry-Go addresses all reference campers BY NAME. On a
     // rename we must update those refs or the camper is silently detached from their
@@ -944,6 +947,7 @@ function saveCamper(){
     // undercounted actual campers).
     var wasNew=!editingCamper;
     if(wasNew)_autoCreateAcceptedEnrollment(full);
+    var wasEdit=!!editingCamper;
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
     // Keep any already-issued parent portal invite in sync. The invite stores
     // a snapshot of camper_data at creation time (see _syncParentInviteSnapshot)
@@ -951,6 +955,23 @@ function saveCamper(){
     // reach a parent who already has portal access until someone manually
     // clicked "Get Invite Link" again.
     _syncInvitesForCamper(full);
+    // Fix (b): the camp changed this parent's email on file → move their existing
+    // invite to the new email IN PLACE (keeps the signed-up parent connected +
+    // preserves token/code), instead of leaving an orphan for the old email.
+    var _newParentEmail=(roster[full].parent1Email||'').trim();
+    if(wasEdit&&_oldParentEmail&&_newParentEmail&&_oldParentEmail.toLowerCase()!==_newParentEmail.toLowerCase()){
+        try{
+            var _db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+            var _camp=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+            if(_db&&_camp){
+                _db.rpc('set_parent_invite_email',{p_camp_id:_camp,p_old_email:_oldParentEmail,p_new_email:_newParentEmail}).then(function(res){
+                    var d=res&&res.data;
+                    if(d&&d.success&&d.moved)toast('Parent portal email updated');
+                    else if(d&&d.error==='target_email_exists')toast('Note: an invite already exists for '+_newParentEmail);
+                }).catch(function(){});
+            }
+        }catch(_){}
+    }
 }
 function _autoCreateAcceptedEnrollment(camperName){
     if(Object.values(enrollments).some(function(e){return e.camperName===camperName}))return;
@@ -2963,14 +2984,22 @@ function _autoProvisionParentInvites(){
 
     _apiRunning=true;
     var expires=new Date();expires.setFullYear(expires.getFullYear()+1);
+    var rosterNames=Object.keys(roster);   // for the offboarding sweep (fix a)
     var i=0,done=0,failed=0;
+    function _finish(){
+        _apiRunning=false;
+        if(!failed)_apiLastSig=sig;   // retry failures on the next save
+        if(done)console.log('[Me] Parent sign-up: '+done+' famil'+(done===1?'y':'ies')+' provisioned/refreshed'+(failed?(' ('+failed+' failed)'):''));
+        // Offboarding: revoke any active invite whose children are ALL gone from
+        // the roster (last child un-enrolled). Safe — keeps access while any
+        // child remains; server no-ops on an empty roster.
+        db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
+            var rev=res&&res.data&&res.data.revoked;
+            if(rev)console.log('[Me] Parent sign-up: revoked '+rev+' orphaned invite'+(rev===1?'':'s')+' (children no longer enrolled)');
+        }).catch(function(){});
+    }
     (function next(){
-        if(i>=keys.length){
-            _apiRunning=false;
-            if(!failed)_apiLastSig=sig;   // retry failures on the next save
-            if(done)console.log('[Me] Parent sign-up: '+done+' famil'+(done===1?'y':'ies')+' provisioned/refreshed'+(failed?(' ('+failed+' failed)'):''));
-            return;
-        }
+        if(i>=keys.length){ _finish(); return; }
         var f=fams[keys[i++]];
         var camperData={};
         f.campers.forEach(function(cn){
