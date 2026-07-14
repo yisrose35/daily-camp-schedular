@@ -138,6 +138,25 @@ no-image-leaves-device consent architecture; no verified accuracy win).
 Deferred: child-focused fine-tuning (YLFW / Inter-Prototype loss) — the only
 technique requiring GPU training; revisit after the engineering wins settle.
 
+## Parked notes (decided, revisit only with new evidence)
+
+- **Outside APIs** (AWS Rekognition ≈ $35/season at 4-camp volume, Azure Face
+  ≈ free tier but Limited-Access-gated): rejected. Replaces only the raw
+  detect/embed calls (~30% of the system), breaks the no-image-leaves-device
+  consent architecture, no verified accuracy win at camp scale. Escape hatch
+  if measured precision ever disappoints: one-time shadow test of ~200
+  consented photos (≈$3 of API calls, consent language updated first).
+- **Estimated standing vs the leaders**: ~90–95% of what Rekognition-class
+  systems would deliver on the same photos; the gap is concentrated in the
+  hardest faces, which the review queue catches. Validate against the
+  measured-precision line after the first real week.
+- **Free model-upgrade lever before any API**: buffalo_s → buffalo_l detector
+  (`det_10g.onnx`, ~16MB, drop-in URL swap) and future browser-sized
+  quantized recognition models; engine registry makes swaps config-only
+  (+ re-enrollment for recognition-model changes).
+- **Child fine-tuning** (YLFW / Inter-Prototype): only path requiring GPU
+  training; license unverified; revisit mid-season with an eval baseline.
+
 ## Known limits / next steps
 
 - SCRFD fixed 640×640 letterbox is used per-face-crop (landmark stage), not as

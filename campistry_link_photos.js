@@ -65,6 +65,7 @@
         learnMeta: { lastTuneN: 0, tunedAt: null },
         unknownClusters: [],// unresolved "who is this?" groups (capped at 12)
         staleCampers: [],   // campers whose enrollment photos predate this season
+        faceIndexVersion: null, // cloud fingerprint the cached index was built from
         stats: {
             totalUploaded: 0,
             totalTagged: 0,
@@ -111,6 +112,7 @@
                 _store.learnMeta = Object.assign({ lastTuneN: 0, tunedAt: null }, parsed.learnMeta || {});
                 _store.unknownClusters = Array.isArray(parsed.unknownClusters) ? parsed.unknownClusters : [];
                 _store.staleCampers = Array.isArray(parsed.staleCampers) ? parsed.staleCampers : [];
+                _store.faceIndexVersion = parsed.faceIndexVersion || null;
                 _store.stats = Object.assign({
                     totalUploaded: 0, totalTagged: 0, totalSent: 0, totalPendingResolved: 0,
                     autoAccepted: 0, autoRejected: 0, burstTagged: 0,
@@ -182,6 +184,45 @@
     // =========================================================================
     // FACE INDEX — cloud descriptors → per-camper multi-model templates
     // =========================================================================
+
+    // Cheap cloud fingerprint of the enrollment state (migration 031).
+    // Same fingerprint as when the cached index was built → provably fresh.
+    async function _getCloudIndexVersion() {
+        var db = _db();
+        if (!db) return null;
+        try {
+            var res = await db.client.rpc('get_face_index_version', { p_camp_id: db.campId });
+            if (res && res.data && res.data.success) return res.data.version || null;
+        } catch(e) { /* RPC missing (pre-031) or offline — treat as unknown */ }
+        return null;
+    }
+
+    /**
+     * Make sure the matcher is built AND matches the cloud, rebuilding ONLY
+     * when enrollment actually changed (new camper, new/updated photos,
+     * revoked consent, promoted descriptors from another device). Called
+     * automatically before every batch scan and at page load — staff never
+     * need to run "Build Index" by hand anymore.
+     */
+    async function ensureFreshIndex(progressCallback) {
+        if (!_indexBuilt) restoreIndexFromStore();
+
+        var v = await _getCloudIndexVersion();
+        if (v && _indexBuilt && _store.faceIndexVersion === v) {
+            return { fresh: true, indexed: _camperTemplates.length, rebuilt: false };
+        }
+        if (!v && _indexBuilt) {
+            // offline or pre-031 backend: cached index is the best we have
+            return { fresh: false, indexed: _camperTemplates.length, rebuilt: false, offline: true };
+        }
+        var r = await buildFaceIndex(progressCallback);
+        if (r && r.indexed > 0 && v) {
+            _store.faceIndexVersion = v;
+            saveStore();
+        }
+        r.rebuilt = true;
+        return r;
+    }
 
     // Build the matcher from the CLOUD face index: descriptors that parents
     // computed in-browser for their consented children (migrations 028/029).
@@ -290,6 +331,11 @@
 
         _indexBuilt = indexed > 0;
         saveStore();
+        // stamp the fingerprint this index was built from (fire-and-forget —
+        // a manual rebuild should also silence future freshness checks)
+        _getCloudIndexVersion().then(function(v) {
+            if (v) { _store.faceIndexVersion = v; saveStore(); }
+        }).catch(function() {});
 
         console.log('[LinkPhotos] ✅ Matcher built:', indexed, 'campers,', skipped, 'skipped,', errors, 'errors,',
                     _store.staleCampers.length, 'need fresh enrollment');
@@ -514,8 +560,13 @@
      * after routing except for pending review tags).
      */
     async function batchUploadAndScan(files, progressCallback) {
+        // auto-sync the matcher with the cloud (rebuild ONLY if enrollment
+        // changed since the cached index was built — otherwise instant)
+        if (progressCallback) progressCallback({ current: 0, total: files.length, name: 'Checking recognition index…', phase: 'indexing' });
+        await ensureFreshIndex(progressCallback);
         if (!_indexBuilt) {
-            return { processed: 0, tagged: 0, untagged: 0, errors: 0, error: 'Build face index first' };
+            return { processed: 0, tagged: 0, untagged: 0, errors: 0,
+                     error: 'No recognition index — no consented reference faces yet.' };
         }
         var core = Core();
         var weekKey = _getWeekKey();
@@ -1172,6 +1223,7 @@
         // Core pipeline
         loadModels: loadModels,
         buildFaceIndex: buildFaceIndex,
+        ensureFreshIndex: ensureFreshIndex,
         restoreIndex: restoreIndexFromStore,
         scanPhoto: scanPhoto,
         batchUploadAndScan: batchUploadAndScan,

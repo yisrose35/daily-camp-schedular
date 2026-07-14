@@ -603,11 +603,11 @@
     </div>
     <div class="lk-stats" id="photoStats"></div>
     <div class="lk-card">
-        <div class="lk-card-head"><h2>Step 1: Set Up Recognition</h2><span class="badge" id="indexBadge">Not built</span></div>
-        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Builds the matcher from consented reference photos parents uploaded in the Link app (up to 3 angles per camper, plus confirmed matches).</p>
-        <button class="btn btn-primary btn-sm" onclick="buildIndex()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            Build Index
+        <div class="lk-card-head"><h2>Recognition Index</h2><span class="badge" id="indexBadge">Not built</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Built from consented reference photos parents uploaded in the Link app (up to 3 angles per camper, plus confirmed matches). <strong>Syncs automatically</strong> — it checks the cloud before every upload and only rebuilds when enrollment actually changed (new camper, new photos, revoked consent). The button below just forces a re-sync.</p>
+        <button class="btn btn-ghost btn-sm" onclick="buildIndex()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            Force Re-sync
         </button>
         <div id="indexProg" style="display:none;margin-top:10px;"></div>
     </div>
@@ -2968,12 +2968,16 @@ async function buildIndex() {
 async function handlePhotos(files) {
     if (!files || !files.length) return;
     var cp = CP(); if (!cp) { toast('Photo engine not loaded'); return; }
-    if (!cp.isIndexBuilt()) { toast('Build face index first'); return; }
     var prog = document.getElementById('uploadProg');
     prog.style.display = 'block';
+    var phaseLabel = { indexing: 'Syncing index', scanning: 'Scanning', saving: 'Saving' };
     var r = await cp.batchUploadAndScan(files, function(p) {
-        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round(p.current / p.total * 100) + '%;"></div></div>Scanning ' + p.current + '/' + p.total + '</div>';
+        var pct = p.total ? Math.round(p.current / p.total * 100) : 0;
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + pct + '%;"></div></div>' + (phaseLabel[p.phase] || 'Working') + ' ' + p.current + '/' + p.total + '</div>';
     });
+    if (r.error) { prog.innerHTML = '<div style="color:var(--red-500);font-size:.82rem;">' + esc(r.error) + '</div>'; return; }
+    document.getElementById('indexBadge').textContent = cp.getIndexSize() + ' campers';
+    document.getElementById('indexBadge').className = 'badge badge-ok';
     prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged' + (r.needsReview ? ', ' + r.needsReview + ' need review' : '') + '</div>';
     document.getElementById('photoInput').value = '';
     refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI(); refreshUnknownFaces();
@@ -3921,16 +3925,25 @@ function boot() {
         else renderDash();
     });
 
-    // Photo index restore (templates rebuild instantly from stored descriptors;
-    // models load in the background for the next scan)
+    // Photo index: restore the cached matcher instantly, then quietly verify
+    // it against the cloud fingerprint and rebuild only if enrollment changed.
     var cp = CP();
-    if (cp && Object.keys(cp.getStore().faceIndex).length) {
-        if (cp.restoreIndex()) {
+    if (cp) {
+        if (Object.keys(cp.getStore().faceIndex).length && cp.restoreIndex()) {
             document.getElementById('indexBadge').textContent = cp.getIndexSize() + ' campers';
             document.getElementById('indexBadge').className = 'badge badge-ok';
             updatePhotoStats();
         }
         cp.loadModels();
+        if (cp.ensureFreshIndex) {
+            cp.ensureFreshIndex().then(function(r) {
+                if (r && r.indexed > 0) {
+                    document.getElementById('indexBadge').textContent = cp.getIndexSize() + ' campers' + (r.rebuilt ? ' (updated)' : '');
+                    document.getElementById('indexBadge').className = 'badge badge-ok';
+                    updatePhotoStats(); refreshTriageUI();
+                }
+            }).catch(function() {});
+        }
     }
     refreshReviewQueue();
     refreshTriageUI();
