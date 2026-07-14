@@ -1,6 +1,8 @@
 {
+  "redirects": [
+    { "source": "/", "destination": "/link", "permanent": false }
+  ],
   "rewrites": [
-    { "source": "/", "destination": "/campistry_link_parent.html" },
     { "source": "/link", "destination": "/campistry_link_parent.html" },
     { "source": "/parents", "destination": "/campistry_link_parent.html" }
   ]
