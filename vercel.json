@@ -1,6 +1,7 @@
 {
   "redirects": [
-    { "source": "/", "destination": "/link", "permanent": false }
+    { "source": "/", "destination": "/link", "permanent": false },
+    { "source": "/((?!campistry_link_parent).*\\.html)", "has": [{ "type": "host", "value": "link.campistry.org" }], "destination": "/link", "permanent": false }
   ],
   "rewrites": [
     { "source": "/link", "destination": "/campistry_link_parent.html" },
