@@ -2676,7 +2676,7 @@ window.addEventListener('storage', function(e) {
         }
         if(!window._msgVisWired){
             window._msgVisWired=true;
-            document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') _syncMessagesFromCloud(); });
+            document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ _syncMessagesFromCloud(); if(typeof _checkConnectableCamps==='function') _checkConnectableCamps(); } });
         }
         init();
         hydratePickupRequests();
@@ -2741,8 +2741,78 @@ window.addEventListener('storage', function(e) {
             });
             init(); // rebuild every child-tab list now that all camps are in
             console.log('[Parent] Multi-camp: '+camps.length+' camps, '+children.length+' children total');
+            _checkConnectableCamps(); // a new camp may have added a child since sign-up
         }).catch(function(){});
     }
+
+    // ── Auto-connect new campers/camps ────────────────────────────────────────
+    // A camp can add a second child (often at a DIFFERENT camp) AFTER the parent
+    // already registered. That invite matches their email but isn't bound to
+    // their account, so get_my_camps() can't see it. We poll for such invites and
+    // ASK the parent whether to connect each one (per-camp consent, migration 042).
+    window._connectDismissed = window._connectDismissed || {}; // invite_id -> dismissed this session
+    function _checkConnectableCamps() {
+        if (!window._parentDB || typeof parent === 'undefined' || !parent) return;
+        db.rpc('get_connectable_invites').then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            var invites = (res.data.invites || []).filter(function(iv){ return !window._connectDismissed[iv.invite_id]; });
+            if (invites.length) _showConnectPrompt(invites);
+        }).catch(function(){});
+    }
+    function _showConnectPrompt(invites) {
+        var rows = invites.map(function(iv){
+            var kids = (iv.camper_names || []).join(', ') || 'your camper';
+            return '<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid #E2E8F0;border-radius:12px;margin-bottom:10px;">' +
+                '<div style="flex:1;min-width:0;">' +
+                '<div style="font-weight:700;font-size:.92rem;color:#0F172A;">'+_esc(iv.camp_name)+'</div>' +
+                '<div style="font-size:.8rem;color:#64748B;margin-top:2px;">'+_esc(kids)+'</div>' +
+                '</div>' +
+                '<button onclick="_connectCamp(\''+_esc(iv.invite_id)+'\',this)" style="background:#3B82F6;color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:.82rem;font-weight:600;cursor:pointer;white-space:nowrap;">Connect</button>' +
+                '</div>';
+        }).join('');
+        var n = invites.length;
+        _showOverlay('connectCampOverlay',
+            '<div style="width:100%;max-width:400px;background:#fff;border-radius:18px;padding:24px;">' +
+            '<div style="text-align:center;margin-bottom:18px;">' +
+            '<div style="font-size:2rem;margin-bottom:6px;">🎉</div>' +
+            '<h2 style="font-size:1.12rem;font-weight:700;color:#0F172A;margin:0 0 4px;">'+(n===1?'A new camper is ready to connect':(n+' new campers are ready to connect'))+'</h2>' +
+            '<p style="font-size:.82rem;color:#64748B;margin:0;">We found '+(n===1?'a camp that':'camps that')+' added your child to your family. Connect to see '+(n===1?'them':'each')+' in your portal.</p>' +
+            '</div>' +
+            rows +
+            '<button onclick="_dismissConnectPrompt()" style="width:100%;background:none;border:1px solid #CBD5E1;border-radius:10px;padding:10px;font-size:.85rem;color:#64748B;font-weight:600;cursor:pointer;margin-top:6px;">Not now</button>' +
+            '</div>');
+    }
+    window._dismissConnectPrompt = function() {
+        // Remember for THIS session so the poll doesn't nag; re-offered next visit.
+        db.rpc('get_connectable_invites').then(function(res){
+            if (res.data && res.data.invites) res.data.invites.forEach(function(iv){ window._connectDismissed[iv.invite_id] = true; });
+        }).catch(function(){});
+        _hideOverlay('connectCampOverlay');
+    };
+    window._connectCamp = function(inviteId, btn) {
+        if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
+        db.rpc('connect_parent_invite', { p_invite_id: inviteId }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
+                toast('Could not connect — please try again.');
+                console.warn('[Parent] connect_parent_invite failed:', res.error ? res.error.message : (res.data||{}).error);
+                return;
+            }
+            window._connectDismissed[inviteId] = true;
+            // Remove this row; close the prompt if it was the last one.
+            if (btn) {
+                var row = btn.parentNode; if (row && row.parentNode) row.parentNode.removeChild(row);
+            }
+            var overlay = document.getElementById('connectCampOverlay');
+            var remaining = overlay ? overlay.querySelectorAll('button[onclick^="_connectCamp"]').length : 0;
+            if (!remaining) _hideOverlay('connectCampOverlay');
+            toast('Connected! Loading your camper…');
+            _augmentOtherCamps(parent.campId); // re-pull all camps and merge the new one
+        }).catch(function(){
+            if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
+            toast('Could not connect — check your connection.');
+        });
+    };
 
     var _lastLinkForms = null; // cache so post-submit re-renders don't lose the RPC data
     function _loadLinkForms(campId) {
