@@ -5884,6 +5884,52 @@ function psMoveColumn(id,colId,dir){
     var t=cols[i];cols[i]=cols[j];cols[j]=t;
     psSave();renderPrintSheets();
 }
+// ── column drag-and-drop reordering ──
+var _psDragColId=null;
+function _psClearDropCues(){
+    document.querySelectorAll('.ps-col-row.ps-drop-above,.ps-col-row.ps-drop-below').forEach(function(r){r.classList.remove('ps-drop-above','ps-drop-below')});
+}
+// The row is only draggable while the ⋮⋮ handle is held — so clicking into the
+// field select / header input never starts a drag.
+function psColDragHandle(e){var row=e.target.closest('.ps-col-row');if(row)row.setAttribute('draggable','true')}
+function psColDragStart(e,colId){
+    _psDragColId=colId;
+    try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',colId)}catch(_){}
+    var row=e.target.closest('.ps-col-row');if(row)row.classList.add('ps-dragging');
+}
+function psColDragEnd(e){
+    var row=e.target.closest('.ps-col-row');if(row){row.classList.remove('ps-dragging');row.setAttribute('draggable','false')}
+    _psClearDropCues();_psDragColId=null;
+}
+function psColDragOver(e){
+    if(!_psDragColId)return;
+    e.preventDefault();try{e.dataTransfer.dropEffect='move'}catch(_){}
+    var row=e.target.closest('.ps-col-row');if(!row||row.dataset.colid===_psDragColId){_psClearDropCues();return}
+    var rect=row.getBoundingClientRect();var after=(e.clientY-rect.top)>rect.height/2;
+    _psClearDropCues();row.classList.add(after?'ps-drop-below':'ps-drop-above');
+}
+function psColDragLeave(e){
+    var row=e.target.closest('.ps-col-row');
+    if(row&&!row.contains(e.relatedTarget))row.classList.remove('ps-drop-above','ps-drop-below');
+}
+function psColDrop(e,sheetId,targetColId){
+    e.preventDefault();
+    var s=psGet(sheetId),dragId=_psDragColId;
+    _psClearDropCues();
+    if(!s||!dragId||dragId===targetColId){_psDragColId=null;return}
+    var cols=s.columns||[];
+    var from=cols.findIndex(function(c){return c.id===dragId});
+    if(from<0){_psDragColId=null;return}
+    var row=e.target.closest('.ps-col-row');
+    var after=false;
+    if(row){var rect=row.getBoundingClientRect();after=(e.clientY-rect.top)>rect.height/2}
+    var moved=cols.splice(from,1)[0];
+    var insertIdx=cols.findIndex(function(c){return c.id===targetColId});
+    if(insertIdx<0)insertIdx=cols.length;else if(after)insertIdx+=1;
+    cols.splice(insertIdx,0,moved);
+    _psDragColId=null;
+    psSave();renderPrintSheets();
+}
 function psSetColField(id,colId,v){
     var s=psGet(id);if(!s)return;
     var col=(s.columns||[]).filter(function(c){return c.id===colId})[0];
@@ -6009,9 +6055,13 @@ function psEditorHtml(s){
     h+='<p style="font-size:.68rem;color:var(--s400);margin:0 0 8px">Pick a field for each column. Leave a column empty and it simply won\'t print. Choose <em>Blank / write-in</em> for a handwriting column (give it a header).</p>';
     h+='<div class="ps-cols">';
     (s.columns||[]).forEach(function(col,i){
-        h+='<div class="ps-col-row">'
-            +'<div class="ps-col-move"><button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+(i===0?' disabled':'')+' onclick="CampistryMe.psMoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\',-1)">↑</button>'
-            +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+(i===(s.columns.length-1)?' disabled':'')+' onclick="CampistryMe.psMoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\',1)">↓</button></div>'
+        h+='<div class="ps-col-row" data-colid="'+je(col.id)+'" draggable="false"'
+            +' ondragstart="CampistryMe.psColDragStart(event,\''+je(col.id)+'\')"'
+            +' ondragend="CampistryMe.psColDragEnd(event)"'
+            +' ondragover="CampistryMe.psColDragOver(event)"'
+            +' ondragleave="CampistryMe.psColDragLeave(event)"'
+            +' ondrop="CampistryMe.psColDrop(event,\''+je(s.id)+'\',\''+je(col.id)+'\')">'
+            +'<span class="ps-col-drag" title="Drag to reorder" onmousedown="CampistryMe.psColDragHandle(event)">⋮⋮</span>'
             +'<div class="ps-col-fields">'
             +'<select class="me-input me-input--sm" onchange="CampistryMe.psSetColField(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'+fieldSelect(col)+'</select>'
             +'<input type="text" class="me-input me-input--sm" value="'+esc(col.header||'')+'" placeholder="'+esc(col.field?('Header: '+psFieldLabel(col.field)):'Column header')+'" oninput="CampistryMe.psSetColHeader(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'
@@ -6087,6 +6137,8 @@ window.CampistryMe={
     psNew:psNew,psEdit:psEdit,psBack:psBack,psDelete:psDelete,psDuplicate:psDuplicate,
     psPrint:psPrint,psRename:psRename,psSetProp:psSetProp,psToggleHideEmpty:psToggleHideEmpty,
     psAddColumn:psAddColumn,psRemoveColumn:psRemoveColumn,psMoveColumn:psMoveColumn,
+    psColDragHandle:psColDragHandle,psColDragStart:psColDragStart,psColDragEnd:psColDragEnd,
+    psColDragOver:psColDragOver,psColDragLeave:psColDragLeave,psColDrop:psColDrop,
     psSetColField:psSetColField,psSetColHeader:psSetColHeader,
 };
 })();

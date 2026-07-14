@@ -220,7 +220,12 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .ps-builder .me-input--sm{padding:6px 8px;font-size:.78rem}
 .ps-cols-hd{font-size:.8rem;font-weight:700;color:var(--s800);margin:16px 0 4px;border-top:1px solid var(--s100);padding-top:12px}
 .ps-cols{display:flex;flex-direction:column;gap:8px}
-.ps-col-row{display:flex;align-items:center;gap:6px;background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:6px}
+.ps-col-row{display:flex;align-items:center;gap:6px;background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:6px;border-top:2px solid transparent;border-bottom:2px solid transparent}
+.ps-col-drag{flex-shrink:0;cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none;align-self:stretch;display:flex;align-items:center}
+.ps-col-drag:active{cursor:grabbing}
+.ps-col-row.ps-dragging{opacity:.45}
+.ps-col-row.ps-drop-above{border-top-color:var(--me)}
+.ps-col-row.ps-drop-below{border-bottom-color:var(--me)}
 .ps-col-move{display:flex;flex-direction:column;gap:2px}
 .ps-col-move .me-btn{padding:1px 6px;line-height:1.2;font-size:.7rem}
 .ps-col-fields{flex:1;display:flex;flex-direction:column;gap:5px;min-width:0}
