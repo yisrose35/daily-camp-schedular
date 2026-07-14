@@ -250,6 +250,11 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
             Lists
         </button>
+        <button class="lk-nav-item" data-page="parents" onclick="nav('parents')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Parents
+            <span class="badge badge-warn" id="parentsReqBadge" style="display:none;margin-left:auto;font-size:.62rem;">0</span>
+        </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Content</div>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
@@ -587,6 +592,83 @@
         <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
     </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  PARENTS — bulk onboarding after registration close -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-parents">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div>
+            <h1>Parents</h1>
+            <p>Invite every family from your roster — one click each side</p>
+        </div>
+    </div>
+    <div class="lk-stats" id="parentStats"></div>
+
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Step 1: Generate Invites</h2></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">
+            Creates a secure invite for every family on your Me roster (siblings grouped by parent email).
+            Already-invited families are refreshed, never duplicated.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-primary btn-sm" onclick="bulkInviteAll()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+                Generate invites for all families
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="downloadParentMailMerge()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download mail-merge CSV
+            </button>
+        </div>
+        <div id="bulkInviteProg" style="display:none;margin-top:10px;"></div>
+    </div>
+
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Step 2: Share the Portal</h2></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:10px;">
+            Blast this ONE link to your parent email list or WhatsApp group. A parent who signs up with
+            the <strong>email you have on file</strong> is linked automatically — no code needed.
+            The CSV above has each family's personal link + access code for anyone who used a different email.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <code id="portalShareUrl" style="font-size:.75rem;background:var(--slate-50);padding:8px 12px;border-radius:8px;border:1px solid var(--border-light);word-break:break-all;"></code>
+            <button class="btn btn-secondary btn-sm" onclick="var b=this;navigator.clipboard.writeText(document.getElementById('portalShareUrl').textContent).then(function(){b.textContent='Copied ✓';setTimeout(function(){b.textContent='Copy link'},2000)})">Copy link</button>
+        </div>
+    </div>
+
+    <div class="lk-card" id="joinRequestsCard" style="display:none;">
+        <div class="lk-card-head"><h2>Access Requests</h2><span class="badge badge-warn" id="joinReqCount">0</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:10px;">
+            Parents who signed up with an email that didn't match your roster. Match each to their family to approve.
+        </p>
+        <div id="joinRequestsList"></div>
+    </div>
+
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Families</h2>
+            <button class="btn btn-ghost btn-sm" onclick="refreshParentsPage()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                Refresh
+            </button>
+        </div>
+        <div style="overflow-x:auto;">
+            <table class="lk-table" style="width:100%;font-size:.8rem;">
+                <thead><tr><th style="text-align:left;padding:6px 8px;">Parent</th><th style="text-align:left;padding:6px 8px;">Children</th><th style="text-align:left;padding:6px 8px;">Status</th><th style="text-align:left;padding:6px 8px;">Access code</th><th style="padding:6px 8px;"></th></tr></thead>
+                <tbody id="parentFamiliesBody"></tbody>
+            </table>
+        </div>
+        <div id="parentFamiliesEmpty" class="lk-empty" style="display:none;padding:28px 16px;">
+            <h3>No families found</h3>
+            <p>Import your campers (with parent emails) into Campistry Me first — then invite everyone from here.</p>
+        </div>
+    </div>
+</div>
+
 
 <!-- ═══════════════════════════════════════════════════ -->
 <!--  PHOTOS                                             -->
@@ -1149,6 +1231,7 @@ function nav(p) {
     window.scrollTo(0, 0);
     if (p === 'dashboard') renderDash();
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
+    if (p === 'parents') { refreshParentsPage(); }
     if (p === 'messages') { switchMsgTab(currentMsgTab || 'inbox'); _loadStaffInbox(); }
     if (p === 'forms') {
         _loadFormSubmissions();
@@ -2946,6 +3029,218 @@ function viewFormSubmission(subId) {
     '</div>';
     el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
     document.body.appendChild(el);
+}
+
+// ─── PARENTS — bulk onboarding ────────────────────────────────────────────────
+// For camps that adopt Link after registration closed: roster is already in Me
+// (CSV import), so we invite every family from it. Parent-side claim paths:
+// personal link / access code (existing) or auto-claim by matching email (029).
+var _parentInvitesByEmail = {};   // lower(email) -> invite row from cloud
+
+function _pgToken(){
+    var arr = new Uint8Array(32);
+    crypto.getRandomValues(arr);
+    return Array.from(arr).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+function _pgPortalUrl(token){
+    var base = window.location.href.replace(/[^/]*$/, '');
+    return base + 'campistry_link_parent.html' + (token ? ('?invite=' + token) : '');
+}
+function _pgFamilies(){
+    var cl = CL(); if (!cl || !cl.data || !cl.data.getFamilyDirectory) return [];
+    return cl.data.getFamilyDirectory().filter(function(f){ return f.parentEmail; });
+}
+// Roster-based camper_data snapshot (Me's flow builds this from enrollments,
+// which post-registration camps don't have).
+function _pgCamperData(children){
+    var cl = CL();
+    var map = (cl && cl.data && cl.data.getCamperParentMap) ? cl.data.getCamperParentMap() : {};
+    var out = {};
+    (children || []).forEach(function(ch){
+        var c = map[ch.name] || {};
+        out[ch.name] = {
+            name: ch.name, dob: c.dob || '', gender: c.gender || '',
+            division: c.division || ch.division || '', grade: c.grade || ch.grade || '', bunk: c.bunk || ch.bunk || '',
+            session: c.session || '',
+            allergies: c.allergies || '', medications: c.medications || '', dietary: c.dietary || '',
+            doctor: c.doctor || '', doctorPhone: c.doctorPhone || '',
+            insurance: c.insurance || '', policyNum: c.policyNum || '',
+            emergencyName: c.emergencyName || '', emergencyPhone: c.emergencyPhone || '', emergencyRel: c.emergencyRel || '',
+            parent2Name: c.parent2Name || '', parent2Phone: c.parent2Phone || '',
+            staff: [], teacher: c.teacher || '', counselor: ''
+        };
+    });
+    return out;
+}
+
+async function bulkInviteAll(){
+    var db = _dbc2(); if (!db) { toast('Not signed in'); return; }
+    var fams = _pgFamilies();
+    if (!fams.length) { toast('No families with parent emails on the roster'); return; }
+    var prog = document.getElementById('bulkInviteProg');
+    prog.style.display = 'block';
+    var ok = 0, fail = 0;
+    var expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
+    for (var i = 0; i < fams.length; i++) {
+        var f = fams[i];
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round((i+1)/fams.length*100) + '%;"></div></div>' + (i+1) + '/' + fams.length + ': <strong>' + esc(f.parentName || f.parentEmail) + '</strong></div>';
+        try {
+            var res = await db.client.rpc('upsert_parent_invite', {
+                p_camp_id: db.campId,
+                p_token: _pgToken(),
+                p_parent_name: f.parentName || f.parentEmail,
+                p_parent_email: f.parentEmail,
+                p_camper_names: (f.children || []).map(function(c){ return c.name; }),
+                p_camper_data: _pgCamperData(f.children),
+                p_expires_at: expires.toISOString()
+            });
+            if (res.error || !res.data || !res.data.success) fail++; else ok++;
+        } catch(e) { fail++; }
+    }
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' families invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed</span>' : '') + '</div>';
+    refreshParentsPage();
+}
+
+function refreshParentsPage(){
+    var db = _dbc2(); if (!db) return;
+    var shareEl = document.getElementById('portalShareUrl');
+    if (shareEl) shareEl.textContent = _pgPortalUrl(null) + '?camp=' + db.campId;
+
+    db.client.rpc('get_camp_parent_invites', { p_camp_id: db.campId }).then(function(res){
+        _parentInvitesByEmail = {};
+        if (!res.error && res.data && res.data.success) {
+            (res.data.invites || []).forEach(function(inv){
+                _parentInvitesByEmail[(inv.parent_email || '').toLowerCase()] = inv;
+            });
+        }
+        _renderParentFamilies();
+    }).catch(function(){ _renderParentFamilies(); });
+
+    db.client.from('link_join_requests').select('*').eq('camp_id', db.campId).eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .then(function(res){ _renderJoinRequests((!res.error && res.data) || []); })
+        .catch(function(){ _renderJoinRequests([]); });
+}
+
+function _renderParentFamilies(){
+    var fams = _pgFamilies();
+    var body = document.getElementById('parentFamiliesBody');
+    var empty = document.getElementById('parentFamiliesEmpty');
+    if (!body) return;
+    var invited = 0, claimed = 0;
+    var rows = fams.map(function(f){
+        var inv = _parentInvitesByEmail[(f.parentEmail || '').toLowerCase()];
+        if (inv) invited++;
+        if (inv && inv.claimed) claimed++;
+        var status = !inv ? '<span class="badge badge-neutral">No invite</span>'
+                   : inv.claimed ? '<span class="badge badge-ok">Signed up ✓</span>'
+                   : '<span class="badge badge-warn">Invited</span>';
+        var kids = (f.children || []).map(function(c){ return c.name.split(' ')[0]; }).join(', ');
+        var linkBtn = inv ? '<button class="btn btn-ghost btn-sm" style="font-size:.68rem;padding:2px 8px;" onclick="var b=this;navigator.clipboard.writeText(_pgPortalUrl(\'' + inv.token + '\')).then(function(){b.textContent=\'✓\';setTimeout(function(){b.textContent=\'Copy link\'},1500)})">Copy link</button>' : '';
+        return '<tr style="border-top:1px solid var(--border-light);">'
+            + '<td style="padding:6px 8px;"><div style="font-weight:600;">' + esc(f.parentName || '—') + '</div><div style="color:var(--text-muted);font-size:.72rem;">' + esc(f.parentEmail) + '</div></td>'
+            + '<td style="padding:6px 8px;">' + esc(kids || '—') + '</td>'
+            + '<td style="padding:6px 8px;">' + status + '</td>'
+            + '<td style="padding:6px 8px;font-family:monospace;">' + esc(inv && inv.access_code ? inv.access_code : '—') + '</td>'
+            + '<td style="padding:6px 8px;text-align:right;">' + linkBtn + '</td>'
+            + '</tr>';
+    });
+    body.innerHTML = rows.join('');
+    if (empty) empty.style.display = fams.length ? 'none' : '';
+    var stats = document.getElementById('parentStats');
+    if (stats) {
+        var famSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>';
+        var mailSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
+        var checkSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+        stats.innerHTML = stat('blue', famSvg, fams.length, 'Families')
+                        + stat('amber', mailSvg, invited, 'Invited')
+                        + stat('green', checkSvg, claimed, 'Signed up');
+    }
+}
+
+function _renderJoinRequests(reqs){
+    var card = document.getElementById('joinRequestsCard');
+    var list = document.getElementById('joinRequestsList');
+    var count = document.getElementById('joinReqCount');
+    var navBadge = document.getElementById('parentsReqBadge');
+    if (!card || !list) return;
+    if (count) count.textContent = reqs.length;
+    if (navBadge) { navBadge.textContent = reqs.length; navBadge.style.display = reqs.length ? '' : 'none'; }
+    card.style.display = reqs.length ? '' : 'none';
+    if (!reqs.length) { list.innerHTML = ''; return; }
+
+    var fams = _pgFamilies();
+    var famOpts = fams.map(function(f){
+        return '<option value="' + esc(f.parentEmail) + '">' + esc((f.parentName || f.parentEmail)) + ' — ' + esc((f.children || []).map(function(c){ return c.name.split(' ')[0]; }).join(', ')) + '</option>';
+    }).join('');
+
+    list.innerHTML = reqs.map(function(r){
+        return '<div style="border:1px solid var(--border-light);border-radius:10px;padding:10px 12px;margin-bottom:8px;">'
+            + '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">'
+            + '<div><div style="font-weight:600;font-size:.85rem;">' + esc(r.name || r.email) + '</div>'
+            + '<div style="font-size:.74rem;color:var(--text-muted);">' + esc(r.email) + (r.phone ? ' · ' + esc(r.phone) : '') + '</div>'
+            + (r.note ? '<div style="font-size:.78rem;margin-top:4px;">“' + esc(r.note) + '”</div>' : '') + '</div>'
+            + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
+            + '<select id="jr_' + r.id + '" style="font-size:.74rem;padding:4px 6px;border:1px solid var(--border-light);border-radius:6px;max-width:220px;"><option value="">Match to family…</option>' + famOpts + '</select>'
+            + '<button class="btn btn-primary btn-sm" style="font-size:.72rem;" onclick="resolveJoinReq(\'' + r.id + '\',\'approve\')">Approve</button>'
+            + '<button class="btn btn-secondary btn-sm" style="font-size:.72rem;" onclick="resolveJoinReq(\'' + r.id + '\',\'decline\')">Decline</button>'
+            + '</div></div></div>';
+    }).join('');
+}
+
+async function resolveJoinReq(reqId, action){
+    var db = _dbc2(); if (!db) return;
+    var email = null;
+    if (action === 'approve') {
+        var sel = document.getElementById('jr_' + reqId);
+        email = sel && sel.value;
+        if (!email) { toast('Pick the matching family first'); return; }
+        // Make sure the family has an invite to bind to (idempotent).
+        var fam = _pgFamilies().find(function(f){ return f.parentEmail === email; });
+        if (fam) {
+            var expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
+            await db.client.rpc('upsert_parent_invite', {
+                p_camp_id: db.campId, p_token: _pgToken(),
+                p_parent_name: fam.parentName || fam.parentEmail, p_parent_email: fam.parentEmail,
+                p_camper_names: (fam.children || []).map(function(c){ return c.name; }),
+                p_camper_data: _pgCamperData(fam.children),
+                p_expires_at: expires.toISOString()
+            });
+        }
+    }
+    var res = await db.client.rpc('resolve_join_request', { p_request_id: reqId, p_action: action, p_parent_email: email });
+    if (res.error || !res.data || !res.data.success) {
+        toast('Could not resolve: ' + ((res.data && res.data.error) || (res.error && res.error.message) || 'unknown'));
+        return;
+    }
+    toast(action === 'approve' ? 'Approved — parent now has access' : 'Request declined');
+    refreshParentsPage();
+}
+
+function downloadParentMailMerge(){
+    var fams = _pgFamilies();
+    if (!fams.length) { toast('No families on the roster'); return; }
+    var head = ['Parent Name','Parent Email','Phone','Children','Invite Link','Access Code','Status'];
+    var lines = [head.join(',')];
+    fams.forEach(function(f){
+        var inv = _parentInvitesByEmail[(f.parentEmail || '').toLowerCase()];
+        var csv = function(s){ s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        lines.push([
+            csv(f.parentName || ''), csv(f.parentEmail), csv(f.parentPhone || ''),
+            csv((f.children || []).map(function(c){ return c.name; }).join('; ')),
+            csv(inv ? _pgPortalUrl(inv.token) : ''),
+            csv(inv ? (inv.access_code || '') : ''),
+            csv(!inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
+        ].join(','));
+    });
+    var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'campistry_parent_invites.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    var missing = fams.filter(function(f){ return !_parentInvitesByEmail[(f.parentEmail || '').toLowerCase()]; }).length;
+    if (missing) toast(missing + ' families have no invite yet — run Generate first');
 }
 
 // ─── PHOTOS ───────────────────────────────────────────────────────────────────

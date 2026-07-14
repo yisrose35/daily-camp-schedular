@@ -2752,12 +2752,45 @@ window.addEventListener('storage', function(e) {
             '</div>' +
             '<button onclick="parentLinkAccount()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Link My Portal</button>' +
             '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
+            _requestAccessBlock() +
             '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:14px;">' +
             '<button onclick="parentSignOut()" style="background:none;border:none;color:#94A3B8;font-size:.78rem;cursor:pointer;">Sign out and use a different account</button>' +
             '</div>' +
             '</div>');
         setTimeout(function(){var f=document.getElementById('paCode');if(f)f.focus();},100);
     }
+
+    // "My email didn't match and I have no code" — file a join request the camp
+    // approves from Link admin → Parents. Only offered when the parent arrived
+    // via the camp's shared portal link (?camp=<id>), which scopes the request.
+    function _requestAccessBlock() {
+        var campParam = new URLSearchParams(window.location.search).get('camp');
+        if (!campParam) return '';
+        return '<div style="border-top:1px solid #F1F5F9;padding-top:14px;margin-bottom:12px;">' +
+            '<div style="font-size:.8rem;font-weight:600;color:#475569;margin-bottom:8px;text-align:center;">Don\'t have a code? Request access</div>' +
+            '<input id="paReqName" type="text" placeholder="Your name" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.85rem;margin-bottom:8px;outline:none;">' +
+            '<input id="paReqNote" type="text" placeholder="Your children\'s names" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.85rem;margin-bottom:8px;outline:none;">' +
+            '<button onclick="parentRequestAccess(\'' + _esc(campParam) + '\')" style="width:100%;padding:10px;background:#F1F5F9;color:#334155;border:1px solid #CBD5E1;border-radius:8px;font-size:.85rem;font-weight:600;cursor:pointer;">Request Access</button>' +
+            '<div id="paReqMsg" style="font-size:.78rem;text-align:center;min-height:16px;margin-top:8px;"></div>' +
+            '</div>';
+    }
+
+    window.parentRequestAccess = function(campId) {
+        var name = (document.getElementById('paReqName')||{}).value||'';
+        var note = (document.getElementById('paReqNote')||{}).value||'';
+        var msgEl = document.getElementById('paReqMsg');
+        var say = function(t, c){ if (msgEl){ msgEl.textContent = t; msgEl.style.color = c || '#EF4444'; } };
+        if (!name.trim() || !note.trim()) { say('Please fill in your name and your children\'s names.'); return; }
+        say('Sending request…', '#64748B');
+        db.rpc('submit_join_request', { p_camp_id: campId, p_name: name, p_phone: '', p_note: note }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) {
+                say('Could not send request: ' + ((res.data && res.data.error) || (res.error && res.error.message) || 'unknown'));
+                return;
+            }
+            say(res.data.already_pending ? 'Your request is already pending — the camp will approve it soon.'
+                                         : 'Request sent! The camp office will approve you shortly.', '#16A34A');
+        }).catch(function(){ say('Could not send request — check your connection.'); });
+    };
 
     function _showInvalidToken(detail) {
         _showOverlay('parentAuthOverlay',
@@ -2866,7 +2899,24 @@ window.addEventListener('storage', function(e) {
                 return;
             }
             if (!res.data || !res.data.success) {
-                // Signed in but no invite linked yet — prompt for access code
+                // Signed in but no invite linked yet. Before asking for a code,
+                // try the zero-friction path: bind any invite whose parent_email
+                // matches this account's confirmed email (migration 029 — camps
+                // bulk-invite their roster, parent just signs up with the email
+                // the camp has on file).
+                if (!window.__emailClaimTried) {
+                    window.__emailClaimTried = true;
+                    console.log('[Parent] No invite linked — trying claim_invites_by_email…');
+                    db.rpc('claim_invites_by_email').then(function(cres) {
+                        console.log('[Parent] claim_invites_by_email result:', cres.data, cres.error);
+                        if (!cres.error && cres.data && cres.data.success && cres.data.claimed > 0) {
+                            _loadByUser(); // invite bound — load for real now
+                        } else {
+                            _showLinkAccount();
+                        }
+                    }).catch(function() { _showLinkAccount(); });
+                    return;
+                }
                 _showLinkAccount();
                 return;
             }
