@@ -32,8 +32,16 @@
         { src: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js',
           wasmPath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/' }
     ];
-    // InsightFace buffalo_s ONNX models, maintained + hosted by the Immich project
-    var DET_URLS = [
+    // InsightFace ONNX models, maintained + hosted by the Immich project.
+    // Detector is ADAPTIVE: WebGPU devices load buffalo_l's det_10g (17MB,
+    // ~83 hard-set AP — the strongest open small-face detector) and fall back
+    // to buffalo_s det_500m (2.5MB, ~68.5 AP); WASM-only devices go straight
+    // to det_500m, where 10g would be too slow per 640px tile.
+    var DET_URLS_LARGE = [
+        LOCAL_BASE + '/insightface/det_10g.onnx',
+        'https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx'
+    ];
+    var DET_URLS_SMALL = [
         LOCAL_BASE + '/insightface/det_500m.onnx',
         'https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx'
     ];
@@ -96,9 +104,12 @@
             if (typeof ort === 'undefined') throw new Error('onnxruntime unavailable');
             if (wasmPath) ort.env.wasm.wasmPaths = wasmPath;
             // WebGPU when the environment has it, else WASM (SIMD auto-detected)
-            var eps = (typeof navigator !== 'undefined' && navigator.gpu) ? ['webgpu', 'wasm'] : ['wasm'];
+            var hasGpu = (typeof navigator !== 'undefined' && navigator.gpu);
+            var eps = hasGpu ? ['webgpu', 'wasm'] : ['wasm'];
             _ep = eps[0];
-            return Promise.all([_createSessionChain(DET_URLS, eps), _createSessionChain(REC_URLS, eps)]);
+            // adaptive detector: big model on GPU, small on WASM (see DET_URLS_*)
+            var detUrls = hasGpu ? DET_URLS_LARGE.concat(DET_URLS_SMALL) : DET_URLS_SMALL;
+            return Promise.all([_createSessionChain(detUrls, eps), _createSessionChain(REC_URLS, eps)]);
         }).then(function (sessions) {
             _detSession = sessions[0];
             _recSession = sessions[1];

@@ -648,10 +648,18 @@
                 var originalDataUrl = await _fileToDataUrl(file);
                 var result = await scanPhoto(originalDataUrl);
                 var displayUrl = await _resizeImage(originalDataUrl, 1200);
+                // shutter time: EXIF DateTimeOriginal beats file.lastModified
+                // (which is the DOWNLOAD time after WhatsApp/AirDrop detours —
+                // that would merge a whole upload into one fake "burst")
+                var capturedAt = null;
+                try {
+                    var head = await file.slice(0, 131072).arrayBuffer();
+                    capturedAt = core.exifCaptureTime(head);
+                } catch(xe) {}
                 scanned.push({
                     idx: scanned.length,
                     fileName: file.name,
-                    capturedAt: file.lastModified || null,   // camera files carry capture time here
+                    capturedAt: capturedAt || file.lastModified || null,
                     displayUrl: displayUrl,
                     result: result
                 });
@@ -1116,6 +1124,49 @@
     }
 
     /**
+     * Photo coverage report — the "photo equity" view camps actually manage
+     * by: every ROSTER camper (not just tagged ones) with their confirmed
+     * photo count for the week, least-photographed first. This is what lets
+     * a director promise "every parent sees their kid weekly" and give the
+     * photographer a shot list.
+     */
+    function getCoverageReport(weekKey) {
+        weekKey = weekKey || _getWeekKey();
+        var roster = {};
+        try { roster = (window.CampistryLink && CampistryLink.data.getRoster) ? (CampistryLink.data.getRoster() || {}) : {}; } catch(e) {}
+
+        var counts = {};
+        _store.photos.forEach(function(p) {
+            if (p.week !== weekKey) return;
+            (p.tags || []).concat(p.manualTags || []).forEach(function(t) {
+                counts[t.camperName] = (counts[t.camperName] || 0) + 1;
+            });
+        });
+
+        var names = Object.keys(roster);
+        if (!names.length) names = Object.keys(_store.faceIndex);   // fallback: enrolled set
+
+        var rows = names.map(function(name) {
+            return {
+                name: name,
+                division: (roster[name] && roster[name].division) || '',
+                bunk: (roster[name] && roster[name].bunk) || '',
+                count: counts[name] || 0,
+                enrolled: !!_store.faceIndex[name]
+            };
+        }).sort(function(a, b) { return a.count - b.count || a.name.localeCompare(b.name); });
+
+        return {
+            week: weekKey,
+            rows: rows,
+            totalCampers: rows.length,
+            zeroPhotos: rows.filter(function(r) { return r.count === 0; }).length,
+            onePhoto: rows.filter(function(r) { return r.count === 1; }).length,
+            notEnrolled: rows.filter(function(r) { return !r.enrolled; }).length
+        };
+    }
+
+    /**
      * Get photo distribution summary — how many photos per camper
      */
     function getDistributionSummary(weekKey) {
@@ -1311,6 +1362,7 @@
         getPhotosForCamper: getPhotosForCamper,
 
         // Distribution
+        getCoverageReport: getCoverageReport,
         getDistributionSummary: getDistributionSummary,
         generatePhotoRoundup: generatePhotoRoundup,
         sendPhotoRoundup: sendPhotoRoundup,

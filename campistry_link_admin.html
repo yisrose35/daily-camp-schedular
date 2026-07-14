@@ -748,6 +748,18 @@
         <div id="triageStats" style="font-size:.72rem;color:var(--text-muted);margin-top:10px;"></div>
         <div id="staleEnrollNote" style="display:none;font-size:.74rem;color:var(--amber-700,#b45309);margin-top:6px;"></div>
     </div>
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Photo Coverage</h2>
+            <span class="badge" id="coverageBadge"></span>
+        </div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">
+            Which campers are getting missed this week — the shot list for your photographer.
+            Parents notice when other kids get photos and theirs doesn't.
+        </p>
+        <div id="coverageSummary" style="font-size:.8rem;margin-bottom:10px;"></div>
+        <div id="coverageList" style="max-height:260px;overflow-y:auto;"></div>
+    </div>
     <div class="lk-card" id="unknownFacesCard" style="display:none;">
         <div class="lk-card-head">
             <h2>Unknown Faces</h2>
@@ -3311,7 +3323,7 @@ async function handlePhotos(files) {
     document.getElementById('indexBadge').className = 'badge badge-ok';
     prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged' + (r.needsReview ? ', ' + r.needsReview + ' need review' : '') + '</div>';
     document.getElementById('photoInput').value = '';
-    refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI(); refreshUnknownFaces();
+    refreshPhotos(); refreshReviewQueue(); updatePhotoStats(); refreshTriageUI(); refreshUnknownFaces(); refreshCoverage();
 }
 function refreshPhotos() {
     var cp = CP(); if (!cp) return;
@@ -3398,6 +3410,33 @@ function toggleStrictDivision(divName) {
     cp.restoreIndex();   // re-mark strict campers on the live matcher
     refreshTriageUI();
 }
+// ─── Photo coverage ("photo equity") ─────────────────────────────────────────
+function refreshCoverage() {
+    var cp = CP(); if (!cp || !cp.getCoverageReport) return;
+    var r = cp.getCoverageReport();
+    var badge = document.getElementById('coverageBadge');
+    var summary = document.getElementById('coverageSummary');
+    var list = document.getElementById('coverageList');
+    if (!summary || !list) return;
+    if (badge) {
+        badge.textContent = r.zeroPhotos + ' missed';
+        badge.className = 'badge ' + (r.zeroPhotos ? 'badge-warn' : 'badge-ok');
+    }
+    summary.innerHTML =
+        '<strong>' + r.zeroPhotos + '</strong> of ' + r.totalCampers + ' campers have no photos this week' +
+        (r.onePhoto ? ' · <strong>' + r.onePhoto + '</strong> have just one' : '') +
+        (r.notEnrolled ? ' · <span style="color:var(--text-muted);">' + r.notEnrolled + ' not enrolled (can\'t be auto-found — tag manually or nudge parents)</span>' : '');
+    var needy = r.rows.filter(function(x) { return x.count <= 1; }).slice(0, 40);
+    if (!needy.length) { list.innerHTML = '<div style="font-size:.78rem;color:var(--green-600);">Everyone has 2+ photos this week 🎉</div>'; return; }
+    list.innerHTML = needy.map(function(x) {
+        return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--slate-100);font-size:.78rem;">' +
+            '<span class="badge ' + (x.count === 0 ? 'badge-warn' : '') + '" style="min-width:24px;text-align:center;">' + x.count + '</span>' +
+            '<span style="flex:1;">' + esc(x.name) + (x.enrolled ? '' : ' <span style="color:var(--text-muted);font-size:.68rem;">(not enrolled)</span>') + '</span>' +
+            '<span style="color:var(--text-muted);font-size:.7rem;">' + esc(x.division || '') + (x.bunk ? ' · ' + esc(x.bunk) : '') + '</span>' +
+        '</div>';
+    }).join('');
+}
+
 // ─── Unknown-person clusters ─────────────────────────────────────────────────
 function refreshUnknownFaces() {
     var cp = CP(); if (!cp || !cp.getUnknownClusters) return;
@@ -3501,7 +3540,7 @@ async function resolveReview(photoId, camperName, approve) {
     } else {
         toast((r && r.error) || 'Could not resolve');
     }
-    refreshReviewQueue(); refreshPhotos(); updatePhotoStats(); refreshTriageUI();
+    refreshReviewQueue(); refreshPhotos(); updatePhotoStats(); refreshTriageUI(); refreshCoverage();
 }
 function updatePhotoStats() {
     var cp = CP(); if (!cp) return;
@@ -4280,6 +4319,7 @@ function boot() {
     refreshReviewQueue();
     refreshTriageUI();
     refreshUnknownFaces();
+    refreshCoverage();
 
     window.addEventListener('storage', function(e) {
         if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {

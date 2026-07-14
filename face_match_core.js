@@ -477,6 +477,74 @@
             .sort(function (a, b) { return b.count - a.count; });
     }
 
+    // ─── EXIF capture time ───────────────────────────────────────────────────
+
+    // Burst clustering needs the moment the shutter fired. file.lastModified
+    // is only that for files straight off a camera — photos that detoured
+    // through WhatsApp/AirDrop/downloads carry the DOWNLOAD time instead,
+    // which either merges a whole upload into one fake burst or splits real
+    // ones. This reads DateTimeOriginal from the JPEG's EXIF APP1 segment
+    // (pass the first ~128KB as an ArrayBuffer). Returns epoch ms or null.
+    function exifCaptureTime(arrayBuffer) {
+        try {
+            var v = new DataView(arrayBuffer);
+            if (v.byteLength < 12 || v.getUint16(0) !== 0xFFD8) return null;   // not a JPEG
+            var off = 2;
+            while (off + 4 <= v.byteLength) {
+                var marker = v.getUint16(off);
+                if ((marker & 0xFF00) !== 0xFF00) break;
+                if (marker === 0xFFDA) break;                                   // start of image data
+                var size = v.getUint16(off + 2);
+                if (size < 2) break;
+                if (marker === 0xFFE1 && off + 10 <= v.byteLength &&
+                    v.getUint32(off + 4) === 0x45786966 && v.getUint16(off + 8) === 0) {  // "Exif\0\0"
+                    return _exifTiffDate(v, off + 10);
+                }
+                off += 2 + size;
+            }
+        } catch (e) { /* truncated buffer / malformed EXIF — fall through */ }
+        return null;
+    }
+
+    function _exifTiffDate(v, base) {
+        var little = v.getUint16(base) === 0x4949;
+        function u16(o) { return v.getUint16(o, little); }
+        function u32(o) { return v.getUint32(o, little); }
+        if (u16(base + 2) !== 42) return null;
+
+        function findTag(ifdStart, wantTag) {
+            var n = u16(ifdStart);
+            for (var i = 0; i < n; i++) {
+                var e = ifdStart + 2 + i * 12;
+                if (u16(e) === wantTag) return e;
+            }
+            return null;
+        }
+        function readAscii(entry) {
+            var count = u32(entry + 4);
+            var valOff = count <= 4 ? entry + 8 : base + u32(entry + 8);
+            var s = '';
+            for (var i = 0; i < Math.min(count, 19); i++) s += String.fromCharCode(v.getUint8(valOff + i));
+            var m = s.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+            if (!m) return null;
+            var t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+            return isFinite(t) ? t : null;
+        }
+
+        var ifd0 = base + u32(base + 4);
+        // preferred: Exif sub-IFD → DateTimeOriginal (0x9003) / CreateDate (0x9004)
+        var exifPtr = findTag(ifd0, 0x8769);
+        if (exifPtr) {
+            var exifIfd = base + u32(exifPtr + 8);
+            var d = findTag(exifIfd, 0x9003) || findTag(exifIfd, 0x9004);
+            if (d) { var t1 = readAscii(d); if (t1) return t1; }
+        }
+        // fallback: IFD0 DateTime (0x0132)
+        var d0 = findTag(ifd0, 0x0132);
+        if (d0) return readAscii(d0);
+        return null;
+    }
+
     // ─── measurement (NIST-style: miss rate at an operating point) ───────────
 
     // Empirical performance of the CURRENT dials against the human-labeled
@@ -604,7 +672,8 @@
         propagateBurstMatches: propagateBurstMatches,
         histogramIntersection: histogramIntersection,
         clusterUnmatched: clusterUnmatched,
-        evalReport: evalReport
+        evalReport: evalReport,
+        exifCaptureTime: exifCaptureTime
     };
 
     if (typeof window !== 'undefined') {

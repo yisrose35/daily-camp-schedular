@@ -444,6 +444,64 @@ describe('clusterUnmatched', () => {
 });
 
 // ---------------------------------------------------------------------------
+// EXIF capture time
+// ---------------------------------------------------------------------------
+describe('exifCaptureTime', () => {
+    // synthetic JPEG: SOI + APP1(Exif, big-endian TIFF) with
+    // IFD0 → ExifIFD → DateTimeOriginal "2026:07:04 10:15:30"
+    function syntheticJpeg() {
+        const tiffLen = 64;
+        const app1Size = 2 + 6 + tiffLen;
+        const buf = new ArrayBuffer(2 + 2 + app1Size);
+        const v = new DataView(buf);
+        let o = 0;
+        v.setUint16(o, 0xFFD8); o += 2;             // SOI
+        v.setUint16(o, 0xFFE1); o += 2;             // APP1
+        v.setUint16(o, app1Size); o += 2;           // segment size
+        [..."Exif"].forEach(ch => { v.setUint8(o++, ch.charCodeAt(0)); });
+        v.setUint16(o, 0); o += 2;                  // padding
+        const base = o;                              // TIFF header
+        v.setUint16(base, 0x4D4D);                   // 'MM' big-endian
+        v.setUint16(base + 2, 42);
+        v.setUint32(base + 4, 8);                    // IFD0 at base+8
+        // IFD0: 1 entry — ExifIFD pointer (0x8769) → base+26
+        v.setUint16(base + 8, 1);
+        v.setUint16(base + 10, 0x8769);
+        v.setUint16(base + 12, 4);                   // LONG
+        v.setUint32(base + 14, 1);
+        v.setUint32(base + 18, 26);
+        v.setUint32(base + 22, 0);                   // next IFD
+        // ExifIFD at base+26: 1 entry — DateTimeOriginal (0x9003), ASCII x20 at base+44
+        v.setUint16(base + 26, 1);
+        v.setUint16(base + 28, 0x9003);
+        v.setUint16(base + 30, 2);                   // ASCII
+        v.setUint32(base + 32, 20);
+        v.setUint32(base + 36, 44);
+        v.setUint32(base + 40, 0);                   // next IFD
+        [..."2026:07:04 10:15:30\0"].forEach((ch, i) => { v.setUint8(base + 44 + i, ch.charCodeAt(0)); });
+        return buf;
+    }
+    it('reads DateTimeOriginal from a JPEG EXIF segment', () => {
+        const t = Core.exifCaptureTime(syntheticJpeg());
+        assert.strictEqual(t, new Date(2026, 6, 4, 10, 15, 30).getTime());
+    });
+    it('returns null for non-JPEG data', () => {
+        assert.strictEqual(Core.exifCaptureTime(new ArrayBuffer(64)), null);
+    });
+    it('returns null for a JPEG without EXIF', () => {
+        const buf = new ArrayBuffer(8);
+        const v = new DataView(buf);
+        v.setUint16(0, 0xFFD8); v.setUint16(2, 0xFFDA); v.setUint16(4, 4);
+        assert.strictEqual(Core.exifCaptureTime(buf), null);
+    });
+    it('survives a truncated EXIF segment without throwing', () => {
+        const full = syntheticJpeg();
+        const cut = full.slice(0, 30);   // chop mid-IFD
+        assert.strictEqual(Core.exifCaptureTime(cut), null);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // eval report
 // ---------------------------------------------------------------------------
 describe('evalReport', () => {

@@ -21,7 +21,8 @@ models/
 │   ├── ort.min.js               # https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js
 │   └── *.wasm                   # the ort-wasm*.wasm files from the same dist/ folder
 └── insightface/
-    ├── det_500m.onnx            # https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx
+    ├── det_10g.onnx             # https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx (17MB, used on WebGPU devices)
+    ├── det_500m.onnx            # https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx (2.5MB, WASM fallback)
     └── w600k_mbf.onnx           # https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx
 ```
 
