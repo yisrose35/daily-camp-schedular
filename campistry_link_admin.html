@@ -2272,7 +2272,7 @@ function renderAdminMsgs(filter) {
             '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + id + '\')">' +
                 '<div class="msg-dot"></div>' +
                 '<div class="msg-body">' +
-                    '<div class="msg-subj">' + (m.important ? LK_ICON_STAR_FILLED_INLINE : '') + esc(m.subject || '(No subject)') + '</div>' +
+                    '<div class="msg-subj">' + (m.important ? LK_ICON_STAR_FILLED_INLINE : '') + esc(m.subject || '(No subject)') + (m.recipientLabel ? ' <span style="font-weight:600;color:var(--link-color);font-size:.72rem;">→ ' + esc(m.recipientLabel) + '</span>' : '') + '</div>' +
                     '<div class="msg-preview">' + esc(preview) + '</div>' +
                     '<div class="msg-from">' + esc(from + camper) + '</div>' +
                 '</div>' +
@@ -2352,16 +2352,19 @@ function openAdminMsg(id) {
         '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);">' +
             '<textarea class="lk-textarea" id="adminReplyBody" placeholder="Write a reply to ' + esc(from) + '..." style="min-height:80px;"></textarea>' +
             '<div style="margin-top:8px;display:flex;gap:6px;justify-content:flex-end;">' +
-                '<button class="btn btn-primary btn-sm" onclick="sendAdminReply(\'' + esc(m.id) + '\',\'' + esc(from) + '\')">Send Reply</button>' +
+                '<button class="btn btn-primary btn-sm" onclick="sendAdminReply(\'' + esc(m.threadId || m.id) + '\',\'' + esc(from) + '\',\'' + esc((m.metadata && m.metadata.parentEmail) || '') + '\')">Send Reply</button>' +
             '</div>' +
         '</div>';
     renderAdminMsgs(_inboxReadFilter);
 }
-function sendAdminReply(threadId, toName) {
+function sendAdminReply(threadId, toName, toEmail) {
     var body = (document.getElementById('adminReplyBody') || {}).value || '';
     if (!body.trim()) { toast('Enter a reply'); return; }
+    if (!toEmail) { toast('Cannot reply — no parent email on this message'); return; }
     var cl = CL();
-    if (cl) cl.msg.send({ to: toName, toType: 'individual', subject: 'Reply from Camp', body: body.trim(), channels: compChannels, threadId: threadId || null });
+    // Pass parentEmail so the reply is keyed to the parent (else parent_email=''
+    // and the parent never sees it); threadId keeps it in the same conversation.
+    if (cl) cl.msg.send({ to: toName, toType: 'individual', subject: 'Reply from Camp', body: body.trim(), channels: compChannels, threadId: threadId || null, metadata: { parentEmail: toEmail } });
     toast('Reply sent to ' + toName + '!');
     closeAdminMsgDetail();
 }
@@ -3068,8 +3071,8 @@ function _pgPortalUrl(token){
     return base + (token ? ((base.indexOf('?') >= 0 ? '&' : '?') + 'invite=' + token) : '');
 }
 function _pgFamilies(){
-    var cl = CL(); if (!cl || !cl.data || !cl.data.getFamilyDirectory) return [];
-    return cl.data.getFamilyDirectory().filter(function(f){ return f.parentEmail; });
+    var cl = CL(); if (!cl || !cl.data || !cl.data.getParentDirectory) return [];
+    return cl.data.getParentDirectory().filter(function(f){ return f.parentEmail; });
 }
 // Roster-based camper_data snapshot (Me's flow builds this from enrollments,
 // which post-registration camps don't have).

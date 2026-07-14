@@ -248,7 +248,7 @@
         limit = limit || 200;
         db.client
             .from('link_messages')
-            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, archived, important, created_at')
+            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, archived, important, recipient_user_id, recipient_label, created_at')
             .eq('camp_id', db.campId)
             .order('created_at', { ascending: false })
             .limit(limit)
@@ -280,6 +280,8 @@
                         date: row.created_at, read: row.read, replied: false,
                         archived: !!row.archived, important: !!row.important,
                         threadId: row.thread_id,
+                        recipientUserId: row.recipient_user_id || null,
+                        recipientLabel: row.recipient_label || null,
                         metadata: { parentEmail: row.parent_email, camperName: row.camper_name }
                     });
                 });
@@ -668,7 +670,19 @@
     var msg = {};
 
     msg.getAll = function() { return _store.messages; };
-    msg.getInbox = function() { return _store.messages.filter(function(m) { return m.direction === 'in'; }); };
+    msg.getInbox = function() {
+        // A routed group message is stored as one row per recipient (same thread,
+        // same time) — collapse those into a single inbox item so the office
+        // doesn't see N duplicates.
+        var seen = {};
+        return _store.messages.filter(function(m) {
+            if (m.direction !== 'in') return false;
+            var key = (m.threadId || m.id) + '|' + (m.date || '');
+            if (seen[key]) return false;
+            seen[key] = true;
+            return true;
+        });
+    };
     msg.getSent = function() { return _store.messages.filter(function(m) { return m.direction === 'out'; }); };
     msg.getUnread = function() { return _store.messages.filter(function(m) { return m.direction === 'in' && !m.read; }); };
     msg.getBroadcasts = function() { return _store.broadcasts; };

@@ -2453,34 +2453,15 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._loadMyMessagesCloud = function(cb) {
-        // Camp-scoped direct read. A parent may hold active invites on MORE THAN
-        // ONE camp (siblings at different camps, or a parent who is also
-        // staff/owner). get_my_messages resolves the single most-recent invite
-        // (ORDER BY created_at DESC LIMIT 1), which locks onto the wrong camp and
-        // hides the messages for the camp actually being viewed. RLS (migration
-        // 023) lets a parent SELECT their own rows, so read directly, scoped to
-        // parent.campId — the camp this portal session is on.
-        var campId = (typeof parent !== 'undefined' && parent) ? parent.campId : null;
-        var pEmail = (typeof parent !== 'undefined' && parent) ? parent.email : null;
-        var _fallback = function() {
-            (window._pRpc ? window._pRpc('get_my_messages', {}) : db.rpc('get_my_messages')).then(function(res) {
-                window._cloudMessages = (!res.error && res.data && res.data.success) ? (res.data.messages || []) : [];
-                if (cb) cb();
-            });
-        };
-        if (!campId || !pEmail) { _fallback(); return; }
-        db.from('link_messages')
-          .select('id,thread_id,direction,subject,body,read,archived_for_parent,created_at')
-          .eq('camp_id', campId).eq('parent_email', pEmail).eq('hidden_for_parent', false)
-          .order('created_at', { ascending: false }).limit(300)
-          .then(function(res) {
-              if (res.error) { console.warn('[Parent] direct link_messages read failed, using RPC:', res.error.message); _fallback(); return; }
-              window._cloudMessages = (res.data || []).map(function(m) {
-                  return { id: m.id, thread_id: m.thread_id, direction: m.direction, subject: m.subject,
-                           body: m.body, read: m.read, archived: m.archived_for_parent, created_at: m.created_at };
-              });
-              if (cb) cb();
-          });
+        // get_my_messages is now camp-aware (p_camp_id via _pRpc, migration 024)
+        // AND (migration 038) dedupes a parent's group-message copies, matches
+        // parent_email case-insensitively, and returns camper/recipient labels.
+        // The old direct-read fast-path bypassed all of that, so route through
+        // the RPC.
+        (window._pRpc ? window._pRpc('get_my_messages', {}) : db.rpc('get_my_messages')).then(function(res) {
+            window._cloudMessages = (!res.error && res.data && res.data.success) ? (res.data.messages || []) : [];
+            if (cb) cb();
+        });
     };
     window._loadCampBroadcastsCloud = function(campId, cb) {
         db.rpc('get_camp_broadcasts', { p_camp_id: campId }).then(function(res) {
