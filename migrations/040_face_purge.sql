@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 037: Facial Recognition — end-of-season biometric purge
+-- Migration 040: Facial Recognition — end-of-season biometric purge
 --
 -- The consent story promises retention limits, and biometric-privacy laws
 -- (BIPA et al.) expect biometric identifiers DESTROYED when their purpose
