@@ -57,28 +57,60 @@
         staleDays: 300              // parent enrollment photos older than this = flag for re-enrollment
     };
 
-    let _store = {
-        photos: [],         // { id, dataUrl, uploadDate, tags: [...], pendingTags: [...], week, sent }
-        faceIndex: {},      // { camperName: { descriptors: [{descriptor, model, pose, source}], updatedAt } }
-        settings: Object.assign({}, SETTINGS_DEFAULTS),
-        learn: [],          // human review decisions: {c: confidence, a: approved, m: model, t: ts} — ~50B each, capped
-        learnMeta: { lastTuneN: 0, tunedAt: null },
-        unknownClusters: [],// unresolved "who is this?" groups (capped at 12)
-        staleCampers: [],   // campers whose enrollment photos predate this season
-        faceIndexVersion: null, // cloud fingerprint the cached index was built from
-        stats: {
-            totalUploaded: 0,
-            totalTagged: 0,
-            totalSent: 0,
-            totalPendingResolved: 0,
-            autoAccepted: 0,
-            autoRejected: 0,
-            burstTagged: 0,
-            lastScanDate: null,
-            lastSendDate: null
-        }
-    };
+    function _defaultStore() {
+        return {
+            photos: [],         // { id, dataUrl, uploadDate, tags: [...], pendingTags: [...], week, sent }
+            faceIndex: {},      // { camperName: { descriptors: [{descriptor, model, pose, source}], updatedAt } }
+            settings: Object.assign({}, SETTINGS_DEFAULTS),
+            learn: [],          // human review decisions: {c: confidence, a: approved, m: model, t: ts} — ~50B each, capped
+            learnMeta: { lastTuneN: 0, tunedAt: null },
+            unknownClusters: [],// unresolved "who is this?" groups (capped at 12)
+            staleCampers: [],   // campers whose enrollment photos predate this season
+            faceIndexVersion: null, // cloud fingerprint the cached index was built from
+            stats: {
+                totalUploaded: 0,
+                totalTagged: 0,
+                totalSent: 0,
+                totalPendingResolved: 0,
+                autoAccepted: 0,
+                autoRejected: 0,
+                burstTagged: 0,
+                lastScanDate: null,
+                lastSendDate: null
+            }
+        };
+    }
+    let _store = _defaultStore();
     const LEARN_CAP = 500;   // plenty for calibration, negligible storage
+
+    // ── per-camp store isolation ─────────────────────────────────────────────
+    // Everything above is cached per CAMP (an owner managing several camps in
+    // one browser must never see camp A's photos/queue/index inside camp B).
+    // Cloud scoping was always correct (RPCs filter by camp_id + RLS); this
+    // makes the LOCAL cache match. Legacy un-scoped data is left untouched.
+    let _storeCampId;   // undefined = not yet resolved
+
+    function _currentCampId() {
+        try { return (window.CampistryDB && CampistryDB.getCampId && CampistryDB.getCampId()) || null; }
+        catch(e) { return null; }
+    }
+
+    function _storeKey() {
+        return _storeCampId ? (PHOTO_STORE + '::' + _storeCampId) : PHOTO_STORE;
+    }
+
+    // Called at the top of every public API entry: if the active camp changed
+    // (login switch, multi-camp owner), swap to that camp's store and drop the
+    // in-memory matcher so it rebuilds from the right camp's data.
+    function _ensureStoreForCamp() {
+        var cid = _currentCampId();
+        if (cid === _storeCampId) return;
+        _storeCampId = cid;
+        _store = _defaultStore();
+        loadStore();
+        _indexBuilt = false;
+        _camperTemplates = [];
+    }
 
     let _modelsLoaded = false;
     let _indexBuilt = false;
@@ -103,7 +135,7 @@
     // =========================================================================
     function loadStore() {
         try {
-            var raw = localStorage.getItem(PHOTO_STORE);
+            var raw = localStorage.getItem(_storeKey());
             if (raw) {
                 var parsed = JSON.parse(raw);
                 _store = Object.assign({}, _store, parsed);
@@ -128,7 +160,7 @@
 
     function saveStore() {
         try {
-            localStorage.setItem(PHOTO_STORE, JSON.stringify(_store));
+            localStorage.setItem(_storeKey(), JSON.stringify(_store));
         } catch(e) {
             console.warn('[LinkPhotos] Store save error (likely size):', e);
             // Photos can be large — if we exceed quota, keep metadata but drop oldest photo data
@@ -149,7 +181,7 @@
                 trimmed++;
             }
             try {
-                localStorage.setItem(PHOTO_STORE, JSON.stringify(_store));
+                localStorage.setItem(_storeKey(), JSON.stringify(_store));
                 console.log('[LinkPhotos] Trimmed ' + trimmed + ' old photos to fit storage');
                 return;
             } catch(e) { continue; }
@@ -1217,9 +1249,10 @@
     // =========================================================================
     // PUBLIC API
     // =========================================================================
+    _storeCampId = _currentCampId();   // may be null pre-auth; re-checked per call
     loadStore();
 
-    window.CampistryPhotos = {
+    var _api = {
         // Core pipeline
         loadModels: loadModels,
         buildFaceIndex: buildFaceIndex,
@@ -1265,6 +1298,16 @@
         getIndexSize: function() { return _camperTemplates.length; },
         getStore: function() { return _store; }
     };
+
+    // Every public call first snaps the local store to the ACTIVE camp — an
+    // owner switching between camps in one browser gets fully isolated
+    // caches (photos, review queue, learn log, index) per camp.
+    window.CampistryPhotos = {};
+    Object.keys(_api).forEach(function(k) {
+        window.CampistryPhotos[k] = (typeof _api[k] === 'function')
+            ? function() { _ensureStoreForCamp(); return _api[k].apply(null, arguments); }
+            : _api[k];
+    });
 
     console.log('[LinkPhotos] Photo engine v2 ready. Stored photos:', _store.photos.length, '| Face index:', Object.keys(_store.faceIndex).length);
 
