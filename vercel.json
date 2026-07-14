@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/((?!.*\\.).*)", "has": [{ "type": "host", "value": "link.campistry.org" }], "destination": "/campistry_link_parent.html" },
+    { "source": "/", "destination": "/campistry_link_parent.html" },
     { "source": "/link", "destination": "/campistry_link_parent.html" },
     { "source": "/parents", "destination": "/campistry_link_parent.html" }
   ]
