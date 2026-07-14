@@ -23,5 +23,5 @@
     // 'https://link.yourcamp.com') so every invite link + the announcement
     // email points THERE instead of the admin's origin. Trailing slash optional.
     // Empty string = same origin as the page generating the link (default).
-    window.__CAMPISTRY_PARENT_URL__ = '';
+    window.__CAMPISTRY_PARENT_URL__ = 'https://link.campistry.org';
 })();
