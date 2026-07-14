@@ -49,7 +49,10 @@
             smsFromNumber: '',
             defaultChannels: ['app'],
             autoNotifyBusRoutes: false,
-            autoNotifyScheduleChanges: false
+            autoNotifyScheduleChanges: false,
+            // Message/email branding — shown in the admin compose preview and
+            // synced to camp_state_kv so the email/portal layer can render it.
+            branding: { logo: '', brandColor: '#2A7A35', footer: '' }
         }
     };
 
@@ -80,8 +83,12 @@
                 _store.settings = Object.assign({
                     emailProvider: 'none', emailApiKey: '', smsProvider: 'none',
                     smsApiKey: '', smsFromNumber: '', defaultChannels: ['app'],
-                    autoNotifyBusRoutes: false, autoNotifyScheduleChanges: false
+                    autoNotifyBusRoutes: false, autoNotifyScheduleChanges: false,
+                    branding: { logo: '', brandColor: '#2A7A35', footer: '' }
                 }, parsed.settings || {});
+                if (!_store.settings.branding || typeof _store.settings.branding !== 'object') {
+                    _store.settings.branding = { logo: '', brandColor: '#2A7A35', footer: '' };
+                }
             }
         } catch(e) { console.warn('[Link] Store load error:', e); }
     }

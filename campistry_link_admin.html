@@ -481,12 +481,21 @@
         <button class="btn btn-ghost btn-sm" onclick="closeComposeDrawer()" style="padding:4px 10px;">✕</button>
     </div>
     <div class="compose-drawer-body">
-        <!-- Quick templates -->
-        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">
-            <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);flex-shrink:0;">Quick fill:</span>
-            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bunk')" style="border:1px solid var(--border-light);">🏠 Bunk</button>
-            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bus')"  style="border:1px solid var(--border-light);">🚌 Bus Route</button>
-            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('form')" style="border:1px solid var(--border-light);">📋 Form Reminder</button>
+        <!-- Quick templates + branding -->
+        <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">
+            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:9px;">
+                <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);flex-shrink:0;">Quick fill:</span>
+                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bunk')" style="border:1px solid var(--border-light);">🏠 Bunk</button>
+                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bus')"  style="border:1px solid var(--border-light);">🚌 Bus Route</button>
+                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('form')" style="border:1px solid var(--border-light);">📋 Form Reminder</button>
+                <span style="flex:1;"></span>
+                <button class="btn btn-ghost btn-sm" onclick="openLinkBranding()" style="border:1px solid var(--border-light);flex-shrink:0;">🎨 Branding &amp; logo</button>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:7px;flex-wrap:wrap;">
+                <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);flex-shrink:0;padding-top:5px;">My templates:</span>
+                <div id="cSavedTemplates" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1;min-width:160px;"></div>
+                <button class="btn btn-ghost btn-sm" onclick="saveComposeTemplate()" style="border:1px solid var(--border-light);flex-shrink:0;">💾 Save as template</button>
+            </div>
         </div>
 
         <!-- To -->
@@ -1348,6 +1357,7 @@ function openComposeDrawer(presetName) {
     document.getElementById('composeBackdrop').classList.add('open');
     onScopeChange();
     _populateComposeAttach();
+    _renderSavedTemplates();
     if (presetName) {
         document.getElementById('cScope').value = 'individual';
         onScopeChange();
@@ -1848,6 +1858,147 @@ function loadTemplate(type) {
     body.focus();
 }
 
+// ─── MESSAGE BRANDING (logo / color / footer) + SAVEABLE TEMPLATES ──────────
+function _linkStore() { var cl = CL(); return cl ? cl.getStore() : null; }
+function _linkCampName() {
+    try { var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); return s.camp_name || s.campName || 'Camp'; }
+    catch (e) { return 'Camp'; }
+}
+// Only accept raster data URLs — an SVG data URL can carry <script>.
+function _isSafeImg(s) { return typeof s === 'string' && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s); }
+function _linkBranding() {
+    var st = _linkStore();
+    var b = (st && st.settings && st.settings.branding) || {};
+    return { logo: b.logo || '', brandColor: b.brandColor || '#2A7A35', footer: (b.footer != null ? b.footer : '') };
+}
+function _linkSaveBranding(b) {
+    var cl = CL(); if (!cl) { toast('Not ready — try again in a moment'); return false; }
+    var st = cl.getStore(); if (!st.settings) st.settings = {};
+    st.settings.branding = b; cl.save(); return true;
+}
+
+// Branded preview markup — logo/color header, escaped subject + body, footer.
+function _brandedPreviewHtml(subj, body) {
+    var b = _linkBranding();
+    var brand = /^#[0-9a-fA-F]{3,8}$/.test(b.brandColor) ? b.brandColor : '#2A7A35';
+    var logo = _isSafeImg(b.logo) ? '<img src="' + b.logo + '" alt="" style="max-height:40px;max-width:160px;object-fit:contain;display:block;margin:0 auto 6px;">' : '';
+    var head = '<div style="background:' + brand + ';color:#fff;padding:9px 12px;margin:-11px -13px 10px;text-align:center;">' + logo + '<div style="font-weight:700;font-size:.82rem;">' + esc(_linkCampName()) + '</div></div>';
+    var subjH = subj ? '<div style="font-weight:700;margin:0 0 6px;color:var(--slate-800);">' + esc(subj) + '</div>' : '';
+    var bodyH = '<div style="white-space:pre-wrap;color:var(--slate-700);">' + esc(body) + '</div>';
+    var foot = b.footer ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-light);font-size:.75rem;color:var(--text-muted);white-space:pre-wrap;">' + esc(b.footer) + '</div>' : '';
+    return head + subjH + bodyH + foot;
+}
+
+// ── saved (custom) templates ──
+function _linkTemplates() { var st = _linkStore(); return (st && Array.isArray(st.templates)) ? st.templates : []; }
+function _renderSavedTemplates() {
+    var wrap = document.getElementById('cSavedTemplates'); if (!wrap) return;
+    var tpls = _linkTemplates();
+    if (!tpls.length) { wrap.innerHTML = '<span style="font-size:.72rem;color:var(--text-muted);padding-top:5px;">None yet — write a message and click “Save as template”.</span>'; return; }
+    wrap.innerHTML = tpls.map(function (t) {
+        return '<span onclick="loadSavedTemplate(\'' + t.id + '\')" title="Load this template" style="display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 5px 3px 10px;font-size:.74rem;cursor:pointer;background:#fff;">' +
+            '<span>' + esc(t.name || 'Untitled') + '</span>' +
+            '<button type="button" title="Delete template" onclick="deleteSavedTemplate(\'' + t.id + '\',event)" style="border:none;background:var(--slate-100);color:var(--text-muted);border-radius:50%;width:16px;height:16px;line-height:14px;font-size:.7rem;cursor:pointer;padding:0;">✕</button>' +
+            '</span>';
+    }).join('');
+}
+function saveComposeTemplate() {
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    if (!subj && !body) { toast('Write a subject or message first'); return; }
+    var name = prompt('Template name:', subj || 'Untitled template');
+    if (name === null) return; name = (name || '').trim(); if (!name) { toast('Template name required'); return; }
+    var cl = CL(); if (!cl) { toast('Not ready — try again in a moment'); return; }
+    var st = cl.getStore(); if (!Array.isArray(st.templates)) st.templates = [];
+    st.templates.push({ id: 'tpl_' + Date.now() + '_' + Math.floor(Math.random() * 1e4), name: name, type: 'custom', subject: subj, bodyTemplate: body, dataFields: [] });
+    cl.save();
+    _renderSavedTemplates();
+    toast('Template saved');
+}
+function loadSavedTemplate(id) {
+    var t = _linkTemplates().filter(function (x) { return x.id === id; })[0]; if (!t) return;
+    var subj = document.getElementById('cSubj'), body = document.getElementById('cBody');
+    var has = (subj && subj.value.trim()) || (body && body.value.trim());
+    if (has && !confirm('Replace the current subject and message with “' + (t.name || 'template') + '”?')) return;
+    if (subj) subj.value = t.subject || '';
+    if (body) body.value = t.bodyTemplate || t.body || '';
+    updateComposePreview();
+    if (body) body.focus();
+}
+function deleteSavedTemplate(id, ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    if (!confirm('Delete this template?')) return;
+    var cl = CL(); if (!cl) return;
+    var st = cl.getStore(); st.templates = (st.templates || []).filter(function (x) { return x.id !== id; });
+    cl.save();
+    _renderSavedTemplates();
+    toast('Template deleted');
+}
+
+// ── branding editor (modal) ──
+function openLinkBranding() {
+    var b = _linkBranding();
+    var prev = document.getElementById('linkBrandModal'); if (prev) prev.remove();
+    var ov = document.createElement('div');
+    ov.id = 'linkBrandModal';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1200;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:16px;';
+    var logoPrev = _isSafeImg(b.logo)
+        ? '<img id="lbLogoImg" src="' + b.logo + '" alt="logo" style="max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;">'
+        : '<div id="lbLogoImg" style="font-size:.8rem;color:var(--text-muted);">No logo uploaded</div>';
+    ov.innerHTML =
+        '<div style="background:#fff;border-radius:14px;width:min(460px,100%);max-height:90vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.3);">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border-light);">' +
+                '<h2 style="margin:0;font-size:1.05rem;font-weight:700;">Message Branding</h2>' +
+                '<button class="btn btn-ghost btn-sm" onclick="closeLinkBranding()" style="padding:4px 10px;">✕</button>' +
+            '</div>' +
+            '<div style="padding:18px 20px;">' +
+                '<div class="lk-field"><label>Logo</label><div style="margin-bottom:8px;">' + logoPrev + '</div>' +
+                    '<input type="file" id="lbLogoFile" accept="image/png,image/jpeg,image/gif,image/webp" onchange="_lbUploadLogo(this)" style="font-size:.82rem;">' +
+                    (_isSafeImg(b.logo) ? ' <button class="btn btn-ghost btn-sm" style="color:#EF4444;" onclick="_lbRemoveLogo()">Remove</button>' : '') +
+                    '<div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;">PNG, JPG, GIF or WebP · shown at the top of the message.</div></div>' +
+                '<div style="display:flex;gap:12px;margin-top:6px;">' +
+                    '<div class="lk-field" style="flex:0 0 120px;"><label>Brand color</label><input type="color" id="lbColor" value="' + (/^#[0-9a-fA-F]{3,8}$/.test(b.brandColor) ? b.brandColor : '#2A7A35') + '" style="width:100%;height:38px;border:1px solid var(--border-light);border-radius:8px;background:#fff;cursor:pointer;"></div>' +
+                    '<div class="lk-field" style="flex:1;"><label>Footer / signature</label><textarea id="lbFooter" class="lk-textarea" rows="3" style="min-height:auto;" placeholder="e.g. Warm regards, The Camp Office · (555) 123-4567">' + esc(b.footer) + '</textarea></div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border-light);">' +
+                '<button class="btn btn-secondary btn-sm" onclick="closeLinkBranding()">Cancel</button>' +
+                '<button class="btn btn-primary btn-sm" onclick="_lbSave()">Save branding</button>' +
+            '</div>' +
+        '</div>';
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) closeLinkBranding(); });
+    document.body.appendChild(ov);
+}
+function closeLinkBranding() { var e = document.getElementById('linkBrandModal'); if (e) e.remove(); }
+function _lbUploadLogo(input) {
+    var file = input && input.files && input.files[0]; if (!file) return;
+    if (file.size > 500 * 1024) { toast('Logo must be under 500 KB'); input.value = ''; return; }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+        var url = e.target.result;
+        if (!_isSafeImg(url)) { toast('Unsupported image — use PNG, JPG, GIF or WebP'); return; }
+        var b = _linkBranding(); b.logo = url;
+        if (_linkSaveBranding(b)) {
+            var img = document.getElementById('lbLogoImg');
+            if (img) { var n = document.createElement('img'); n.id = 'lbLogoImg'; n.src = url; n.alt = 'logo'; n.style.cssText = 'max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;'; img.replaceWith(n); }
+            updateComposePreview();
+            toast('Logo uploaded');
+        }
+    };
+    reader.onerror = function () { toast('Could not read that file'); };
+    reader.readAsDataURL(file);
+}
+function _lbRemoveLogo() {
+    var b = _linkBranding(); b.logo = '';
+    if (_linkSaveBranding(b)) { closeLinkBranding(); openLinkBranding(); updateComposePreview(); toast('Logo removed'); }
+}
+function _lbSave() {
+    var color = (document.getElementById('lbColor') || {}).value || '#2A7A35';
+    var footer = (document.getElementById('lbFooter') || {}).value || '';
+    var b = _linkBranding(); b.brandColor = color; b.footer = footer;
+    if (_linkSaveBranding(b)) { closeLinkBranding(); updateComposePreview(); toast('Branding saved'); }
+}
+
 // Scope change — show/hide the secondary filter (as toggle pills) or the search
 function onScopeChange() {
     var scope    = (document.getElementById('cScope')    || {}).value || 'all';
@@ -2086,8 +2237,8 @@ function updateComposePreview() {
     if (!targets.length || !body.trim()) { wrap.style.display = 'none'; return; }
     var busMap = _buildBusRouteMap();
     var t = targets[0];
-    var subjLine = subj ? 'Subject: ' + _applyMergeTags(subj, t, busMap) + '\n\n' : '';
-    pre.textContent = subjLine + _applyMergeTags(body, t, busMap);
+    // Branded preview: logo/color header + escaped subject & body + footer.
+    pre.innerHTML = _brandedPreviewHtml(_applyMergeTags(subj, t, busMap), _applyMergeTags(body, t, busMap));
     if (lbl) lbl.textContent = '— ' + t.parentName + (t.camperName ? ' (' + t.camperName + ')' : '');
     wrap.style.display = '';
     _updateScopeCount();
@@ -2117,7 +2268,17 @@ function showComposePreviewAll() {
     var wrap = document.getElementById('cPreviewAll');
     if (!wrap || !targets.length || !body) return;
     var busMap = _buildBusRouteMap();
+    var _b = _linkBranding();
+    var _brandBanner = '';
+    if (_isSafeImg(_b.logo) || _b.footer) {
+        var _bc = /^#[0-9a-fA-F]{3,8}$/.test(_b.brandColor) ? _b.brandColor : '#2A7A35';
+        _brandBanner = '<div style="padding:8px 14px;background:' + _bc + ';color:#fff;text-align:center;">' +
+            (_isSafeImg(_b.logo) ? '<img src="' + _b.logo + '" alt="" style="max-height:30px;max-width:130px;object-fit:contain;vertical-align:middle;">' : '') +
+            '<span style="font-weight:700;font-size:.76rem;margin-left:6px;">' + esc(_linkCampName()) + '</span>' +
+            '<div style="font-size:.68rem;opacity:.85;">This header appears on every message</div></div>';
+    }
     var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:340px;overflow-y:auto;">' +
+        _brandBanner +
         '<div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;">' +
             '<span>' + targets.length + ' personalized messages</span>' +
             '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'cPreviewAll\').style.display=\'none\'">✕</button>' +
