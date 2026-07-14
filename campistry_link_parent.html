@@ -782,6 +782,10 @@ document.addEventListener('click',function(e){
     if(wrap&&!wrap.contains(e.target))closeAvatarMenu();
 });
 function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
+// Global HTML escaper — this block (script 1) needs it too (e.g. the health-doc
+// upload/list render). The forms module has its own IIFE-local copy; declaring a
+// top-level one here makes it resolvable from both blocks without shadowing.
+function _escHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 var _selAmt=25;
 function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});b.classList.add('sel');var ci=document.getElementById('canteenCustomAmt');if(ci)ci.value='';}
 function selCustomAmt(input){
@@ -2709,7 +2713,7 @@ window.addEventListener('storage', function(e) {
             var primary = camps.find(function(cp){ return cp.camp_id === primaryCampId; });
             if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) ch.campName = primary.camp_name || ''; });
             var others = camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
-            if (!others.length) { init(); return; } // single camp — nothing to add
+            if (!others.length) { init(); _afterMergeReloadCloud(); return; } // single camp — nothing to add
             others.forEach(function(cp){
                 var cnames = (cp.camper_names && cp.camper_names.length) ? cp.camper_names : Object.keys(cp.camper_data || {});
                 cnames.forEach(function(name){
@@ -2740,9 +2744,32 @@ window.addEventListener('storage', function(e) {
                 if (kids.length) _syncCanteenFromCloud(kids, cp.camp_id);
             });
             init(); // rebuild every child-tab list now that all camps are in
+            _afterMergeReloadCloud();
             console.log('[Parent] Multi-camp: '+camps.length+' camps, '+children.length+' children total');
             _checkConnectableCamps(); // a new camp may have added a child since sign-up
         }).catch(function(){});
+    }
+
+    // init() (re-run after the multi-camp merge) rebuilds the page shell and
+    // resets the cloud-backed sections to their empty state. Re-run the loaders
+    // so forms / lists / health / photos / messages / mail / tips reappear with
+    // the fully-merged, all-camps data. (Without this the initial async renders
+    // that finished BEFORE the merge's init() get clobbered — e.g. an assigned
+    // form vanishes from the list even though its badge count stays.)
+    function _afterMergeReloadCloud() {
+        try {
+            if (parent && parent.campId) {
+                if (typeof _loadLinkForms === 'function') _loadLinkForms(parent.campId);
+                if (typeof _loadLinkLists === 'function') _loadLinkLists(parent.campId);
+                if (typeof _loadTipsConfigCloud === 'function') _loadTipsConfigCloud(parent.campId);
+            }
+            if (typeof _loadMyHealthDocs === 'function') _loadMyHealthDocs();
+            if (typeof _loadParentPhotos === 'function') _loadParentPhotos();
+            if (typeof _loadCamperFaceStatus === 'function') _loadCamperFaceStatus();
+            if (typeof _syncMessagesFromCloud === 'function') _syncMessagesFromCloud();
+            if (typeof _loadMyMail === 'function') _loadMyMail();
+            if (typeof _loadMyTips === 'function') _loadMyTips();
+        } catch (e) { console.warn('[Parent] _afterMergeReloadCloud', e); }
     }
 
     // ── Auto-connect new campers/camps ────────────────────────────────────────
