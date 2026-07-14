@@ -9,6 +9,7 @@ var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={};
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
+var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
@@ -107,6 +108,7 @@ function loadData(){
         bunkStaff=me.bunkStaff||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         formConfig=me.formConfig||null;
+        printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         // Ensure promoCodes live inside enrollSettings
         if(me.promoCodes&&!enrollSettings.promoCodes)enrollSettings.promoCodes=me.promoCodes;
         // Analytics & Finance
@@ -180,6 +182,7 @@ function save(){
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
+            printSheets:printSheets,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         });
@@ -335,7 +338,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,analytics:renderAnalytics,reports:renderReports,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -5672,6 +5675,360 @@ function exportCsv(){
 // ═══ BOOT ════════════════════════════════════════════════════════
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 
+// ═══════════════════════════════════════════════════════════════
+// PRINT SHEETS — user-built printable rosters (columns × rows)
+// A camp can design a sheet, choose exactly what each column holds
+// (first name, parent address, bunk, allergies, a blank write-in
+// column, …), and print one sheet per bunk / grade / division / team.
+// Columns left unconfigured never print. Templates persist to cloud.
+// ═══════════════════════════════════════════════════════════════
+var psEditingId=null; // id of the sheet open in the builder, or null for the list
+
+// Catalog of fields a column can hold. Custom fields (Settings → Custom
+// Fields) are appended so anything the camp tracks can be printed.
+function psFields(){
+    loadCustomFields();
+    var f=[
+        {key:'firstName',label:'First Name'},
+        {key:'lastName',label:'Last Name'},
+        {key:'fullName',label:'Full Name'},
+        {key:'altName',label:'Alternate Name'},
+        {key:'camperId',label:'Camper ID'},
+        {key:'division',label:'Division'},
+        {key:'grade',label:'Grade'},
+        {key:'bunk',label:'Bunk'},
+        {key:'team',label:'League Team'},
+        {key:'dob',label:'Date of Birth'},
+        {key:'age',label:'Age'},
+        {key:'gender',label:'Gender'},
+        {key:'school',label:'School'},
+        {key:'schoolGrade',label:'School Grade'},
+        {key:'teacher',label:'Teacher'},
+        {key:'parent1Name',label:'Parent / Guardian'},
+        {key:'parent1Phone',label:'Parent Phone'},
+        {key:'parent1Email',label:'Parent Email'},
+        {key:'street',label:'Street'},
+        {key:'city',label:'City'},
+        {key:'state',label:'State'},
+        {key:'zip',label:'ZIP'},
+        {key:'address',label:'Full Address'},
+        {key:'allergies',label:'Allergies'},
+        {key:'medications',label:'Medications'},
+        {key:'dietary',label:'Dietary'},
+        {key:'emergencyName',label:'Emergency Contact'},
+        {key:'emergencyPhone',label:'Emergency Phone'},
+        {key:'emergencyRel',label:'Emergency Relation'},
+        {key:'__blank',label:'Blank / write-in column'}
+    ];
+    (customFields||[]).forEach(function(cf){f.push({key:'cf_'+cf.id,label:cf.label})});
+    return f;
+}
+function psFieldLabel(key){
+    if(!key)return'';
+    var m=psFields().filter(function(f){return f.key===key})[0];
+    return m?m.label:key;
+}
+// Resolve a field's value for one camper. name is the roster key.
+function psValue(field,name,c){
+    if(!field||field==='__blank')return'';
+    c=c||{};
+    var parts=(name||'').split(' ');
+    switch(field){
+        case'firstName':return parts[0]||'';
+        case'lastName':return parts.slice(1).join(' ')||'';
+        case'fullName':return name||'';
+        case'altName':return[c.altFirstName,c.altLastName].filter(Boolean).join(' ');
+        case'camperId':return c.camperId?String(c.camperId).padStart(4,'0'):'';
+        case'age':return String(age(c.dob)||'');
+        case'dob':return c.dob?formatDateLocale(c.dob):'';
+        case'address':{
+            var line2=[c.city,c.state].filter(Boolean).join(', ');
+            if(c.zip)line2=(line2?line2+' ':'')+c.zip;
+            return[c.street,line2].filter(Boolean).join(', ');
+        }
+        case'team':return c.team||Object.values(c.teams||{})[0]||'';
+        default:return c[field]!=null?String(c[field]):'';
+    }
+}
+
+// ── template + column model ──
+function psGet(id){return printSheets.filter(function(s){return s.id===id})[0]||null}
+function psColHeader(col){return(col.header&&col.header.trim())||psFieldLabel(col.field)}
+// A column prints only when it has "something inside": a real field, or a
+// write-in column the user gave a header to.
+function psColPrints(col){
+    if(!col||!col.field)return false;
+    if(col.field==='__blank')return!!(col.header&&col.header.trim());
+    return true;
+}
+// Columns to actually render. When hideEmptyCols is on, data columns that
+// are blank for every camper are dropped too (write-in columns are kept).
+function psActiveColumns(sheet,rows){
+    var cols=(sheet.columns||[]).filter(psColPrints);
+    if(sheet.hideEmptyCols!==false&&rows&&rows.length){
+        cols=cols.filter(function(col){
+            if(col.field==='__blank')return true;
+            return rows.some(function(r){return psValue(col.field,r[0],r[1]).trim()!==''});
+        });
+    }
+    return cols;
+}
+
+// ── camper selection, sorting, grouping ──
+function psFilteredCampers(sheet){
+    var rows=Object.entries(roster);
+    if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
+    var sortKey=sheet.sortBy||'lastName';
+    rows.sort(function(a,b){
+        var va,vb;
+        if(sortKey==='camperId'){va=a[1].camperId||0;vb=b[1].camperId||0;return va-vb}
+        if(sortKey==='firstName'){va=(a[0].split(' ')[0]||'');vb=(b[0].split(' ')[0]||'')}
+        else if(sortKey==='bunk'){va=a[1].bunk||'';vb=b[1].bunk||''}
+        else if(sortKey==='grade'){va=a[1].grade||'';vb=b[1].grade||''}
+        else{va=(a[0].split(' ').slice(1).join(' ')||a[0]);vb=(b[0].split(' ').slice(1).join(' ')||b[0])}
+        return String(va).localeCompare(String(vb),undefined,{numeric:true});
+    });
+    return rows;
+}
+function psGroupVal(groupBy,c){
+    if(groupBy==='division')return c.division||'';
+    if(groupBy==='grade')return c.grade||'';
+    if(groupBy==='bunk')return c.bunk||'';
+    if(groupBy==='team')return c.team||Object.values(c.teams||{})[0]||'';
+    return'';
+}
+function psOrderedGroups(groupBy){
+    var out=[];
+    try{
+        if(groupBy==='division'){_sortedDivisions().forEach(function(e){out.push(e[0])})}
+        else if(groupBy==='grade'){_sortedDivisions().forEach(function(e){_sortedGrades(e[1]).forEach(function(g){if(out.indexOf(g[0])<0)out.push(g[0])})})}
+        else if(groupBy==='bunk'){_sortedDivisions().forEach(function(e){_sortedGrades(e[1]).forEach(function(g){(g[1].bunks||[]).forEach(function(b){if(out.indexOf(b)<0)out.push(b)})})})}
+        else if(groupBy==='team'){var lg=getLeagues();Object.keys(lg).sort().forEach(function(k){(lg[k]||[]).forEach(function(t){if(out.indexOf(t)<0)out.push(t)})})}
+    }catch(e){}
+    return out;
+}
+function psGroups(sheet){
+    var rows=psFilteredCampers(sheet);
+    if(!sheet.groupBy)return[{label:'',rows:rows}];
+    var buckets={};
+    rows.forEach(function(r){var v=psGroupVal(sheet.groupBy,r[1])||'__unassigned';(buckets[v]=buckets[v]||[]).push(r)});
+    var ordered=psOrderedGroups(sheet.groupBy),result=[];
+    ordered.forEach(function(v){if(buckets[v]){result.push({label:v,rows:buckets[v]});delete buckets[v]}});
+    Object.keys(buckets).sort().forEach(function(v){if(v!=='__unassigned')result.push({label:v,rows:buckets[v]})});
+    if(buckets['__unassigned'])result.push({label:'(Unassigned)',rows:buckets['__unassigned']});
+    return result;
+}
+
+// ── shared table renderer (preview + print use the same output) ──
+function psTableHtml(cols,rows){
+    var h='<table class="ps-tbl"><thead><tr>';
+    cols.forEach(function(col){h+='<th>'+esc(psColHeader(col))+'</th>'});
+    h+='</tr></thead><tbody>';
+    if(!rows.length){h+='<tr><td colspan="'+(cols.length||1)+'" class="ps-empty">No campers</td></tr>'}
+    rows.forEach(function(r){
+        h+='<tr>';
+        cols.forEach(function(col){
+            var v=col.field==='__blank'?'':psValue(col.field,r[0],r[1]);
+            h+='<td'+(col.field==='__blank'?' class="ps-write"':'')+'>'+esc(v)+'</td>';
+        });
+        h+='</tr>';
+    });
+    h+='</tbody></table>';
+    return h;
+}
+
+// ── persistence + CRUD ──
+function psSave(){save()}
+// Debounced save for while-you-type edits (name, headers) so we don't fire a
+// cloud write on every keystroke.
+var _psSaveT=null;
+function psSaveSoon(){clearTimeout(_psSaveT);_psSaveT=setTimeout(save,600)}
+function psNew(){
+    var s={id:'ps_'+Date.now()+'_'+Math.floor(Math.random()*1e4),name:'Untitled Sheet',
+        columns:[{id:'c1',field:'firstName',header:''},{id:'c2',field:'lastName',header:''},{id:'c3',field:'bunk',header:''}],
+        groupBy:'',scopeDiv:'',sortBy:'lastName',hideEmptyCols:true};
+    printSheets.push(s);psSave();psEditingId=s.id;renderPrintSheets();
+}
+function psEdit(id){psEditingId=id;renderPrintSheets()}
+function psBack(){psEditingId=null;renderPrintSheets()}
+function psDelete(id){
+    if(!confirm('Delete this sheet template?'))return;
+    var i=printSheets.findIndex(function(s){return s.id===id});
+    if(i>=0)printSheets.splice(i,1);
+    psSave();if(psEditingId===id)psEditingId=null;renderPrintSheets();toast('Sheet deleted');
+}
+function psDuplicate(id){
+    var s=psGet(id);if(!s)return;
+    var copy=JSON.parse(JSON.stringify(s));
+    copy.id='ps_'+Date.now()+'_'+Math.floor(Math.random()*1e4);
+    copy.name=(s.name||'Sheet')+' (copy)';
+    printSheets.push(copy);psSave();renderPrintSheets();toast('Sheet duplicated');
+}
+function psRename(id,v){var s=psGet(id);if(!s)return;s.name=v;psSaveSoon()}
+function psSetProp(id,prop,v){var s=psGet(id);if(!s)return;s[prop]=v;psSave();renderPrintSheets()}
+function psToggleHideEmpty(id,checked){var s=psGet(id);if(!s)return;s.hideEmptyCols=!!checked;psSave();renderPrintSheets()}
+function psAddColumn(id){
+    var s=psGet(id);if(!s)return;
+    (s.columns=s.columns||[]).push({id:'c'+Date.now(),field:'',header:''});
+    psSave();renderPrintSheets();
+}
+function psRemoveColumn(id,colId){
+    var s=psGet(id);if(!s)return;
+    s.columns=(s.columns||[]).filter(function(c){return c.id!==colId});
+    psSave();renderPrintSheets();
+}
+function psMoveColumn(id,colId,dir){
+    var s=psGet(id);if(!s)return;
+    var cols=s.columns||[],i=cols.findIndex(function(c){return c.id===colId}),j=i+dir;
+    if(i<0||j<0||j>=cols.length)return;
+    var t=cols[i];cols[i]=cols[j];cols[j]=t;
+    psSave();renderPrintSheets();
+}
+function psSetColField(id,colId,v){
+    var s=psGet(id);if(!s)return;
+    var col=(s.columns||[]).filter(function(c){return c.id===colId})[0];
+    if(col){col.field=v;psSave();renderPrintSheets()}
+}
+function psSetColHeader(id,colId,v){
+    var s=psGet(id);if(!s)return;
+    var col=(s.columns||[]).filter(function(c){return c.id===colId})[0];
+    if(col){col.header=v;psRefreshPreview(id);psSaveSoon()}
+}
+// Update only the live preview pane (keeps input focus while typing headers)
+function psRefreshPreview(id){
+    var s=psGet(id),el=document.getElementById('psPreview');
+    if(s&&el)el.innerHTML=psPreviewHtml(s);
+}
+
+// ── preview + print output ──
+function psPreviewHtml(sheet){
+    var groups=psGroups(sheet),allRows=groups.reduce(function(a,g){return a.concat(g.rows)},[]);
+    var cols=psActiveColumns(sheet,allRows);
+    if(!cols.length)return'<div class="ps-hint">Add at least one column with a field selected to see a preview.</div>';
+    var h='';
+    groups.forEach(function(g){
+        var gcols=psActiveColumns(sheet,g.rows);
+        if(!gcols.length)gcols=cols;
+        h+='<div class="ps-sheet">';
+        if(sheet.groupBy)h+='<div class="ps-sheet-title">'+esc(g.label||'(Unassigned)')+' <span class="ps-count">'+g.rows.length+'</span></div>';
+        h+=psTableHtml(gcols,g.rows);
+        h+='</div>';
+    });
+    return h;
+}
+function psPrint(id){
+    var sheet=psGet(id);if(!sheet)return;
+    var groups=psGroups(sheet),allRows=groups.reduce(function(a,g){return a.concat(g.rows)},[]);
+    var baseCols=psActiveColumns(sheet,allRows);
+    if(!baseCols.length){toast('Add at least one column first','error');return}
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    var campName=(s.camp_name||s.campName||(s.campistryMe&&s.campistryMe.campSettings&&s.campistryMe.campSettings.campName)||'');
+    var w=window.open('','_blank');
+    if(!w){toast('Pop-up blocked — allow pop-ups to print','error');return}
+    var css='@page{margin:14mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;padding:18px}'
+        +'.ps-sheet{page-break-inside:auto}.ps-sheet+.ps-sheet{page-break-before:always}'
+        +'.ps-hd{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #0f172a;padding-bottom:6px;margin-bottom:10px}'
+        +'.ps-hd h1{font-size:16px;margin:0}.ps-hd .sub{font-size:11px;color:#64748b}'
+        +'.ps-sheet-title{font-size:14px;font-weight:700;margin:0 0 8px}.ps-count{color:#64748b;font-weight:400;font-size:11px}'
+        +'table{width:100%;border-collapse:collapse;margin-bottom:6px;font-size:12px}'
+        +'th{text-align:left;background:#f1f5f9;border:1px solid #cbd5e1;padding:6px 8px;font-size:11px;text-transform:uppercase;letter-spacing:.3px}'
+        +'td{border:1px solid #cbd5e1;padding:6px 8px;vertical-align:top}tr{page-break-inside:avoid}'
+        +'.ps-write{height:26px}.ps-empty{text-align:center;color:#94a3b8}'
+        +'.ps-foot{margin-top:14px;font-size:10px;color:#94a3b8}';
+    var h='<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(sheet.name||'Print Sheet')+'</title><style>'+css+'</style></head><body>';
+    groups.forEach(function(g){
+        var gcols=psActiveColumns(sheet,g.rows);
+        if(!gcols.length)gcols=baseCols;
+        h+='<div class="ps-sheet">';
+        h+='<div class="ps-hd"><h1>'+esc(sheet.name||'Print Sheet')+(sheet.groupBy?' — '+esc(g.label||'(Unassigned)'):'')+'</h1>'
+            +'<div class="sub">'+esc(campName)+(campName?' · ':'')+esc(new Date().toLocaleDateString())+' · '+g.rows.length+' campers</div></div>';
+        h+=psTableHtml(gcols,g.rows);
+        h+='</div>';
+    });
+    h+='</body></html>';
+    w.document.write(h);w.document.close();
+    setTimeout(function(){try{w.focus();w.print()}catch(e){}},350);
+}
+
+// ── page render ──
+function renderPrintSheets(){
+    var c=document.getElementById('page-printsheets');
+    if(!c)return;
+    if(psEditingId&&psGet(psEditingId)){c.innerHTML=psEditorHtml(psGet(psEditingId));return}
+    psEditingId=null;
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Print Sheets</h2><p class="sec-desc">Design custom printable sheets — pick what goes in each column, then print one per bunk, grade, or division.</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.psNew()">+ New Sheet</button></div></div>';
+    if(!printSheets.length){
+        h+='<div class="me-empty"><h3>No print sheets yet</h3><p>Build a sheet of columns — camper name, bunk, parent address, allergies, a blank sign-in column — and print it grouped however you need.</p><button class="me-btn me-btn--pri" style="margin-top:10px" onclick="CampistryMe.psNew()">+ Create your first sheet</button></div>';
+        c.innerHTML=h;return;
+    }
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px">';
+    printSheets.forEach(function(s){
+        var cols=(s.columns||[]).filter(psColPrints);
+        var grpLabel={'':'One combined sheet',division:'One sheet per division',grade:'One sheet per grade',bunk:'One sheet per bunk',team:'One sheet per team'}[s.groupBy||'']||'';
+        var scope=s.scopeDiv?('Division: '+s.scopeDiv):'All campers';
+        h+='<div class="me-card" style="padding:16px;display:flex;flex-direction:column;gap:8px">'
+            +'<div style="font-size:.95rem;font-weight:700">'+esc(s.name||'Untitled Sheet')+'</div>'
+            +'<div style="font-size:.72rem;color:var(--s400)">'+cols.length+' column'+(cols.length===1?'':'s')+' · '+esc(grpLabel)+'</div>'
+            +'<div style="font-size:.72rem;color:var(--s400)">'+esc(scope)+'</div>'
+            +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">'
+            +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.psPrint(\''+je(s.id)+'\')">Print</button>'
+            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.psEdit(\''+je(s.id)+'\')">Edit</button>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.psDuplicate(\''+je(s.id)+'\')">Duplicate</button>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.psDelete(\''+je(s.id)+'\')">Delete</button>'
+            +'</div></div>';
+    });
+    h+='</div>';
+    c.innerHTML=h;
+}
+function psEditorHtml(s){
+    var fieldOpts=psFields();
+    function fieldSelect(col){
+        var o='<option value="">— empty (won\'t print) —</option>';
+        fieldOpts.forEach(function(f){o+='<option value="'+esc(f.key)+'"'+(f.key===col.field?' selected':'')+'>'+esc(f.label)+'</option>'});
+        return o;
+    }
+    var h='<div class="sec-hd"><div style="display:flex;align-items:center;gap:10px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.psBack()">← Back</button><h2 class="sec-title" style="margin:0">Edit Sheet</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.psPrint(\''+je(s.id)+'\')">Print</button></div></div>';
+    h+='<div class="ps-builder">';
+    // ── config column ──
+    h+='<div class="ps-config">';
+    h+='<div class="me-field"><label>Sheet Name</label><input type="text" class="me-input" value="'+esc(s.name||'')+'" oninput="CampistryMe.psRename(\''+je(s.id)+'\',this.value)" onchange="CampistryMe.psRename(\''+je(s.id)+'\',this.value)" placeholder="e.g. Bunk Sign-In Sheet"></div>';
+
+    var divOpts='<option value="">All campers</option>'+Object.keys(structure).sort().map(function(d){return'<option value="'+esc(d)+'"'+(d===s.scopeDiv?' selected':'')+'>'+esc(d)+'</option>'}).join('');
+    h+='<div class="me-field"><label>Include</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'scopeDiv\',this.value)">'+divOpts+'</select></div>';
+
+    var groupOpts=[['','One combined sheet (no split)'],['division','A separate sheet per division'],['grade','A separate sheet per grade'],['bunk','A separate sheet per bunk'],['team','A separate sheet per league team']];
+    h+='<div class="me-field"><label>Print</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'groupBy\',this.value)">'+groupOpts.map(function(g){return'<option value="'+g[0]+'"'+(g[0]===(s.groupBy||'')?' selected':'')+'>'+g[1]+'</option>'}).join('')+'</select></div>';
+
+    var sortOpts=[['lastName','Last name'],['firstName','First name'],['bunk','Bunk'],['grade','Grade'],['camperId','Camper ID']];
+    h+='<div class="me-field"><label>Sort rows by</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'sortBy\',this.value)">'+sortOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.sortBy||'lastName')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>';
+
+    h+='<label style="display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--s600);margin-top:4px;cursor:pointer"><input type="checkbox"'+(s.hideEmptyCols!==false?' checked':'')+' onchange="CampistryMe.psToggleHideEmpty(\''+je(s.id)+'\',this.checked)"> Hide columns that are empty for everyone</label>';
+
+    // ── columns editor ──
+    h+='<div class="ps-cols-hd">Columns</div>';
+    h+='<p style="font-size:.68rem;color:var(--s400);margin:0 0 8px">Pick a field for each column. Leave a column empty and it simply won\'t print. Choose <em>Blank / write-in</em> for a handwriting column (give it a header).</p>';
+    h+='<div class="ps-cols">';
+    (s.columns||[]).forEach(function(col,i){
+        h+='<div class="ps-col-row">'
+            +'<div class="ps-col-move"><button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+(i===0?' disabled':'')+' onclick="CampistryMe.psMoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\',-1)">↑</button>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+(i===(s.columns.length-1)?' disabled':'')+' onclick="CampistryMe.psMoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\',1)">↓</button></div>'
+            +'<div class="ps-col-fields">'
+            +'<select class="me-input me-input--sm" onchange="CampistryMe.psSetColField(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'+fieldSelect(col)+'</select>'
+            +'<input type="text" class="me-input me-input--sm" value="'+esc(col.header||'')+'" placeholder="'+esc(col.field?('Header: '+psFieldLabel(col.field)):'Column header')+'" oninput="CampistryMe.psSetColHeader(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'
+            +'</div>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" title="Remove column" style="color:var(--err)" onclick="CampistryMe.psRemoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\')">✕</button>'
+            +'</div>';
+    });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:8px" onclick="CampistryMe.psAddColumn(\''+je(s.id)+'\')">+ Add Column</button>';
+    h+='</div>'; // ps-config
+
+    // ── live preview ──
+    h+='<div class="ps-preview-wrap"><div class="ps-preview-hd">Live Preview</div><div id="psPreview" class="ps-preview">'+psPreviewHtml(s)+'</div></div>';
+    h+='</div>'; // ps-builder
+    return h;
+}
+
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
@@ -5726,5 +6083,10 @@ window.CampistryMe={
     addScholarship:addScholarship,
     // Duplicate detection
     detectDuplicates:detectDuplicates,mergeCampers:mergeCampers,
+    // Print Sheets
+    psNew:psNew,psEdit:psEdit,psBack:psBack,psDelete:psDelete,psDuplicate:psDuplicate,
+    psPrint:psPrint,psRename:psRename,psSetProp:psSetProp,psToggleHideEmpty:psToggleHideEmpty,
+    psAddColumn:psAddColumn,psRemoveColumn:psRemoveColumn,psMoveColumn:psMoveColumn,
+    psSetColField:psSetColField,psSetColHeader:psSetColHeader,
 };
 })();
