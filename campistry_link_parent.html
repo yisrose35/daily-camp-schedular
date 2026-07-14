@@ -2827,6 +2827,19 @@ window.addEventListener('storage', function(e) {
         }).catch(function(){ say('Could not send request — check your connection.'); });
     };
 
+    // Bound family, but no child is in their session window right now.
+    function _showSessionInactive() {
+        _showOverlay('parentAuthOverlay',
+            '<div style="max-width:380px;text-align:center;">' +
+            '<img src="Link_clean.png" style="height:44px;margin-bottom:16px;">' +
+            '<div style="width:60px;height:60px;border-radius:50%;background:#EFF6FF;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">' +
+            '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>' +
+            '<h2 style="font-size:1.15rem;font-weight:700;margin-bottom:10px;color:#0F172A;">You\'re all set</h2>' +
+            '<p style="font-size:.85rem;color:#64748B;line-height:1.6;margin-bottom:20px;">Your camp portal opens when your child\'s session begins, and stays available through the end of camp. Check back then — you\'ll sign in with this same email.</p>' +
+            '<button onclick="parentSignOut()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 20px;font-size:.85rem;color:#475569;cursor:pointer;">Sign out</button>' +
+            '</div>');
+    }
+
     function _showInvalidToken(detail) {
         _showOverlay('parentAuthOverlay',
             '<div style="max-width:360px;text-align:center;">' +
@@ -2936,6 +2949,13 @@ window.addEventListener('storage', function(e) {
                 }
                 return;
             }
+            // Bound to a family, but no child is currently in session (their
+            // half hasn't started yet or has ended). This is not a "wrong email"
+            // situation — show a calm status screen, not the code prompt.
+            if (res.data && !res.data.success && res.data.error === 'no_active_session') {
+                _showSessionInactive();
+                return;
+            }
             if (!res.data || !res.data.success) {
                 // Signed in but no invite linked yet. Before asking for a code,
                 // try the zero-friction path: bind any invite whose parent_email
@@ -2972,6 +2992,11 @@ window.addEventListener('storage', function(e) {
                     ? 'Database setup incomplete. Ask the camp admin to run migration 009 in Supabase.'
                     : 'Error: ' + msg;
                 _showSignIn('', errText);
+                return;
+            }
+            if (res.data && !res.data.success && res.data.error === 'no_active_session') {
+                // Invite bound successfully, just not in session yet.
+                _showSessionInactive();
                 return;
             }
             if (!res.data || !res.data.success) {

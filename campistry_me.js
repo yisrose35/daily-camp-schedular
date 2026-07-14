@@ -2932,6 +2932,51 @@ function _syncInvitesForCamper(camperName){
     _enrollIdsForCamper(camperName).forEach(function(id){ _syncParentInviteSnapshot(id,true); });
 }
 
+// ═══ SESSION-GATED ACCESS WINDOWS ════════════════════════════════════════════
+// A parent sees a child (and has portal access) only while that child is inside
+// their attendance window: [session start − lead] .. [session end + grace].
+// These per-camper ISO dates are stamped into camper_data; the parent RPCs
+// (migration 035) gate on them by today's date. Lengths are camp-adjustable via
+// campistryMe.linkAccessWindow; defaults give ~3 weeks to onboard + 1 week of
+// post-camp photo access.
+function _linkAccessWindowDays(){
+    var lead=21, grace=7;
+    try{
+        var g=window.loadGlobalSettings?window.loadGlobalSettings():null;
+        var cfg=g&&g.campistryMe&&g.campistryMe.linkAccessWindow;
+        if(cfg){ if(typeof cfg.leadDays==='number')lead=cfg.leadDays; if(typeof cfg.graceDays==='number')grace=cfg.graceDays; }
+    }catch(_){}
+    return {lead:lead, grace:grace};
+}
+function _isoShift(dateStr, days){
+    if(!dateStr)return '';
+    var d=new Date(dateStr+'T12:00:00'); if(isNaN(d.getTime()))return '';
+    d.setDate(d.getDate()+days);
+    return d.toISOString().slice(0,10);
+}
+// Union of a camper's enrolled-session windows (handles a single "Full Summer"
+// session or two half-sessions). Empty strings => no dated session => the RPC
+// treats the camper as always active (camps not using sessions are unaffected).
+function _linkCamperWindow(camperName){
+    var names=[], minStart=null, maxEnd=null;
+    (_enrollIdsForCamper(camperName)||[]).forEach(function(id){
+        var en=enrollments[id]; if(!en||!en.session)return;
+        names.push(en.session);
+        var s=(sessions||[]).find(function(x){return x.name===en.session;});
+        if(s){
+            if(s.startDate&&(!minStart||s.startDate<minStart))minStart=s.startDate;
+            if(s.endDate&&(!maxEnd||s.endDate>maxEnd))maxEnd=s.endDate;
+        }
+    });
+    var w=_linkAccessWindowDays();
+    return {
+        sessionName:names.join(', '),
+        sessionStart:minStart||'', sessionEnd:maxEnd||'',
+        accessStart:minStart?_isoShift(minStart,-w.lead):'',
+        accessEnd:maxEnd?_isoShift(maxEnd,w.grace):''
+    };
+}
+
 // ═══ AUTO-PROVISION PARENT SIGN-UP (roster-driven) ═══════════════════════════
 // The moment a camper exists in Me with a parent email — CSV import, manual
 // add, or edit — that family can sign up in the Link parent app with that
@@ -2977,8 +3022,13 @@ function _autoProvisionParentInvites(){
     if(!keys.length)return;
 
     // Skip entirely when nothing invite-relevant changed since the last run.
+    // Include each camper's access window so editing SESSION DATES (not just
+    // membership) also re-stamps the invites.
     var sig=keys.slice().sort().map(function(k){
-        return k+':'+fams[k].campers.slice().sort().join('|');
+        return k+':'+fams[k].campers.slice().sort().map(function(cn){
+            var w=_linkCamperWindow(cn);
+            return cn+'@'+w.accessStart+'-'+w.accessEnd;
+        }).join('|');
     }).join(';');
     if(sig===_apiLastSig)return;
 
@@ -3004,10 +3054,13 @@ function _autoProvisionParentInvites(){
         var camperData={};
         f.campers.forEach(function(cn){
             var r=roster[cn]||{};
+            var _w=_linkCamperWindow(cn);
             camperData[cn]={
                 name:cn,dob:r.dob||'',gender:r.gender||'',
                 division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
-                session:'',
+                session:_w.sessionName,
+                sessionStart:_w.sessionStart,sessionEnd:_w.sessionEnd,
+                accessStart:_w.accessStart,accessEnd:_w.accessEnd,
                 allergies:r.allergies||'',medications:r.medications||'',dietary:r.dietary||'',
                 doctor:r.doctor||'',doctorPhone:r.doctorPhone||'',
                 insurance:r.insurance||'',policyNum:r.policyNum||'',
@@ -3168,10 +3221,13 @@ function _syncParentInviteSnapshot(enrollId,silent){
         var camperData={};
         familyEnrollments.forEach(function(en){
             var r=roster[en.camperName]||{};
+            var _w=_linkCamperWindow(en.camperName);
             camperData[en.camperName]={
                 name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
                 division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
                 session:en.session||'',
+                sessionStart:_w.sessionStart,sessionEnd:_w.sessionEnd,
+                accessStart:_w.accessStart,accessEnd:_w.accessEnd,
                 allergies:en.allergies||r.allergies||'',medications:en.medications||r.medications||'',dietary:en.dietary||r.dietary||'',
                 doctor:en.doctor||r.doctor||'',doctorPhone:en.doctorPhone||r.doctorPhone||'',
                 insurance:en.insurance||r.insurance||'',policyNum:en.policyNum||r.policyNum||'',
