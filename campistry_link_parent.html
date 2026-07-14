@@ -816,7 +816,7 @@ function addFunds(){
     if(!db){toast('Connection not ready — try again in a moment.');return;}
     var btn=document.getElementById('canteenAddBtn');
     if(btn){btn.disabled=true;btn.textContent='Adding…';}
-    (window._pRpc?window._pRpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt}):db.rpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt})).then(function(res){
+    (window._pRpc?window._pRpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt},c.campId):db.rpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt,p_camp_id:c.campId})).then(function(res){
         if(btn){btn.disabled=false;btn.textContent='Add Funds';}
         if(res.error){
             console.error('[Parent] submit_canteen_deposit error:',res.error.message,res.error);
@@ -862,8 +862,8 @@ function saveSpendingControls(){
     // never enforced when the camp charges a purchase.
     var db=window._parentDB;
     if(db&&db.rpc){
-        var send = window._pRpc ? window._pRpc('set_canteen_limits',{p_camper_name:c.name,p_daily_limit:lim,p_credit_limit:credit,p_balance_floor:floor})
-                                : db.rpc('set_canteen_limits',{p_camper_name:c.name,p_daily_limit:lim,p_credit_limit:credit,p_balance_floor:floor,p_camp_id:(parent&&parent.campId)||null});
+        var send = window._pRpc ? window._pRpc('set_canteen_limits',{p_camper_name:c.name,p_daily_limit:lim,p_credit_limit:credit,p_balance_floor:floor},c.campId)
+                                : db.rpc('set_canteen_limits',{p_camper_name:c.name,p_daily_limit:lim,p_credit_limit:credit,p_balance_floor:floor,p_camp_id:c.campId||(parent&&parent.campId)||null});
         send.then(function(res){
             if(res.error||!res.data||!res.data.success){
                 console.warn('[Parent] set_canteen_limits failed:',res.error?res.error.message:(res.data||{}).error);
@@ -908,7 +908,9 @@ function init(){
 
     // Children list
     var cl=document.getElementById('childrenList');cl.innerHTML='';
-    if(children.length){children.forEach(function(c,i){cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
+    // Multi-camp: show which camp each child is at when the family spans >1 camp.
+    var _multiCamp=children.length && children.some(function(c){ return c.campId!==children[0].campId; });
+    if(children.length){children.forEach(function(c,i){var campChip=(_multiCamp&&c.campName)?('<span class="badge badge-info" style="font-size:.62rem;margin-right:6px;">'+String(c.campName).replace(/[<>&]/g,'')+'</span>'):'';cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+campChip+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
     else{cl.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}
 
     // Payments
@@ -1096,8 +1098,8 @@ function switchHealth(id,btn){
 function _submitHeadshot(child,pose,model,descriptor,thumb){
     var payload={p_camper_name:child.name,p_headshot_data:thumb,p_descriptor:descriptor,p_pose:pose,p_model:model};
     var call=window._pRpc
-        ? window._pRpc('submit_camper_headshot',payload)
-        : (window._parentDB&&window._parentDB.rpc('submit_camper_headshot',Object.assign({p_camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null},payload)));
+        ? window._pRpc('submit_camper_headshot',payload,child.campId)
+        : (window._parentDB&&window._parentDB.rpc('submit_camper_headshot',Object.assign({p_camp_id:child.campId||((typeof parent!=='undefined'&&parent)?parent.campId:null)},payload)));
     return Promise.resolve(call);
 }
 
@@ -1188,13 +1190,26 @@ function _updateRefStatusText(id){
     else status.textContent='Add photos from 3 angles';
 }
 
+// Run a read RPC once per camp this parent belongs to (multi-camp) and merge the
+// named array field across all camps. Falls back to the single primary camp.
+function _pRpcEachCamp(name,arrayField){
+    var camps=(typeof parent!=='undefined'&&parent&&parent.camps&&parent.camps.length)
+        ? parent.camps
+        : [{camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null}];
+    return Promise.all(camps.map(function(cp){
+        var cid=cp.camp_id||cp.campId||null;
+        var call=window._pRpc?window._pRpc(name,{},cid):(window._parentDB&&window._parentDB.rpc(name,{p_camp_id:cid}));
+        return Promise.resolve(call).then(function(res){
+            return (res&&res.data&&res.data.success&&Array.isArray(res.data[arrayField]))?res.data[arrayField]:[];
+        }).catch(function(){return [];});
+    })).then(function(lists){ return [].concat.apply([],lists); });
+}
+
 // Load each child's saved reference-face state from the cloud and reflect it.
 function _loadCamperFaceStatus(){
     var db=window._parentDB; if(!db||typeof parent==='undefined'||!parent||!parent.campId||typeof children==='undefined')return;
-    var call=window._pRpc?window._pRpc('get_my_camper_face_status',{}):db.rpc('get_my_camper_face_status',{p_camp_id:parent.campId});
-    Promise.resolve(call).then(function(res){
-        if(!res||!res.data||!res.data.success)return;
-        (res.data.campers||[]).forEach(function(f){
+    _pRpcEachCamp('get_my_camper_face_status','campers').then(function(campers){
+        (campers||[]).forEach(function(f){
             var c=children.find(function(k){return k.name===f.camper_name;}); if(!c)return;
             var slot=document.getElementById('refSlot_'+c.id),avatar=document.getElementById('refAvatar_'+c.id),status=document.getElementById('refStatus_'+c.id);
             // poses: [{pose, at}] since migration 030; plain strings before
@@ -1228,10 +1243,8 @@ function _loadCamperFaceStatus(){
 function _loadParentPhotos(){
     var db=window._parentDB, pg=document.getElementById('photoGrid');
     if(!pg||!db||typeof parent==='undefined'||!parent||!parent.campId)return;
-    var call=window._pRpc?window._pRpc('get_my_camper_photos',{}):db.rpc('get_my_camper_photos',{p_camp_id:parent.campId});
-    Promise.resolve(call).then(function(res){
-        if(!res||!res.data||!res.data.success)return;
-        var photos=res.data.photos||[];
+    _pRpcEachCamp('get_my_camper_photos','photos').then(function(photos){
+        photos=photos||[];
         window._parentPhotoCache=photos;
         var sub=document.getElementById('homePhotosSub');if(sub)sub.textContent=photos.length?(photos.length+' photo'+(photos.length===1?'':'s')):'No photos yet';
         if(!photos.length)return; // keep the friendly empty state
@@ -1281,9 +1294,11 @@ function handleHealthDocUpload(input){
     reader.onload=function(e){
         var dataUrl=e.target.result;
         var meta=document.getElementById(rowId+'_meta');
+        var _hc=(typeof children!=='undefined')?children.find(function(k){return k.name===camperName;}):null;
+        var _hcamp=(_hc&&_hc.campId)||((typeof parent!=='undefined'&&parent)?parent.campId:null);
         var call=window._pRpc
-            ? window._pRpc('submit_health_document',{p_camper_name:camperName,p_file_name:f.name,p_file_type:f.type||'',p_file_data:dataUrl,p_note:null})
-            : (window._parentDB&&window._parentDB.rpc('submit_health_document',{p_camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null,p_camper_name:camperName,p_file_name:f.name,p_file_type:f.type||'',p_file_data:dataUrl,p_note:null}));
+            ? window._pRpc('submit_health_document',{p_camper_name:camperName,p_file_name:f.name,p_file_type:f.type||'',p_file_data:dataUrl,p_note:null},_hcamp)
+            : (window._parentDB&&window._parentDB.rpc('submit_health_document',{p_camp_id:_hcamp,p_camper_name:camperName,p_file_name:f.name,p_file_type:f.type||'',p_file_data:dataUrl,p_note:null}));
         Promise.resolve(call).then(function(res){
             var ok=res&&res.data&&res.data.success;
             if(meta) meta.textContent=ok?('Sent to camp nurse · '+badgeText):('Upload failed'+((res&&res.data&&res.data.error)?(': '+res.data.error):'')+' · '+badgeText);
@@ -1299,10 +1314,8 @@ function handleHealthDocUpload(input){
 function _loadMyHealthDocs(){
     var db=window._parentDB, list=document.getElementById('healthDocList');
     if(!list||!db||typeof parent==='undefined'||!parent||!parent.campId)return;
-    var call=window._pRpc?window._pRpc('get_my_health_documents',{}):db.rpc('get_my_health_documents',{p_camp_id:parent.campId});
-    Promise.resolve(call).then(function(res){
-        if(!res||!res.data||!res.data.success)return;
-        var docs=res.data.documents||[]; if(!docs.length)return;
+    _pRpcEachCamp('get_my_health_documents','documents').then(function(docs){
+        docs=docs||[]; if(!docs.length)return;
         var docSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         list.innerHTML=docs.map(function(d){
             var st=d.status==='approved'?'Approved ✓':d.status==='flagged'?'Needs attention':'Pending review';
@@ -1519,33 +1532,57 @@ function toggleCompose(show){
 window._campContacts = [];
 function _loadCampContacts(){
     var el=document.getElementById('composeRecipients'); if(!el) return;
+    var camps=(typeof parent!=='undefined'&&parent&&parent.camps&&parent.camps.length)
+        ? parent.camps
+        : [{camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null, camp_name:''}];
+    var multi=camps.length>1;
     function paint(){
-        var html='<button type="button" class="lk-recip selected" data-uid="" data-label="Camp Office" onclick="_toggleRecip(this)" style="'+_recipStyle(true)+'">Camp Office</button>';
-        (window._campContacts||[]).forEach(function(c){
-            var label=(c.department? c.department+' — ':'')+c.name;
-            html+='<button type="button" class="lk-recip" data-uid="'+_pEsc(c.user_id)+'" data-label="'+_pEsc(label)+'" onclick="_toggleRecip(this)" style="'+_recipStyle(false)+'">'+_pEsc(label)+'</button>';
+        var html='';
+        // One "Camp Office" per camp (labelled with the camp when multi-camp),
+        // plus each camp's staff — every button tagged with its camp so a reply
+        // routes back to the right camp.
+        camps.forEach(function(cp,ci){
+            var cid=cp.camp_id||cp.campId||'';
+            var cname=cp.camp_name||cp.campName||'';
+            var officeLabel=multi?((cname||'Camp')+' Office'):'Camp Office';
+            var sel=(!multi&&ci===0);
+            html+='<button type="button" class="lk-recip'+(sel?' selected':'')+'" data-uid="" data-camp="'+_pEsc(cid)+'" data-label="'+_pEsc(officeLabel)+'" onclick="_toggleRecip(this)" style="'+_recipStyle(sel)+'">'+_pEsc(officeLabel)+'</button>';
+            (window._campContacts||[]).filter(function(c){return (c._campId||'')===cid;}).forEach(function(c){
+                var label=(c.department? c.department+' — ':'')+c.name;
+                html+='<button type="button" class="lk-recip" data-uid="'+_pEsc(c.user_id)+'" data-camp="'+_pEsc(cid)+'" data-label="'+_pEsc(label)+'" onclick="_toggleRecip(this)" style="'+_recipStyle(false)+'">'+_pEsc(label)+'</button>';
+            });
         });
         el.innerHTML=html;
+        // Ensure something is selected (first office) — matters in multi-camp too.
+        if(!el.querySelector('.lk-recip.selected')){ var o=el.querySelector('.lk-recip[data-uid=""]'); if(o){o.classList.add('selected');o.setAttribute('style',_recipStyle(true));} }
     }
     paint();
     var db=window._parentDB;
-    if(db&&db.rpc&&parent&&parent.campId){
-        db.rpc('get_camp_contacts',{p_camp_id:parent.campId}).then(function(res){
-            if(!res.error&&res.data&&res.data.success){ window._campContacts=res.data.contacts||[]; paint(); }
-        });
+    if(db&&db.rpc){
+        Promise.all(camps.map(function(cp){
+            var cid=cp.camp_id||cp.campId; if(!cid) return Promise.resolve([]);
+            return db.rpc('get_camp_contacts',{p_camp_id:cid}).then(function(res){
+                var list=(!res.error&&res.data&&res.data.success)?(res.data.contacts||[]):[];
+                list.forEach(function(c){ c._campId=cid; });
+                return list;
+            }).catch(function(){return [];});
+        })).then(function(lists){ window._campContacts=[].concat.apply([],lists); paint(); });
     }
 }
 function _recipStyle(on){ return 'padding:6px 13px;font-size:.8rem;font-weight:600;border-radius:999px;cursor:pointer;border:1.5px solid '+(on?'var(--link-color)':'var(--slate-200)')+';background:'+(on?'var(--link-tint)':'#fff')+';color:'+(on?'var(--link-color)':'var(--slate-600)')+';'; }
 function _toggleRecip(el){
     // "Camp Office" is exclusive with specific staff (routing to office OR people)
     var isOffice=!el.dataset.uid;
+    var myCamp=el.dataset.camp||'';
     var all=[].slice.call(document.querySelectorAll('#composeRecipients .lk-recip'));
     var willSelect=!el.classList.contains('selected');
-    if(isOffice&&willSelect){ all.forEach(function(b){ b.classList.remove('selected'); b.setAttribute('style',_recipStyle(false)); }); }
-    else if(!isOffice&&willSelect){ var off=document.querySelector('#composeRecipients .lk-recip[data-uid=""]'); if(off){off.classList.remove('selected');off.setAttribute('style',_recipStyle(false));} }
+    // A single message goes to ONE camp — deselect anything in another camp.
+    if(willSelect){ all.forEach(function(b){ if((b.dataset.camp||'')!==myCamp){ b.classList.remove('selected'); b.setAttribute('style',_recipStyle(false)); } }); }
+    if(isOffice&&willSelect){ all.forEach(function(b){ if((b.dataset.camp||'')===myCamp){ b.classList.remove('selected'); b.setAttribute('style',_recipStyle(false)); } }); }
+    else if(!isOffice&&willSelect){ var off=document.querySelector('#composeRecipients .lk-recip[data-uid=""][data-camp="'+(window.CSS&&CSS.escape?CSS.escape(myCamp):myCamp)+'"]'); if(off){off.classList.remove('selected');off.setAttribute('style',_recipStyle(false));} }
     el.classList.toggle('selected',willSelect);
     el.setAttribute('style',_recipStyle(el.classList.contains('selected')));
-    // Never leave nothing selected — fall back to Camp Office.
+    // Never leave nothing selected — fall back to the first Camp Office.
     if(!document.querySelector('#composeRecipients .lk-recip.selected')){ var o=document.querySelector('#composeRecipients .lk-recip[data-uid=""]'); if(o){o.classList.add('selected');o.setAttribute('style',_recipStyle(true));} }
 }
 
@@ -1556,6 +1593,9 @@ function sendComposedMsg(){
     var chosen=[].slice.call(document.querySelectorAll('#composeRecipients .lk-recip.selected'));
     var recipients=chosen.filter(function(b){return b.dataset.uid;}).map(function(b){return {user_id:b.dataset.uid,label:b.dataset.label};});
     var toLabel=chosen.map(function(b){return b.dataset.label;}).join(', ')||'Camp Office';
+    // Multi-camp: the message goes to the chosen recipients' camp (selection is
+    // single-camp, enforced by _toggleRecip).
+    var toCamp=(chosen[0]&&chosen[0].dataset.camp)||(parent&&parent.campId)||null;
     var db=window._parentDB;
     var _afterSend=function(res){
         if(res.error||!res.data||!res.data.success){ toast('Could not send message — please try again.'); return; }
@@ -1568,18 +1608,18 @@ function sendComposedMsg(){
         toast('Message sent to '+toLabel+'!');
     };
     // Route to specific staff when chosen; else fall back to the office channel.
-    if(db&&db.rpc&&recipients.length&&parent&&parent.campId){
-        db.rpc('submit_parent_message',{p_camp_id:parent.campId,p_subject:subj,p_body:body,p_recipients:recipients}).then(function(res){
+    if(db&&db.rpc&&recipients.length&&toCamp){
+        db.rpc('submit_parent_message',{p_camp_id:toCamp,p_subject:subj,p_body:body,p_recipients:recipients}).then(function(res){
             var emsg=res.error&&res.error.message||'';
             if(res.error&&/PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)){
                 // migration 027 not applied yet -> office fallback
-                if(window._submitMessageReplyCloud) window._submitMessageReplyCloud(null,subj,body,_afterSend); else toast('Messaging not ready yet.');
+                if(window._submitMessageReplyCloud) window._submitMessageReplyCloud(null,subj,body,_afterSend,toCamp); else toast('Messaging not ready yet.');
                 return;
             }
             _afterSend(res);
         });
     } else if(typeof window._submitMessageReplyCloud==='function'){
-        window._submitMessageReplyCloud(null,subj,body,_afterSend);
+        window._submitMessageReplyCloud(null,subj,body,_afterSend,toCamp);
     } else { toast('Connection not ready — try again in a moment.'); }
 }
 
@@ -2170,8 +2210,8 @@ function submitPickup(type) {
             var body = labels[type] + ' request for ' + (child.name||'') + (child.bunk?(' ('+child.bunk+')'):'') + '.'
                        + (lines.length ? '\n\n' + lines.join('\n') : '');
             var subject = labels[type] + ' — ' + (child.name||'');
-            var send = window._pRpc ? window._pRpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body })
-                                    : db.rpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body, p_camp_id:(parent&&parent.campId)||null });
+            var send = window._pRpc ? window._pRpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body }, child.campId)
+                                    : db.rpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body, p_camp_id:child.campId||(parent&&parent.campId)||null });
             send.then(function(res){
                 if (res.error || !res.data || !res.data.success) {
                     console.warn('[Parent] pickup request cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
@@ -2212,8 +2252,8 @@ function checkPhotoConsent() {
 function _setFaceConsentAll(consent){
     var db=window._parentDB; if(!db||typeof children==='undefined'||typeof parent==='undefined'||!parent||!parent.campId)return;
     children.forEach(function(c){
-        if(window._pRpc) window._pRpc('set_camper_face_consent',{p_camper_name:c.name,p_consent:consent});
-        else db.rpc('set_camper_face_consent',{p_camper_name:c.name,p_consent:consent,p_camp_id:parent.campId});
+        if(window._pRpc) window._pRpc('set_camper_face_consent',{p_camper_name:c.name,p_consent:consent},c.campId);
+        else db.rpc('set_camper_face_consent',{p_camper_name:c.name,p_consent:consent,p_camp_id:c.campId||parent.campId});
     });
 }
 function acceptPhotoConsent() {
@@ -2325,7 +2365,10 @@ window.addEventListener('storage', function(e) {
     // never loses the parent's work on this device.
     var _cloudSubs = []; // [{form_id, camper_name, ...}] — my submissions from the cloud
     window._submitFormResponseCloud = function(p, done) {
-        db.rpc('submit_link_form_response', {
+        // Multi-camp: scope to the camper's own camp (falls back to primary).
+        var _fc=(typeof children!=='undefined')?children.find(function(k){return k.name===(p.camperName||'')||String(k.campersId||k.id)===String(p.camperId||'');}):null;
+        var _fcamp=(_fc&&_fc.campId)||((typeof parent!=='undefined'&&parent)?parent.campId:null);
+        var _formArgs={
             p_form_id:     p.formId || '',
             p_form_name:   p.formName || '',
             p_mode:        p.mode || 'digital',
@@ -2338,7 +2381,8 @@ window.addEventListener('storage', function(e) {
             p_division:    p.division || null,
             p_grade:       p.grade || null,
             p_bunk:        p.bunk || null
-        }).then(function(res) {
+        };
+        (window._pRpc?window._pRpc('submit_link_form_response',_formArgs,_fcamp):db.rpc('submit_link_form_response',_formArgs)).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] Cloud form submit failed:', res.error ? res.error.message : (res.data||{}).error);
             } else {
@@ -2361,14 +2405,18 @@ window.addEventListener('storage', function(e) {
 
     // ── Camper Mail bridge (migration 015) ────────────────────────────────────
     window._submitCamperMailCloud = function(letter) {
-        db.rpc('submit_camper_mail', {
+        // Multi-camp: scope to the camper's own camp (falls back to primary).
+        var _mc=(typeof children!=='undefined')?children.find(function(k){return k.name===(letter.camper||'');}):null;
+        var _mcamp=(_mc&&_mc.campId)||((typeof parent!=='undefined'&&parent)?parent.campId:null);
+        var _mailArgs={
             p_camper_name: letter.camper || '',
             p_subject:     letter.subject || '',
             p_body:        letter.body || '',
             p_division:    letter.division || null,
             p_grade:       letter.grade || null,
             p_bunk:        letter.bunk || null
-        }).then(function(res) {
+        };
+        (window._pRpc?window._pRpc('submit_camper_mail',_mailArgs,_mcamp):db.rpc('submit_camper_mail',_mailArgs)).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] Camper mail cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
                 if (res.data && res.data.error === 'daily_limit_reached') {
@@ -2428,9 +2476,11 @@ window.addEventListener('storage', function(e) {
     // this portal is on. To stay safe BEFORE that migration is applied (older
     // signature has no p_camp_id → PostgREST can't find the function), we retry
     // once without p_camp_id on a function-resolution error.
-    window._pRpc = function(name, args) {
+    window._pRpc = function(name, args, campIdOverride) {
         var dbc = window._parentDB || db;
-        var campId = (typeof parent !== 'undefined' && parent) ? parent.campId : null;
+        // Multi-camp: a child-scoped call passes the child's campId; otherwise
+        // default to the primary camp.
+        var campId = campIdOverride || ((typeof parent !== 'undefined' && parent) ? parent.campId : null);
         return dbc.rpc(name, Object.assign({}, args, { p_camp_id: campId })).then(function(res) {
             if (res.error && /p_camp_id|PGRST202|could not find|schema cache|does not exist|no function/i.test(res.error.message || '')) {
                 return dbc.rpc(name, args);
@@ -2439,8 +2489,17 @@ window.addEventListener('storage', function(e) {
         });
     };
     var _pRpc = window._pRpc;
-    window._submitMessageReplyCloud = function(threadId, subject, body, done) {
-        _pRpc('submit_message_reply', { p_thread_id: threadId || null, p_subject: subject || '', p_body: body || '' }).then(function(res) {
+    // Multi-camp: find the camp a message/thread belongs to (tagged at load) so
+    // replies/reads/deletes hit the SAME camp the message came from, not the
+    // primary. Falls back to the primary camp when unknown.
+    window._msgCampId = function(messageId, threadId) {
+        var msgs = window._cloudMessages || [];
+        var m = messageId && msgs.find(function(x){ return x.id === messageId; });
+        if (!m && threadId) m = msgs.find(function(x){ return (x.thread_id||x.threadId) === threadId; });
+        return (m && m.campId) || ((typeof parent !== 'undefined' && parent) ? parent.campId : null);
+    };
+    window._submitMessageReplyCloud = function(threadId, subject, body, done, campIdOverride) {
+        _pRpc('submit_message_reply', { p_thread_id: threadId || null, p_subject: subject || '', p_body: body || '' }, campIdOverride || window._msgCampId(null, threadId)).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] Message reply cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
             }
@@ -2448,7 +2507,7 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._markMessageReadCloud = function(messageId) {
-        _pRpc('mark_message_read', { p_message_id: messageId }).then(function(res) {
+        _pRpc('mark_message_read', { p_message_id: messageId }, window._msgCampId(messageId)).then(function(res) {
             if (res.error) console.warn('[Parent] mark_message_read failed:', res.error.message);
         });
     };
@@ -2458,8 +2517,21 @@ window.addEventListener('storage', function(e) {
         // parent_email case-insensitively, and returns camper/recipient labels.
         // The old direct-read fast-path bypassed all of that, so route through
         // the RPC.
-        (window._pRpc ? window._pRpc('get_my_messages', {}) : db.rpc('get_my_messages')).then(function(res) {
-            window._cloudMessages = (!res.error && res.data && res.data.success) ? (res.data.messages || []) : [];
+        // Multi-camp: fan the read across every camp this parent belongs to and
+        // tag each message with its campId so replies route back correctly.
+        var camps = (typeof parent !== 'undefined' && parent && parent.camps && parent.camps.length)
+            ? parent.camps
+            : [{ camp_id: (typeof parent !== 'undefined' && parent) ? parent.campId : null }];
+        Promise.all(camps.map(function(cp){
+            var cid = cp.camp_id || cp.campId || null;
+            var call = window._pRpc ? window._pRpc('get_my_messages', {}, cid) : db.rpc('get_my_messages', { p_camp_id: cid });
+            return Promise.resolve(call).then(function(res){
+                var list = (!res.error && res.data && res.data.success) ? (res.data.messages || []) : [];
+                list.forEach(function(m){ m.campId = cid; });
+                return list;
+            }).catch(function(){ return []; });
+        })).then(function(lists){
+            window._cloudMessages = [].concat.apply([], lists);
             if (cb) cb();
         });
     };
@@ -2470,7 +2542,7 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._deleteMyMessageCloud = function(messageId, done) {
-        _pRpc('delete_my_message', { p_message_id: messageId }).then(function(res) {
+        _pRpc('delete_my_message', { p_message_id: messageId }, window._msgCampId(messageId)).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] delete_my_message failed:', res.error ? res.error.message : (res.data||{}).error);
             }
@@ -2478,7 +2550,7 @@ window.addEventListener('storage', function(e) {
         });
     };
     window._setMyMessageArchivedCloud = function(messageId, archived, done) {
-        _pRpc('set_my_message_archived', { p_message_id: messageId, p_archived: !!archived }).then(function(res) {
+        _pRpc('set_my_message_archived', { p_message_id: messageId, p_archived: !!archived }, window._msgCampId(messageId)).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] set_my_message_archived failed:', res.error ? res.error.message : (res.data||{}).error);
             }
@@ -2568,6 +2640,7 @@ window.addEventListener('storage', function(e) {
             if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
             return {
                 id:'child_'+idx, name:name, initials:initials, age:age,
+                campId:d.camp_id||null, campName:'',   // multi-camp: which camp this kid is at
                 division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
                 session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
                 allergies:c.allergies||'None', medications:c.medications||'None',
@@ -2616,18 +2689,88 @@ window.addEventListener('storage', function(e) {
         }
         _loadMyMail();
         _loadMyTips();
+        // Multi-camp: this parent may have kids at OTHER camps too. The block
+        // above loaded the primary camp instantly; now pull every camp and merge
+        // the other camps' kids in (each tagged with its own campId).
+        parent.camps = [{ camp_id: d.camp_id, camp_name: '', camper_names: d.camper_names, camper_data: d.camper_data }];
+        _augmentOtherCamps(d.camp_id);
+    }
+
+    // Load ALL the parent's camps and merge in the kids from any camp OTHER than
+    // the primary one already loaded. Each child is tagged with its campId so
+    // actions (canteen, forms, messages) route to the correct camp.
+    function _augmentOtherCamps(primaryCampId) {
+        var call = window._pRpc ? window._pRpc('get_my_camps', {}) : db.rpc('get_my_camps');
+        Promise.resolve(call).then(function(res) {
+            if (!res || res.error || !res.data || !res.data.success) return;
+            var camps = res.data.camps || [];
+            parent.camps = camps;
+            // give the primary camp its display name
+            var primary = camps.find(function(cp){ return cp.camp_id === primaryCampId; });
+            if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) ch.campName = primary.camp_name || ''; });
+            var others = camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
+            if (!others.length) { init(); return; } // single camp — nothing to add
+            others.forEach(function(cp){
+                var cnames = (cp.camper_names && cp.camper_names.length) ? cp.camper_names : Object.keys(cp.camper_data || {});
+                cnames.forEach(function(name){
+                    var c = (cp.camper_data && cp.camper_data[name]) || {};
+                    var initials = name.split(' ').map(function(p){return p[0]||''}).join('').toUpperCase().slice(0,2);
+                    var age = c.dob ? Math.floor((Date.now()-new Date(c.dob))/(365.25*24*3600*1000)) : null;
+                    var ec = [];
+                    if (c.emergencyName) ec.push({name:c.emergencyName, rel:c.emergencyRel||'Emergency', phone:c.emergencyPhone||''});
+                    if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
+                    children.push({
+                        id:'child_'+children.length, name:name, initials:initials, age:age,
+                        campId:cp.camp_id, campName:cp.camp_name||'',
+                        division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
+                        session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
+                        allergies:c.allergies||'None', medications:c.medications||'None',
+                        dietary:c.dietary||'', doctor:c.doctor||'', doctorPhone:c.doctorPhone||'',
+                        insurance:c.insurance||'', policyNum:c.policyNum||'',
+                        canteenBalance:0, dailyLimit:5, emergencyContacts:ec
+                    });
+                });
+            });
+            // canteen tx buckets for the new kids
+            children.forEach(function(c){ if(!canteenTxByChild[c.id]) canteenTxByChild[c.id]=[]; });
+            _loadSnacksData(children);
+            // canteen loads per camp (each child's account lives at their camp)
+            camps.forEach(function(cp){
+                var kids = children.filter(function(c){ return c.campId === cp.camp_id; });
+                if (kids.length) _syncCanteenFromCloud(kids, cp.camp_id);
+            });
+            init(); // rebuild every child-tab list now that all camps are in
+            console.log('[Parent] Multi-camp: '+camps.length+' camps, '+children.length+' children total');
+        }).catch(function(){});
     }
 
     var _lastLinkForms = null; // cache so post-submit re-renders don't lose the RPC data
     function _loadLinkForms(campId) {
         // Load my cloud submissions first so "Submitted" badges are correct
         // on any device, then the camp's forms.
+        // Multi-camp: fan across every camp this parent belongs to and tag each
+        // form with its campId so it only pairs with that camp's children.
+        var camps = (typeof parent!=='undefined' && parent && parent.camps && parent.camps.length)
+            ? parent.camps
+            : [{ camp_id: campId }];
         _loadMyCloudSubmissions(function() {
-            db.rpc('get_link_camp_forms', {p_camp_id: campId}).then(function(res) {
-                if (res.error || !res.data || !res.data.success) return; // silent — empty state already shown
-                var lf = res.data.forms || {};
-                _lastLinkForms = lf;
-                _renderLinkForms(lf.digital||[], lf.printReturn||[], lf.documents||[]);
+            Promise.all(camps.map(function(cp){
+                var cid = cp.camp_id || cp.campId; if(!cid) return Promise.resolve(null);
+                return db.rpc('get_link_camp_forms', {p_camp_id: cid}).then(function(res){
+                    if (res.error || !res.data || !res.data.success) return null;
+                    var lf = res.data.forms || {};
+                    ['digital','printReturn','documents'].forEach(function(k){ (lf[k]||[]).forEach(function(f){ f._campId=cid; }); });
+                    return lf;
+                }).catch(function(){ return null; });
+            })).then(function(all){
+                var merged = { digital:[], printReturn:[], documents:[] };
+                all.filter(Boolean).forEach(function(lf){
+                    merged.digital = merged.digital.concat(lf.digital||[]);
+                    merged.printReturn = merged.printReturn.concat(lf.printReturn||[]);
+                    merged.documents = merged.documents.concat(lf.documents||[]);
+                });
+                _lastLinkForms = merged;
+                _renderLinkForms(merged.digital, merged.printReturn, merged.documents);
             });
         });
     }
@@ -2638,12 +2781,17 @@ window.addEventListener('storage', function(e) {
     };
 
     function _loadLinkLists(campId) {
-        db.rpc('get_link_camp_lists', {p_camp_id: campId}).then(function(res) {
-            if (res.error || !res.data || !res.data.success) {
-                if (res.error) console.warn('[Parent] get_link_camp_lists:', res.error.message);
-                return;
-            }
-            window._campLists = res.data.lists || [];
+        // Multi-camp: merge every camp's lists (informational cards, not child-scoped).
+        var camps = (typeof parent!=='undefined' && parent && parent.camps && parent.camps.length)
+            ? parent.camps
+            : [{ camp_id: campId }];
+        Promise.all(camps.map(function(cp){
+            var cid = cp.camp_id || cp.campId; if(!cid) return Promise.resolve([]);
+            return db.rpc('get_link_camp_lists', {p_camp_id: cid}).then(function(res){
+                return (!res.error && res.data && res.data.success) ? (res.data.lists || []) : [];
+            }).catch(function(){ return []; });
+        })).then(function(lists){
+            window._campLists = [].concat.apply([], lists);
             renderCampLists();
         });
     }
@@ -2665,6 +2813,10 @@ window.addEventListener('storage', function(e) {
             return mySubs.some(function(s){ return s.formId === formId && s.camper === camperName; })
                 || _cloudSubs.some(function(s){ return s.form_id === formId && s.camper_name === camperName; });
         }
+        // Multi-camp: a form only pairs with children at the form's own camp.
+        function _kidsForForm(f) {
+            return (f && f._campId) ? children.filter(function(c){ return c.campId === f._campId; }) : children;
+        }
 
         // Digital forms
         var fol = document.getElementById('formsOnlineList');
@@ -2672,7 +2824,7 @@ window.addEventListener('storage', function(e) {
             if (digital.length) {
                 var fh='';
                 digital.forEach(function(f, fi) {
-                    children.forEach(function(c) {
+                    _kidsForForm(f).forEach(function(c) {
                         var submitted = isSubmitted(f.id, c.name);
                         var reqBadge = f.required && !submitted ? '<span class="badge badge-warn" style="font-size:.62rem;">Required</span> ' : '';
                         fh+='<div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);">'+docSvgFill+'</div>';
@@ -2687,7 +2839,7 @@ window.addEventListener('storage', function(e) {
                 });
                 fol.innerHTML=fh;
                 // Update badge count (only pending, not submitted)
-                var pending = digital.reduce(function(acc, f, fi){ return acc + children.filter(function(c){ return !isSubmitted(f.id, c.name); }).length; }, 0);
+                var pending = digital.reduce(function(acc, f, fi){ return acc + _kidsForForm(f).filter(function(c){ return !isSubmitted(f.id, c.name); }).length; }, 0);
                 var onlineBadge=document.getElementById('formsOnlineBadge');
                 if(onlineBadge){if(pending>0){onlineBadge.textContent=pending;onlineBadge.style.display='';}else{onlineBadge.style.display='none';}}
             }
@@ -2700,7 +2852,7 @@ window.addEventListener('storage', function(e) {
                 var prh='';
                 var printPending=0;
                 printReturn.forEach(function(f,fi) {
-                    children.forEach(function(c) {
+                    _kidsForForm(f).forEach(function(c) {
                         var cid=c.id+'_pr'+fi;
                         var submitted=isSubmitted(f.id, c.name);
                         if(!submitted)printPending++;
@@ -2737,7 +2889,7 @@ window.addEventListener('storage', function(e) {
         // Recompute home forms badge — pending (unsubmitted) items only
         var fc=0;
         digital.concat(printReturn).forEach(function(f){
-            children.forEach(function(c){ if(!isSubmitted(f.id, c.name)) fc++; });
+            _kidsForForm(f).forEach(function(c){ if(!isSubmitted(f.id, c.name)) fc++; });
         });
         var fb=document.getElementById('homeFormsBadge');var fs=document.getElementById('homeFormsSub');
         if(fb){fb.textContent=fc;fb.style.display=fc>0?'flex':'none';}
