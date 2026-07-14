@@ -2911,8 +2911,13 @@ function _genAccessCode(){
 }
 
 function _parentPortalUrl(token){
-    var base=window.location.href.replace(/[^/]*$/,'');
-    return base+'campistry_link_parent.html?invite='+token;
+    // Prefer the configured parent-portal domain so links point at the parent
+    // site, not the admin origin. When a dedicated domain roots at the portal,
+    // cfg alone is the page; on a shared origin we append the filename.
+    // Empty config => same-origin (legacy behavior).
+    var cfg=(window.__CAMPISTRY_PARENT_URL__||'').replace(/\/+$/,'');
+    var base = cfg ? (cfg + '/') : (window.location.href.replace(/[^/]*$/,'') + 'campistry_link_parent.html');
+    return base + (base.indexOf('?')>=0?'&':'?') + 'invite=' + token;
 }
 
 function generateParentInvite(enrollId){

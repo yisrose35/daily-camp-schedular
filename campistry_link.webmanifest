@@ -1,0 +1,15 @@
+{
+  "name": "Campistry Link",
+  "short_name": "Link",
+  "description": "Your camp parent portal — photos, canteen, schedule, forms, and messages.",
+  "start_url": "./campistry_link_parent.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FDFCFB",
+  "theme_color": "#166534",
+  "icons": [
+    { "src": "Link_apple_touch_icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" },
+    { "src": "Link_apple_touch_icon.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

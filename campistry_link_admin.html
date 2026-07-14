@@ -3049,8 +3049,11 @@ function _pgToken(){
     return Array.from(arr).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
 }
 function _pgPortalUrl(token){
-    var base = window.location.href.replace(/[^/]*$/, '');
-    return base + 'campistry_link_parent.html' + (token ? ('?invite=' + token) : '');
+    // Point at the configured parent-portal domain when set (so shared links +
+    // the announcement email use the parent site), else same-origin.
+    var cfg = (window.__CAMPISTRY_PARENT_URL__ || '').replace(/\/+$/, '');
+    var base = cfg ? (cfg + '/') : (window.location.href.replace(/[^/]*$/, '') + 'campistry_link_parent.html');
+    return base + (token ? ((base.indexOf('?') >= 0 ? '&' : '?') + 'invite=' + token) : '');
 }
 function _pgFamilies(){
     var cl = CL(); if (!cl || !cl.data || !cl.data.getFamilyDirectory) return [];
