@@ -208,6 +208,10 @@ function save(){
         if(typeof window.refreshStarterBanner==='function'){
             try{window.refreshStarterBanner(rosterCount)}catch(ex){}
         }
+        // ★ Parent sign-up eligibility is roster-driven: any camper with a parent
+        //   email makes that family claimable in the Link parent app the moment
+        //   they're saved (debounced + signature-guarded, so repeat saves are free).
+        try{_scheduleAutoParentInvites()}catch(ex){}
     }catch(e){
         console.error('[Me] Save:',e);
         // ★ #V2-7: surface the failure instead of swallowing it. A throw out of the
@@ -2905,6 +2909,95 @@ function _enrollIdsForCamper(camperName){
 }
 function _syncInvitesForCamper(camperName){
     _enrollIdsForCamper(camperName).forEach(function(id){ _syncParentInviteSnapshot(id,true); });
+}
+
+// ═══ AUTO-PROVISION PARENT SIGN-UP (roster-driven) ═══════════════════════════
+// The moment a camper exists in Me with a parent email — CSV import, manual
+// add, or edit — that family can sign up in the Link parent app with that
+// email (claim_invites_by_email auto-binds on first sign-in, migration 032).
+// No manual "generate invites" step. save() schedules this; a content
+// signature makes repeat saves free, and upsert_parent_invite dedupes per
+// (camp, parent_email) and PRESERVES the existing token + access code, so
+// already-shared links never break.
+var _apiTimer=null,_apiLastSig='',_apiRunning=false;
+function _scheduleAutoParentInvites(){
+    clearTimeout(_apiTimer);
+    _apiTimer=setTimeout(_autoProvisionParentInvites,4000);
+}
+function _autoProvisionParentInvites(){
+    if(_apiRunning)return;
+    var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!db||!campId)return;
+
+    // Group campers into families: explicit family records win, remaining
+    // roster campers group by shared parent1Email (implied families) — the
+    // same rules the Link data bridge uses.
+    var fams={},inFamily={};
+    Object.keys(families||{}).forEach(function(fk){
+        var fam=families[fk];
+        var p=fam&&fam.households&&fam.households[0]&&fam.households[0].parents&&fam.households[0].parents[0];
+        if(!p||!p.email)return;
+        var key=String(p.email).toLowerCase();
+        if(!fams[key])fams[key]={parentName:p.name||'',parentEmail:p.email,campers:[]};
+        (fam.camperIds||[]).forEach(function(cn){
+            if(roster[cn]&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
+        });
+    });
+    Object.keys(roster).forEach(function(cn){
+        if(inFamily[cn])return;
+        var c=roster[cn];if(!c||!c.parent1Email)return;
+        var key=String(c.parent1Email).toLowerCase();
+        if(!fams[key])fams[key]={parentName:c.parent1Name||'',parentEmail:c.parent1Email,campers:[]};
+        if(fams[key].campers.indexOf(cn)<0)fams[key].campers.push(cn);
+    });
+
+    var keys=Object.keys(fams).filter(function(k){return fams[k].campers.length;});
+    if(!keys.length)return;
+
+    // Skip entirely when nothing invite-relevant changed since the last run.
+    var sig=keys.slice().sort().map(function(k){
+        return k+':'+fams[k].campers.slice().sort().join('|');
+    }).join(';');
+    if(sig===_apiLastSig)return;
+
+    _apiRunning=true;
+    var expires=new Date();expires.setFullYear(expires.getFullYear()+1);
+    var i=0,done=0,failed=0;
+    (function next(){
+        if(i>=keys.length){
+            _apiRunning=false;
+            if(!failed)_apiLastSig=sig;   // retry failures on the next save
+            if(done)console.log('[Me] Parent sign-up: '+done+' famil'+(done===1?'y':'ies')+' provisioned/refreshed'+(failed?(' ('+failed+' failed)'):''));
+            return;
+        }
+        var f=fams[keys[i++]];
+        var camperData={};
+        f.campers.forEach(function(cn){
+            var r=roster[cn]||{};
+            camperData[cn]={
+                name:cn,dob:r.dob||'',gender:r.gender||'',
+                division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
+                session:'',
+                allergies:r.allergies||'',medications:r.medications||'',dietary:r.dietary||'',
+                doctor:r.doctor||'',doctorPhone:r.doctorPhone||'',
+                insurance:r.insurance||'',policyNum:r.policyNum||'',
+                emergencyName:r.emergencyName||'',emergencyPhone:r.emergencyPhone||'',emergencyRel:r.emergencyRel||'',
+                parent2Name:r.parent2Name||'',parent2Phone:r.parent2Phone||'',
+                staff:bunkStaff[r.bunk]||[],teacher:r.teacher||'',
+                counselor:(function(){var st=bunkStaff[r.bunk]||[];var c=st.filter(function(s){return (s.role||'').toLowerCase()==='counselor';})[0];return c?c.name:'';})()
+            };
+        });
+        db.rpc('upsert_parent_invite',{
+            p_camp_id:campId,p_token:_genToken(),
+            p_parent_name:f.parentName||f.parentEmail,p_parent_email:f.parentEmail,
+            p_camper_names:f.campers,p_camper_data:camperData,
+            p_expires_at:expires.toISOString()
+        }).then(function(res){
+            if(!res.error&&res.data&&res.data.success)done++;else failed++;
+            next();
+        }).catch(function(){failed++;next();});
+    })();
 }
 
 // Rebuild EVERY active parent portal's child list from the current family /
