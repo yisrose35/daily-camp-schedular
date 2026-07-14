@@ -2937,31 +2937,12 @@ function _syncInvitesForCamper(camperName){
     _enrollIdsForCamper(camperName).forEach(function(id){ _syncParentInviteSnapshot(id,true); });
 }
 
-// ═══ SESSION-GATED ACCESS WINDOWS ════════════════════════════════════════════
-// A parent sees a child (and has portal access) only while that child is inside
-// their attendance window: [session start − lead] .. [session end + grace].
-// These per-camper ISO dates are stamped into camper_data; the parent RPCs
-// (migration 035) gate on them by today's date. Lengths are camp-adjustable via
-// campistryMe.linkAccessWindow; defaults give ~3 weeks to onboard + 1 week of
-// post-camp photo access.
-function _linkAccessWindowDays(){
-    var lead=21, grace=7;
-    try{
-        var g=window.loadGlobalSettings?window.loadGlobalSettings():null;
-        var cfg=g&&g.campistryMe&&g.campistryMe.linkAccessWindow;
-        if(cfg){ if(typeof cfg.leadDays==='number')lead=cfg.leadDays; if(typeof cfg.graceDays==='number')grace=cfg.graceDays; }
-    }catch(_){}
-    return {lead:lead, grace:grace};
-}
-function _isoShift(dateStr, days){
-    if(!dateStr)return '';
-    var d=new Date(dateStr+'T12:00:00'); if(isNaN(d.getTime()))return '';
-    d.setDate(d.getDate()+days);
-    return d.toISOString().slice(0,10);
-}
-// Union of a camper's enrolled-session windows (handles a single "Full Summer"
-// session or two half-sessions). Empty strings => no dated session => the RPC
-// treats the camper as always active (camps not using sessions are unaffected).
+// ═══ CAMPER SESSION LABELS (display only) ════════════════════════════════════
+// Access to Link is ENROLLMENT-based (migration 039): a parent has access for as
+// long as their camper is enrolled — no session-date window. So we stamp the
+// camper's session name/dates for display, but leave accessStart/accessEnd EMPTY
+// so the parent RPCs never date-gate. Access ends only when the camper is
+// removed (offboarding revoke, migration 034).
 function _linkCamperWindow(camperName){
     var names=[], minStart=null, maxEnd=null;
     (_enrollIdsForCamper(camperName)||[]).forEach(function(id){
@@ -2973,12 +2954,10 @@ function _linkCamperWindow(camperName){
             if(s.endDate&&(!maxEnd||s.endDate>maxEnd))maxEnd=s.endDate;
         }
     });
-    var w=_linkAccessWindowDays();
     return {
         sessionName:names.join(', '),
         sessionStart:minStart||'', sessionEnd:maxEnd||'',
-        accessStart:minStart?_isoShift(minStart,-w.lead):'',
-        accessEnd:maxEnd?_isoShift(maxEnd,w.grace):''
+        accessStart:'', accessEnd:''   // empty => no date gating => access = enrolled
     };
 }
 
