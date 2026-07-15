@@ -597,7 +597,7 @@
                 position: absolute;
                 top: 4px;
                 bottom: 4px;
-                width: calc(50% - 4px);
+                width: calc(33.333% - 2.67px);
                 background: #FFFFFF;
                 border-radius: 999px;
                 box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
@@ -607,8 +607,11 @@
             .builder-mode-slider[data-mode="manual"] .builder-mode-indicator {
                 transform: translateX(0);
             }
-            .builder-mode-slider[data-mode="auto"] .builder-mode-indicator {
+            .builder-mode-slider[data-mode="helper"] .builder-mode-indicator {
                 transform: translateX(100%);
+            }
+            .builder-mode-slider[data-mode="auto"] .builder-mode-indicator {
+                transform: translateX(200%);
             }
         `;
         document.head.appendChild(style);    }
@@ -633,6 +636,7 @@
             <div class="builder-mode-slider" id="builderModeSlider" data-mode="${currentMode}">
                 <div class="builder-mode-indicator"></div>
                 <div class="builder-mode-option ${currentMode === 'manual' ? 'active' : ''}" data-target="manual">Manual Builder</div>
+                <div class="builder-mode-option ${currentMode === 'helper' ? 'active' : ''}" data-target="helper">Helper Mode</div>
                 <div class="builder-mode-option ${currentMode === 'auto' ? 'active' : ''}" data-target="auto">Auto Builder</div>
             </div>
         `;

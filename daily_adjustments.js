@@ -6155,6 +6155,19 @@ function _applyDailyTimeRuleIronGate(_includeSetup) {
 // =================================================================
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
+    // ★ HELPER MODE: no solver. The user built blank time-boxes; "Generate" just
+    //   opens the Helper spreadsheet (an Excel-style per-bunk fill grid with
+    //   real-time validation). Bypass the entire skeleton/auto pipeline.
+    const _hmMode = window._daBuilderMode || (window.getCampBuilderMode && window.getCampBuilderMode());
+    if (_hmMode === 'helper') {
+        if (window.HelperMode && typeof window.HelperMode.openSpreadsheet === 'function') {
+            try { await window.HelperMode.openSpreadsheet(); }
+            catch (e) { console.error('[Optimizer] Helper Mode open failed:', e); await daShowAlert('Could not open the Helper spreadsheet: ' + (e && e.message ? e.message : e)); }
+        } else {
+            await daShowAlert('Helper Mode is not loaded (helper_mode.js missing).');
+        }
+        return;
+    }
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
     // ★ Day 22.5 audit fix: re-entrancy guard — refuse a second concurrent run.
     if (_daOptimizerRunning) { await daShowAlert("A schedule is already being generated — please wait for it to finish."); return; }
