@@ -2713,7 +2713,7 @@ window.addEventListener('storage', function(e) {
             var primary = camps.find(function(cp){ return cp.camp_id === primaryCampId; });
             if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) ch.campName = primary.camp_name || ''; });
             var others = camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
-            if (!others.length) { init(); _afterMergeReloadCloud(); return; } // single camp — nothing to add
+            if (!others.length) { init(); _afterMergeReloadCloud(); _checkConnectableCamps(); return; } // single connected camp — but still check for pending invites on OTHER camps
             others.forEach(function(cp){
                 var cnames = (cp.camper_names && cp.camper_names.length) ? cp.camper_names : Object.keys(cp.camper_data || {});
                 cnames.forEach(function(name){
