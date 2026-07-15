@@ -576,18 +576,20 @@
                 border-radius: 999px;
                 padding: 4px;
                 position: relative;
-                width: 380px;
+                width: 456px;
+                max-width: 100%;
                 box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.05);
             }
             .builder-mode-option {
                 flex: 1;
                 text-align: center;
-                padding: 10px 0;
-                font-size: 0.95rem;
+                padding: 10px 4px;
+                font-size: 0.9rem;
                 font-weight: 600;
                 color: #64748B;
                 cursor: pointer;
                 z-index: 2;
+                white-space: nowrap;
                 transition: color 0.3s;
             }
             .builder-mode-option.active {
