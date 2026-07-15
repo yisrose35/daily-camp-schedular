@@ -2441,11 +2441,16 @@ window.addEventListener('storage', function(e) {
 
     // ── Tips bridge (migration 016) ───────────────────────────────────────────
     window._submitTipCloud = function(tip) {
-        db.rpc('submit_link_tip', {
-            p_recipient_name: tip.recipientName || '',
-            p_recipient_role: tip.role || '',
-            p_amount:         tip.amount || 0,
-            p_camper_name:    tip.childName || null
+        // Multi-camp: credit the tip to the tipped child's OWN camp (migration 043).
+        var _tc = (typeof children !== 'undefined') ? children.find(function(k){ return k.name === (tip.childName || ''); }) : null;
+        var _tcamp = (_tc && _tc.campId) || ((typeof parent !== 'undefined' && parent) ? parent.campId : null);
+        var _base = { p_recipient_name: tip.recipientName || '', p_recipient_role: tip.role || '', p_amount: tip.amount || 0, p_camper_name: tip.childName || null };
+        // Pass p_camp_id (migration 043); retry without it on older 4-arg signature.
+        db.rpc('submit_link_tip', Object.assign({}, _base, { p_camp_id: _tcamp })).then(function(res) {
+            if (res.error && /p_camp_id|PGRST202|could not find|schema cache|does not exist|no function/i.test(res.error.message || '')) {
+                return db.rpc('submit_link_tip', _base);
+            }
+            return res;
         }).then(function(res) {
             if (res.error || !res.data || !res.data.success) {
                 console.warn('[Parent] Tip cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
@@ -2463,12 +2468,24 @@ window.addEventListener('storage', function(e) {
     function _loadTipsConfigCloud(campId) {
         db.rpc('get_link_tips_config', { p_camp_id: campId }).then(function(res) {
             if (res.error || !res.data || !res.data.success || !res.data.config) return;
-            window._cloudTipsConfig = res.data.config;
+            // Multi-camp: keep each camp's tip config separately so the Tips page
+            // shows the recipients for the ACTIVE child's camp (not just primary).
+            window._cloudTipsConfigByCamp = window._cloudTipsConfigByCamp || {};
+            window._cloudTipsConfigByCamp[campId] = res.data.config;
+            if (!window._cloudTipsConfig || campId === ((typeof parent !== 'undefined' && parent) ? parent.campId : null)) {
+                window._cloudTipsConfig = res.data.config; // primary/back-compat default
+            }
             // Re-render if the parent is looking at the Tips page right now
             var pg = document.getElementById('page-tips');
             if (pg && pg.classList.contains('active') && typeof renderTipsPage === 'function') renderTipsPage();
         });
     }
+    // Load every camp's tip config (multi-camp).
+    window._loadAllTipsConfig = function() {
+        var camps = ((typeof parent !== 'undefined' && parent && parent.camps && parent.camps.length)
+            ? parent.camps : [{ camp_id: (typeof parent !== 'undefined' && parent) ? parent.campId : null }]);
+        camps.forEach(function(cp){ var cid = cp.camp_id || cp.campId; if (cid) _loadTipsConfigCloud(cid); });
+    };
 
     // ── Messages bridge (migration 020) ───────────────────────────────────────
     // Before this, Messages had no cloud path at all in either direction — a
@@ -2761,7 +2778,8 @@ window.addEventListener('storage', function(e) {
             if (parent && parent.campId) {
                 if (typeof _loadLinkForms === 'function') _loadLinkForms(parent.campId);
                 if (typeof _loadLinkLists === 'function') _loadLinkLists(parent.campId);
-                if (typeof _loadTipsConfigCloud === 'function') _loadTipsConfigCloud(parent.campId);
+                if (typeof window._loadAllTipsConfig === 'function') window._loadAllTipsConfig();
+                else if (typeof _loadTipsConfigCloud === 'function') _loadTipsConfigCloud(parent.campId);
             }
             if (typeof _loadMyHealthDocs === 'function') _loadMyHealthDocs();
             if (typeof _loadParentPhotos === 'function') _loadParentPhotos();
@@ -3573,7 +3591,12 @@ var _tipChildId = null;
 
 function _loadTipsConfigP() {
     // Cloud config (get_link_tips_config) is authoritative — the local key
-    // only exists when the admin shares this browser
+    // only exists when the admin shares this browser.
+    // Multi-camp: show the tip config for the ACTIVE child's camp.
+    var byCamp = window._cloudTipsConfigByCamp || {};
+    var child = (typeof _activeTipChild === 'function') ? _activeTipChild() : null;
+    var cid = child && child.campId;
+    if (cid && byCamp[cid]) return byCamp[cid];
     if (window._cloudTipsConfig) return window._cloudTipsConfig;
     var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e){}
     return gs.link_tips_config || { amounts: [5, 10, 20, 50], categories: [] };
