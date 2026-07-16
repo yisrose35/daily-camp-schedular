@@ -20,12 +20,14 @@
   'use strict';
 
   var HELPER = 'helper';
+  var HELPER_VERSION = 'v10-exact-windows';
 
   // Debounced autosave + validation issue map keyed by `${bunk}|${slotIdx}`.
   var _saveTimer = null;
   var _issues = {};        // key -> { level:'error'|'warn', msg }
   var _stylesInjected = false;
   var _viewMode = 'grade'; // 'grade' (per-division tables) | 'all' (shared timeline)
+  var _divTimes = {};      // Helper's own EXACT per-grade windows (immune to external snapping)
 
   // ---------------------------------------------------------------------
   // Mode + small utilities
@@ -206,6 +208,7 @@
       divisionTimes[d].sort(function (a, b) { return a.startMin - b.startMin; });
       divisionTimes[d].forEach(function (s, i) { s.slotIndex = i; });
     });
+    _divTimes = divisionTimes;      // Helper's authoritative exact copy
     window.divisionTimes = divisionTimes;
 
     // Union of all distinct windows -> unifiedTimes (flat master axis).
@@ -746,7 +749,7 @@
       td.addEventListener('click', function () {
         var dn = td.getAttribute('data-div');
         var idx = parseInt(td.getAttribute('data-idx'), 10);
-        var block = (window.divisionTimes[dn] || [])[idx];
+        var block = (_divTimes[dn] || window.divisionTimes[dn] || [])[idx];
         if (!block) return;
         if (td.getAttribute('data-league') === '1') { openLeagueEditor(dn, idx, block); return; }
         openCellEditor(td.getAttribute('data-bunk'), dn, idx, block);
@@ -777,7 +780,7 @@
   function renderAllBunks(container, html) {
     var divs = getDivisions();
     var order = divisionOrder();
-    var divTimes = window.divisionTimes || {};
+    var divTimes = _divTimes || window.divisionTimes || {};
 
     // Collect every distinct boundary time across all grades → segments.
     var bset = {};
@@ -849,7 +852,7 @@
 
     var divs = getDivisions();
     var order = divisionOrder();
-    var divTimes = window.divisionTimes || {};
+    var divTimes = _divTimes || window.divisionTimes || {};
 
     var hasAny = order.some(function (dn) { return (divTimes[dn] || []).length && (divs[dn].bunks || []).length; });
 
@@ -1486,8 +1489,26 @@
     _writeCellsMulti: writeCellsMulti,
     _writeLeagueSlot: writeLeagueSlot,
     setView: function (v) { if (v === 'grade' || v === 'all') { _viewMode = v; try { renderGrid(); } catch (e) {} } },
-    getView: function () { return _viewMode; }
+    getView: function () { return _viewMode; },
+    version: HELPER_VERSION,
+    diagnose: function () {
+      var dk = currentDateKey();
+      var sk = getDaySkeleton(dk);
+      buildStructure(dk);
+      var dt = {};
+      Object.keys(window.divisionTimes || {}).forEach(function (d) {
+        dt[d] = (window.divisionTimes[d] || []).map(function (s) { return s.startMin + '-' + s.endMin; });
+      });
+      var out = {
+        version: HELPER_VERSION,
+        date: dk,
+        skeleton: (sk || []).map(function (t) { return { div: t.division, start: t.startTime, end: t.endTime }; }),
+        divTimes: dt
+      };
+      console.log('[HelperMode] diagnose:', JSON.stringify(out));
+      return out;
+    }
   };
 
-  console.log('[HelperMode] loaded');
+  console.log('[HelperMode] loaded ' + HELPER_VERSION);
 })();
