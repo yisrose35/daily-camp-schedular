@@ -25,6 +25,7 @@
   var _saveTimer = null;
   var _issues = {};        // key -> { level:'error'|'warn', msg }
   var _stylesInjected = false;
+  var _viewMode = 'grade'; // 'grade' (per-division tables) | 'all' (shared timeline)
 
   // ---------------------------------------------------------------------
   // Mode + small utilities
@@ -585,6 +586,14 @@
       '.helper-lg.lg-general::before{background:#f59e0b;}',
       '.helper-lg.lg-league::before{background:#6366f1;}',
       '.helper-lg.lg-note::before{background:#64748b;}',
+      // view toggle + all-bunks timeline
+      '.helper-viewtoggle{display:flex;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;}',
+      '.helper-viewbtn{padding:6px 14px;border:none;background:#fff;font-size:.78rem;font-weight:700;color:#64748b;cursor:pointer;}',
+      '.helper-viewbtn.on{background:#2563eb;color:#fff;}',
+      '.helper-div-row{background:#e0e7ff;color:#3730a3;font-weight:800;font-size:.8rem;padding:7px 14px;text-transform:uppercase;letter-spacing:.03em;}',
+      '.helper-div-row span{position:sticky;left:14px;}',
+      '.helper-oos{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);cursor:default;}',
+      '.helper-oos:hover{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);}',
       // division cards
       '.helper-div{margin:0 4px 22px;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.06);}',
       '.helper-div-head{background:linear-gradient(90deg,#eef2ff,#f8fafc);padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:baseline;gap:10px;}',
@@ -704,6 +713,112 @@
     return '<div class="hc-card ' + cellTypeClass(entry) + '"><div class="hc-act">' + esc(act) + '</div>' + sub + '</div>';
   }
 
+  // A single bunk×slot <td> (shared by both views). League cells render as a
+  // compact card that reopens the whole-grade builder.
+  function bunkCellTd(bunk, dn, slotIdx) {
+    var arr = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
+    var entry = arr[slotIdx];
+    var iss = issueFor(bunk, slotIdx);
+    var cls = 'helper-cell';
+    if (iss) cls += iss.level === 'error' ? ' helper-err' : ' helper-warn';
+    var inner, isLeague = false;
+    if (entry && entry._league) {
+      isLeague = true;
+      inner = '<div class="hc-card hc-league"><div class="hc-act">🏆 ' + esc(entry._leagueName || 'League') + '</div>' +
+        (entry._gameLabel ? '<div class="hc-sub">' + esc(entry._gameLabel) + '</div>' : '') + '</div>';
+    } else if (entry && entry._activity !== 'Free' && (entry._activity || entry._displayName || entry.sport)) {
+      inner = cellCardHtml(entry);
+    } else {
+      inner = '<div class="hc-empty">+</div>';
+    }
+    var flag = iss ? '<span class="helper-flag">' + (iss.level === 'error' ? '🔴' : '⚠️') + '</span>' : '';
+    return '<td class="' + cls + '" data-bunk="' + esc(bunk) + '" data-div="' + esc(dn) + '" data-idx="' + slotIdx + '"' +
+      (isLeague ? ' data-league="1"' : '') + (iss ? ' title="' + esc(iss.msg) + '"' : '') + '>' +
+      flag + '<div class="helper-cell-inner">' + inner + '</div></td>';
+  }
+
+  function wireCells(container) {
+    container.querySelectorAll('.helper-cell').forEach(function (td) {
+      td.addEventListener('click', function () {
+        var dn = td.getAttribute('data-div');
+        var idx = parseInt(td.getAttribute('data-idx'), 10);
+        var block = (window.divisionTimes[dn] || [])[idx];
+        if (!block) return;
+        if (td.getAttribute('data-league') === '1') { openLeagueEditor(dn, idx, block); return; }
+        openCellEditor(td.getAttribute('data-bunk'), dn, idx, block);
+      });
+    });
+  }
+
+  function wireToggle(container) {
+    container.querySelectorAll('.helper-viewbtn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var v = b.getAttribute('data-view');
+        if (v && v !== _viewMode) { _viewMode = v; renderGrid(container); }
+      });
+    });
+  }
+
+  function viewToggleHtml() {
+    return '<div class="helper-viewtoggle">' +
+      '<button class="helper-viewbtn' + (_viewMode === 'grade' ? ' on' : '') + '" data-view="grade">By Grade</button>' +
+      '<button class="helper-viewbtn' + (_viewMode === 'all' ? ' on' : '') + '" data-view="all">All Bunks</button>' +
+      '</div>';
+  }
+
+  // Shared-timeline view: every bunk (grouped by grade) on ONE unified time axis
+  // so you can scan a column and see what the whole camp is doing at that time.
+  function renderAllBunks(container, html) {
+    var divs = getDivisions();
+    var order = divisionOrder();
+    var divTimes = window.divisionTimes || {};
+    var uni = window.unifiedTimes || [];
+    if (!uni.length) {
+      container.innerHTML = html + '<div class="helper-empty-note">No periods yet.</div></div>';
+      wireToggle(container);
+      return;
+    }
+    // Map each unified column to the division slot that overlaps it most (or -1).
+    function colMap(dn) {
+      var slots = divTimes[dn] || [];
+      return uni.map(function (u) {
+        var best = -1, bo = 0;
+        slots.forEach(function (s, i) {
+          var ov = Math.min(s.endMin, u.endMin) - Math.max(s.startMin, u.startMin);
+          if (ov > bo) { bo = ov; best = i; }
+        });
+        return best;
+      });
+    }
+    html += '<div class="helper-div"><div class="helper-scroll"><table class="helper-table"><thead><tr>' +
+      '<th class="helper-corner">Bunk</th>';
+    uni.forEach(function (u) {
+      var dur = u.endMin - u.startMin;
+      html += '<th class="helper-time-h"><div class="th-range">' + esc(minutesToLabel(u.startMin) + '–' + minutesToLabel(u.endMin)) + '</div>' +
+        (dur ? '<div class="th-dur">' + dur + ' min</div>' : '') + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    order.forEach(function (dn) {
+      var bunks = (divs[dn] && divs[dn].bunks) || [];
+      if (!bunks.length || !(divTimes[dn] || []).length) return;
+      html += '<tr><td class="helper-div-row" colspan="' + (uni.length + 1) + '"><span>' + esc(dn) + '</span></td></tr>';
+      var cm = colMap(dn);
+      bunks.forEach(function (bunk) {
+        html += '<tr><td class="helper-bunk-cell">' + esc(bunk) + '</td>';
+        uni.forEach(function (u, ci) {
+          var si = cm[ci];
+          if (si < 0) { html += '<td class="helper-cell helper-oos"><div class="helper-cell-inner"></div></td>'; return; }
+          html += bunkCellTd(bunk, dn, si);
+        });
+        html += '</tr>';
+      });
+    });
+    html += '</tbody></table></div></div></div>';
+    container.innerHTML = html;
+    wireCells(container);
+    wireToggle(container);
+  }
+
   function renderGrid(container) {
     if (!isActive()) return;
     container = container || document.getElementById('scheduleTable');
@@ -723,6 +838,7 @@
     var html = '<div class="helper-wrap">';
     html += '<div class="helper-topbar">';
     html += '<div class="helper-title"><span class="helper-badge">Helper</span> Fill-in Spreadsheet</div>';
+    html += viewToggleHtml();
     var ic = issueCount();
     html += ic > 0
       ? '<span class="helper-issues-pill helper-issues-bad">⚠ ' + ic + ' issue' + (ic === 1 ? '' : 's') + '</span>'
@@ -735,6 +851,7 @@
         'Go to the <strong>schedule builder</strong>, drag <strong>Activity Block</strong> tiles onto each grade to mark the activity windows, then press <strong>Generate</strong>.</div>';
       html += '</div>';
       container.innerHTML = html;
+      wireToggle(container);
       return;
     }
 
@@ -746,6 +863,9 @@
       '<span class="helper-lg lg-league">League</span>' +
       '<span class="helper-lg lg-note">Note</span>' +
       '</div>';
+
+    // Shared-timeline view (all bunks on one axis).
+    if (_viewMode === 'all') { renderAllBunks(container, html); return; }
 
     order.forEach(function (dn) {
       var slots = divTimes[dn] || [];
@@ -811,18 +931,8 @@
 
     html += '</div>';
     container.innerHTML = html;
-
-    // Wire cell clicks — league banners open the whole-grade matchup builder.
-    container.querySelectorAll('.helper-cell').forEach(function (td) {
-      td.addEventListener('click', function () {
-        var dn = td.getAttribute('data-div');
-        var idx = parseInt(td.getAttribute('data-idx'), 10);
-        var block = (window.divisionTimes[dn] || [])[idx];
-        if (!block) return;
-        if (td.getAttribute('data-league') === '1') { openLeagueEditor(dn, idx, block); return; }
-        openCellEditor(td.getAttribute('data-bunk'), dn, idx, block);
-      });
-    });
+    wireCells(container);
+    wireToggle(container);
   }
 
   function leagueBannerHtml(la) {
@@ -1356,7 +1466,9 @@
     _getGeneralActivities: getGeneralActivities,
     _roundRobinRounds: roundRobinRounds,
     _writeCellsMulti: writeCellsMulti,
-    _writeLeagueSlot: writeLeagueSlot
+    _writeLeagueSlot: writeLeagueSlot,
+    setView: function (v) { if (v === 'grade' || v === 'all') { _viewMode = v; try { renderGrid(); } catch (e) {} } },
+    getView: function () { return _viewMode; }
   };
 
   console.log('[HelperMode] loaded');
