@@ -407,9 +407,7 @@
     afterWrite();
   }
 
-  function writeCell(bunk, idx, block, entry) {
-    if (!window.scheduleAssignments) window.scheduleAssignments = {};
-    if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+  function stampEntry(entry, block) {
     entry._startMin = block.startMin;
     entry._endMin = block.endMin;
     entry.continuation = false;
@@ -417,7 +415,101 @@
     entry._postEdit = true;
     entry._helper = true;
     entry._editedAt = Date.now();
-    window.scheduleAssignments[bunk][idx] = entry;
+    return entry;
+  }
+
+  function writeCell(bunk, idx, block, entry) {
+    if (!window.scheduleAssignments) window.scheduleAssignments = {};
+    if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+    window.scheduleAssignments[bunk][idx] = stampEntry(entry, block);
+    afterWrite();
+  }
+
+  function getGradeBunks(divName) {
+    var d = getDivisions()[divName];
+    return (d && d.bunks) || [];
+  }
+
+  // Apply an activity to MANY bunks at once (whole grade or a chosen subset).
+  // buildEntry(fieldName) returns the entry for a given resolved field; when a
+  // bunk needs an auto-assigned field it's resolved per-bunk & sequentially so
+  // the bunks spread across different open fields instead of colliding.
+  function writeCellsMulti(targets, idx, block, buildEntry, opts) {
+    opts = opts || {};
+    if (!window.scheduleAssignments) window.scheduleAssignments = {};
+    targets.forEach(function (tb) {
+      var field = opts.explicitField || null;
+      if (!field && opts.autoField && opts.activity) {
+        field = autoAssignField(opts.activity, tb, opts.divName, block);
+      }
+      var entry = buildEntry(field, !opts.explicitField && !!field);
+      if (!window.scheduleAssignments[tb]) window.scheduleAssignments[tb] = [];
+      window.scheduleAssignments[tb][idx] = stampEntry(entry, block);
+    });
+    afterWrite();
+  }
+
+  // Circle-method round-robin. Returns array of rounds; each round is an array
+  // of [teamA, teamB] pairs. Odd team counts get a BYE (dropped from pairs).
+  function roundRobinRounds(teams) {
+    var t = (teams || []).filter(Boolean).slice();
+    if (t.length < 2) return [];
+    if (t.length % 2 === 1) t.push('__BYE__');
+    var n = t.length, rounds = [];
+    var arr = t.slice();
+    for (var r = 0; r < n - 1; r++) {
+      var pairs = [];
+      for (var i = 0; i < n / 2; i++) {
+        var a = arr[i], b = arr[n - 1 - i];
+        if (a !== '__BYE__' && b !== '__BYE__') pairs.push([a, b]);
+      }
+      rounds.push(pairs);
+      arr.splice(1, 0, arr.pop()); // rotate, keeping the first element fixed
+    }
+    return rounds;
+  }
+
+  // Write a whole-grade league period: the authoritative division entry PLUS a
+  // _league marker mirrored into every bunk (matches the auto/print model).
+  function writeLeagueSlot(divName, idx, block, leagueName, matchups, gameLabel) {
+    if (!window.leagueAssignments) window.leagueAssignments = {};
+    if (!window.leagueAssignments[divName]) window.leagueAssignments[divName] = {};
+    var teamSet = {};
+    var mus = matchups.map(function (m) {
+      teamSet[m.teamA] = 1; teamSet[m.teamB] = 1;
+      return {
+        teamA: m.teamA, teamB: m.teamB, sport: m.sport || null, field: m.field || null,
+        display: m.teamA + ' vs ' + m.teamB + (m.sport ? ' (' + m.sport + ')' : '') + (m.field ? ' @ ' + m.field : '')
+      };
+    });
+    window.leagueAssignments[divName][idx] = {
+      matchups: mus,
+      gameLabel: gameLabel || 'League Game',
+      sport: (mus[0] && mus[0].sport) || null,
+      leagueName: leagueName,
+      teams: Object.keys(teamSet),
+      _startMin: block.startMin, _endMin: block.endMin
+    };
+    if (!window.scheduleAssignments) window.scheduleAssignments = {};
+    getGradeBunks(divName).forEach(function (bunk) {
+      if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
+      window.scheduleAssignments[bunk][idx] = stampEntry({
+        field: 'League Game', sport: window.leagueAssignments[divName][idx].sport || null,
+        _activity: 'League Game', _league: true, _leagueName: leagueName,
+        _gameLabel: gameLabel || 'League Game', matchups: mus
+      }, block);
+    });
+    afterWrite();
+  }
+
+  function clearLeagueSlot(divName, idx) {
+    if (window.leagueAssignments && window.leagueAssignments[divName]) {
+      delete window.leagueAssignments[divName][idx];
+    }
+    getGradeBunks(divName).forEach(function (bunk) {
+      var e = (window.scheduleAssignments[bunk] || [])[idx];
+      if (e && e._league) window.scheduleAssignments[bunk][idx] = null;
+    });
     afterWrite();
   }
 
@@ -530,7 +622,27 @@
       '.helper-btn{padding:9px 16px;border-radius:8px;font-weight:600;font-size:.84rem;cursor:pointer;border:1px solid transparent;}',
       '.helper-btn-save{background:#2563eb;color:#fff;}',
       '.helper-btn-cancel{background:#f1f5f9;color:#475569;border-color:#cbd5e1;}',
-      '.helper-btn-clear{background:#fff;color:#b91c1c;border-color:#fecaca;margin-right:auto;}'
+      '.helper-btn-clear{background:#fff;color:#b91c1c;border-color:#fecaca;margin-right:auto;}',
+      // multi-bunk scope
+      '.helper-pick{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;max-height:120px;overflow:auto;padding:8px;border:1px solid #e2e8f0;border-radius:8px;}',
+      '.helper-pick-item{display:flex;align-items:center;gap:5px;font-size:.82rem;color:#334155;font-weight:500;white-space:nowrap;}',
+      // league banner in the grid
+      '.helper-league-cell{background:#eef2ff;vertical-align:top;cursor:pointer;}',
+      '.helper-league-cell:hover{background:#e0e7ff;}',
+      '.helper-league-head{font-size:.7rem;font-weight:800;color:#3730a3;text-transform:uppercase;letter-spacing:.03em;padding:6px 10px 2px;}',
+      '.helper-mu-list{padding:2px 10px 8px;display:flex;flex-direction:column;gap:3px;}',
+      '.helper-mu{font-size:.82rem;color:#1e1b4b;font-weight:600;}',
+      '.helper-mu-meta{font-size:.68rem;color:#6366f1;font-weight:500;}',
+      // league editor
+      '.helper-league-body{padding:16px 22px;max-height:64vh;overflow:auto;}',
+      '.helper-lg-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;}',
+      '.helper-lg-toolbar select{padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:.84rem;}',
+      '.helper-lg-allsport{font-size:.78rem;color:#475569;font-weight:600;display:flex;align-items:center;gap:6px;}',
+      '.helper-mu-head{display:grid;grid-template-columns:1fr 24px 1fr 1fr 1.2fr 28px;gap:8px;font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#94a3b8;padding:0 2px 6px;}',
+      '.helper-mu-row{display:grid;grid-template-columns:1fr 24px 1fr 1fr 1.2fr 28px;gap:8px;align-items:center;margin-bottom:8px;}',
+      '.helper-mu-row select{padding:8px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:.86rem;width:100%;box-sizing:border-box;}',
+      '.helper-mu-row .mu-vs{text-align:center;font-weight:700;color:#64748b;font-size:.8rem;}',
+      '.helper-mu-row .mu-del{border:1px solid #fecaca;background:#fff;color:#b91c1c;border-radius:7px;height:34px;cursor:pointer;font-size:1rem;line-height:1;}'
     ].join('');
     document.head.appendChild(css);
   }
@@ -600,10 +712,30 @@
       });
       html += '</tr></thead><tbody>';
 
-      bunks.forEach(function (bunk) {
+      // Detect league columns — a league fills the WHOLE grade at that time, so
+      // it renders as one banner spanning every bunk row (not per-bunk cells).
+      var leagueCols = {};
+      slots.forEach(function (s, c) {
+        var la = window.leagueAssignments && window.leagueAssignments[dn] && window.leagueAssignments[dn][c];
+        if (la && la.matchups && la.matchups.length) { leagueCols[c] = la; return; }
+        var mk = null;
+        bunks.some(function (b) { var e = (window.scheduleAssignments[b] || [])[c]; if (e && e._league === true) { mk = e; return true; } return false; });
+        if (mk) leagueCols[c] = { matchups: mk.matchups || [], gameLabel: mk._gameLabel || 'League', leagueName: mk._leagueName };
+      });
+
+      bunks.forEach(function (bunk, rowIdx) {
         html += '<tr><td class="helper-bunk-cell">' + esc(bunk) + '</td>';
         var arr = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
         slots.forEach(function (s, idx) {
+          if (leagueCols[idx]) {
+            // Only the first bunk row emits the spanning banner; others skip.
+            if (rowIdx === 0) {
+              html += '<td class="helper-cell helper-league-cell" rowspan="' + bunks.length +
+                '" data-league="1" data-div="' + esc(dn) + '" data-idx="' + idx + '">' +
+                leagueBannerHtml(leagueCols[idx]) + '</td>';
+            }
+            return;
+          }
           var entry = arr[idx];
           var iss = issueFor(bunk, idx);
           var cls = 'helper-cell';
@@ -629,16 +761,31 @@
     html += '</div>';
     container.innerHTML = html;
 
-    // Wire cell clicks.
+    // Wire cell clicks — league banners open the whole-grade matchup builder.
     container.querySelectorAll('.helper-cell').forEach(function (td) {
       td.addEventListener('click', function () {
-        var bunk = td.getAttribute('data-bunk');
         var dn = td.getAttribute('data-div');
         var idx = parseInt(td.getAttribute('data-idx'), 10);
         var block = (window.divisionTimes[dn] || [])[idx];
-        if (block) openCellEditor(bunk, dn, idx, block);
+        if (!block) return;
+        if (td.getAttribute('data-league') === '1') { openLeagueEditor(dn, idx, block); return; }
+        openCellEditor(td.getAttribute('data-bunk'), dn, idx, block);
       });
     });
+  }
+
+  function leagueBannerHtml(la) {
+    var head = '<div class="helper-league-head">🏆 ' + esc(la.leagueName || 'League') +
+      (la.gameLabel ? ' · ' + esc(la.gameLabel) : '') + '</div>';
+    var rows = (la.matchups || []).map(function (m) {
+      var teams = (m.teamA || m.team1 || '?') + ' vs ' + (m.teamB || m.team2 || '?');
+      var meta = [];
+      if (m.sport) meta.push(esc(m.sport));
+      if (m.field) meta.push(esc(m.field));
+      return '<div class="helper-mu">' + esc(teams) +
+        (meta.length ? ' <span class="helper-mu-meta">' + meta.join(' · ') + '</span>' : '') + '</div>';
+    }).join('') || '<div class="helper-mu helper-cell-empty">Tap to set up matchups</div>';
+    return head + '<div class="helper-mu-list">' + rows + '</div>';
   }
 
   // ---------------------------------------------------------------------
@@ -663,6 +810,15 @@
               '<button data-mode="activity">Activity</button>' +
               '<button data-mode="league">League</button>' +
             '</div>' +
+            '<div class="helper-field helper-scope-wrap" id="hm-scope-wrap">' +
+              '<label>Apply to</label>' +
+              '<select id="hm-scope">' +
+                '<option value="one">This bunk only</option>' +
+                '<option value="grade">Whole grade (' + getGradeBunks(divName).length + ' bunks)</option>' +
+                '<option value="pick">Pick bunks…</option>' +
+              '</select>' +
+              '<div id="hm-pick" class="helper-pick" style="display:none;"></div>' +
+            '</div>' +
             '<div class="helper-modal-body" id="helper-modal-body"></div>' +
           '</div>' +
           '<div class="helper-modal-right">' +
@@ -682,11 +838,42 @@
     var segBtns = ov.querySelectorAll('.helper-seg > button');
     var state = { mode: 'activity' };
 
+    // Legacy single-matchup / league entry → jump straight to the grade builder.
+    if (existing && (existing._h2h || existing._league)) {
+      if (ov.parentNode) ov.parentNode.removeChild(ov);
+      openLeagueEditor(divName, idx, block);
+      return;
+    }
     // Seed initial mode from the existing entry.
     if (existing) {
-      if (existing._h2h || existing._league) state.mode = 'league';
-      else if (existing._customText) state.mode = 'text';
+      if (existing._customText) state.mode = 'text';
       else state.mode = 'activity';
+    }
+
+    // --- Multi-bunk scope (non-league modes) ---------------------------
+    var gradeBunks = getGradeBunks(divName);
+    var scopeSel = ov.querySelector('#hm-scope');
+    var pickWrap = ov.querySelector('#hm-pick');
+    if (pickWrap) {
+      pickWrap.innerHTML = gradeBunks.map(function (b) {
+        return '<label class="helper-pick-item"><input type="checkbox" value="' + esc(b) + '"' + (b === bunk ? ' checked' : '') + '> ' + esc(b) + '</label>';
+      }).join('');
+    }
+    if (scopeSel) scopeSel.addEventListener('change', function () {
+      if (pickWrap) pickWrap.style.display = scopeSel.value === 'pick' ? 'block' : 'none';
+    });
+    function scopeTargets() {
+      var v = scopeSel ? scopeSel.value : 'one';
+      if (v === 'grade') return gradeBunks.slice();
+      if (v === 'pick' && pickWrap) {
+        var picked = Array.prototype.map.call(pickWrap.querySelectorAll('input:checked'), function (i) { return i.value; });
+        return picked.length ? picked : [bunk];
+      }
+      return [bunk];
+    }
+    function updateScopeVisibility() {
+      var w = ov.querySelector('#hm-scope-wrap');
+      if (w) w.style.display = (state.mode === 'league') ? 'none' : 'block';
     }
 
     // --- Contextual report (reuses the manual post-edit panel) ---------
@@ -813,113 +1000,247 @@
         });
         state._getKind = function () { return kind; };
       } else if (state.mode === 'league') {
-        var leagues = getLeaguesForDivision(divName);
-        if (!leagues.length) {
-          body.innerHTML = '<div class="helper-empty-note" style="padding:20px;">No league is assigned to <strong>' +
-            esc(divName) + '</strong>. Configure one in the Leagues page first.</div>';
-          return;
-        }
-        var curLeague = existing && existing._league ? existing._league : (leagues[0].name || '');
-        var leagueSel = leagues.length > 1
-          ? '<div class="helper-field"><label>League</label><select id="hm-league">' +
-              leagues.map(function (l) { return '<option value="' + esc(l.name) + '"' + (l.name === curLeague ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') +
-            '</select></div>'
-          : '<input type="hidden" id="hm-league" value="' + esc(curLeague) + '">';
-        body.innerHTML = leagueSel +
-          '<div class="helper-field"><label>Matchup</label>' +
-            '<div style="display:flex;gap:6px;align-items:center;">' +
-              '<select id="hm-teamA" style="flex:1"></select>' +
-              '<span style="font-weight:700;color:#64748b;">vs</span>' +
-              '<select id="hm-teamB" style="flex:1"></select>' +
-            '</div></div>' +
-          '<div class="helper-field"><label>Sport</label><select id="hm-lsport"></select></div>' +
-          '<div class="helper-field"><label>Field / Location</label><select id="hm-lfield">' + fieldOptions(existing ? entryLocation(existing) : '') + '</select></div>';
-
-        function leagueByName(n) { return leagues.find(function (l) { return l.name === n; }) || leagues[0]; }
-        function fillTeamsAndSports() {
-          var lg = leagueByName((body.querySelector('#hm-league') || {}).value || curLeague);
-          var teams = (lg.teams || []);
-          var sports = (lg.sports && lg.sports.length) ? lg.sports : getSports();
-          var a = body.querySelector('#hm-teamA'), b = body.querySelector('#hm-teamB'), sp = body.querySelector('#hm-lsport');
-          var curA = '', curB = '', curSp = '';
-          if (existing && existing._h2h && existing._activity) {
-            var mm = String(existing._activity).split(' vs ');
-            curA = (mm[0] || '').trim(); curB = (mm[1] || '').trim();
-            curSp = existing.sport || '';
-          }
-          a.innerHTML = teams.map(function (t) { return '<option' + (t === curA ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
-          b.innerHTML = teams.map(function (t) { return '<option' + (t === curB ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
-          sp.innerHTML = sports.map(function (s) { return '<option' + (s === curSp ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') || '<option value="">(none)</option>';
-          if (sp) sp.addEventListener('change', refreshReport);
-        }
-        fillTeamsAndSports();
-        var lsel = body.querySelector('#hm-league');
-        if (lsel && lsel.tagName === 'SELECT') lsel.addEventListener('change', function () { fillTeamsAndSports(); refreshReport(); });
+        // Leagues fill the whole grade — hand off to the dedicated builder.
+        body.innerHTML = '<div class="helper-empty-note" style="padding:18px;">League games fill the ' +
+          '<strong>whole grade</strong> at this time. Set up every matchup at once.' +
+          '<div style="margin-top:14px;"><button class="helper-btn helper-btn-save" id="hm-open-league">Set up matchups →</button></div></div>';
+        var ob = body.querySelector('#hm-open-league');
+        if (ob) ob.addEventListener('click', function () { if (ov.parentNode) ov.parentNode.removeChild(ov); openLeagueEditor(divName, idx, block); });
       }
     }
 
     segBtns.forEach(function (b) {
-      b.addEventListener('click', function () { state.mode = b.getAttribute('data-mode'); renderBody(); refreshReport(); });
+      b.addEventListener('click', function () {
+        var m = b.getAttribute('data-mode');
+        if (m === 'league') { if (ov.parentNode) ov.parentNode.removeChild(ov); openLeagueEditor(divName, idx, block); return; }
+        state.mode = m; renderBody(); updateScopeVisibility(); refreshReport();
+      });
     });
     renderBody();
+    updateScopeVisibility();
     mountReport();
 
     function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('#helper-cancel').addEventListener('click', close);
-    ov.querySelector('#helper-clear').addEventListener('click', function () { clearCell(bunk, idx); close(); });
+    ov.querySelector('#helper-clear').addEventListener('click', function () {
+      // Clear applies to the same scope the user picked.
+      var tgts = scopeTargets();
+      tgts.forEach(function (tb) { if (window.scheduleAssignments[tb]) window.scheduleAssignments[tb][idx] = null; });
+      afterWrite();
+      close();
+    });
 
     ov.querySelector('#helper-save').addEventListener('click', function () {
-      var entry = null;
+      var targets = scopeTargets();
       if (state.mode === 'text') {
-        var t = (body.querySelector('#hm-text') || {}).value || '';
-        t = t.trim();
-        if (!t) { clearCell(bunk, idx); close(); return; }
-        entry = { _activity: t, _displayName: t, _customText: true, sport: null, field: t, _location: null };
-      } else if (state.mode === 'activity') {
+        var t = ((body.querySelector('#hm-text') || {}).value || '').trim();
+        if (!t) { ov.querySelector('#helper-clear').click(); return; }
+        writeCellsMulti(targets, idx, block, function () {
+          return { _activity: t, _displayName: t, _customText: true, sport: null, field: t, _location: null };
+        }, {});
+        close(); return;
+      }
+      if (state.mode === 'activity') {
         var act = (body.querySelector('#post-edit-activity') || {}).value || '';
         if (!act) { close(); return; }
-        var fld = (body.querySelector('#hm-field') || {}).value || '';
+        var explicit = (body.querySelector('#hm-field') || {}).value || '';
         var kind = state._getKind ? state._getKind() : 'sport';
-        // If the tab says sport but the value is a configured special, trust the value.
         if (kind === 'sport' && getSpecials().some(function (s) { return s === act; })) kind = 'special';
-        // General activity: fall back to its configured facility if no field set.
-        if (kind === 'general' && !fld) {
+        if (kind === 'general' && !explicit) {
           var _ga = getGeneralActivities().find(function (g) { return g.name === act; });
-          if (_ga && _ga.facility) fld = _ga.facility;
+          if (_ga && _ga.facility) explicit = _ga.facility;
         }
-        // Empty field ⇒ let the program assign an open field for this activity.
-        var autoAssigned = false;
-        if (!fld) {
-          var _af = autoAssignField(act, bunk, divName, block);
-          if (_af) { fld = _af; autoAssigned = true; }
-        }
-        entry = {
-          _activity: act,
-          sport: kind === 'sport' ? act : null,
-          _special: kind === 'special',
-          _general: kind === 'general',
-          field: fld ? (fld + ' – ' + act) : act,
-          _location: fld || null,
-          _autoField: autoAssigned
-        };
-      } else if (state.mode === 'league') {
-        var A = (body.querySelector('#hm-teamA') || {}).value || '';
-        var B = (body.querySelector('#hm-teamB') || {}).value || '';
-        if (!A || !B) { close(); return; }
-        if (A === B) { alert('Pick two different teams for the matchup.'); return; }
-        var lname = (body.querySelector('#hm-league') || {}).value || '';
-        var lsport = (body.querySelector('#hm-lsport') || {}).value || '';
-        var lfield = (body.querySelector('#hm-lfield') || {}).value || '';
-        var mu = A + ' vs ' + B;
-        entry = {
-          _activity: mu, _h2h: true, _league: lname, sport: lsport || null,
-          field: lfield ? (lfield + ' – ' + (lsport || 'League')) : (lsport || 'League'),
-          _location: lfield || null,
-          _displayName: mu + (lsport ? ' (' + lsport + ')' : '')
-        };
+        var isSport = kind === 'sport', isSpecial = kind === 'special', isGeneral = kind === 'general';
+        writeCellsMulti(targets, idx, block, function (field, wasAuto) {
+          return {
+            _activity: act,
+            sport: isSport ? act : null,
+            _special: isSpecial,
+            _general: isGeneral,
+            field: field ? (field + ' – ' + act) : act,
+            _location: field || null,
+            _autoField: !!wasAuto
+          };
+        }, { explicitField: explicit || null, autoField: !explicit, activity: act, divName: divName });
+        close(); return;
       }
-      if (entry) writeCell(bunk, idx, block, entry);
+      close();
+    });
+  }
+
+  function fieldSelectHtml(selected) {
+    var opts = '<option value="">— Auto —</option>';
+    getFieldNames().forEach(function (f) {
+      opts += '<option value="' + esc(f) + '"' + (normField(f) === normField(selected) ? ' selected' : '') + '>' + esc(f) + '</option>';
+    });
+    return opts;
+  }
+
+  // ---------------------------------------------------------------------
+  // League matchup builder — sets up ALL matchups for a grade at once
+  // (10 teams → 5 matchups) and fills the whole grade's league period.
+  // ---------------------------------------------------------------------
+  function openLeagueEditor(divName, idx, block) {
+    injectStyles();
+    var leagues = getLeaguesForDivision(divName);
+    if (!leagues.length) {
+      alert('No league is assigned to ' + divName + '. Add this grade to a league in the Leagues page first.');
+      return;
+    }
+    var existingLA = (window.leagueAssignments && window.leagueAssignments[divName] && window.leagueAssignments[divName][idx]) || null;
+    var st = { leagueName: (existingLA && existingLA.leagueName) || leagues[0].name, round: 0, matchups: [] };
+
+    function curLeague() { return leagues.find(function (l) { return l.name === st.leagueName; }) || leagues[0]; }
+    function leagueTeams() { return (curLeague().teams || []).slice(); }
+    function leagueSports() { var l = curLeague(); return (l.sports && l.sports.length) ? l.sports : getSports(); }
+    function defaultSport() { var s = leagueSports(); return s[0] || ''; }
+    function roundsForLeague() { return roundRobinRounds(leagueTeams()); }
+
+    function autoPair() {
+      var rounds = roundsForLeague();
+      var rd = rounds.length ? rounds[st.round % rounds.length] : [];
+      var ds = defaultSport();
+      st.matchups = rd.map(function (p) { return { teamA: p[0], teamB: p[1], sport: ds, field: '' }; });
+    }
+
+    if (existingLA && existingLA.matchups && existingLA.matchups.length) {
+      st.matchups = existingLA.matchups.map(function (m) {
+        return { teamA: m.teamA || m.team1 || '', teamB: m.teamB || m.team2 || '', sport: m.sport || defaultSport(), field: m.field || '' };
+      });
+    } else {
+      autoPair();
+    }
+
+    var ov = document.createElement('div');
+    ov.className = 'helper-modal-ov';
+    ov.innerHTML =
+      '<div class="helper-modal helper-modal-wide">' +
+        '<div class="helper-modal-head">🏆 League Games' +
+          '<div class="helper-modal-sub">' + esc(divName) + ' · ' +
+            esc(minutesToLabel(block.startMin) + '–' + minutesToLabel(block.endMin)) +
+            ' · fills the whole grade</div>' +
+        '</div>' +
+        '<div class="helper-league-body" id="hm-league-body"></div>' +
+        '<div class="helper-modal-foot">' +
+          '<button class="helper-btn helper-btn-clear" id="hm-league-clear">Remove league</button>' +
+          '<button class="helper-btn helper-btn-cancel" id="hm-league-cancel">Cancel</button>' +
+          '<button class="helper-btn helper-btn-save" id="hm-league-save">Save all matchups</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    var lbody = ov.querySelector('#hm-league-body');
+
+    function syncFromDom() {
+      var rows = lbody.querySelectorAll('.helper-mu-row');
+      st.matchups = Array.prototype.map.call(rows, function (r) {
+        return {
+          teamA: r.querySelector('.mu-a').value,
+          teamB: r.querySelector('.mu-b').value,
+          sport: r.querySelector('.mu-sport').value,
+          field: r.querySelector('.mu-field').value
+        };
+      });
+    }
+
+    function teamOpts(sel) {
+      return '<option value="">—</option>' + leagueTeams().map(function (t) {
+        return '<option value="' + esc(t) + '"' + (t === sel ? ' selected' : '') + '>' + esc(t) + '</option>';
+      }).join('');
+    }
+    function sportOpts(sel) {
+      return leagueSports().map(function (s) {
+        return '<option value="' + esc(s) + '"' + (s === sel ? ' selected' : '') + '>' + esc(s) + '</option>';
+      }).join('') || '<option value="">(none)</option>';
+    }
+
+    function render() {
+      var rounds = roundsForLeague();
+      var leagueSel = leagues.length > 1
+        ? '<div class="helper-field"><label>League</label><select id="hm-lg-name">' +
+            leagues.map(function (l) { return '<option value="' + esc(l.name) + '"' + (l.name === st.leagueName ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') +
+          '</select></div>'
+        : '';
+      var roundSel = rounds.length > 1
+        ? '<select id="hm-lg-round">' + rounds.map(function (r, i) { return '<option value="' + i + '"' + (i === st.round ? ' selected' : '') + '>Round ' + (i + 1) + '</option>'; }).join('') + '</select>'
+        : '';
+      var rows = st.matchups.map(function (m, i) {
+        return '<div class="helper-mu-row" data-i="' + i + '">' +
+          '<select class="mu-a">' + teamOpts(m.teamA) + '</select>' +
+          '<span class="mu-vs">vs</span>' +
+          '<select class="mu-b">' + teamOpts(m.teamB) + '</select>' +
+          '<select class="mu-sport">' + sportOpts(m.sport) + '</select>' +
+          '<select class="mu-field">' + fieldSelectHtml(m.field) + '</select>' +
+          '<button class="mu-del" title="Remove">×</button>' +
+        '</div>';
+      }).join('');
+      lbody.innerHTML =
+        leagueSel +
+        '<div class="helper-lg-toolbar">' +
+          '<button class="helper-btn helper-btn-cancel" id="hm-lg-autopair">↻ Auto-pair round-robin</button>' +
+          roundSel +
+          '<span style="flex:1"></span>' +
+          '<label class="helper-lg-allsport">Sport for all: <select id="hm-lg-allsport"><option value="">—</option>' + sportOpts('') + '</select></label>' +
+        '</div>' +
+        '<div class="helper-mu-head"><span>Team A</span><span></span><span>Team B</span><span>Sport</span><span>Field (empty = auto)</span><span></span></div>' +
+        '<div id="hm-mu-rows">' + rows + '</div>' +
+        '<button class="helper-btn helper-btn-cancel" id="hm-lg-add" style="margin-top:10px;">+ Add matchup</button>' +
+        '<div class="helper-field-hint" style="margin-top:8px;">' + st.matchups.length + ' matchup' + (st.matchups.length === 1 ? '' : 's') +
+          ' · ' + leagueTeams().length + ' teams. Empty field = the program assigns an open one.</div>';
+      wire();
+    }
+
+    function wire() {
+      var lgName = lbody.querySelector('#hm-lg-name');
+      if (lgName) lgName.addEventListener('change', function () { st.leagueName = lgName.value; st.round = 0; autoPair(); render(); });
+      var rnd = lbody.querySelector('#hm-lg-round');
+      if (rnd) rnd.addEventListener('change', function () { st.round = parseInt(rnd.value, 10) || 0; autoPair(); render(); });
+      var ap = lbody.querySelector('#hm-lg-autopair');
+      if (ap) ap.addEventListener('click', function () { autoPair(); render(); });
+      var add = lbody.querySelector('#hm-lg-add');
+      if (add) add.addEventListener('click', function () { syncFromDom(); st.matchups.push({ teamA: '', teamB: '', sport: defaultSport(), field: '' }); render(); });
+      var allSport = lbody.querySelector('#hm-lg-allsport');
+      if (allSport) allSport.addEventListener('change', function () {
+        if (!allSport.value) return;
+        syncFromDom(); st.matchups.forEach(function (m) { m.sport = allSport.value; }); render();
+      });
+      lbody.querySelectorAll('.mu-del').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var row = btn.closest('.helper-mu-row'); var i = parseInt(row.getAttribute('data-i'), 10);
+          syncFromDom(); st.matchups.splice(i, 1); render();
+        });
+      });
+    }
+
+    // Auto-assign a distinct open field to any matchup left blank.
+    function assignFields(matchups) {
+      var used = {};
+      matchups.forEach(function (m) { if (m.field) used[normField(m.field)] = 1; });
+      var slots = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.findSlotsForRange)
+        ? (window.SchedulerCoreUtils.findSlotsForRange(block.startMin, block.endMin, divName, null) || []) : [];
+      matchups.forEach(function (m) {
+        if (m.field || !m.sport) return;
+        var res = (typeof window.findFieldsForActivity === 'function')
+          ? window.findFieldsForActivity(m.sport, slots, divName, null, block.startMin, block.endMin) : null;
+        var open = (res && res.open) ? res.open : [];
+        for (var i = 0; i < open.length; i++) {
+          if (!used[normField(open[i].name)]) { m.field = open[i].name; used[normField(open[i].name)] = 1; break; }
+        }
+      });
+    }
+
+    render();
+
+    function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    ov.querySelector('#hm-league-cancel').addEventListener('click', close);
+    ov.querySelector('#hm-league-clear').addEventListener('click', function () { clearLeagueSlot(divName, idx); close(); });
+    ov.querySelector('#hm-league-save').addEventListener('click', function () {
+      syncFromDom();
+      var valid = st.matchups.filter(function (m) { return m.teamA && m.teamB && m.teamA !== m.teamB; });
+      if (!valid.length) { alert('Add at least one matchup (two different teams).'); return; }
+      assignFields(valid);
+      writeLeagueSlot(divName, idx, block, st.leagueName, valid, 'League Game');
       close();
     });
   }
@@ -968,7 +1289,10 @@
     save: save,
     _buildStructure: buildStructure,
     _autoAssignField: autoAssignField,
-    _getGeneralActivities: getGeneralActivities
+    _getGeneralActivities: getGeneralActivities,
+    _roundRobinRounds: roundRobinRounds,
+    _writeCellsMulti: writeCellsMulti,
+    _writeLeagueSlot: writeLeagueSlot
   };
 
   console.log('[HelperMode] loaded');
