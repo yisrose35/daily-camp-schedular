@@ -862,12 +862,16 @@
     // Make sure any saved data for the date is in memory, then rebuild + paint.
     var dateKey = currentDateKey();
     try { if (typeof window.loadScheduleForDate === 'function' && !window._postEditInProgress) window.loadScheduleForDate(dateKey); } catch (e) {}
-    // Reveal the schedule output tab if a switcher exists.
-    try { if (typeof window.showScheduleTab === 'function') window.showScheduleTab(); } catch (e) {}
     buildStructure(dateKey);
+    // ★ The fill sheet renders into #scheduleTable, which lives on the "schedule"
+    //   tab. The user presses Generate from the "daily-adjustments" tab, so switch
+    //   to the schedule tab (showTab calls updateTable → our render guard).
+    window._scheduleNeedsRender = true;
+    try { if (typeof window.showTab === 'function') window.showTab('schedule'); } catch (e) {}
+    // Paint directly too, in case showTab isn't present or didn't render.
     renderGrid(document.getElementById('scheduleTable'));
-    // Persist a baseline so the row exists in daily_schedules.
-    save();
+    // No baseline save here — an empty grid would just hit the wipe guard.
+    // The daily_schedules row is written on the first real cell edit (writeCell).
   }
 
   // Clear the active grid when leaving Helper Mode so the normal renderer resumes.
