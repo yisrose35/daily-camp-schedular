@@ -3414,6 +3414,14 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     // render path (manual flat table AND the auto-grid delegation below).
     function renderTransposedView(container) {
         var _el = container || document.getElementById('scheduleTable');
+        // ★ HELPER MODE owns the schedule output area while active — every render
+        //   path (renderStaggeredView AND updateTable) funnels through here, so
+        //   this one guard keeps the unified renderer from painting over the
+        //   Helper spreadsheet.
+        if (window.HelperMode && window.HelperMode.isActive && window.HelperMode.isActive()) {
+            try { window.HelperMode.renderGrid(_el); } catch (e) { console.error('[Helper] render failed', e); }
+            return;
+        }
         var _savedScroll = _usCaptureScroll(_el);
         try {
             return _renderTransposedViewImpl(container);
@@ -3774,6 +3782,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     // time across X-axis). To force the legacy layout, call _renderStaggeredView.
     function renderStaggeredView(container) {
         if (!container) container = document.getElementById('scheduleTable');
+        // ★ HELPER MODE owns the schedule output area while its spreadsheet is
+        //   active — defer so the unified renderer never paints over it.
+        if (window.HelperMode && window.HelperMode.isActive && window.HelperMode.isActive()) {
+            try { window.HelperMode.renderGrid(container); } catch (e) { console.error('[Helper] render failed', e); }
+            return;
+        }
         return renderTransposedView(container);
     }
 

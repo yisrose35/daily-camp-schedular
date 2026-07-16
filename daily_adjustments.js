@@ -2812,8 +2812,19 @@ function renderPalette() {
   if (!paletteEl) return;
   
   paletteEl.innerHTML = '';
-  
-  const categories = [
+
+  // ★ HELPER MODE: same as the Master Builder — a single blank "Activity Block"
+  //   tile. The user just marks activity windows here; the actual activity /
+  //   sport / special / league is filled per bunk in the Helper fill sheet.
+  const _daHelper = window._daBuilderMode === 'helper';
+  const categories = _daHelper
+    ? [{ label: 'Helper', tiles: [{
+        type: 'activity',
+        name: 'Activity Block',
+        style: 'background:#93c5fd;color:#1e3a5f;',
+        description: 'A blank time-box. Place one per grade for each activity window; fill in the details per bunk after you press Open Fill Sheet.'
+      }] }]
+    : [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
     { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
@@ -2823,7 +2834,7 @@ function renderPalette() {
   // ★ FN-48: custom general activities (facilities registry) as pinned tiles
   //   in the MANUAL palette too — the tile carries gaName/gaFacility so the
   //   drop pre-binds the event + facility and only asks for times.
-  const _gaItemsM = (window.getGeneralActivityPaletteItems?.() || []);
+  const _gaItemsM = _daHelper ? [] : (window.getGeneralActivityPaletteItems?.() || []);
   if (_gaItemsM.length) {
     categories.push({
       label: 'General Activities',
@@ -5846,11 +5857,30 @@ function renderToolbar() {
   
   // ★ In auto mode, show auto layer templates instead of skeleton templates
   const isAutoMode = window._daBuilderMode === 'auto';
+  // ★ Helper Mode: the user fills the schedule in per-bunk themselves. It reuses
+  //   the manual skeleton editor (blank Activity Block tiles) for setup, so it
+  //   shares the manual (non-auto) toolbar — but Generate opens the fill sheet
+  //   instead of running the solver, and we badge the toolbar so the mode is clear.
+  const isHelperMode = window._daBuilderMode === 'helper';
   const autoTemplates = isAutoMode ? (masterSettings.app1?.autoLayerTemplates || {}) : {};
   const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
   const autoLoadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
   
+  // ★ Visible mode badge so Daily Adjustments always shows which builder mode
+  //   is active (Manual / Helper / Auto).
+  const _modeBadge = (() => {
+    const m = isHelperMode ? { t: 'Helper Mode', bg: '#dbeafe', fg: '#1e40af' }
+      : isAutoMode ? { t: 'Auto Builder', bg: '#dcfce7', fg: '#166534' }
+      : { t: 'Manual Builder', bg: '#f1f5f9', fg: '#475569' };
+    return '<span class="da-mode-badge" title="Current builder mode" style="background:' + m.bg +
+      ';color:' + m.fg + ';border-radius:999px;padding:3px 12px;font-size:11px;font-weight:700;' +
+      'text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + m.t + '</span>';
+  })();
+
   toolbar.innerHTML = `
+    <div class="da-toolbar-group">
+      ${_modeBadge}
+    </div>
     <div class="da-toolbar-group">
       <span class="da-toolbar-label">Template:</span>
       <select id="da-load-select" class="da-select">
@@ -5879,7 +5909,7 @@ function renderToolbar() {
       })()}
       <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
       <button id="da-gen-scope-btn" class="da-btn da-btn-ghost" title="Choose which divisions to generate">${_getGenScopeBtnLabel()}</button>
-      <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
+      <button id="da-generate-btn" class="da-btn da-btn-success">${isHelperMode ? '▶ Open Fill Sheet' : '▶ Generate Schedule'}</button>
     </div>
   `;
   
@@ -6155,6 +6185,19 @@ function _applyDailyTimeRuleIronGate(_includeSetup) {
 // =================================================================
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
+    // ★ HELPER MODE: no solver. The user built blank time-boxes; "Generate" just
+    //   opens the Helper spreadsheet (an Excel-style per-bunk fill grid with
+    //   real-time validation). Bypass the entire skeleton/auto pipeline.
+    const _hmMode = window._daBuilderMode || (window.getCampBuilderMode && window.getCampBuilderMode());
+    if (_hmMode === 'helper') {
+        if (window.HelperMode && typeof window.HelperMode.openSpreadsheet === 'function') {
+            try { await window.HelperMode.openSpreadsheet(); }
+            catch (e) { console.error('[Optimizer] Helper Mode open failed:', e); await daShowAlert('Could not open the Helper spreadsheet: ' + (e && e.message ? e.message : e)); }
+        } else {
+            await daShowAlert('Helper Mode is not loaded (helper_mode.js missing).');
+        }
+        return;
+    }
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
     // ★ Day 22.5 audit fix: re-entrancy guard — refuse a second concurrent run.
     if (_daOptimizerRunning) { await daShowAlert("A schedule is already being generated — please wait for it to finish."); return; }
