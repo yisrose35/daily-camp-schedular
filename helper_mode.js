@@ -623,9 +623,15 @@
       '.helper-btn-save{background:#2563eb;color:#fff;}',
       '.helper-btn-cancel{background:#f1f5f9;color:#475569;border-color:#cbd5e1;}',
       '.helper-btn-clear{background:#fff;color:#b91c1c;border-color:#fecaca;margin-right:auto;}',
-      // multi-bunk scope
-      '.helper-pick{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;max-height:120px;overflow:auto;padding:8px;border:1px solid #e2e8f0;border-radius:8px;}',
-      '.helper-pick-item{display:flex;align-items:center;gap:5px;font-size:.82rem;color:#334155;font-weight:500;white-space:nowrap;}',
+      // multi-bunk scope (tap-to-toggle chips)
+      '.helper-scope-count{font-size:.72rem;color:#94a3b8;font-weight:600;}',
+      '.helper-scope-quick{display:flex;gap:8px;margin:2px 0 8px;}',
+      '.helper-scope-qbtn{padding:6px 12px;border:1px solid #cbd5e1;background:#f8fafc;border-radius:8px;font-size:.8rem;font-weight:600;color:#475569;cursor:pointer;}',
+      '.helper-scope-qbtn:hover{background:#eef2ff;border-color:#c7d2fe;}',
+      '.helper-scope-chips{display:flex;flex-wrap:wrap;gap:6px;}',
+      '.helper-chip{padding:6px 13px;border:1px solid #cbd5e1;background:#fff;border-radius:999px;font-size:.82rem;font-weight:600;color:#475569;cursor:pointer;transition:all .12s;}',
+      '.helper-chip:hover{border-color:#93c5fd;}',
+      '.helper-chip.on{background:#2563eb;border-color:#2563eb;color:#fff;}',
       // league banner in the grid
       '.helper-league-cell{background:#eef2ff;vertical-align:top;cursor:pointer;}',
       '.helper-league-cell:hover{background:#e0e7ff;}',
@@ -811,13 +817,12 @@
               '<button data-mode="league">League</button>' +
             '</div>' +
             '<div class="helper-field helper-scope-wrap" id="hm-scope-wrap">' +
-              '<label>Apply to</label>' +
-              '<select id="hm-scope">' +
-                '<option value="one">This bunk only</option>' +
-                '<option value="grade">Whole grade (' + getGradeBunks(divName).length + ' bunks)</option>' +
-                '<option value="pick">Pick bunks…</option>' +
-              '</select>' +
-              '<div id="hm-pick" class="helper-pick" style="display:none;"></div>' +
+              '<label>Apply to <span class="helper-scope-count" id="hm-scope-count"></span></label>' +
+              '<div class="helper-scope-quick">' +
+                '<button type="button" class="helper-scope-qbtn" id="hm-scope-one">This bunk</button>' +
+                '<button type="button" class="helper-scope-qbtn" id="hm-scope-all">Whole grade</button>' +
+              '</div>' +
+              '<div class="helper-scope-chips" id="hm-scope-chips"></div>' +
             '</div>' +
             '<div class="helper-modal-body" id="helper-modal-body"></div>' +
           '</div>' +
@@ -851,30 +856,44 @@
     }
 
     // --- Multi-bunk scope (non-league modes) ---------------------------
+    // Tap bunk chips to toggle; one-tap "This bunk" / "Whole grade" shortcuts.
     var gradeBunks = getGradeBunks(divName);
-    var scopeSel = ov.querySelector('#hm-scope');
-    var pickWrap = ov.querySelector('#hm-pick');
-    if (pickWrap) {
-      pickWrap.innerHTML = gradeBunks.map(function (b) {
-        return '<label class="helper-pick-item"><input type="checkbox" value="' + esc(b) + '"' + (b === bunk ? ' checked' : '') + '> ' + esc(b) + '</label>';
-      }).join('');
+    var selectedBunks = {}; selectedBunks[bunk] = true;
+    var scopeChips = ov.querySelector('#hm-scope-chips');
+    function selectedCount() { return gradeBunks.filter(function (b) { return selectedBunks[b]; }).length; }
+    function updateScopeCount() {
+      var n = selectedCount();
+      var el = ov.querySelector('#hm-scope-count');
+      if (el) el.textContent = '· ' + n + ' bunk' + (n === 1 ? '' : 's');
     }
-    if (scopeSel) scopeSel.addEventListener('change', function () {
-      if (pickWrap) pickWrap.style.display = scopeSel.value === 'pick' ? 'block' : 'none';
-    });
+    function renderChips() {
+      if (!scopeChips) return;
+      scopeChips.innerHTML = gradeBunks.map(function (b) {
+        return '<button type="button" class="helper-chip' + (selectedBunks[b] ? ' on' : '') + '" data-bunk="' + esc(b) + '">' + esc(b) + '</button>';
+      }).join('');
+      scopeChips.querySelectorAll('.helper-chip').forEach(function (ch) {
+        ch.addEventListener('click', function () {
+          var b = ch.getAttribute('data-bunk');
+          selectedBunks[b] = !selectedBunks[b];
+          if (selectedCount() === 0) selectedBunks[b] = true; // never allow zero
+          renderChips();
+        });
+      });
+      updateScopeCount();
+    }
+    var oneBtn = ov.querySelector('#hm-scope-one');
+    if (oneBtn) oneBtn.addEventListener('click', function () { selectedBunks = {}; selectedBunks[bunk] = true; renderChips(); });
+    var allBtn = ov.querySelector('#hm-scope-all');
+    if (allBtn) allBtn.addEventListener('click', function () { selectedBunks = {}; gradeBunks.forEach(function (b) { selectedBunks[b] = true; }); renderChips(); });
     function scopeTargets() {
-      var v = scopeSel ? scopeSel.value : 'one';
-      if (v === 'grade') return gradeBunks.slice();
-      if (v === 'pick' && pickWrap) {
-        var picked = Array.prototype.map.call(pickWrap.querySelectorAll('input:checked'), function (i) { return i.value; });
-        return picked.length ? picked : [bunk];
-      }
-      return [bunk];
+      var t = gradeBunks.filter(function (b) { return selectedBunks[b]; });
+      return t.length ? t : [bunk];
     }
     function updateScopeVisibility() {
       var w = ov.querySelector('#hm-scope-wrap');
       if (w) w.style.display = (state.mode === 'league') ? 'none' : 'block';
     }
+    renderChips();
 
     // --- Contextual report (reuses the manual post-edit panel) ---------
     // The activity picker carries id="post-edit-activity" so the panel's own
