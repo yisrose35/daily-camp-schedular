@@ -20,7 +20,7 @@
   'use strict';
 
   var HELPER = 'helper';
-  var HELPER_VERSION = 'v11-zoom';
+  var HELPER_VERSION = 'v12-sheet';
 
   // Debounced autosave + validation issue map keyed by `${bunk}|${slotIdx}`.
   var _saveTimer = null;
@@ -606,14 +606,16 @@
       '.helper-timeline .helper-tick{background:#f8fafc;padding:8px 8px;text-align:right;white-space:nowrap;position:sticky;top:0;z-index:3;border-bottom:2px solid #e2e8f0;}',
       '.helper-timeline .helper-tick .th-range{font-weight:700;font-size:.72rem;color:#475569;}',
       '.helper-timeline .hc-card{white-space:normal;}',
-      // division cards
-      '.helper-div{margin:0 4px 22px;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.06);}',
-      '.helper-div-head{background:linear-gradient(90deg,#eef2ff,#f8fafc);padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:baseline;gap:10px;}',
+      // ONE Excel-style sheet: a single scroll surface for the whole grid, with
+      // the time row + bunk column frozen. No nested per-grade scrollbars.
+      '.helper-sheet{overflow:auto;max-height:calc(100vh - 200px);min-height:320px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;margin:0 4px;}',
+      '.helper-div{margin:0;background:#fff;}',
+      '.helper-div-head{background:#f1f5f9;padding:9px 14px;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;display:flex;align-items:baseline;gap:10px;position:sticky;left:0;}',
+      '.helper-div-head .hdh-name,.helper-div-head .hdh-meta{position:sticky;left:14px;}',
       '.hdh-name{font-weight:800;font-size:1.02rem;color:#0f172a;}',
       '.hdh-meta{font-size:.74rem;color:#64748b;font-weight:600;}',
-      '.helper-scroll{overflow:auto;max-height:72vh;}',
       '.helper-table{border-collapse:separate;border-spacing:0;width:100%;min-width:520px;}',
-      '.helper-table th,.helper-table td{border-right:1px solid #eef2f6;border-bottom:1px solid #eef2f6;text-align:left;vertical-align:top;padding:0;}',
+      '.helper-table th,.helper-table td{border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;text-align:left;vertical-align:top;padding:0;}',
       '.helper-table thead th{background:#f8fafc;padding:8px 12px;white-space:nowrap;position:sticky;top:0;z-index:3;border-bottom:2px solid #e2e8f0;}',
       '.th-range{font-weight:800;font-size:.82rem;color:#1e293b;}',
       '.th-dur{font-size:.66rem;color:#94a3b8;font-weight:600;margin-top:1px;}',
@@ -777,7 +779,7 @@
   function applyZoom(container) {
     var root = container || document.getElementById('scheduleTable');
     if (!root || typeof root.querySelectorAll !== 'function') return;
-    root.querySelectorAll('.helper-div').forEach(function (el) { if (el.style) el.style.zoom = _zoom; });
+    root.querySelectorAll('.helper-table').forEach(function (el) { if (el.style) el.style.zoom = _zoom; });
     var lbl = typeof root.querySelector === 'function' ? root.querySelector('#helper-zlabel') : null;
     if (lbl) lbl.textContent = Math.round(_zoom * 100) + '%';
   }
@@ -867,7 +869,7 @@
     var nCols = cols.length;
     function colOf(min) { return Math.round((min - minS) / g); }
 
-    html += '<div class="helper-div"><div class="helper-scroll"><table class="helper-table helper-timeline"><thead><tr>' +
+    html += '<div class="helper-sheet"><table class="helper-table helper-timeline"><thead><tr>' +
       '<th class="helper-corner">Bunk</th>';
     cols.forEach(function (tm) {
       html += '<th class="helper-tick"><div class="th-range">' + esc(minutesToLabel(tm)) + '</div></th>';
@@ -893,7 +895,7 @@
         html += '</tr>';
       });
     });
-    html += '</tbody></table></div></div></div>';
+    html += '</tbody></table></div></div>'; // close table, .helper-sheet, .helper-wrap
     container.innerHTML = html;
     wireCells(container);
     wireToggle(container);
@@ -950,6 +952,8 @@
     // Shared-timeline view (all bunks on one axis).
     if (_viewMode === 'all') { renderAllBunks(container, html); return; }
 
+    // One scroll surface for every grade (Excel-style; no nested scrollbars).
+    html += '<div class="helper-sheet">';
     order.forEach(function (dn) {
       var slots = divTimes[dn] || [];
       var bunks = (divs[dn] && divs[dn].bunks) || [];
@@ -959,7 +963,7 @@
       html += '<div class="helper-div-head"><span class="hdh-name">' + esc(dn) + '</span>' +
         '<span class="hdh-meta">' + bunks.length + ' bunk' + (bunks.length === 1 ? '' : 's') +
         ' · ' + slots.length + ' period' + (slots.length === 1 ? '' : 's') + '</span></div>';
-      html += '<div class="helper-scroll"><table class="helper-table"><thead><tr><th class="helper-corner">Bunk</th>';
+      html += '<table class="helper-table"><thead><tr><th class="helper-corner">Bunk</th>';
       slots.forEach(function (s) {
         var dur = (s.endMin != null && s.startMin != null) ? (s.endMin - s.startMin) : 0;
         html += '<th class="helper-time-h"><div class="th-range">' + esc(minutesToLabel(s.startMin) + '–' + minutesToLabel(s.endMin)) + '</div>' +
@@ -1009,10 +1013,11 @@
         html += '</tr>';
       });
 
-      html += '</tbody></table></div></div>';
+      html += '</tbody></table></div>';
     });
+    html += '</div>'; // close .helper-sheet
 
-    html += '</div>';
+    html += '</div>'; // close .helper-wrap
     container.innerHTML = html;
     wireCells(container);
     wireToggle(container);
