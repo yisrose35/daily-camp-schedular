@@ -576,28 +576,51 @@
       '.helper-issues-ok{background:#dcfce7;color:#166534;}',
       '.helper-issues-bad{background:#fee2e2;color:#991b1b;}',
       '#helper-save-status{font-size:.8rem;font-weight:600;margin-left:auto;}',
-      '.helper-div{margin:0 4px 26px;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff;}',
-      '.helper-div-head{background:#f1f5f9;padding:8px 14px;font-weight:700;color:#0f172a;border-bottom:1px solid #e2e8f0;}',
-      '.helper-scroll{overflow-x:auto;}',
-      '.helper-table{border-collapse:collapse;width:100%;min-width:520px;}',
-      '.helper-table th,.helper-table td{border:1px solid #e5e7eb;padding:0;text-align:left;vertical-align:top;}',
-      '.helper-table thead th{background:#f8fafc;font-size:.72rem;color:#475569;padding:7px 10px;white-space:nowrap;position:sticky;top:0;}',
-      '.helper-bunk-cell{background:#f8fafc;font-weight:700;font-size:.82rem;color:#334155;padding:8px 12px;white-space:nowrap;}',
-      '.helper-cell{min-width:130px;height:46px;position:relative;cursor:pointer;transition:background .12s;}',
-      '.helper-cell:hover{background:#eff6ff;}',
-      '.helper-cell-inner{padding:6px 9px;font-size:.8rem;color:#0f172a;line-height:1.25;min-height:34px;}',
-      '.helper-cell-empty{color:#94a3b8;font-style:italic;}',
-      '.helper-cell.helper-err{background:#fef2f2;box-shadow:inset 0 0 0 2px #ef4444;}',
-      '.helper-cell.helper-warn{background:#fffbeb;box-shadow:inset 0 0 0 2px #f59e0b;}',
-      '.helper-flag{position:absolute;top:2px;right:4px;font-size:.7rem;}',
-      '.helper-tag{display:inline-block;font-size:.62rem;font-weight:700;padding:1px 6px;border-radius:5px;margin-bottom:2px;text-transform:uppercase;letter-spacing:.03em;}',
-      '.helper-tag-sport{background:#dcfce7;color:#166534;}',
-      '.helper-tag-special{background:#ede9fe;color:#5b21b6;}',
-      '.helper-tag-league{background:#e0e7ff;color:#3730a3;}',
-      '.helper-tag-general-act{background:#fef3c7;color:#92400e;}',
-      '.helper-tag-text{background:#f1f5f9;color:#475569;}',
+      // legend
+      '.helper-legend{display:flex;flex-wrap:wrap;gap:14px;margin:0 4px 16px;padding:9px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;}',
+      '.helper-lg{display:flex;align-items:center;gap:6px;font-size:.74rem;font-weight:700;color:#475569;}',
+      '.helper-lg::before{content:"";width:12px;height:12px;border-radius:4px;display:inline-block;}',
+      '.helper-lg.lg-sport::before{background:#22c55e;}',
+      '.helper-lg.lg-special::before{background:#a855f7;}',
+      '.helper-lg.lg-general::before{background:#f59e0b;}',
+      '.helper-lg.lg-league::before{background:#6366f1;}',
+      '.helper-lg.lg-note::before{background:#64748b;}',
+      // division cards
+      '.helper-div{margin:0 4px 22px;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.06);}',
+      '.helper-div-head{background:linear-gradient(90deg,#eef2ff,#f8fafc);padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:baseline;gap:10px;}',
+      '.hdh-name{font-weight:800;font-size:1.02rem;color:#0f172a;}',
+      '.hdh-meta{font-size:.74rem;color:#64748b;font-weight:600;}',
+      '.helper-scroll{overflow:auto;max-height:72vh;}',
+      '.helper-table{border-collapse:separate;border-spacing:0;width:100%;min-width:520px;}',
+      '.helper-table th,.helper-table td{border-right:1px solid #eef2f6;border-bottom:1px solid #eef2f6;text-align:left;vertical-align:top;padding:0;}',
+      '.helper-table thead th{background:#f8fafc;padding:8px 12px;white-space:nowrap;position:sticky;top:0;z-index:3;border-bottom:2px solid #e2e8f0;}',
+      '.th-range{font-weight:800;font-size:.82rem;color:#1e293b;}',
+      '.th-dur{font-size:.66rem;color:#94a3b8;font-weight:600;margin-top:1px;}',
+      '.helper-table thead th.helper-corner{position:sticky;left:0;top:0;z-index:6;background:#eef2ff;font-weight:800;color:#334155;font-size:.74rem;text-transform:uppercase;letter-spacing:.03em;}',
+      '.helper-bunk-cell{position:sticky;left:0;z-index:2;background:#f8fafc;font-weight:800;font-size:.9rem;color:#1e293b;padding:10px 14px;white-space:nowrap;border-right:2px solid #e2e8f0;}',
+      '.helper-cell{min-width:152px;height:58px;position:relative;cursor:pointer;transition:background .12s;}',
+      '.helper-cell:hover{background:#f0f7ff;}',
+      '.helper-cell-inner{padding:6px;min-height:46px;}',
+      // filled-cell cards, color-coded by type
+      '.hc-card{border-radius:9px;padding:7px 9px;border-left:4px solid #94a3b8;background:#f8fafc;min-height:34px;box-sizing:border-box;}',
+      '.hc-act{font-weight:700;font-size:.86rem;color:#0f172a;line-height:1.2;}',
+      '.hc-sub{font-size:.7rem;color:#64748b;margin-top:2px;font-weight:600;}',
+      '.hc-auto{color:#0d9488;font-weight:700;}',
+      '.hc-sport{background:#f0fdf4;border-left-color:#22c55e;}',
+      '.hc-sport .hc-act{color:#166534;}',
+      '.hc-special{background:#faf5ff;border-left-color:#a855f7;}',
+      '.hc-special .hc-act{color:#6b21a8;}',
+      '.hc-general{background:#fffbeb;border-left-color:#f59e0b;}',
+      '.hc-general .hc-act{color:#92400e;}',
+      '.hc-note{background:#f8fafc;border-left-color:#64748b;}',
+      '.hc-league{background:#eef2ff;border-left-color:#6366f1;}',
+      '.hc-empty{display:flex;align-items:center;justify-content:center;min-height:44px;color:#cbd5e1;font-size:1.4rem;font-weight:300;}',
+      '.helper-cell:hover .hc-empty{color:#60a5fa;}',
+      '.helper-cell.helper-err{box-shadow:inset 0 0 0 2px #ef4444;}',
+      '.helper-cell.helper-warn{box-shadow:inset 0 0 0 2px #f59e0b;}',
+      '.helper-flag{position:absolute;top:3px;right:5px;font-size:.72rem;}',
       '.helper-auto-field{font-size:.62rem;color:#0d9488;font-weight:600;}',
-      '.helper-empty-note{padding:40px;text-align:center;color:#64748b;}',
+      '.helper-empty-note{padding:40px;text-align:center;color:#64748b;line-height:1.6;}',
       // modal
       '.helper-modal-ov{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;}',
       '.helper-modal{background:#fff;border-radius:14px;max-width:460px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);}',
@@ -661,14 +684,24 @@
     return entry._displayName || entry._activity || entry.field || '';
   }
 
-  function tagForEntry(entry) {
-    if (!entry) return '';
-    if (entry._h2h || entry._league) return '<span class="helper-tag helper-tag-league">League</span>';
-    if (entry._general) return '<span class="helper-tag helper-tag-general-act">General</span>';
-    if (entry._special) return '<span class="helper-tag helper-tag-special">Special</span>';
-    if (entry._customText) return '<span class="helper-tag helper-tag-text">Note</span>';
-    if (entry.sport) return '<span class="helper-tag helper-tag-sport">Sport</span>';
-    return '';
+  function cellTypeClass(entry) {
+    if (entry._h2h || entry._league) return 'hc-league';
+    if (entry._general) return 'hc-general';
+    if (entry._special) return 'hc-special';
+    if (entry._customText) return 'hc-note';
+    if (entry.sport) return 'hc-sport';
+    return 'hc-note';
+  }
+
+  // A filled cell renders as a color-coded card: activity name on top, field
+  // (with a pin) underneath — easy for a head counselor to scan down a column.
+  function cellCardHtml(entry) {
+    var act = entry._displayName || entry._activity || entry.sport || labelForEntry(entry);
+    var loc = entryLocation(entry);
+    var sub = '';
+    if (loc) sub = '<div class="hc-sub">📍 ' + esc(loc) + (entry._autoField ? ' <span class="hc-auto">· auto</span>' : '') + '</div>';
+    else if (entry._customText) sub = '';
+    return '<div class="hc-card ' + cellTypeClass(entry) + '"><div class="hc-act">' + esc(act) + '</div>' + sub + '</div>';
   }
 
   function renderGrid(container) {
@@ -705,16 +738,29 @@
       return;
     }
 
+    // Color legend so counselors learn the code at a glance.
+    html += '<div class="helper-legend">' +
+      '<span class="helper-lg lg-sport">Sport</span>' +
+      '<span class="helper-lg lg-special">Special</span>' +
+      '<span class="helper-lg lg-general">General</span>' +
+      '<span class="helper-lg lg-league">League</span>' +
+      '<span class="helper-lg lg-note">Note</span>' +
+      '</div>';
+
     order.forEach(function (dn) {
       var slots = divTimes[dn] || [];
       var bunks = (divs[dn] && divs[dn].bunks) || [];
       if (!slots.length || !bunks.length) return;
 
       html += '<div class="helper-div">';
-      html += '<div class="helper-div-head">' + esc(dn) + '</div>';
-      html += '<div class="helper-scroll"><table class="helper-table"><thead><tr><th>Bunk</th>';
+      html += '<div class="helper-div-head"><span class="hdh-name">' + esc(dn) + '</span>' +
+        '<span class="hdh-meta">' + bunks.length + ' bunk' + (bunks.length === 1 ? '' : 's') +
+        ' · ' + slots.length + ' period' + (slots.length === 1 ? '' : 's') + '</span></div>';
+      html += '<div class="helper-scroll"><table class="helper-table"><thead><tr><th class="helper-corner">Bunk</th>';
       slots.forEach(function (s) {
-        html += '<th>' + esc(minutesToLabel(s.startMin) + '–' + minutesToLabel(s.endMin)) + '</th>';
+        var dur = (s.endMin != null && s.startMin != null) ? (s.endMin - s.startMin) : 0;
+        html += '<th class="helper-time-h"><div class="th-range">' + esc(minutesToLabel(s.startMin) + '–' + minutesToLabel(s.endMin)) + '</div>' +
+          (dur ? '<div class="th-dur">' + dur + ' min</div>' : '') + '</th>';
       });
       html += '</tr></thead><tbody>';
 
@@ -748,10 +794,9 @@
           if (iss) cls += iss.level === 'error' ? ' helper-err' : ' helper-warn';
           var inner;
           if (entry && entry._activity !== 'Free' && (entry._activity || entry._displayName || entry.sport)) {
-            inner = tagForEntry(entry) + '<div>' + esc(labelForEntry(entry)) +
-              (entry._autoField ? ' <span class="helper-auto-field">· auto field</span>' : '') + '</div>';
+            inner = cellCardHtml(entry);
           } else {
-            inner = '<span class="helper-cell-empty">+ add</span>';
+            inner = '<div class="hc-empty">+</div>';
           }
           var flag = iss ? '<span class="helper-flag">' + (iss.level === 'error' ? '🔴' : '⚠️') + '</span>' : '';
           html += '<td class="' + cls + '" data-bunk="' + esc(bunk) + '" data-div="' + esc(dn) +
