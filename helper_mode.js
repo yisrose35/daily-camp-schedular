@@ -106,6 +106,29 @@
       return l && Array.isArray(l.divisions) && l.divisions.indexOf(divName) !== -1;
     });
   }
+  // Configured "general activities" (facilities registry) — named activities
+  // pre-bound to a facility, e.g. { name:'Photography', facility:'Art Room' }.
+  function getGeneralActivities() {
+    try { return (window.getGeneralActivityPaletteItems && window.getGeneralActivityPaletteItems()) || []; }
+    catch (e) { return []; }
+  }
+
+  // When the user leaves the field blank for a sport/special/general activity,
+  // let the program pick an OPEN field for that activity at this time window
+  // (respects access, capacity, conflicts). Returns a field name or null.
+  function autoAssignField(activity, bunk, divName, block) {
+    if (!activity) return null;
+    try {
+      var slots = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.findSlotsForRange)
+        ? (window.SchedulerCoreUtils.findSlotsForRange(block.startMin, block.endMin, divName, bunk) || [])
+        : [];
+      if (typeof window.findFieldsForActivity === 'function') {
+        var res = window.findFieldsForActivity(activity, slots, divName, bunk, block.startMin, block.endMin);
+        if (res && res.open && res.open.length) return res.open[0].name;
+      }
+    } catch (e) { console.error('[Helper] autoAssignField failed', e); }
+    return null;
+  }
 
   function divisionOrder() {
     var divs = getDivisions();
@@ -479,16 +502,19 @@
       '.helper-tag-sport{background:#dcfce7;color:#166534;}',
       '.helper-tag-special{background:#ede9fe;color:#5b21b6;}',
       '.helper-tag-league{background:#e0e7ff;color:#3730a3;}',
+      '.helper-tag-general-act{background:#fef3c7;color:#92400e;}',
       '.helper-tag-text{background:#f1f5f9;color:#475569;}',
+      '.helper-auto-field{font-size:.62rem;color:#0d9488;font-weight:600;}',
       '.helper-empty-note{padding:40px;text-align:center;color:#64748b;}',
       // modal
       '.helper-modal-ov{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;}',
       '.helper-modal{background:#fff;border-radius:14px;max-width:460px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);}',
-      '.helper-modal.helper-modal-wide{max-width:900px;}',
-      '.helper-modal-cols{display:flex;gap:18px;padding:16px 20px;flex-wrap:wrap;align-items:flex-start;}',
+      '.helper-modal.helper-modal-wide{max-width:1060px;}',
+      '.helper-modal-cols{display:flex;gap:20px;padding:18px 22px;flex-wrap:wrap;align-items:flex-start;}',
       '.helper-modal-cols .helper-modal-body{padding:0;}',
-      '.helper-modal-left{flex:1 1 300px;min-width:270px;}',
-      '.helper-modal-right{flex:1 1 340px;min-width:270px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;max-height:56vh;overflow:auto;}',
+      '.helper-modal-left{flex:1 1 380px;min-width:340px;}',
+      '.helper-modal-right{flex:1 1 360px;min-width:300px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;max-height:60vh;overflow:auto;}',
+      '.helper-field-hint{font-size:.72rem;color:#94a3b8;margin-top:4px;}',
       '.helper-report-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#475569;padding:10px 14px 4px;}',
       '.helper-modal-head{padding:16px 20px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#0f172a;}',
       '.helper-modal-sub{font-size:.8rem;color:#64748b;font-weight:500;margin-top:2px;}',
@@ -498,8 +524,8 @@
       '.helper-seg button.active{background:#2563eb;border-color:#2563eb;color:#fff;}',
       '.helper-field{margin-bottom:12px;}',
       '.helper-field label{display:block;font-size:.75rem;font-weight:600;color:#475569;margin-bottom:4px;}',
-      '.helper-field select,.helper-field input,.helper-field textarea{width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:.86rem;font-family:inherit;box-sizing:border-box;}',
-      '.helper-field textarea{min-height:70px;resize:vertical;}',
+      '.helper-field select,.helper-field input,.helper-field textarea{width:100%;padding:11px 13px;border:1px solid #cbd5e1;border-radius:8px;font-size:.95rem;font-family:inherit;box-sizing:border-box;}',
+      '.helper-field textarea{min-height:130px;resize:vertical;}',
       '.helper-modal-foot{display:flex;gap:8px;padding:14px 20px;border-top:1px solid #e2e8f0;}',
       '.helper-btn{padding:9px 16px;border-radius:8px;font-weight:600;font-size:.84rem;cursor:pointer;border:1px solid transparent;}',
       '.helper-btn-save{background:#2563eb;color:#fff;}',
@@ -520,6 +546,7 @@
   function tagForEntry(entry) {
     if (!entry) return '';
     if (entry._h2h || entry._league) return '<span class="helper-tag helper-tag-league">League</span>';
+    if (entry._general) return '<span class="helper-tag helper-tag-general-act">General</span>';
     if (entry._special) return '<span class="helper-tag helper-tag-special">Special</span>';
     if (entry._customText) return '<span class="helper-tag helper-tag-text">Note</span>';
     if (entry.sport) return '<span class="helper-tag helper-tag-sport">Sport</span>';
@@ -583,7 +610,8 @@
           if (iss) cls += iss.level === 'error' ? ' helper-err' : ' helper-warn';
           var inner;
           if (entry && entry._activity !== 'Free' && (entry._activity || entry._displayName || entry.sport)) {
-            inner = tagForEntry(entry) + '<div>' + esc(labelForEntry(entry)) + '</div>';
+            inner = tagForEntry(entry) + '<div>' + esc(labelForEntry(entry)) +
+              (entry._autoField ? ' <span class="helper-auto-field">· auto field</span>' : '') + '</div>';
           } else {
             inner = '<span class="helper-cell-empty">+ add</span>';
           }
@@ -704,47 +732,76 @@
           '<div class="helper-field"><label>Text</label>' +
           '<textarea id="hm-text" placeholder="Type anything (e.g. Trip to lake, Rest hour)…">' + esc(txt) + '</textarea></div>';
       } else if (state.mode === 'activity') {
-        var isSpecial = existing && existing._special;
+        var isGeneral = existing && existing._general;
+        var isSpecial = existing && existing._special && !isGeneral;
         var curAct = existing ? (existing._activity || existing.sport || '') : '';
         var curField = existing ? entryLocation(existing) : '';
         body.innerHTML =
           '<div class="helper-seg" id="hm-actkind">' +
-            '<button data-kind="sport" class="' + (!isSpecial ? 'active' : '') + '">Sport</button>' +
+            '<button data-kind="sport" class="' + (!isSpecial && !isGeneral ? 'active' : '') + '">Sport</button>' +
             '<button data-kind="special" class="' + (isSpecial ? 'active' : '') + '">Special</button>' +
+            '<button data-kind="general" class="' + (isGeneral ? 'active' : '') + '">General</button>' +
           '</div>' +
           '<div class="helper-field"><label id="hm-act-label">Activity</label>' +
           '<select id="post-edit-activity"></select></div>' +
           '<div class="helper-field"><label>Field / Location</label>' +
-          '<select id="hm-field">' + fieldOptions(curField) + '</select></div>';
+          '<select id="hm-field">' + fieldOptions(curField) + '</select>' +
+          '<div class="helper-field-hint">Leave empty and the program will assign an open field for you.</div></div>';
 
-        var kind = isSpecial ? 'special' : 'sport';
+        var kind = isGeneral ? 'general' : (isSpecial ? 'special' : 'sport');
         function fillActs() {
           var sel = body.querySelector('#post-edit-activity');
-          var list = kind === 'special' ? getSpecials() : getSports();
-          body.querySelector('#hm-act-label').textContent = kind === 'special' ? 'Special activity' : 'Sport';
-          sel.innerHTML = '<option value="">— Choose —</option>' + list.map(function (a) {
-            return '<option value="' + esc(a) + '"' + (a === curAct ? ' selected' : '') + '>' + esc(a) + '</option>';
-          }).join('');
+          body.querySelector('#hm-act-label').textContent =
+            kind === 'special' ? 'Special activity' : kind === 'general' ? 'General activity' : 'Sport';
+          var opts = '<option value="">— Choose —</option>';
+          if (kind === 'general') {
+            var gas = getGeneralActivities();
+            if (!gas.length) opts += '<option value="" disabled>(no general activities configured)</option>';
+            gas.forEach(function (g) {
+              opts += '<option value="' + esc(g.name) + '"' + (g.name === curAct ? ' selected' : '') + '>' +
+                esc(g.name) + (g.facility ? ' — ' + esc(g.facility) : '') + '</option>';
+            });
+          } else {
+            var list = kind === 'special' ? getSpecials() : getSports();
+            list.forEach(function (a) {
+              opts += '<option value="' + esc(a) + '"' + (a === curAct ? ' selected' : '') + '>' + esc(a) + '</option>';
+            });
+          }
+          sel.innerHTML = opts;
+        }
+        // A general activity is pre-bound to a facility — default the field to it.
+        function applyGeneralFacility(val) {
+          if (kind !== 'general' || !val) return;
+          var ga = getGeneralActivities().find(function (g) { return g.name === val; });
+          var fsel = body.querySelector('#hm-field');
+          if (ga && ga.facility && fsel) {
+            if (!Array.prototype.some.call(fsel.options, function (o) { return normField(o.value) === normField(ga.facility); })) {
+              var o = document.createElement('option'); o.value = ga.facility; o.textContent = ga.facility; fsel.appendChild(o);
+            }
+            fsel.value = ga.facility;
+          }
         }
         fillActs();
         var actSel = body.querySelector('#post-edit-activity');
-        // A suggestion click (or manual pick) may land a special while the
-        // Sport tab is active (or vice-versa) — auto-switch the tab to match
-        // so the value stays visible, then refresh the report.
+        function syncKindUI() {
+          body.querySelectorAll('#hm-actkind button').forEach(function (x) { x.classList.toggle('active', x.getAttribute('data-kind') === kind); });
+        }
+        // A suggestion click (or manual pick) may land a special while the Sport
+        // tab is active (or vice-versa) — auto-switch the tab to match so the
+        // value stays visible, then refresh the report.
         actSel.addEventListener('change', function () {
           var val = actSel.value;
           curAct = val;
-          if (val) {
+          if (val && kind !== 'general') {
             var isSp = getSpecials().some(function (s) { return s === val; });
             var isSpo = getSports().some(function (s) { return s === val; });
             if (isSp && kind !== 'special') { kind = 'special'; syncKindUI(); fillActs(); actSel = body.querySelector('#post-edit-activity'); }
             else if (isSpo && !isSp && kind !== 'sport') { kind = 'sport'; syncKindUI(); fillActs(); actSel = body.querySelector('#post-edit-activity'); }
           }
+          applyGeneralFacility(val);
           refreshReport();
         });
-        function syncKindUI() {
-          body.querySelectorAll('#hm-actkind button').forEach(function (x) { x.classList.toggle('active', x.getAttribute('data-kind') === kind); });
-        }
+        applyGeneralFacility(curAct);
         body.querySelectorAll('#hm-actkind button').forEach(function (b) {
           b.addEventListener('click', function () {
             kind = b.getAttribute('data-kind');
@@ -826,12 +883,25 @@
         var kind = state._getKind ? state._getKind() : 'sport';
         // If the tab says sport but the value is a configured special, trust the value.
         if (kind === 'sport' && getSpecials().some(function (s) { return s === act; })) kind = 'special';
+        // General activity: fall back to its configured facility if no field set.
+        if (kind === 'general' && !fld) {
+          var _ga = getGeneralActivities().find(function (g) { return g.name === act; });
+          if (_ga && _ga.facility) fld = _ga.facility;
+        }
+        // Empty field ⇒ let the program assign an open field for this activity.
+        var autoAssigned = false;
+        if (!fld) {
+          var _af = autoAssignField(act, bunk, divName, block);
+          if (_af) { fld = _af; autoAssigned = true; }
+        }
         entry = {
           _activity: act,
           sport: kind === 'sport' ? act : null,
           _special: kind === 'special',
+          _general: kind === 'general',
           field: fld ? (fld + ' – ' + act) : act,
-          _location: fld || null
+          _location: fld || null,
+          _autoField: autoAssigned
         };
       } else if (state.mode === 'league') {
         var A = (body.querySelector('#hm-teamA') || {}).value || '';
@@ -889,7 +959,9 @@
     renderGrid: renderGrid,
     validateAll: validateAll,
     save: save,
-    _buildStructure: buildStructure
+    _buildStructure: buildStructure,
+    _autoAssignField: autoAssignField,
+    _getGeneralActivities: getGeneralActivities
   };
 
   console.log('[HelperMode] loaded');
