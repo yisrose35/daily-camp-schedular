@@ -596,9 +596,10 @@
       '.helper-div-row span{position:sticky;left:14px;}',
       '.helper-oos{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);cursor:default;}',
       '.helper-oos:hover{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);}',
-      '.helper-timeline .helper-cell{min-width:96px;}',
-      '.helper-timeline .helper-time-h .th-range{font-size:.76rem;}',
-      '.helper-timeline .helper-time-h .th-dur{color:#94a3b8;font-size:.66rem;}',
+      '.helper-timeline .helper-cell{min-width:56px;}',
+      '.helper-timeline .helper-tick{background:#f8fafc;padding:8px 8px;text-align:right;white-space:nowrap;position:sticky;top:0;z-index:3;border-bottom:2px solid #e2e8f0;}',
+      '.helper-timeline .helper-tick .th-range{font-weight:700;font-size:.72rem;color:#475569;}',
+      '.helper-timeline .hc-card{white-space:normal;}',
       // division cards
       '.helper-div{margin:0 4px 22px;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.06);}',
       '.helper-div-head{background:linear-gradient(90deg,#eef2ff,#f8fafc);padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:baseline;gap:10px;}',
@@ -773,64 +774,64 @@
       '</div>';
   }
 
-  // Shared-timeline view: every bunk (grouped by grade) on ONE real time axis.
-  // The axis breaks at every period boundary across all grades, and each
-  // activity SPANS the segments it actually covers — so staggered periods
-  // (e.g. 9–11 vs 9:20–11:20) line up correctly instead of duplicating.
+  function gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { var t = b; b = a % b; a = t; } return a; }
+
+  // Shared-timeline view — a real time ruler like a spreadsheet: uniform time
+  // columns (e.g. every 15 min) across the top, and each activity is a block
+  // that SPANS its actual duration at its true start position. Every bunk
+  // (grouped by grade) is a row; empty periods show a clickable "+" block and
+  // out-of-schedule stretches show a light hatch.
   function renderAllBunks(container, html) {
     var divs = getDivisions();
     var order = divisionOrder();
     var divTimes = _divTimes || window.divisionTimes || {};
 
-    // Collect every distinct boundary time across all grades → segments.
-    var bset = {};
+    var starts = [], ends = [], bset = {};
     order.forEach(function (dn) {
-      (divTimes[dn] || []).forEach(function (s) { bset[s.startMin] = 1; bset[s.endMin] = 1; });
+      (divTimes[dn] || []).forEach(function (s) { starts.push(s.startMin); ends.push(s.endMin); bset[s.startMin] = 1; bset[s.endMin] = 1; });
     });
-    var bounds = Object.keys(bset).map(Number).sort(function (a, b) { return a - b; });
-    if (bounds.length < 2) {
+    if (!starts.length) {
       container.innerHTML = html + '<div class="helper-empty-note">No periods yet.</div></div>';
       wireToggle(container);
       return;
     }
-    var segs = [];
-    for (var i = 0; i < bounds.length - 1; i++) segs.push({ s: bounds[i], e: bounds[i + 1] });
+    var minS = Math.min.apply(null, starts), maxE = Math.max.apply(null, ends);
 
-    // Which division slot fully covers a segment (slots align to boundaries).
-    function slotForSeg(dn, sg) {
-      var slots = divTimes[dn] || [];
-      for (var k = 0; k < slots.length; k++) {
-        if (slots[k].startMin <= sg.s && slots[k].endMin >= sg.e) return k;
-      }
-      return -1;
-    }
+    // Column granularity = GCD of all boundary offsets (so every block aligns),
+    // clamped to a sensible tick size and column count.
+    var offs = Object.keys(bset).map(Number).map(function (b) { return b - minS; }).filter(function (x) { return x > 0; });
+    var g = offs.reduce(function (a, b) { return gcd(a, b); }, 0) || 15;
+    g = Math.max(5, Math.min(60, g));
+    var totalCols = Math.ceil((maxE - minS) / g);
+    while (totalCols > 96) { g += 5; totalCols = Math.ceil((maxE - minS) / g); }
+    var cols = [];
+    for (var t = minS; t < maxE; t += g) cols.push(t);
+    var nCols = cols.length;
+    function colOf(min) { return Math.round((min - minS) / g); }
 
     html += '<div class="helper-div"><div class="helper-scroll"><table class="helper-table helper-timeline"><thead><tr>' +
       '<th class="helper-corner">Bunk</th>';
-    segs.forEach(function (sg) {
-      html += '<th class="helper-time-h"><div class="th-range">' + esc(minutesToLabel(sg.s)) + '</div>' +
-        '<div class="th-dur">' + esc(minutesToLabel(sg.e)) + '</div></th>';
+    cols.forEach(function (tm) {
+      html += '<th class="helper-tick"><div class="th-range">' + esc(minutesToLabel(tm)) + '</div></th>';
     });
     html += '</tr></thead><tbody>';
 
     order.forEach(function (dn) {
       var bunks = (divs[dn] && divs[dn].bunks) || [];
-      if (!bunks.length || !(divTimes[dn] || []).length) return;
-      html += '<tr><td class="helper-div-row" colspan="' + (segs.length + 1) + '"><span>' + esc(dn) + '</span></td></tr>';
+      var slots = (divTimes[dn] || []).slice().sort(function (a, b) { return a.startMin - b.startMin; });
+      if (!bunks.length || !slots.length) return;
+      html += '<tr><td class="helper-div-row" colspan="' + (nCols + 1) + '"><span>' + esc(dn) + '</span></td></tr>';
       bunks.forEach(function (bunk) {
         html += '<tr><td class="helper-bunk-cell">' + esc(bunk) + '</td>';
-        var ci = 0;
-        while (ci < segs.length) {
-          var si = slotForSeg(dn, segs[ci]);
-          var span = 1;
-          while (ci + span < segs.length && slotForSeg(dn, segs[ci + span]) === si) span++;
-          if (si < 0) {
-            html += '<td class="helper-cell helper-oos" colspan="' + span + '"><div class="helper-cell-inner"></div></td>';
-          } else {
-            html += bunkCellTd(bunk, dn, si, span);
-          }
-          ci += span;
-        }
+        var cur = 0;
+        slots.forEach(function (s) {
+          var sc = colOf(s.startMin), ec = colOf(s.endMin);
+          if (sc > cur) { html += '<td class="helper-cell helper-oos" colspan="' + (sc - cur) + '"><div class="helper-cell-inner"></div></td>'; cur = sc; }
+          var span = Math.max(1, ec - sc);
+          html += bunkCellTd(bunk, dn, s.slotIndex, span);
+          cur = sc + span;
+        });
+        if (cur < nCols) html += '<td class="helper-cell helper-oos" colspan="' + (nCols - cur) + '"><div class="helper-cell-inner"></div></td>';
         html += '</tr>';
       });
     });
