@@ -182,31 +182,30 @@
     var skeleton = getDaySkeleton(dateKey);
     var divs = getDivisions();
 
+    // ★ Build divisionTimes from the EXACT tile windows the user drew — grouped
+    //   by grade, deduped, sorted. We deliberately DO NOT use
+    //   DivisionTimesSystem.buildFromSkeleton here: it clips/normalizes tiles to
+    //   each grade's configured hours (so a 9:20–11:20 block could be snapped or
+    //   clipped), but in Helper Mode the blank Activity Block IS the intended
+    //   window and must be honored verbatim.
     var divisionTimes = {};
-    if (window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+    skeleton.forEach(function (b) {
+      if (!b || !b.division) return;
+      var sm = parseTimeToMinutes(b.startTime), em = parseTimeToMinutes(b.endTime);
+      if (sm == null || em == null || em <= sm) return;
+      var listD = (divisionTimes[b.division] = divisionTimes[b.division] || []);
+      if (listD.some(function (s) { return s.startMin === sm && s.endMin === em; })) return; // dedupe
+      listD.push({ startMin: sm, endMin: em, event: b.event || 'Activity', type: 'slot' });
+    });
+    // Fallback to DivisionTimesSystem only if we somehow got nothing.
+    if (!Object.keys(divisionTimes).length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
       try { divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divs) || {}; }
       catch (e) { console.error('[Helper] buildFromSkeleton failed', e); divisionTimes = {}; }
     }
-    // Fallback: group skeleton tiles by division directly.
-    if (!divisionTimes || !Object.keys(divisionTimes).length) {
-      divisionTimes = {};
-      skeleton.forEach(function (b) {
-        if (!b || !b.division) return;
-        var sm = parseTimeToMinutes(b.startTime), em = parseTimeToMinutes(b.endTime);
-        if (sm == null || em == null || em <= sm) return;
-        (divisionTimes[b.division] = divisionTimes[b.division] || []).push({
-          startMin: sm, endMin: em, event: b.event || 'Activity', type: 'slot'
-        });
-      });
-      Object.keys(divisionTimes).forEach(function (d) {
-        divisionTimes[d].sort(function (a, b) { return a.startMin - b.startMin; });
-        divisionTimes[d].forEach(function (s, i) { s.slotIndex = i; });
-      });
-    } else {
-      Object.keys(divisionTimes).forEach(function (d) {
-        divisionTimes[d].forEach(function (s, i) { if (s.slotIndex == null) s.slotIndex = i; });
-      });
-    }
+    Object.keys(divisionTimes).forEach(function (d) {
+      divisionTimes[d].sort(function (a, b) { return a.startMin - b.startMin; });
+      divisionTimes[d].forEach(function (s, i) { s.slotIndex = i; });
+    });
     window.divisionTimes = divisionTimes;
 
     // Union of all distinct windows -> unifiedTimes (flat master axis).
