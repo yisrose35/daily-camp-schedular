@@ -944,11 +944,18 @@
     // The daily_schedules row is written on the first real cell edit (writeCell).
   }
 
-  // Clear the active grid when leaving Helper Mode so the normal renderer resumes.
+  // Manual ⇄ Helper interop: both modes share window.scheduleAssignments and the
+  // daily_schedules cloud table. On every mode switch, load whatever the OTHER
+  // mode already saved for this date and repaint, so each reads the other's work.
   window.addEventListener('campistry-builder-mode-changed', function () {
     _issues = {};
-    if (!isActive()) {
-      // Let the unified system repaint normally on the next render tick.
+    var dateKey = currentDateKey();
+    try { if (typeof window.loadScheduleForDate === 'function' && !window._postEditInProgress) window.loadScheduleForDate(dateKey); } catch (e) {}
+    if (isActive()) {
+      // Entering Helper — render the shared schedule into the Helper grid.
+      try { renderGrid(document.getElementById('scheduleTable')); } catch (e) {}
+    } else {
+      // Leaving Helper — let the unified renderer repaint the shared schedule.
       try { if (typeof window.updateTable === 'function') window.updateTable(); } catch (e) {}
     }
   });
