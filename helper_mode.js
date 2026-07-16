@@ -20,7 +20,7 @@
   'use strict';
 
   var HELPER = 'helper';
-  var HELPER_VERSION = 'v12-sheet';
+  var HELPER_VERSION = 'v13-spreadsheet';
 
   // Debounced autosave + validation issue map keyed by `${bunk}|${slotIdx}`.
   var _saveTimer = null;
@@ -606,6 +606,16 @@
       '.helper-timeline .helper-tick{background:#f8fafc;padding:8px 8px;text-align:right;white-space:nowrap;position:sticky;top:0;z-index:3;border-bottom:2px solid #e2e8f0;}',
       '.helper-timeline .helper-tick .th-range{font-weight:700;font-size:.72rem;color:#475569;}',
       '.helper-timeline .hc-card{white-space:normal;}',
+      // spreadsheet selection + inline editing
+      '.helper-cell.helper-sel::after{content:"";position:absolute;inset:0;background:rgba(37,99,235,.14);pointer-events:none;z-index:2;}',
+      '.helper-cell.helper-active{outline:2px solid #2563eb;outline-offset:-2px;}',
+      '.helper-cell.helper-active::after{background:rgba(37,99,235,.05);}',
+      '.helper-inline-input{width:100%;box-sizing:border-box;border:2px solid #2563eb;border-radius:4px;padding:6px 7px;font-size:.86rem;font-family:inherit;outline:none;}',
+      '.helper-ac{position:absolute;left:2px;right:2px;top:100%;z-index:50;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 10px 28px rgba(0,0,0,.18);max-height:210px;overflow:auto;min-width:150px;}',
+      '.helper-ac-item{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;font-size:.82rem;cursor:pointer;gap:10px;}',
+      '.helper-ac-item:hover,.helper-ac-item.on{background:#eff6ff;}',
+      '.helper-ac-k{font-size:.64rem;color:#94a3b8;font-weight:700;text-transform:uppercase;}',
+      '.helper-hint{font-size:.72rem;color:#64748b;margin:0 4px 10px;}',
       // ONE Excel-style sheet: a single scroll surface for the whole grid, with
       // the time row + bunk column frozen. No nested per-grade scrollbars.
       '.helper-sheet{overflow:auto;max-height:calc(100vh - 200px);min-height:320px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;margin:0 4px;}',
@@ -754,14 +764,15 @@
   }
 
   function wireCells(container) {
-    container.querySelectorAll('.helper-cell').forEach(function (td) {
+    // League banners open the whole-grade builder on a single click. Normal
+    // cells are handled by the spreadsheet layer (mousedown = select,
+    // double-click / Enter / type = edit) — see attachSheetHandlers.
+    container.querySelectorAll('.helper-cell[data-league="1"]').forEach(function (td) {
       td.addEventListener('click', function () {
         var dn = td.getAttribute('data-div');
         var idx = parseInt(td.getAttribute('data-idx'), 10);
         var block = (_divTimes[dn] || window.divisionTimes[dn] || [])[idx];
-        if (!block) return;
-        if (td.getAttribute('data-league') === '1') { openLeagueEditor(dn, idx, block); return; }
-        openCellEditor(td.getAttribute('data-bunk'), dn, idx, block);
+        if (block) openLeagueEditor(dn, idx, block);
       });
     });
   }
@@ -824,6 +835,7 @@
     applyZoom(container);
     wireZoomButtons(container);
     wireZoomGestures(container);
+    wireSheet(container);
   }
 
   function viewToggleHtml() {
@@ -948,6 +960,7 @@
       '<span class="helper-lg lg-league">League</span>' +
       '<span class="helper-lg lg-note">Note</span>' +
       '</div>';
+    html += '<div class="helper-hint">Click a cell and type to fill it (autocompletes activities) · double-click for full options · arrows/Tab/Enter to move · drag to select · Ctrl+D fill down, Ctrl+R fill right · Ctrl+C/Ctrl+V copy &amp; paste (works with Excel)</div>';
 
     // Shared-timeline view (all bunks on one axis).
     if (_viewMode === 'all') { renderAllBunks(container, html); return; }
@@ -1544,6 +1557,240 @@
     }
   });
 
+  // =====================================================================
+  // Spreadsheet interactions — Excel muscle memory on the smart grid:
+  // select, keyboard nav, type-in-cell + autocomplete, fill-down/right,
+  // copy/paste (incl. from Excel), range select + bulk apply. Every write
+  // still goes through the structured entry builder (field auto-assign,
+  // validation, rotation), so the camp-smart layer is preserved.
+  // =====================================================================
+  var _sel = null;     // { r0,c0 (anchor), r1,c1 (focus/active) }
+  var _rows = [];      // visual rows -> array of editable <td> cells
+  var _mouseDown = false;
+
+  function tdInfo(td) {
+    return { bunk: td.getAttribute('data-bunk'), div: td.getAttribute('data-div'), idx: parseInt(td.getAttribute('data-idx'), 10) };
+  }
+  function buildCellIndex(container) {
+    _rows = [];
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    var trs = container.querySelectorAll('tbody tr');
+    trs.forEach(function (tr) {
+      var cells = tr.querySelectorAll('.helper-cell[data-bunk]');
+      if (!cells.length) return;
+      var arr = [];
+      cells.forEach(function (td) { arr.push(td); });
+      var r = _rows.length;
+      arr.forEach(function (td, c) { td._r = r; td._c = c; });
+      _rows.push(arr);
+    });
+  }
+  function cellAt(r, c) { var row = _rows[r]; if (!row) return null; return row[Math.max(0, Math.min(c, row.length - 1))]; }
+  function currentCellText(info) { var e = (window.scheduleAssignments[info.bunk] || [])[info.idx]; if (!e || e._league) return e && e._league ? '' : ''; return e._displayName || e._activity || e.sport || ''; }
+  function selectionRange() {
+    if (!_sel) return null;
+    return { r0: Math.min(_sel.r0, _sel.r1), r1: Math.max(_sel.r0, _sel.r1), c0: Math.min(_sel.c0, _sel.c1), c1: Math.max(_sel.c0, _sel.c1) };
+  }
+  function selectionCells() {
+    var g = selectionRange(); if (!g) return [];
+    var out = [];
+    for (var r = g.r0; r <= g.r1; r++) { var row = _rows[r]; if (!row) continue; for (var c = g.c0; c <= Math.min(g.c1, row.length - 1); c++) { if (row[c]) out.push(tdInfo(row[c])); } }
+    return out;
+  }
+  function renderSelection() {
+    _rows.forEach(function (row) { row.forEach(function (td) { td.classList.remove('helper-sel', 'helper-active'); }); });
+    var g = selectionRange(); if (!g) return;
+    for (var r = g.r0; r <= g.r1; r++) { var row = _rows[r]; if (!row) continue; for (var c = g.c0; c <= Math.min(g.c1, row.length - 1); c++) { if (row[c]) row[c].classList.add('helper-sel'); } }
+    var act = cellAt(_sel.r1, _sel.c1); if (act) act.classList.add('helper-active');
+  }
+  function selectCell(r, c, extend) {
+    if (!_rows.length) return;
+    r = Math.max(0, Math.min(r, _rows.length - 1));
+    var row = _rows[r]; if (!row) return;
+    c = Math.max(0, Math.min(c, row.length - 1));
+    if (extend && _sel) { _sel.r1 = r; _sel.c1 = c; } else { _sel = { r0: r, c0: c, r1: r, c1: c }; }
+    renderSelection();
+    var td = cellAt(r, c); if (td && td.scrollIntoView) td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function classifyActivity(t) {
+    if (getGeneralActivities().some(function (g) { return g.name === t; })) return 'general';
+    if (getSpecials().some(function (s) { return s === t; })) return 'special';
+    if (getSports().some(function (s) { return s === t; })) return 'sport';
+    return 'note';
+  }
+  function buildEntryFromText(text, bunk, div, block) {
+    var t = (text || '').trim();
+    if (!t) return null;
+    var kind = classifyActivity(t);
+    if (kind === 'note') return stampEntry({ _activity: t, _displayName: t, _customText: true, sport: null, field: t, _location: null }, block);
+    var fld = null, auto = false;
+    if (kind === 'general') { var ga = getGeneralActivities().find(function (g) { return g.name === t; }); if (ga && ga.facility) fld = ga.facility; }
+    if (!fld) { var af = autoAssignField(t, bunk, div, block); if (af) { fld = af; auto = true; } }
+    return stampEntry({
+      _activity: t, sport: kind === 'sport' ? t : null, _special: kind === 'special', _general: kind === 'general',
+      field: fld ? (fld + ' – ' + t) : t, _location: fld || null, _autoField: auto
+    }, block);
+  }
+  // Write a batch of {bunk,div,idx,text} cells (auto-field distributes per bunk
+  // because each write lands before the next one's field is resolved).
+  function applyEntries(pairs) {
+    if (!window.scheduleAssignments) window.scheduleAssignments = {};
+    pairs.forEach(function (p) {
+      var block = (_divTimes[p.div] || [])[p.idx]; if (!block) return;
+      if (!window.scheduleAssignments[p.bunk]) window.scheduleAssignments[p.bunk] = [];
+      window.scheduleAssignments[p.bunk][p.idx] = (p.text && p.text.trim()) ? buildEntryFromText(p.text, p.bunk, p.div, block) : null;
+    });
+    afterWrite();
+  }
+  function applyTextToCells(cells, text) { applyEntries(cells.map(function (c) { return { bunk: c.bunk, div: c.div, idx: c.idx, text: text }; })); }
+
+  function fillDown() {
+    var g = selectionRange(); if (!g) return;
+    var pairs = [];
+    if (g.r0 === g.r1) {
+      var src = _rows[g.r0 - 1]; if (!src) return;
+      for (var c = g.c0; c <= g.c1; c++) { var s = src[c], d = _rows[g.r0][c]; if (s && d) pairs.push(Object.assign(tdInfo(d), { text: currentCellText(tdInfo(s)) })); }
+    } else {
+      for (var c2 = g.c0; c2 <= g.c1; c2++) { var top = _rows[g.r0][c2]; if (!top) continue; var txt = currentCellText(tdInfo(top)); for (var r = g.r0 + 1; r <= g.r1; r++) { var dd = _rows[r] && _rows[r][c2]; if (dd) pairs.push(Object.assign(tdInfo(dd), { text: txt })); } }
+    }
+    if (pairs.length) applyEntries(pairs);
+  }
+  function fillRight() {
+    var g = selectionRange(); if (!g) return;
+    var pairs = [];
+    if (g.c0 === g.c1) {
+      for (var r = g.r0; r <= g.r1; r++) { var row = _rows[r]; if (!row) continue; var s = row[g.c0 - 1], d = row[g.c0]; if (s && d) pairs.push(Object.assign(tdInfo(d), { text: currentCellText(tdInfo(s)) })); }
+    } else {
+      for (var r2 = g.r0; r2 <= g.r1; r2++) { var row2 = _rows[r2]; if (!row2) continue; var left = row2[g.c0]; if (!left) continue; var txt = currentCellText(tdInfo(left)); for (var c = g.c0 + 1; c <= g.c1; c++) { if (row2[c]) pairs.push(Object.assign(tdInfo(row2[c]), { text: txt })); } }
+    }
+    if (pairs.length) applyEntries(pairs);
+  }
+
+  function activityOptions() {
+    var out = [];
+    getSports().forEach(function (s) { out.push({ t: s, k: 'Sport' }); });
+    getSpecials().forEach(function (s) { out.push({ t: s, k: 'Special' }); });
+    getGeneralActivities().forEach(function (g) { out.push({ t: g.name, k: 'General' }); });
+    return out;
+  }
+  function openInlineEditor(td, initial) {
+    var info = tdInfo(td);
+    var block = (_divTimes[info.div] || [])[info.idx]; if (!block) return;
+    if (td.getAttribute('data-league') === '1') { openLeagueEditor(info.div, info.idx, block); return; }
+    var saved = td.innerHTML, done = false;
+    td.innerHTML = '<div class="helper-cell-inner"><input class="helper-inline-input" /><div class="helper-ac" style="display:none;"></div></div>';
+    var input = td.querySelector('.helper-inline-input'), ac = td.querySelector('.helper-ac');
+    input.value = initial || '';
+    input.focus();
+    if (initial && initial.length === 1) { try { input.setSelectionRange(1, 1); } catch (e) {} } else { input.select(); }
+    var items = [], sel = -1;
+    function renderAC() {
+      var v = input.value.trim().toLowerCase();
+      if (!v) { ac.style.display = 'none'; items = []; return; }
+      items = activityOptions().filter(function (o) { return o.t.toLowerCase().indexOf(v) >= 0; }).slice(0, 8);
+      if (!items.length) { ac.style.display = 'none'; return; }
+      sel = -1; ac.style.display = 'block';
+      ac.innerHTML = items.map(function (o, i) { return '<div class="helper-ac-item" data-i="' + i + '"><span>' + esc(o.t) + '</span><span class="helper-ac-k">' + o.k + '</span></div>'; }).join('');
+      ac.querySelectorAll('.helper-ac-item').forEach(function (el) {
+        el.addEventListener('mousedown', function (ev) { ev.preventDefault(); commit(items[parseInt(el.getAttribute('data-i'), 10)].t, 'down'); });
+      });
+    }
+    function hl() { ac.querySelectorAll('.helper-ac-item').forEach(function (el, i) { el.classList.toggle('on', i === sel); }); }
+    function commit(text, move) {
+      if (done) return; done = true;
+      applyTextToCells(selectionCells(), text); // whole selection when a range is active
+      var r = _sel ? _sel.r1 : 0, c = _sel ? _sel.c1 : 0;
+      if (move === 'right') selectCell(r, c + 1); else if (move === 'down') selectCell(r + 1, c); else selectCell(r, c);
+    }
+    function cancel() { if (done) return; done = true; td.innerHTML = saved; }
+    input.addEventListener('input', renderAC);
+    input.addEventListener('keydown', function (e) {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(sel >= 0 ? items[sel].t : input.value, 'down'); }
+      else if (e.key === 'Tab') { e.preventDefault(); commit(sel >= 0 ? items[sel].t : input.value, 'right'); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      else if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); hl(); }
+      else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); sel = Math.max(sel - 1, 0); hl(); }
+    });
+    input.addEventListener('blur', function () { setTimeout(function () { if (!done) commit(input.value, 'stay'); }, 120); });
+    renderAC();
+  }
+
+  function attachSheetHandlers(container) {
+    if (!container || typeof container.addEventListener !== 'function' || container._hsWired) return;
+    container._hsWired = true;
+    container.tabIndex = -1;
+    container.addEventListener('mousedown', function (e) {
+      var td = e.target.closest && e.target.closest('.helper-cell[data-bunk]');
+      if (!td || td._r == null) return;
+      if (td.getAttribute('data-league') === '1') return; // league banners open on click via wireCells
+      try { container.focus({ preventScroll: true }); } catch (_) { container.focus(); }
+      _mouseDown = true;
+      selectCell(td._r, td._c, e.shiftKey);
+    });
+    container.addEventListener('mousemove', function (e) {
+      if (!_mouseDown) return;
+      var td = e.target.closest && e.target.closest('.helper-cell[data-bunk]');
+      if (td && td._r != null) selectCell(td._r, td._c, true);
+    });
+    document.addEventListener('mouseup', function () { _mouseDown = false; });
+    container.addEventListener('dblclick', function (e) {
+      var td = e.target.closest && e.target.closest('.helper-cell[data-bunk]');
+      if (!td) return;
+      var info = tdInfo(td), block = (_divTimes[info.div] || [])[info.idx];
+      if (!block) return;
+      if (td.getAttribute('data-league') === '1') { openLeagueEditor(info.div, info.idx, block); return; }
+      openCellEditor(info.bunk, info.div, info.idx, block);
+    });
+    container.addEventListener('keydown', function (e) {
+      if (!_sel || !isActive()) return;
+      if (container.querySelector('.helper-inline-input')) return; // editor handles keys
+      var r = _sel.r1, c = _sel.c1, k = e.key;
+      if (k === 'ArrowUp') { e.preventDefault(); selectCell(r - 1, c, e.shiftKey); }
+      else if (k === 'ArrowDown') { e.preventDefault(); selectCell(r + 1, c, e.shiftKey); }
+      else if (k === 'ArrowLeft') { e.preventDefault(); selectCell(r, c - 1, e.shiftKey); }
+      else if (k === 'ArrowRight') { e.preventDefault(); selectCell(r, c + 1, e.shiftKey); }
+      else if (k === 'Tab') { e.preventDefault(); selectCell(r, c + (e.shiftKey ? -1 : 1)); }
+      else if (k === 'Enter') { e.preventDefault(); var td = cellAt(r, c); if (td) openInlineEditor(td, ''); }
+      else if (k === 'F2') { e.preventDefault(); var td2 = cellAt(r, c); if (td2) openInlineEditor(td2, currentCellText(tdInfo(td2))); }
+      else if ((e.ctrlKey || e.metaKey) && (k === 'd' || k === 'D')) { e.preventDefault(); fillDown(); }
+      else if ((e.ctrlKey || e.metaKey) && (k === 'r' || k === 'R')) { e.preventDefault(); fillRight(); }
+      else if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); applyTextToCells(selectionCells(), ''); }
+      else if (k === 'Escape') { e.preventDefault(); }
+      else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); var td3 = cellAt(r, c); if (td3) openInlineEditor(td3, k); }
+    });
+    container.addEventListener('copy', function (e) {
+      var g = selectionRange(); if (!g) return;
+      var lines = [];
+      for (var r = g.r0; r <= g.r1; r++) { var row = _rows[r]; var cells = []; for (var c = g.c0; c <= g.c1; c++) { var td = row && row[c]; cells.push(td ? currentCellText(tdInfo(td)) : ''); } lines.push(cells.join('\t')); }
+      try { e.clipboardData.setData('text/plain', lines.join('\n')); e.preventDefault(); } catch (_) {}
+    });
+    container.addEventListener('paste', function (e) {
+      if (!_sel) return;
+      var text = '';
+      try { text = (e.clipboardData || window.clipboardData).getData('text'); } catch (_) { return; }
+      if (text == null) return;
+      e.preventDefault();
+      var grid = text.replace(/\r/g, '').replace(/\n$/, '').split('\n').map(function (l) { return l.split('\t'); });
+      var g = selectionRange();
+      var pairs = [];
+      grid.forEach(function (vals, dr) {
+        vals.forEach(function (v, dc) {
+          var row = _rows[g.r0 + dr]; if (!row) return;
+          var td = row[g.c0 + dc]; if (!td) return;
+          pairs.push(Object.assign(tdInfo(td), { text: v }));
+        });
+      });
+      if (pairs.length) applyEntries(pairs);
+    });
+  }
+  function wireSheet(container) {
+    buildCellIndex(container);
+    attachSheetHandlers(container);
+    renderSelection();
+  }
+
   window.HelperMode = {
     isActive: isActive,
     openSpreadsheet: openSpreadsheet,
@@ -1560,6 +1807,9 @@
     getView: function () { return _viewMode; },
     setZoom: function (z) { setZoom(z); return _zoom; },
     getZoom: function () { return _zoom; },
+    _buildEntryFromText: buildEntryFromText,
+    _classifyActivity: classifyActivity,
+    _applyEntries: applyEntries,
     version: HELPER_VERSION,
     diagnose: function () {
       var dk = currentDateKey();
