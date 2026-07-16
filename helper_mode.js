@@ -20,7 +20,7 @@
   'use strict';
 
   var HELPER = 'helper';
-  var HELPER_VERSION = 'v10-exact-windows';
+  var HELPER_VERSION = 'v11-zoom';
 
   // Debounced autosave + validation issue map keyed by `${bunk}|${slotIdx}`.
   var _saveTimer = null;
@@ -28,6 +28,8 @@
   var _stylesInjected = false;
   var _viewMode = 'grade'; // 'grade' (per-division tables) | 'all' (shared timeline)
   var _divTimes = {};      // Helper's own EXACT per-grade windows (immune to external snapping)
+  var _zoom = 1;           // grid zoom factor (buttons / ctrl+wheel / pinch)
+  var ZOOM_MIN = 0.5, ZOOM_MAX = 2.5;
 
   // ---------------------------------------------------------------------
   // Mode + small utilities
@@ -592,6 +594,10 @@
       '.helper-viewtoggle{display:flex;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;}',
       '.helper-viewbtn{padding:6px 14px;border:none;background:#fff;font-size:.78rem;font-weight:700;color:#64748b;cursor:pointer;}',
       '.helper-viewbtn.on{background:#2563eb;color:#fff;}',
+      '.helper-zoomctl{display:flex;align-items:stretch;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;}',
+      '.helper-zbtn{border:none;background:#fff;color:#475569;font-size:.95rem;font-weight:700;padding:5px 12px;cursor:pointer;line-height:1;}',
+      '.helper-zbtn:hover{background:#eef2ff;}',
+      '.helper-zlabel{font-size:.74rem;min-width:50px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;}',
       '.helper-div-row{background:#e0e7ff;color:#3730a3;font-weight:800;font-size:.8rem;padding:7px 14px;text-transform:uppercase;letter-spacing:.03em;}',
       '.helper-div-row span{position:sticky;left:14px;}',
       '.helper-oos{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);cursor:default;}',
@@ -767,6 +773,57 @@
     });
   }
 
+  // --- Zoom (buttons + ctrl/cmd-wheel + pinch) ------------------------
+  function applyZoom(container) {
+    var root = container || document.getElementById('scheduleTable');
+    if (!root || typeof root.querySelectorAll !== 'function') return;
+    root.querySelectorAll('.helper-div').forEach(function (el) { if (el.style) el.style.zoom = _zoom; });
+    var lbl = typeof root.querySelector === 'function' ? root.querySelector('#helper-zlabel') : null;
+    if (lbl) lbl.textContent = Math.round(_zoom * 100) + '%';
+  }
+  function setZoom(z, container) {
+    _zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+    applyZoom(container);
+  }
+  function zoomControlsHtml() {
+    return '<div class="helper-zoomctl">' +
+      '<button class="helper-zbtn" data-zoom="out" title="Zoom out">−</button>' +
+      '<button class="helper-zbtn helper-zlabel" data-zoom="reset" id="helper-zlabel" title="Reset zoom">' + Math.round(_zoom * 100) + '%</button>' +
+      '<button class="helper-zbtn" data-zoom="in" title="Zoom in">+</button>' +
+      '</div>';
+  }
+  function wireZoomButtons(container) {
+    container.querySelectorAll('.helper-zbtn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var a = b.getAttribute('data-zoom');
+        if (a === 'in') setZoom(_zoom + 0.1, container);
+        else if (a === 'out') setZoom(_zoom - 0.1, container);
+        else setZoom(1, container);
+      });
+    });
+  }
+  function wireZoomGestures(container) {
+    if (container._hzWired) return; // attach once; survives innerHTML rebuilds
+    container._hzWired = true;
+    container.addEventListener('wheel', function (e) {
+      if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom(_zoom * (e.deltaY < 0 ? 1.08 : 0.92), container); }
+    }, { passive: false });
+    var pinchDist = 0, pinchZoom = 1;
+    function dist(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
+    container.addEventListener('touchstart', function (e) {
+      if (e.touches.length === 2) { pinchDist = dist(e.touches); pinchZoom = _zoom; }
+    }, { passive: true });
+    container.addEventListener('touchmove', function (e) {
+      if (e.touches.length === 2 && pinchDist) { e.preventDefault(); setZoom(pinchZoom * (dist(e.touches) / pinchDist), container); }
+    }, { passive: false });
+    container.addEventListener('touchend', function (e) { if (e.touches.length < 2) pinchDist = 0; });
+  }
+  function afterRenderControls(container) {
+    applyZoom(container);
+    wireZoomButtons(container);
+    wireZoomGestures(container);
+  }
+
   function viewToggleHtml() {
     return '<div class="helper-viewtoggle">' +
       '<button class="helper-viewbtn' + (_viewMode === 'grade' ? ' on' : '') + '" data-view="grade">By Grade</button>' +
@@ -793,6 +850,7 @@
     if (!starts.length) {
       container.innerHTML = html + '<div class="helper-empty-note">No periods yet.</div></div>';
       wireToggle(container);
+    afterRenderControls(container);
       return;
     }
     var minS = Math.min.apply(null, starts), maxE = Math.max.apply(null, ends);
@@ -839,6 +897,7 @@
     container.innerHTML = html;
     wireCells(container);
     wireToggle(container);
+    afterRenderControls(container);
   }
 
   function renderGrid(container) {
@@ -861,6 +920,7 @@
     html += '<div class="helper-topbar">';
     html += '<div class="helper-title"><span class="helper-badge">Helper</span> Fill-in Spreadsheet</div>';
     html += viewToggleHtml();
+    html += zoomControlsHtml();
     var ic = issueCount();
     html += ic > 0
       ? '<span class="helper-issues-pill helper-issues-bad">⚠ ' + ic + ' issue' + (ic === 1 ? '' : 's') + '</span>'
@@ -874,6 +934,7 @@
       html += '</div>';
       container.innerHTML = html;
       wireToggle(container);
+    afterRenderControls(container);
       return;
     }
 
@@ -955,6 +1016,7 @@
     container.innerHTML = html;
     wireCells(container);
     wireToggle(container);
+    afterRenderControls(container);
   }
 
   function leagueBannerHtml(la) {
@@ -1491,6 +1553,8 @@
     _writeLeagueSlot: writeLeagueSlot,
     setView: function (v) { if (v === 'grade' || v === 'all') { _viewMode = v; try { renderGrid(); } catch (e) {} } },
     getView: function () { return _viewMode; },
+    setZoom: function (z) { setZoom(z); return _zoom; },
+    getZoom: function () { return _zoom; },
     version: HELPER_VERSION,
     diagnose: function () {
       var dk = currentDateKey();
