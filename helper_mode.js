@@ -594,6 +594,9 @@
       '.helper-div-row span{position:sticky;left:14px;}',
       '.helper-oos{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);cursor:default;}',
       '.helper-oos:hover{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f1f5f9 6px,#f1f5f9 12px);}',
+      '.helper-timeline .helper-cell{min-width:96px;}',
+      '.helper-timeline .helper-time-h .th-range{font-size:.76rem;}',
+      '.helper-timeline .helper-time-h .th-dur{color:#94a3b8;font-size:.66rem;}',
       // division cards
       '.helper-div{margin:0 4px 22px;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.06);}',
       '.helper-div-head{background:linear-gradient(90deg,#eef2ff,#f8fafc);padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:baseline;gap:10px;}',
@@ -714,8 +717,9 @@
   }
 
   // A single bunk×slot <td> (shared by both views). League cells render as a
-  // compact card that reopens the whole-grade builder.
-  function bunkCellTd(bunk, dn, slotIdx) {
+  // compact card that reopens the whole-grade builder. `colspan` lets the
+  // timeline view span an activity across the segments it actually covers.
+  function bunkCellTd(bunk, dn, slotIdx, colspan) {
     var arr = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
     var entry = arr[slotIdx];
     var iss = issueFor(bunk, slotIdx);
@@ -733,6 +737,7 @@
     }
     var flag = iss ? '<span class="helper-flag">' + (iss.level === 'error' ? '🔴' : '⚠️') + '</span>' : '';
     return '<td class="' + cls + '" data-bunk="' + esc(bunk) + '" data-div="' + esc(dn) + '" data-idx="' + slotIdx + '"' +
+      (colspan && colspan > 1 ? ' colspan="' + colspan + '"' : '') +
       (isLeague ? ' data-league="1"' : '') + (iss ? ' title="' + esc(iss.msg) + '"' : '') + '>' +
       flag + '<div class="helper-cell-inner">' + inner + '</div></td>';
   }
@@ -766,50 +771,64 @@
       '</div>';
   }
 
-  // Shared-timeline view: every bunk (grouped by grade) on ONE unified time axis
-  // so you can scan a column and see what the whole camp is doing at that time.
+  // Shared-timeline view: every bunk (grouped by grade) on ONE real time axis.
+  // The axis breaks at every period boundary across all grades, and each
+  // activity SPANS the segments it actually covers — so staggered periods
+  // (e.g. 9–11 vs 9:20–11:20) line up correctly instead of duplicating.
   function renderAllBunks(container, html) {
     var divs = getDivisions();
     var order = divisionOrder();
     var divTimes = window.divisionTimes || {};
-    var uni = window.unifiedTimes || [];
-    if (!uni.length) {
+
+    // Collect every distinct boundary time across all grades → segments.
+    var bset = {};
+    order.forEach(function (dn) {
+      (divTimes[dn] || []).forEach(function (s) { bset[s.startMin] = 1; bset[s.endMin] = 1; });
+    });
+    var bounds = Object.keys(bset).map(Number).sort(function (a, b) { return a - b; });
+    if (bounds.length < 2) {
       container.innerHTML = html + '<div class="helper-empty-note">No periods yet.</div></div>';
       wireToggle(container);
       return;
     }
-    // Map each unified column to the division slot that overlaps it most (or -1).
-    function colMap(dn) {
+    var segs = [];
+    for (var i = 0; i < bounds.length - 1; i++) segs.push({ s: bounds[i], e: bounds[i + 1] });
+
+    // Which division slot fully covers a segment (slots align to boundaries).
+    function slotForSeg(dn, sg) {
       var slots = divTimes[dn] || [];
-      return uni.map(function (u) {
-        var best = -1, bo = 0;
-        slots.forEach(function (s, i) {
-          var ov = Math.min(s.endMin, u.endMin) - Math.max(s.startMin, u.startMin);
-          if (ov > bo) { bo = ov; best = i; }
-        });
-        return best;
-      });
+      for (var k = 0; k < slots.length; k++) {
+        if (slots[k].startMin <= sg.s && slots[k].endMin >= sg.e) return k;
+      }
+      return -1;
     }
-    html += '<div class="helper-div"><div class="helper-scroll"><table class="helper-table"><thead><tr>' +
+
+    html += '<div class="helper-div"><div class="helper-scroll"><table class="helper-table helper-timeline"><thead><tr>' +
       '<th class="helper-corner">Bunk</th>';
-    uni.forEach(function (u) {
-      var dur = u.endMin - u.startMin;
-      html += '<th class="helper-time-h"><div class="th-range">' + esc(minutesToLabel(u.startMin) + '–' + minutesToLabel(u.endMin)) + '</div>' +
-        (dur ? '<div class="th-dur">' + dur + ' min</div>' : '') + '</th>';
+    segs.forEach(function (sg) {
+      html += '<th class="helper-time-h"><div class="th-range">' + esc(minutesToLabel(sg.s)) + '</div>' +
+        '<div class="th-dur">' + esc(minutesToLabel(sg.e)) + '</div></th>';
     });
     html += '</tr></thead><tbody>';
+
     order.forEach(function (dn) {
       var bunks = (divs[dn] && divs[dn].bunks) || [];
       if (!bunks.length || !(divTimes[dn] || []).length) return;
-      html += '<tr><td class="helper-div-row" colspan="' + (uni.length + 1) + '"><span>' + esc(dn) + '</span></td></tr>';
-      var cm = colMap(dn);
+      html += '<tr><td class="helper-div-row" colspan="' + (segs.length + 1) + '"><span>' + esc(dn) + '</span></td></tr>';
       bunks.forEach(function (bunk) {
         html += '<tr><td class="helper-bunk-cell">' + esc(bunk) + '</td>';
-        uni.forEach(function (u, ci) {
-          var si = cm[ci];
-          if (si < 0) { html += '<td class="helper-cell helper-oos"><div class="helper-cell-inner"></div></td>'; return; }
-          html += bunkCellTd(bunk, dn, si);
-        });
+        var ci = 0;
+        while (ci < segs.length) {
+          var si = slotForSeg(dn, segs[ci]);
+          var span = 1;
+          while (ci + span < segs.length && slotForSeg(dn, segs[ci + span]) === si) span++;
+          if (si < 0) {
+            html += '<td class="helper-cell helper-oos" colspan="' + span + '"><div class="helper-cell-inner"></div></td>';
+          } else {
+            html += bunkCellTd(bunk, dn, si, span);
+          }
+          ci += span;
+        }
         html += '</tr>';
       });
     });
