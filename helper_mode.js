@@ -484,6 +484,12 @@
       // modal
       '.helper-modal-ov{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;}',
       '.helper-modal{background:#fff;border-radius:14px;max-width:460px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);}',
+      '.helper-modal.helper-modal-wide{max-width:900px;}',
+      '.helper-modal-cols{display:flex;gap:18px;padding:16px 20px;flex-wrap:wrap;align-items:flex-start;}',
+      '.helper-modal-cols .helper-modal-body{padding:0;}',
+      '.helper-modal-left{flex:1 1 300px;min-width:270px;}',
+      '.helper-modal-right{flex:1 1 340px;min-width:270px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;max-height:56vh;overflow:auto;}',
+      '.helper-report-title{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#475569;padding:10px 14px 4px;}',
       '.helper-modal-head{padding:16px 20px;border-bottom:1px solid #e2e8f0;font-weight:700;color:#0f172a;}',
       '.helper-modal-sub{font-size:.8rem;color:#64748b;font-weight:500;margin-top:2px;}',
       '.helper-modal-body{padding:16px 20px;}',
@@ -617,17 +623,25 @@
     var ov = document.createElement('div');
     ov.className = 'helper-modal-ov';
     ov.innerHTML =
-      '<div class="helper-modal">' +
+      '<div class="helper-modal helper-modal-wide">' +
         '<div class="helper-modal-head">' + esc(bunk) +
           '<div class="helper-modal-sub">' + esc(divName) + ' · ' +
             esc(minutesToLabel(block.startMin) + '–' + minutesToLabel(block.endMin)) + '</div>' +
         '</div>' +
-        '<div class="helper-seg">' +
-          '<button data-mode="text">Free Text</button>' +
-          '<button data-mode="activity">Activity</button>' +
-          '<button data-mode="league">League</button>' +
+        '<div class="helper-modal-cols">' +
+          '<div class="helper-modal-left">' +
+            '<div class="helper-seg">' +
+              '<button data-mode="text">Free Text</button>' +
+              '<button data-mode="activity">Activity</button>' +
+              '<button data-mode="league">League</button>' +
+            '</div>' +
+            '<div class="helper-modal-body" id="helper-modal-body"></div>' +
+          '</div>' +
+          '<div class="helper-modal-right">' +
+            '<div class="helper-report-title">This bunk — history, usage &amp; what\'s open now</div>' +
+            '<div id="helper-report-mount"></div>' +
+          '</div>' +
         '</div>' +
-        '<div class="helper-modal-body" id="helper-modal-body"></div>' +
         '<div class="helper-modal-foot">' +
           '<button class="helper-btn helper-btn-clear" id="helper-clear">Clear</button>' +
           '<button class="helper-btn helper-btn-cancel" id="helper-cancel">Cancel</button>' +
@@ -637,7 +651,7 @@
     document.body.appendChild(ov);
 
     var body = ov.querySelector('#helper-modal-body');
-    var segBtns = ov.querySelectorAll('.helper-seg button');
+    var segBtns = ov.querySelectorAll('.helper-seg > button');
     var state = { mode: 'activity' };
 
     // Seed initial mode from the existing entry.
@@ -645,6 +659,32 @@
       if (existing._h2h || existing._league) state.mode = 'league';
       else if (existing._customText) state.mode = 'text';
       else state.mode = 'activity';
+    }
+
+    // --- Contextual report (reuses the manual post-edit panel) ---------
+    // The activity picker carries id="post-edit-activity" so the panel's own
+    // clickable suggestions + async cloud-count hydrate target it for free.
+    function reportSelected() {
+      if (state.mode === 'league') { var sp = body.querySelector('#hm-lsport'); return sp ? sp.value : ''; }
+      if (state.mode === 'activity') { var a = body.querySelector('#post-edit-activity'); return a ? a.value : ''; }
+      return '';
+    }
+    function mountReport() {
+      var mount = ov.querySelector('#helper-report-mount');
+      if (!mount) return;
+      if (window.PostEditReport && typeof window.PostEditReport.panelHtml === 'function') {
+        try { mount.innerHTML = window.PostEditReport.panelHtml(bunk, divName, block.startMin, block.endMin, reportSelected(), null); return; }
+        catch (e) { console.error('[Helper] report panel failed', e); }
+      }
+      mount.innerHTML = '<div style="padding:14px;color:#94a3b8;font-size:.82rem;">History &amp; availability are unavailable right now.</div>';
+    }
+    function refreshReport() {
+      var el = ov.querySelector('#post-edit-report-body');
+      if (!el) { mountReport(); return; }
+      if (window.PostEditReport && typeof window.PostEditReport.bodyHtml === 'function') {
+        try { el.innerHTML = window.PostEditReport.bodyHtml(bunk, divName, block.startMin, block.endMin, reportSelected(), null); }
+        catch (e) { /* keep last */ }
+      }
     }
 
     function fieldOptions(selected) {
@@ -673,26 +713,45 @@
             '<button data-kind="special" class="' + (isSpecial ? 'active' : '') + '">Special</button>' +
           '</div>' +
           '<div class="helper-field"><label id="hm-act-label">Activity</label>' +
-          '<select id="hm-act"></select></div>' +
+          '<select id="post-edit-activity"></select></div>' +
           '<div class="helper-field"><label>Field / Location</label>' +
           '<select id="hm-field">' + fieldOptions(curField) + '</select></div>';
 
         var kind = isSpecial ? 'special' : 'sport';
         function fillActs() {
-          var sel = body.querySelector('#hm-act');
+          var sel = body.querySelector('#post-edit-activity');
           var list = kind === 'special' ? getSpecials() : getSports();
           body.querySelector('#hm-act-label').textContent = kind === 'special' ? 'Special activity' : 'Sport';
-          sel.innerHTML = list.map(function (a) {
+          sel.innerHTML = '<option value="">— Choose —</option>' + list.map(function (a) {
             return '<option value="' + esc(a) + '"' + (a === curAct ? ' selected' : '') + '>' + esc(a) + '</option>';
-          }).join('') || '<option value="">(none configured)</option>';
+          }).join('');
         }
         fillActs();
+        var actSel = body.querySelector('#post-edit-activity');
+        // A suggestion click (or manual pick) may land a special while the
+        // Sport tab is active (or vice-versa) — auto-switch the tab to match
+        // so the value stays visible, then refresh the report.
+        actSel.addEventListener('change', function () {
+          var val = actSel.value;
+          curAct = val;
+          if (val) {
+            var isSp = getSpecials().some(function (s) { return s === val; });
+            var isSpo = getSports().some(function (s) { return s === val; });
+            if (isSp && kind !== 'special') { kind = 'special'; syncKindUI(); fillActs(); actSel = body.querySelector('#post-edit-activity'); }
+            else if (isSpo && !isSp && kind !== 'sport') { kind = 'sport'; syncKindUI(); fillActs(); actSel = body.querySelector('#post-edit-activity'); }
+          }
+          refreshReport();
+        });
+        function syncKindUI() {
+          body.querySelectorAll('#hm-actkind button').forEach(function (x) { x.classList.toggle('active', x.getAttribute('data-kind') === kind); });
+        }
         body.querySelectorAll('#hm-actkind button').forEach(function (b) {
           b.addEventListener('click', function () {
             kind = b.getAttribute('data-kind');
-            body.querySelectorAll('#hm-actkind button').forEach(function (x) { x.classList.toggle('active', x === b); });
+            syncKindUI();
             curAct = '';
             fillActs();
+            refreshReport();
           });
         });
         state._getKind = function () { return kind; };
@@ -734,17 +793,19 @@
           a.innerHTML = teams.map(function (t) { return '<option' + (t === curA ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
           b.innerHTML = teams.map(function (t) { return '<option' + (t === curB ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join('');
           sp.innerHTML = sports.map(function (s) { return '<option' + (s === curSp ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') || '<option value="">(none)</option>';
+          if (sp) sp.addEventListener('change', refreshReport);
         }
         fillTeamsAndSports();
         var lsel = body.querySelector('#hm-league');
-        if (lsel && lsel.tagName === 'SELECT') lsel.addEventListener('change', fillTeamsAndSports);
+        if (lsel && lsel.tagName === 'SELECT') lsel.addEventListener('change', function () { fillTeamsAndSports(); refreshReport(); });
       }
     }
 
     segBtns.forEach(function (b) {
-      b.addEventListener('click', function () { state.mode = b.getAttribute('data-mode'); renderBody(); });
+      b.addEventListener('click', function () { state.mode = b.getAttribute('data-mode'); renderBody(); refreshReport(); });
     });
     renderBody();
+    mountReport();
 
     function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
@@ -759,10 +820,12 @@
         if (!t) { clearCell(bunk, idx); close(); return; }
         entry = { _activity: t, _displayName: t, _customText: true, sport: null, field: t, _location: null };
       } else if (state.mode === 'activity') {
-        var act = (body.querySelector('#hm-act') || {}).value || '';
+        var act = (body.querySelector('#post-edit-activity') || {}).value || '';
         if (!act) { close(); return; }
         var fld = (body.querySelector('#hm-field') || {}).value || '';
         var kind = state._getKind ? state._getKind() : 'sport';
+        // If the tab says sport but the value is a configured special, trust the value.
+        if (kind === 'sport' && getSpecials().some(function (s) { return s === act; })) kind = 'special';
         entry = {
           _activity: act,
           sport: kind === 'sport' ? act : null,
