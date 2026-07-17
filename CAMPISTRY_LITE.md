@@ -7,8 +7,15 @@ will split into per-product apps as they grow. Everything is built mobile-first:
 big tap targets, no horizontal scroll, thumb-reachable bottom nav, glanceable
 while standing in the middle of camp.
 
-**Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`) that
-mirrors the website dashboard's quick-launch: a compact grid of **product tiles
+**Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`) with
+**no top nav bar** — the coral hero card is the top element and carries the
+account/settings button in its top-right corner (`#liteHeroMenuBtn`, opens the
+same menu the in-app header avatar does). The sticky header only appears once
+you're inside an app (back-chevron · app title · avatar). The camp name is
+resolved by `resolveCampName()` from the first trustworthy source
+(`AccessControl.getCampName()` → `camp_state_kv.camp_name` → `camps.name` →
+signup metadata) so the hero reads the real camp name rather than the "Your Camp"
+placeholder. Below the hero sits a compact grid of **product tiles
 using each product's real logo** (`Flow_clean.png`, `Me_clean.png`, …) with the
 product color as a bottom accent. **Flow** is live; the rest of the suite (Me,
 Go, Health, Live, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors

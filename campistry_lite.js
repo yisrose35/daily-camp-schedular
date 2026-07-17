@@ -31,13 +31,14 @@
 
     const HEAD_ROLES = ['owner', 'admin', 'scheduler'];
     const KV_KEYS = ['app1', 'campStructure', 'leaguesByName', 'specialtyLeagues',
-                     'liteStaffAssignments', 'liteSmsSettings'];
+                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name'];
     const SMS_BATCH_SIZE = 100;
 
     // ─── State ──────────────────────────────────────────────────────────
     let campId = null;
     let role = null;
     let userEmail = null;
+    let campDisplayName = '';
     let userName = null;
 
     const camp = {
@@ -133,6 +134,10 @@
             // Camp state (structure, roster, leagues, Lite settings)
             await loadCampState();
 
+            // Resolve the real camp name (getCampName often falls back to a
+            // placeholder when Lite is opened directly, not via the dashboard).
+            campDisplayName = await resolveCampName();
+
             // Chrome: avatar, menu identity, role badge
             const ini = avatarInitials();
             document.getElementById('liteAvatarInitials').textContent = ini;
@@ -163,6 +168,41 @@
     // DATA
     // ════════════════════════════════════════════════════════════════════
 
+    // Resolve the real camp name from the first trustworthy source.
+    async function resolveCampName() {
+        const bad = new Set(['', 'your camp', 'unknown camp', 'my camp']);
+        const clean = v => {
+            const s = (v == null ? '' : String(v)).trim();
+            return (s && !bad.has(s.toLowerCase())) ? s : null;
+        };
+
+        // 1) AccessControl (its full DB resolution reads camps.name)
+        let n = clean(window.AccessControl?.getCampName?.());
+        if (n) return n;
+
+        // 2) camp_state_kv camp_name (set when an owner edits the camp name)
+        n = clean(camp.campName);
+        if (n) return n;
+
+        // 3) camps table directly (id or owner == campId)
+        try {
+            const { data } = await window.supabase
+                .from('camps').select('name')
+                .or(`id.eq.${campId},owner.eq.${campId}`).limit(1).maybeSingle();
+            n = clean(data && data.name);
+            if (n) return n;
+        } catch (_) { /* RLS or none — fall through */ }
+
+        // 4) signup metadata
+        try {
+            const { data: { user } } = await window.supabase.auth.getUser();
+            n = clean(user && user.user_metadata && user.user_metadata.camp_name);
+            if (n) return n;
+        } catch (_) {}
+
+        return '';
+    }
+
     async function loadCampState() {
         try {
             const { data, error } = await window.supabase
@@ -183,6 +223,8 @@
             camp.leagues = byKey.leaguesByName || {};
             camp.specialty = byKey.specialtyLeagues || {};
             camp.staff = byKey.liteStaffAssignments || {};
+            camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
+                          : (byKey.camp_name && byKey.camp_name.value) || '';
             camp.sms = Object.assign({ enabled: false, audience: 'counselors', footer: '' },
                                      byKey.liteSmsSettings || {});
             camp.stateLoaded = true;
@@ -401,7 +443,7 @@
     function renderHome() {
         const view = document.getElementById('view-home');
         const apps = appsForRole();
-        const campName = window.AccessControl?.getCampName?.() || '';
+        const campName = campDisplayName;
         const single = apps.length === 1;
 
         view.innerHTML = heroCardHTML(campName)
@@ -409,6 +451,8 @@
 
         view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
             t.addEventListener('click', () => openApp(t.dataset.app)));
+        const heroBtn = view.querySelector('#liteHeroMenuBtn');
+        if (heroBtn) heroBtn.addEventListener('click', toggleMenu);
 
         startClock();
         renderWeather();
@@ -417,6 +461,7 @@
     function heroCardHTML(campName) {
         const name = campName ? esc(campName) : 'your camp';
         return `<div class="lite-hero-card">
+            <button class="lite-hero-settings" id="liteHeroMenuBtn" aria-label="Account & settings"><span>${esc(avatarInitials())}</span></button>
             <div class="lite-hero-greeting">${greeting()},</div>
             <div class="lite-hero-welcome">Welcome back, <span>${name}</span>!</div>
             <div class="lite-hero-sub">Your camp, in your pocket — every Campistry app, on the go.</div>
@@ -526,7 +571,7 @@
         currentApp = id;
         applyTheme(app);
         document.getElementById('view-home').style.display = 'none';
-        setHeader(app.title || app.name, window.AccessControl?.getCampName?.() || '');
+        setHeader(app.title || app.name, campDisplayName);
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
         buildTabs(app.tabs);
         switchTab(app.tabs[0].id);
@@ -549,7 +594,7 @@
     }
     function setHeaderHome() {
         document.getElementById('liteHeaderTitle').innerHTML = 'Campistry <span>Lite</span>';
-        document.getElementById('liteHeaderSub').textContent = window.AccessControl?.getCampName?.() || '';
+        document.getElementById('liteHeaderSub').textContent = campDisplayName;
     }
 
     function animateIn(el) {
@@ -592,13 +637,16 @@
         else if (id === 'messaging') renderMessaging();
     }
 
+    function toggleMenu(e) {
+        if (e) e.stopPropagation();
+        const menu = document.getElementById('liteMenu');
+        menu.style.display = menu.style.display === 'none' ? '' : 'none';
+    }
+
     function wireChrome() {
         document.getElementById('liteBackBtn').addEventListener('click', goHome);
         const menu = document.getElementById('liteMenu');
-        document.getElementById('liteMenuBtn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            menu.style.display = menu.style.display === 'none' ? '' : 'none';
-        });
+        document.getElementById('liteMenuBtn').addEventListener('click', toggleMenu);
         document.addEventListener('click', () => { menu.style.display = 'none'; });
         menu.addEventListener('click', (e) => e.stopPropagation());
 

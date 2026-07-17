@@ -160,17 +160,32 @@ button { cursor: pointer; border: none; background: none; }
 
 /* ─── Main / views ────────────────────────────────────────────────────── */
 .lite-main { flex: 1; padding: 16px 15px calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom)); }
-.lite-app[data-screen="home"] .lite-main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+/* Home has no top header — the hero card is the top element, so it carries
+   the settings button and clears the status bar itself. */
+.lite-app[data-screen="home"] .lite-header { display: none; }
+.lite-app[data-screen="home"] .lite-main { padding-top: calc(14px + env(safe-area-inset-top)); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 
 /* ─── HOME LAUNCHER ───────────────────────────────────────────────────── */
 /* Hero card — mirrors the website dashboard hero, in the Lite coral theme.
    Always coral regardless of the per-app accent. */
 .lite-hero-card {
+    position: relative;
     background: linear-gradient(150deg, #F0765F 0%, #C4402A 100%);
     border-radius: 24px; padding: 22px 20px; color: #fff; margin-bottom: 18px;
     box-shadow: 0 16px 36px -14px rgba(196,64,42,0.55);
 }
+.lite-hero-settings {
+    position: absolute; top: 16px; right: 16px; z-index: 3;
+    width: 42px; height: 42px; border-radius: 50%;
+    background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.3);
+    color: #fff; font-size: 0.85rem; font-weight: 700; letter-spacing: 0.02em;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(4px);
+}
+.lite-hero-greeting, .lite-hero-welcome, .lite-hero-sub { position: relative; z-index: 1; }
+.lite-hero-settings:active { background: rgba(255,255,255,0.3); transform: scale(0.94); }
 .lite-hero-greeting { font-size: 0.98rem; font-weight: 500; opacity: 0.92; }
+.lite-hero-welcome { padding-right: 40px; }
 .lite-hero-welcome { font-family: var(--font-display); font-size: 1.55rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; margin-top: 4px; }
 .lite-hero-welcome span { color: #FBD38D; }
 .lite-hero-sub { font-size: 0.86rem; opacity: 0.85; margin-top: 10px; line-height: 1.45; }
