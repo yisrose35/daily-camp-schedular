@@ -23,7 +23,8 @@ models/
 └── insightface/
     ├── det_10g.onnx             # https://huggingface.co/immich-app/buffalo_l/resolve/main/detection/model.onnx (17MB, used on WebGPU devices)
     ├── det_500m.onnx            # https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx (2.5MB, WASM fallback)
-    └── w600k_mbf.onnx           # https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx
+    ├── w600k_mbf.onnx           # https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx (13.6MB, default recognition)
+    └── w600k_r50.onnx           # https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx (166MB, STAGED r50 — only if useR50 enabled)
 ```
 
 Only the models a page actually uses are fetched (parents don't download the

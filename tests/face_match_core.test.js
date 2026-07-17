@@ -153,6 +153,11 @@ describe('qualityTier', () => {
     it('marks small-but-usable faces weak', () => {
         assert.strictEqual(Core.qualityTier({ sizePx: 60, detScore: 0.9 }), 'weak');
     });
+    it('surfaces distant field-shot faces (40px) as weak, not reject', () => {
+        // lowered reject floor (36) means a 40px face is found + reviewable
+        assert.strictEqual(Core.qualityTier({ sizePx: 40, detScore: 0.9 }), 'weak');
+        assert.strictEqual(Core.qualityTier({ sizePx: 30, detScore: 0.9 }), 'reject');
+    });
     it('marks blurry faces weak even when large', () => {
         assert.strictEqual(Core.qualityTier({ sizePx: 200, detScore: 0.9, blurVar: 10 }), 'weak');
     });
@@ -646,6 +651,24 @@ describe('assignFaces', () => {
         const out = Core.assignFaces(faces, campers2);
         assert.strictEqual(out[0].camperName, 'Alice A');
         assert.strictEqual(out[0].model, 'arc-512');
+    });
+
+    it('prefers r50 over mbf when a face and camper share both 512-D models', () => {
+        const mbf = Core.l2normalize(axis(512, 2));
+        const r50 = Core.l2normalize(axis(512, 4));
+        // mbf says close to Bob, r50 says close to Alice — r50 must win
+        const faces = [{
+            id: 'f1', tier: 'good',
+            descriptors: { 'arc-512': near(bob512(), 0.01), 'arc-512-r50': near(r50, 0.02) }
+        }];
+        function bob512() { return Core.l2normalize(axis(512, 8)); }
+        const campers2 = [
+            { name: 'Alice A', templates: { 'arc-512': Core.buildTemplate([mbf]), 'arc-512-r50': Core.buildTemplate([r50]) } },
+            { name: 'Bob B', templates: { 'arc-512': Core.buildTemplate([bob512()]), 'arc-512-r50': Core.buildTemplate([Core.l2normalize(axis(512, 12))]) } }
+        ];
+        const out = Core.assignFaces(faces, campers2);
+        assert.strictEqual(out[0].camperName, 'Alice A');
+        assert.strictEqual(out[0].model, 'arc-512-r50');
     });
 
     it('matches campers that only have legacy 128-D templates when the face has both models', () => {

@@ -45,7 +45,9 @@
         autoTag: true,              // auto-scan on upload
         maxPhotosPerEmail: 20,      // limit photos per parent email
         tiledDetection: true,       // SAHI-style tiling for large photos
-        minFacePx: 48,              // quality gate: reject below this box size
+        minFacePx: 36,              // quality gate: reject below this box size
+                                    //  (low enough to surface distant field-shot
+                                    //   faces as review suggestions)
         reviewQueue: true,          // keep a human queue for the unresolved middle band
         acceptPct: 0.35,            // auto-accept review-band suggestions at/above this confidence
         rejectPct: 0.08,            // auto-reject below this confidence
@@ -54,7 +56,12 @@
         useWorker: true,            // scan in a background Web Worker when supported
         strictDivisions: [],        // youngest divisions: stricter auto-tagging (NIST: child false-match risk)
         strictDelta: 0.12,          // extra confidence required to auto-accept a strict camper
-        staleDays: 300              // parent enrollment photos older than this = flag for re-enrollment
+        staleDays: 300,             // parent enrollment photos older than this = flag for re-enrollment
+        useR50: false               // STAGED: buffalo_l ResNet-50 recognition. Stronger
+                                    //  at separating similar kids, but a different vector
+                                    //  space — enabling requires ALL parents to re-enroll
+                                    //  (and a 166MB one-time model download, WebGPU only).
+                                    //  Do not flip mid-season on a working camp.
     };
 
     function _defaultStore() {
@@ -140,6 +147,9 @@
                 var parsed = JSON.parse(raw);
                 _store = Object.assign({}, _store, parsed);
                 _store.settings = Object.assign({}, SETTINGS_DEFAULTS, parsed.settings || {});
+                // one-time: bump the old 48px reject floor to the new distant-face
+                // default (only if the owner never customized it)
+                if (parsed.settings && parsed.settings.minFacePx === 48) _store.settings.minFacePx = SETTINGS_DEFAULTS.minFacePx;
                 _store.learn = Array.isArray(parsed.learn) ? parsed.learn : [];
                 _store.learnMeta = Object.assign({ lastTuneN: 0, tunedAt: null }, parsed.learnMeta || {});
                 _store.unknownClusters = Array.isArray(parsed.unknownClusters) ? parsed.unknownClusters : [];
@@ -201,6 +211,7 @@
             console.log('[LinkPhotos] ✅ Face models loaded');
             // kick off the optional modern engine in the background — scanning
             // works without it and picks it up when ready
+            if (_store.settings.useR50) window.CAMPISTRY_USE_R50 = true;  // staged r50 (main-thread/inline path)
             if (window.CampistryFaceEngineV2 && window.CampistryFaceEngineV2.init) {
                 window.CampistryFaceEngineV2.init().catch(function(e) {
                     console.log('[LinkPhotos] arc-512 engine unavailable (fallback to faceapi-128):', e && e.message);
@@ -501,7 +512,8 @@
                     console.warn('[LinkPhotos] scan worker error:', e && e.message);
                     if (!settled) { settled = true; clearTimeout(timer); resolve(null); }
                 };
-                w.postMessage({ type: 'init', modelBase: window.CAMPISTRY_MODEL_BASE || undefined });
+                w.postMessage({ type: 'init', modelBase: window.CAMPISTRY_MODEL_BASE || undefined,
+                                useR50: !!_store.settings.useR50 });
             } catch(e) { resolve(null); }
         });
     }

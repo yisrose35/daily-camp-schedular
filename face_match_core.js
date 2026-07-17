@@ -33,15 +33,25 @@
     //   arc-512 — cosine distance (1 - cosine similarity) between L2-normalized
     //     512-D InsightFace w600k embeddings. sim >= 0.42 auto, sim >= 0.30 review.
     var MODEL_PROFILES = {
-        'faceapi-128': { metric: 'euclidean', dims: 128, autoDist: 0.45, reviewDist: 0.55 },
-        'arc-512':     { metric: 'cosine',    dims: 512, autoDist: 0.58, reviewDist: 0.70 }
+        'faceapi-128':  { metric: 'euclidean', dims: 128, autoDist: 0.45, reviewDist: 0.55 },
+        'arc-512':      { metric: 'cosine',    dims: 512, autoDist: 0.58, reviewDist: 0.70 },
+        // buffalo_l ResNet-50 recognition — stronger at telling similar kids
+        // apart. Separate vector space from mbf 'arc-512' (never cross-matched);
+        // slightly tighter thresholds since embeddings are more discriminative.
+        'arc-512-r50':  { metric: 'cosine',    dims: 512, autoDist: 0.55, reviewDist: 0.66 }
     };
+    // Strongest-first: when a face and a camper share more than one model, the
+    // earliest one present wins (a lucky weaker-model score can't override it).
+    var MODEL_PREFERENCE = ['arc-512-r50', 'arc-512'];
 
     // Quality gate defaults. minFacePx is the min box side (in ORIGINAL image
     // pixels) below which a descriptor is too unreliable to auto-tag.
     var QUALITY_DEFAULTS = {
-        minFacePx: 48,        // below this: never embed/match ('reject')
-        weakFacePx: 80,       // below this: match, but cap at review ('weak')
+        minFacePx: 36,        // below this: never embed/match ('reject'). Lowered
+                              //  from 48 so distant field-shot faces are found +
+                              //  reviewable rather than silently dropped
+        weakFacePx: 88,       // below this: match, but cap at review ('weak') —
+                              //  small faces never auto-tag, they suggest
         minDetScore: 0.4,     // detector confidence floor for auto-tagging
         minBlurVar: 60        // variance-of-Laplacian floor; lower = blurrier
     };
@@ -593,7 +603,7 @@
     // Returns [{ faceId, camperName, dist, model, status: 'auto'|'review' }].
     function assignFaces(faces, campers, opts) {
         var profiles = (opts && opts.profiles) || MODEL_PROFILES;
-        var prefer = (opts && opts.preferModels) || ['arc-512'];
+        var prefer = (opts && opts.preferModels) || MODEL_PREFERENCE;
         var strictFactor = (opts && opts.strictFactor) || 0.85;
         var pairs = [];
 
@@ -601,12 +611,19 @@
             if (!face || face.tier === 'reject' || !face.descriptors) return;
             campers.forEach(function (camper) {
                 if (!camper || !camper.templates) return;
-                // restrict to preferred models when both sides share one
+                // models both sides share
                 var models = Object.keys(face.descriptors).filter(function (m) {
                     return profiles[m] && camper.templates[m] && face.descriptors[m];
                 });
-                var preferred = models.filter(function (m) { return prefer.indexOf(m) >= 0; });
-                if (preferred.length) models = preferred;
+                // ORDERED preference: use the single highest-priority model both
+                // sides have (r50 > mbf); a weaker model's lucky score can't win.
+                // Only when none of the preferred models are shared do we fall
+                // back to whatever's left (e.g. faceapi-128).
+                var chosen = null;
+                for (var pi = 0; pi < prefer.length; pi++) {
+                    if (models.indexOf(prefer[pi]) >= 0) { chosen = prefer[pi]; break; }
+                }
+                if (chosen) models = [chosen];
 
                 var best = null;
                 models.forEach(function (model) {
@@ -651,6 +668,7 @@
     var api = {
         VERSION: VERSION,
         MODEL_PROFILES: MODEL_PROFILES,
+        MODEL_PREFERENCE: MODEL_PREFERENCE,
         QUALITY_DEFAULTS: QUALITY_DEFAULTS,
         iou: iou,
         nmsMerge: nmsMerge,

@@ -20,9 +20,10 @@
 
 var _initialized = false;
 
-function _initScripts(modelBase) {
+function _initScripts(modelBase, useR50) {
     if (_initialized) return;
     if (modelBase) self.CAMPISTRY_MODEL_BASE = modelBase;
+    if (useR50) self.CAMPISTRY_USE_R50 = true;   // staged r50 recognition (opt-in)
     importScripts('face_match_core.js', 'campistry_face_shared.js', 'campistry_face_engine_v2.js');
     _initialized = true;
 }
@@ -32,7 +33,7 @@ self.onmessage = function (ev) {
 
     if (msg.type === 'init') {
         try {
-            _initScripts(msg.modelBase);
+            _initScripts(msg.modelBase, msg.useR50);
         } catch (e) {
             self.postMessage({ type: 'init_failed', error: 'script load: ' + (e && e.message) });
             return;

@@ -45,13 +45,29 @@
         LOCAL_BASE + '/insightface/det_500m.onnx',
         'https://huggingface.co/immich-app/buffalo_s/resolve/main/detection/model.onnx'
     ];
-    var REC_URLS = [
+    // Recognition is ADAPTIVE + opt-in: when useR50 is enabled (owner setting,
+    // WebGPU only), load buffalo_l's ResNet-50 w600k_r50 (~166MB, stronger at
+    // separating similar kids) and tag embeddings 'arc-512-r50'. Otherwise the
+    // default MobileFaceNet w600k_mbf (13.6MB), tagged 'arc-512'. The two are
+    // DIFFERENT vector spaces — switching to r50 means parents re-enroll.
+    var REC_URLS_MBF = [
         LOCAL_BASE + '/insightface/w600k_mbf.onnx',
         'https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx'
     ];
+    var REC_URLS_R50 = [
+        LOCAL_BASE + '/insightface/w600k_r50.onnx',
+        'https://huggingface.co/immich-app/buffalo_l/resolve/main/recognition/model.onnx'
+    ];
+    var _recModelTag = 'arc-512';   // set at init: 'arc-512' (mbf) | 'arc-512-r50'
 
     var DET_SIZE  = 640;            // SCRFD letterbox input (fixed-shape safe)
-    var DET_THRESH = 0.35;
+    var DET_THRESH = 0.35;          // default confidence floor
+    var DET_THRESH_FINE = 0.22;     // lower floor for magnified small-face tiles
+                                    // (the per-face re-crop + faceapi re-detect
+                                    //  verification stage filters false positives)
+    var FINE_TILE = 416;            // small tiles → SCRFD upsizes them to 640,
+                                    //  magnifying distant faces ~1.5x so a kid
+                                    //  20px across in a field shot becomes ~30px
     var STRIDES   = [8, 16, 32];
 
     // ArcFace canonical 112x112 5-point template (lm order: left eye, right
@@ -109,7 +125,12 @@
             _ep = eps[0];
             // adaptive detector: big model on GPU, small on WASM (see DET_URLS_*)
             var detUrls = hasGpu ? DET_URLS_LARGE.concat(DET_URLS_SMALL) : DET_URLS_SMALL;
-            return Promise.all([_createSessionChain(detUrls, eps), _createSessionChain(REC_URLS, eps)]);
+            // adaptive recognition: r50 only when opted in AND on WebGPU
+            // (r50 on WASM would be painfully slow); mbf otherwise
+            var wantR50 = hasGpu && !!(GLOBAL.CAMPISTRY_USE_R50);
+            _recModelTag = wantR50 ? 'arc-512-r50' : 'arc-512';
+            var recUrls = wantR50 ? REC_URLS_R50 : REC_URLS_MBF;
+            return Promise.all([_createSessionChain(detUrls, eps), _createSessionChain(recUrls, eps)]);
         }).then(function (sessions) {
             _detSession = sessions[0];
             _recSession = sessions[1];
@@ -154,7 +175,8 @@
     // Decode SCRFD outputs. Output tensor names vary between exports, so
     // tensors are identified by shape: rows = (size/stride)^2 * 2 anchors,
     // cols = 1 (score) / 4 (bbox) / 10 (keypoints).
-    function _decodeScrfd(results, size) {
+    function _decodeScrfd(results, size, thresh) {
+        thresh = (thresh == null) ? DET_THRESH : thresh;
         var byRows = {};
         Object.keys(results).forEach(function (name) {
             var t = results[name];
@@ -175,7 +197,7 @@
             if (!grp || !grp.score || !grp.bbox) return;
             for (var r = 0; r < rows; r++) {
                 var score = grp.score[r];
-                if (score < DET_THRESH) continue;
+                if (score < thresh) continue;
                 var cell = Math.floor(r / 2);
                 var cx = (cell % side) * stride;
                 var cy = Math.floor(cell / side) * stride;
@@ -202,13 +224,13 @@
     }
 
     // All SCRFD detections on a canvas, coords back in canvas space.
-    function _detectAll(canvas) {
+    function _detectAll(canvas, thresh) {
         var prep = _blobFromCanvas(canvas, DET_SIZE, 127.5, 128);
         var feeds = {};
         feeds[_detSession.inputNames[0]] = prep.tensor;
         return _detSession.run(feeds).then(function (results) {
             var s = prep.scale;
-            return _decodeScrfd(results, DET_SIZE).map(function (d) {
+            return _decodeScrfd(results, DET_SIZE, thresh).map(function (d) {
                 return {
                     score: d.score,
                     box: { x: d.box.x / s, y: d.box.y / s, width: d.box.width / s, height: d.box.height / s },
@@ -225,30 +247,48 @@
         });
     }
 
-    // PRIMARY detection for CampistryFace: tiled SCRFD over the working canvas.
-    // 640px tiles run at native scale (no letterbox shrink), which is exactly
-    // where SCRFD's small-face advantage lives; a whole-image pass catches the
-    // faces larger than a tile. Returns [{box, score, kps}] in work coords.
+    // One tiled pass: cut `work` into `tileSize` tiles, detect each (SCRFD
+    // upscales any tile smaller than 640 to 640, magnifying small faces),
+    // remap coords back to work space.
+    function _tiledPass(work, tileSize, overlap, thresh) {
+        var Core = _core();
+        var tiles = Core.planTiles(work.width, work.height, tileSize, overlap);
+        return Promise.all(tiles.map(function (t) {
+            return Promise.resolve().then(function () {
+                var tc = _makeCanvas(t.w, t.h);
+                tc.getContext('2d').drawImage(work, t.x, t.y, t.w, t.h, 0, 0, t.w, t.h);
+                return _detectAll(tc, thresh).then(function (dets) {
+                    dets.forEach(function (d) {
+                        d.box.x += t.x; d.box.y += t.y;
+                        if (d.kps) d.kps = d.kps.map(function (p) { return [p[0] + t.x, p[1] + t.y]; });
+                    });
+                    return dets;
+                });
+            });
+        })).then(function (arrs) {
+            var all = []; arrs.forEach(function (a) { all = all.concat(a); }); return all;
+        });
+    }
+
+    // PRIMARY detection for CampistryFace: multi-scale tiled SCRFD.
+    //   A. whole-image pass — big/near faces
+    //   B. coarse 640 tiles — normal group-photo faces
+    //   C. FINE 416 tiles, magnified to 640 with a lower threshold — the
+    //      distant "kids playing ball from across the field" faces that are
+    //      ~20px in the original and invisible to the coarse passes
+    // Returns [{box, score, kps}] in work coords (deduped later by the caller).
     function detectPrimary(work, opts) {
         if (!_ready) return Promise.resolve([]);
-        var Core = _core();
+        var maxSide = Math.max(work.width, work.height);
+        var tileOn = !opts || opts.tileThreshold == null || maxSide >= opts.tileThreshold;
         var passes = [_detectAll(work)];
-        var tileOn = !opts || opts.tileThreshold == null || Math.max(work.width, work.height) >= opts.tileThreshold;
-        if (tileOn && Math.max(work.width, work.height) > DET_SIZE) {
-            var tiles = Core.planTiles(work.width, work.height, DET_SIZE, 0.25);
-            tiles.forEach(function (t) {
-                passes.push(Promise.resolve().then(function () {
-                    var tc = _makeCanvas(t.w, t.h);
-                    tc.getContext('2d').drawImage(work, t.x, t.y, t.w, t.h, 0, 0, t.w, t.h);
-                    return _detectAll(tc).then(function (dets) {
-                        dets.forEach(function (d) {
-                            d.box.x += t.x; d.box.y += t.y;
-                            if (d.kps) d.kps = d.kps.map(function (p) { return [p[0] + t.x, p[1] + t.y]; });
-                        });
-                        return dets;
-                    });
-                }));
-            });
+        if (tileOn && maxSide > DET_SIZE) {
+            passes.push(_tiledPass(work, DET_SIZE, 0.25, DET_THRESH));
+            // fine magnified pass only pays off on genuinely large photos
+            // (small uploads have no tiny-face problem to solve)
+            if (maxSide >= 1400) {
+                passes.push(_tiledPass(work, FINE_TILE, 0.3, DET_THRESH_FINE));
+            }
         }
         return Promise.all(passes).then(function (results) {
             var all = [];
@@ -350,7 +390,7 @@
                     var aligned = _alignFace(workCanvas, face.kps);
                     if (!aligned) return;
                     return _embed(aligned).then(function (vec) {
-                        face.descriptors['arc-512'] = vec;
+                        face.descriptors[_recModelTag] = vec;
                     }).catch(function (e) {
                         console.warn('[FaceEngineV2] embed failed:', e && e.message);
                     });
@@ -373,7 +413,7 @@
                 }).then(function (aligned) {
                     if (!aligned) return;
                     return _embed(aligned).then(function (vec) {
-                        face.descriptors['arc-512'] = vec;
+                        face.descriptors[_recModelTag] = vec;
                     });
                 }).catch(function (e) {
                     console.warn('[FaceEngineV2] per-face embed failed:', e && e.message);

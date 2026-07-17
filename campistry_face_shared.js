@@ -51,12 +51,20 @@
     ];
 
     var DEFAULTS = {
-        maxWorkDim: 2560,      // working-canvas cap: keeps memory bounded but preserves small faces
+        maxWorkDim: 3200,      // working-canvas cap: raised from 2560 so distant
+                               //  faces in big phone photos keep their pixels
         tileThreshold: 1100,   // run the tiled pass when the working image exceeds this
         tileSize: 768,
         tileOverlap: 0.25,
         wholeInputSize: 640,   // detector input for the whole-image pass (was 416)
         tileInputSize: 512,    // detector input per tile
+        // FINE magnified pass (distant/small faces): small tiles fed to the
+        // detector at a LARGER input size, upscaling ~1.5x so a 20px field-shot
+        // face becomes ~30px. Only runs on large photos.
+        fineTileThreshold: 1400,
+        fineTileSize: 416,
+        fineTileInputSize: 608,
+        fineScoreThreshold: 0.2,
         scoreThreshold: 0.3,
         cropMargin: 0.4,       // margin around a detection when re-cropping for descriptor
         cropMinSide: 160       // upscale face crops so landmarks/descriptor get enough pixels
@@ -274,20 +282,34 @@
         });
     }
 
-    // faceapi primary detection: whole-image pass + SAHI tiles, merged.
-    function _detectPrimaryFaceapi(work, o, Core) {
-        var passes = [_detectOn(work, o.wholeInputSize)];
-        if (Math.max(work.width, work.height) >= o.tileThreshold) {
-            var tiles = Core.planTiles(work.width, work.height, o.tileSize, o.tileOverlap);
-            tiles.forEach(function (t) {
-                passes.push(Promise.resolve().then(function () {
-                    var tc = _cropCanvas(work, t.x, t.y, t.w, t.h);
-                    return _detectOn(tc, o.tileInputSize).then(function (dets) {
-                        dets.forEach(function (d) { d.box.x += t.x; d.box.y += t.y; });
-                        return dets;
+    // One tiled faceapi pass over `work`; small tiles + large inputSize
+    // magnify faces (that's how the fine pass finds distant ones).
+    function _faceapiTiledPass(work, o, Core, tileSize, overlap, inputSize, score) {
+        var tiles = Core.planTiles(work.width, work.height, tileSize, overlap);
+        return Promise.all(tiles.map(function (t) {
+            return Promise.resolve().then(function () {
+                var tc = _cropCanvas(work, t.x, t.y, t.w, t.h);
+                return faceapi.detectAllFaces(tc, _tinyOpts(inputSize, score)).then(function (dets) {
+                    return (dets || []).map(function (d) {
+                        return { box: { x: d.box.x + t.x, y: d.box.y + t.y, width: d.box.width, height: d.box.height }, score: d.score };
                     });
-                }));
+                });
             });
+        })).then(function (arrs) {
+            var all = []; arrs.forEach(function (a) { all = all.concat(a); }); return all;
+        });
+    }
+
+    // faceapi primary detection: whole-image + coarse tiles + a fine magnified
+    // pass for the distant/small faces (kids playing ball from across a field).
+    function _detectPrimaryFaceapi(work, o, Core) {
+        var maxSide = Math.max(work.width, work.height);
+        var passes = [_detectOn(work, o.wholeInputSize)];
+        if (maxSide >= o.tileThreshold) {
+            passes.push(_faceapiTiledPass(work, o, Core, o.tileSize, o.tileOverlap, o.tileInputSize, o.scoreThreshold));
+        }
+        if (maxSide >= o.fineTileThreshold) {
+            passes.push(_faceapiTiledPass(work, o, Core, o.fineTileSize, 0.3, o.fineTileInputSize, o.fineScoreThreshold));
         }
         return Promise.all(passes).then(function (results) {
             var all = [];
