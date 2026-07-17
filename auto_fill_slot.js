@@ -184,8 +184,9 @@
         return !allowed.includes(divName);
     }
 
-    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps, divName) {
-        const rules = actProps?.[fieldName]?.timeRules;
+    // Core rule evaluation on a rules ARRAY — shared by the field-keyed check
+    // below and the special's-own-rules gate in the candidate builder.
+    function areTimeRulesBlocking(rules, slotStart, slotEnd, divName) {
         if (!Array.isArray(rules) || rules.length === 0) return false;
         const parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
         const myDiv = divName != null ? String(divName) : null;
@@ -210,6 +211,10 @@
         }
         if (hasAvail && !inAvail) return true;
         return false;
+    }
+
+    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps, divName) {
+        return areTimeRulesBlocking(actProps?.[fieldName]?.timeRules, slotStart, slotEnd, divName);
     }
 
     // Returns true if GlobalFieldLocks blocks this field/time/division
@@ -466,6 +471,20 @@
                 if (loc && _disabledLc.has(String(loc).toLowerCase().trim())) return;
                 // ★ Facility-existence gate
                 if (_validLocs && loc && String(loc).trim() && !_validLocs.has(String(loc).trim().toLowerCase())) return;
+                // ★ Special's OWN config time rules. A HOSTED special (location ≠ name,
+                //   e.g. "Cap Making behind Masmidim BM" in room "Cap Making") only had
+                //   its ROOM's rules checked below (isFieldBlockedByTimeRules keyed by
+                //   loc) — its own Available/Unavailable windows were never consulted on
+                //   this leftover-fill path, so the filler could seat it inside its own
+                //   closed window (e.g. Unavailable 12:20–1:25). Check the special's own
+                //   rules here; fall back to its activityProperties entry (dual-keyed by
+                //   name) when the settings row carries none.
+                {
+                    const _ownTR = (Array.isArray(s.timeRules) && s.timeRules.length)
+                        ? s.timeRules
+                        : (actProps?.[s.name]?.timeRules || null);
+                    if (areTimeRulesBlocking(_ownTR, slotStart, slotEnd, divName)) return;
+                }
                 if (loc) {
                     if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
                     if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;

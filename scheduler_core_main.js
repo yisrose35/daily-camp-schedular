@@ -6988,11 +6988,37 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const sw = s.sharableWith || {};
                     const cap = (sw.type === 'not_sharable') ? 1 : (parseInt(sw.capacity, 10) || 2);
                     let floor = parseInt(sw.minBunks, 10) || 0; if (floor < 2) floor = 1; floor = Math.min(floor, cap);
-                    _forced64[String(s.name).toLowerCase().trim()] = { name: s.name, floor: floor, cap: cap, type: sw.type || 'not_sharable', pairs: sw.allowedPairs || {}, loc: s.location || null };
+                    _forced64[String(s.name).toLowerCase().trim()] = { name: s.name, floor: floor, cap: cap, type: sw.type || 'not_sharable', pairs: sw.allowedPairs || {}, loc: s.location || null, timeRules: Array.isArray(s.timeRules) ? s.timeRules : [] };
                 });
                 if (Object.keys(_forced64).length) {
                     const _isFree64 = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
                     const _winOf64 = (b, g, idx, e) => (e && e._startMin != null && e._endMin != null) ? { s: e._startMin, e: e._endMin } : _stime76(b, g, idx, e);
+                    // ★ Special's own time rules — force-placement must still respect the
+                    //   special's Available/Unavailable windows (it picks a LEGAL window
+                    //   instead; previously no time check ran on this seeding path at all,
+                    //   so a forced special could seat inside its own closed window).
+                    //   Same semantics as the SmartTile pool gate: division-scoped rules,
+                    //   Unavailable = no overlap, Available (when any apply) = must fit
+                    //   inside one. Case-insensitive type match.
+                    const _trBlocked64 = (rules, ws, we, g) => {
+                        if (!Array.isArray(rules) || rules.length === 0) return false;
+                        const _pm = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                        let hasAvail = false, inAvail = false;
+                        for (const r of rules) {
+                            const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                            if (rDivs.length > 0 && g != null && !rDivs.includes(String(g))) continue;
+                            const rs = r.startMin ?? (_pm ? _pm(r.start || r.startTime) : null);
+                            const re = r.endMin ?? (_pm ? _pm(r.end || r.endTime) : null);
+                            if (rs == null || re == null) continue;
+                            const rt = String(r.type || '').toLowerCase();
+                            if ((rt === 'unavailable' || r.available === false) && rs < we && re > ws) return true;
+                            if (rt === 'available' || r.available === true) {
+                                hasAvail = true;
+                                if (ws >= rs && we <= re) inAvail = true;
+                            }
+                        }
+                        return hasAvail && !inAvail;
+                    };
                     const _daysOf64 = (b, name) => { try { const d = (window.RotationEngine && typeof window.RotationEngine.getDaysSinceActivity === 'function') ? window.RotationEngine.getDaysSinceActivity(b, name) : null; return (typeof d === 'number') ? d : 9999; } catch (_e) { return 9999; } };
                     let _forcedSeeded64 = 0, _forcedFail64 = 0;
                     Object.keys(_forced64).forEach(actLC => {
@@ -7023,6 +7049,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 const e = arr[idx];
                                 if (!e || e.continuation || e._isTransition || e._league || e._h2h || e._postEdit || e._pinned || e._bunkOverride) continue;
                                 const t = _winOf64(b, g, idx, e); if (!t || t.s == null || t.e == null) continue;
+                                if (_trBlocked64(F.timeRules, t.s, t.e, g)) continue; // ★ window violates the special's own time rules
                                 const ck = _kindByCell76[String(b) + '|' + idx];
                                 const kind = (ck && ck !== 'any') ? ck : slotKindOf(_slotEvent76(b, g, idx, e));
                                 if (kind === 'sport') continue;
