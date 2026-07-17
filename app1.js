@@ -1308,8 +1308,15 @@
             //   the initial/user-driven load, whenever it drifts from the blob, so
             //   the bunk is part of the camp from the very first render.
             //   Drift-gated → a no-op (no write, no cloud loop) once reconciled.
+            //   Runs on EVERY load path, including the skipSync cross-tab/cloud
+            //   refresh: the drift gate makes it a one-shot, self-terminating
+            //   write (after it persists once, the blob matches campStructure, so
+            //   the re-entrant refresh finds no drift and writes nothing). This is
+            //   why it's safe here even though the full-state syncSpine above must
+            //   stay gated behind !skipSync — syncSpine always writes and would
+            //   loop; this only writes on a genuine structural mismatch.
             try {
-                if (!_opts.skipSync && Object.keys(campStructure).length > 0) {
+                if (Object.keys(campStructure).length > 0) {
                     const _blobBunks = Array.isArray(data.bunks) ? data.bunks.map(String) : [];
                     const _liveBunkSet = new Set((state.bunks || []).map(String));
                     const _blobBunkSet = new Set(_blobBunks);
