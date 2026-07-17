@@ -48,12 +48,14 @@ via **My Bunk**. **Staff assignments** and **SMS Alerts** are parked out of Flow
 Lite's nav (the code — `renderStaff`, `renderMessaging`, `send-sms` — is retained;
 SMS is coming back soon).
 
-### Flow Lite tabs
+### Flow Lite tabs — `Schedule · Facilities · Locate · Reports`
 
-- **Schedule** — read-only schedule, division chips, any bunk, date picker. Lite can never generate.
-- **Now** — the roaming head-counselor view. For the current time (with a ±15-min stepper to peek ahead), shows every bunk's current activity + location across the whole camp. Toggle **By division** or **By field** ("who's on the basketball court right now"). Reads today's `daily_schedules`.
+- **Schedule** — read-only schedule, date picker, with **By division / By grade** scope toggle, a **bunk search** (jump to any bunk across the camp), and a **Schedule / Now** mode toggle. "Now" is the folded-in whole-camp snapshot — every bunk's current activity grouped by division/grade. Lite can never generate.
+- **Facilities** — who's using **what facility, when, and by whom**. Per-facility cards list each booking (time · bunk · division · activity) for the selected date, current booking highlighted. Facility search included.
 - **Locate** — search any camper → their bunk, current activity, field, and time window (or where they'll be at a chosen time). Reads `app1.camperRoster` + the schedule.
-- **Reports** — **Bunk Rotation & Usage** per division: each bunk's activity tallies with usage bars, straight from `RotationCloud.load()` (`rotation_counts` table). Same numbers as the desktop report, without the desktop DOM coupling.
+- **Reports** — two views via a toggle:
+  - **Rotation & Usage** — each bunk's activity tallies with usage bars (from `RotationCloud.load()` / `rotation_counts`), with the same **By division / By grade** scope toggle and **bunk search** as Schedule.
+  - **Availability** — "what's available and when": for the selected date, each facility's open windows (free times), computed from the day's bookings vs the configured `fields`. Facilities configured but never used read "Open all day."
 
 It is installable as a PWA ("Add to Home Screen") via `manifest_lite.webmanifest`
 — standalone display, portrait, warm coral theme (`#EE6A53`, ramp defined in

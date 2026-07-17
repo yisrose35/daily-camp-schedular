@@ -31,7 +31,7 @@
 
     const HEAD_ROLES = ['owner', 'admin', 'scheduler'];
     const KV_KEYS = ['app1', 'campStructure', 'leaguesByName', 'specialtyLeagues',
-                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name'];
+                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields'];
     const SMS_BATCH_SIZE = 100;
 
     // ─── State ──────────────────────────────────────────────────────────
@@ -56,13 +56,24 @@
     let currentDate = todayKey();
     let activeTab = 'today';
     let currentApp = null;            // null = home launcher; else a LITE_APPS id
-    let selectedDivision = null;      // head-staff Today/Roster division chip
+    let selectedDivision = null;      // head-staff Roster division chip
     let rosterQuery = '';
-    let nowTargetMin = null;          // Now/Locate time selection; null = live "now"
-    let nowGroupBy = 'division';      // Now view grouping: 'division' | 'field'
+    let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
-    let reportsDivision = null;       // Reports division selection
     let rotationData = null;          // cached RotationCloud.load() result
+
+    // Schedule tab
+    let schedScope = 'division';      // 'division' | 'grade'
+    let schedMode = 'schedule';       // 'schedule' | 'now'
+    let schedSel = null;              // selected division/grade chip
+    let bunkQuery = '';               // Schedule bunk search
+    // Facilities tab
+    let facQuery = '';
+    // Reports tab
+    let repView = 'usage';            // 'usage' | 'avail'
+    let repScope = 'division';        // 'division' | 'grade'
+    let repSel = null;
+    let repBunkQuery = '';
     const scheduleCache = {};         // dateKey -> merged schedule data (or null)
     const schedulePending = {};       // dateKey -> Promise
 
@@ -223,6 +234,7 @@
             camp.leagues = byKey.leaguesByName || {};
             camp.specialty = byKey.specialtyLeagues || {};
             camp.staff = byKey.liteStaffAssignments || {};
+            camp.fields = byKey.fields || app1.fields || [];
             camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
                           : (byKey.camp_name && byKey.camp_name.value) || '';
             camp.sms = Object.assign({ enabled: false, audience: 'counselors', footer: '' },
@@ -278,6 +290,22 @@
     function invalidateSchedule(dateKey) { delete scheduleCache[dateKey]; }
 
     // ─── Camp-structure helpers ─────────────────────────────────────────
+
+    // Grade-level keys (app1.divisions is grade-keyed: each is a grade with bunks)
+    function gradeKeys() { return Object.keys(camp.divisions || {}); }
+
+    // Chips + bunks for a scope ('division' → parent divisions, 'grade' → grades)
+    function scopeChips(scope) { return scope === 'grade' ? gradeKeys() : parentDivisions(); }
+    function bunksForScope(scope, sel) {
+        if (!sel) return [];
+        return scope === 'grade' ? ((camp.divisions[sel] && camp.divisions[sel].bunks) || []) : bunksForParent(sel);
+    }
+
+    // Segmented control (mode / scope toggles)
+    function segHTML(id, options, active) {
+        return `<div class="lite-seg" id="${id}">${options.map(o =>
+            `<button type="button" class="lite-seg-btn${o.val === active ? ' active' : ''}" data-val="${o.val}">${esc(o.label)}</button>`).join('')}</div>`;
+    }
 
     // Parent divisions in display order (campStructure preferred)
     function parentDivisions() {
@@ -384,7 +412,7 @@
 
     const TAB_ICONS = {
         today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
-        now: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+        facilities: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 13v.01"/><path d="M9 17v.01"/></svg>',
         locate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
         reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
         roster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
@@ -402,7 +430,7 @@
         { id: 'flow', name: 'Flow', title: 'Flow Lite', logo: 'Flow_clean.png', color: '#147D91',
           theme: { accent: '#147D91', dark: '#0F5F6E', tint: '#E6F4F7' },
           roles: HEAD, status: 'available',
-          tabs: [{ id: 'today', label: 'Schedule' }, { id: 'now', label: 'Now' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
+          tabs: [{ id: 'today', label: 'Schedule' }, { id: 'facilities', label: 'Facilities' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
         { id: 'me',     name: 'Me',     logo: 'Me_clean.png',     color: '#F59E0B', theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'soon' },
         { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
         { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
@@ -571,7 +599,7 @@
         currentApp = id;
         applyTheme(app);
         document.getElementById('view-home').style.display = 'none';
-        setHeader(app.title || app.name, campDisplayName);
+        setHeader(app.title || app.name, '');   // no camp-name subtitle in-app
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
         buildTabs(app.tabs);
         switchTab(app.tabs[0].id);
@@ -628,7 +656,7 @@
 
     function renderView(id) {
         if (id === 'today') renderToday();
-        else if (id === 'now') renderNow();
+        else if (id === 'facilities') renderFacilities();
         else if (id === 'locate') renderLocate();
         else if (id === 'reports') renderReports();
         else if (id === 'roster') renderRoster();
@@ -666,48 +694,107 @@
 
     async function renderToday() {
         const view = document.getElementById('view-today');
-        view.innerHTML = dateStripHTML() + `<div id="liteTodayBody">${loadingHTML()}</div>`;
-        wireDateStrip(view, () => renderToday());
 
-        const body = view.querySelector('#liteTodayBody');
-        const sched = await getSchedule(currentDate);
-        if (activeTab !== 'today') return; // user navigated away mid-fetch
-
-        let bunks;
+        // Counselor: just their bunk(s) timeline — no controls.
         if (isCounselor()) {
-            bunks = myBunks();
+            view.innerHTML = dateStripHTML() + `<div id="liteTodayBody">${loadingHTML()}</div>`;
+            wireDateStrip(view, () => renderToday());
+            const body = view.querySelector('#liteTodayBody');
+            const bunks = myBunks();
             if (!bunks.length) {
                 body.innerHTML = emptyHTML('🏕️',
-                    'No bunk assigned to you yet.<br>Ask your head staff to assign your bunk in Campistry Lite → Staff.');
+                    'No bunk assigned to you yet.<br>Ask your head staff to assign your bunk in Campistry Lite → My Camp.');
                 return;
             }
-        } else {
-            // Head staff / viewer: division chips + that division's bunks
-            const parents = parentDivisions();
-            const schedBunks = sched ? Object.keys(sched.scheduleAssignments || {}) : [];
-            if (!parents.length && !schedBunks.length) {
-                body.innerHTML = emptyHTML('📭', 'No schedule found for this day.');
-                return;
-            }
-            if (parents.length) {
-                if (!selectedDivision || !parents.includes(selectedDivision)) selectedDivision = parents[0];
-                body.innerHTML = chipRowHTML(parents, selectedDivision) + '<div id="liteDivBunks"></div>';
-                body.querySelectorAll('.lite-chip').forEach(ch =>
-                    ch.addEventListener('click', () => { selectedDivision = ch.dataset.val; renderToday(); }));
-                bunks = bunksForParent(selectedDivision);
-            } else {
-                bunks = schedBunks.sort();
-            }
-        }
-
-        const target = body.querySelector('#liteDivBunks') || body;
-        if (!sched || !sched.scheduleAssignments) {
-            target.innerHTML = emptyHTML('📭', `No schedule published for ${friendlyDate(currentDate)} yet.`);
+            const sched = await getSchedule(currentDate);
+            if (activeTab !== 'today') return;
+            body.innerHTML = (!sched || !sched.scheduleAssignments)
+                ? emptyHTML('📭', `No schedule published for ${friendlyDate(currentDate)} yet.`)
+                : bunks.map(b => bunkCardHTML(b, sched)).join('');
             return;
         }
 
-        const cards = bunks.map(b => bunkCardHTML(b, sched)).join('');
-        target.innerHTML = cards || emptyHTML('📭', 'No bunks in this division.');
+        // Head staff / viewer: date + mode + search + scope + chips + body
+        view.innerHTML = dateStripHTML()
+            + segHTML('liteSchedMode', [{ val: 'schedule', label: 'Schedule' }, { val: 'now', label: 'Now' }], schedMode)
+            + `<div class="lite-field" style="margin-bottom:10px;">
+                 <input class="lite-input" id="liteBunkSearch" type="search" placeholder="Search a bunk…" value="${esc(bunkQuery)}" autocomplete="off">
+               </div>`
+            + segHTML('liteSchedScope', [{ val: 'division', label: 'By division' }, { val: 'grade', label: 'By grade' }], schedScope)
+            + `<div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
+        wireDateStrip(view, () => renderToday());
+        view.querySelectorAll('#liteSchedMode .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { schedMode = b.dataset.val; renderToday(); }));
+        view.querySelectorAll('#liteSchedScope .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { schedScope = b.dataset.val; schedSel = null; renderToday(); }));
+        const inp = view.querySelector('#liteBunkSearch');
+        inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedChips(view); renderSchedBody(view); });
+
+        renderSchedChips(view);
+        await renderSchedBody(view);
+    }
+
+    function renderSchedChips(view) {
+        const el = view.querySelector('#liteSchedChips');
+        if (!el) return;
+        if (bunkQuery.trim() || schedMode === 'now') { el.innerHTML = ''; return; }
+        const chips = scopeChips(schedScope);
+        if (!chips.length) { el.innerHTML = ''; return; }
+        if (!schedSel || !chips.includes(schedSel)) schedSel = chips[0];
+        el.innerHTML = chipRowHTML(chips, schedSel);
+        el.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { schedSel = ch.dataset.val; renderSchedChips(view); renderSchedBody(view); }));
+    }
+
+    async function renderSchedBody(view) {
+        const body = view.querySelector('#liteSchedBody');
+        if (!body) return;
+        const sched = await getSchedule(currentDate);
+        if (activeTab !== 'today') return;
+        if (!sched || !sched.scheduleAssignments || !Object.keys(sched.scheduleAssignments).length) {
+            body.innerHTML = emptyHTML('📭', `No schedule published for ${friendlyDate(currentDate)} yet.`);
+            return;
+        }
+
+        const q = bunkQuery.trim().toLowerCase();
+        if (q) {
+            const hits = allBunkRows(sched).map(r => r.bunk).filter(b => b.toLowerCase().includes(q));
+            body.innerHTML = hits.length ? hits.map(b => bunkCardHTML(b, sched)).join('')
+                                         : emptyHTML('🔍', 'No bunk matches your search.');
+            return;
+        }
+        if (schedMode === 'now') { body.innerHTML = nowSnapshotHTML(sched, schedScope); return; }
+
+        const bunks = bunksForScope(schedScope, schedSel);
+        body.innerHTML = bunks.length ? bunks.map(b => bunkCardHTML(b, sched)).join('')
+                                      : emptyHTML('📭', 'No bunks here.');
+    }
+
+    // The folded-in "Now" view — every bunk's current activity, grouped by scope.
+    function nowSnapshotHTML(sched, scope) {
+        const min = nowMinutes();
+        const rows = allBunkRows(sched).map(r => {
+            const entries = normalizeBunkEntries(r.bunk, sched);
+            return {
+                bunk: r.bunk,
+                group: scope === 'grade' ? (divKeyForBunk(r.bunk) || r.parent) : r.parent,
+                entry: entryCovering(entries, min),
+                upcoming: nextEntry(entries, min)
+            };
+        });
+        const byGroup = {};
+        rows.forEach(r => { (byGroup[r.group] = byGroup[r.group] || []).push(r); });
+        return `<div class="lite-note" style="margin:-2px 2px 10px;">● Happening right now · ${esc(fmtMin(min))}</div>`
+            + Object.keys(byGroup).map(g => `
+            <div class="lite-card lite-bunk-card">
+                <div class="lite-bunk-head"><span class="lite-bunk-name">${esc(g)}</span><span class="lite-bunk-div">${byGroup[g].length}</span></div>
+                ${byGroup[g].map(r => `<div class="lite-slot">
+                    <div class="lite-slot-time"><div class="t1">${esc(r.bunk)}</div></div>
+                    <div class="lite-slot-body">${r.entry
+                        ? `<div class="lite-slot-activity">${esc(r.entry.title)}</div>${r.entry.location && r.entry.location !== r.entry.title ? `<div class="lite-slot-loc">📍 ${esc(r.entry.location)}</div>` : ''}`
+                        : `<div class="lite-slot-activity" style="color:var(--muted);">${r.upcoming ? `Free · next ${esc(r.upcoming.title)} ${esc(fmtMin(r.upcoming.startMin))}` : 'Nothing scheduled'}</div>`}</div>
+                </div>`).join('')}
+            </div>`).join('');
     }
 
     function bunkCardHTML(bunk, sched) {
@@ -1356,7 +1443,7 @@
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // VIEW: NOW  (whole-camp live snapshot — the roaming head-counselor view)
+    // Shared time helpers (used by Schedule/Now, Facilities, Locate)
     // ════════════════════════════════════════════════════════════════════
 
     function effectiveNowMin() {
@@ -1409,87 +1496,113 @@
         view.querySelector('#liteNowReset').addEventListener('click', () => { nowTargetMin = null; rerender(); });
     }
 
-    async function renderNow() {
-        const view = document.getElementById('view-now');
-        view.innerHTML = timeBarHTML()
-            + `<div class="lite-chiprow" id="liteNowGroup">
-                 <button type="button" class="lite-chip ${nowGroupBy === 'division' ? 'active' : ''}" data-g="division">By division</button>
-                 <button type="button" class="lite-chip ${nowGroupBy === 'field' ? 'active' : ''}" data-g="field">By field</button>
-               </div>
-               <div id="liteNowBody">${loadingHTML()}</div>`;
-        wireTimeBar(view, renderNow);
-        view.querySelectorAll('#liteNowGroup .lite-chip').forEach(ch =>
-            ch.addEventListener('click', () => { nowGroupBy = ch.dataset.g; renderNow(); }));
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: FACILITIES  (who is using what facility, when, and by whom)
+    // ════════════════════════════════════════════════════════════════════
 
-        const sched = await getSchedule(todayKey());
-        if (activeTab !== 'now') return;
-        const body = view.querySelector('#liteNowBody');
-        if (!sched || !sched.scheduleAssignments || !Object.keys(sched.scheduleAssignments).length) {
-            body.innerHTML = emptyHTML('📭', 'No schedule published for today yet.');
-            return;
-        }
-
-        const min = effectiveNowMin();
-        const rows = allBunkRows(sched).map(r => {
-            const entries = normalizeBunkEntries(r.bunk, sched);
-            return { ...r, entry: entryCovering(entries, min), upcoming: nextEntry(entries, min) };
+    // All facility names known to the camp (configured fields ∪ ones in use)
+    function facilityNames() {
+        const out = new Set();
+        (camp.fields || []).forEach(f => {
+            const n = (typeof f === 'string') ? f : (f && (f.name || f.field || f.id));
+            if (n) out.add(String(n));
         });
+        return out;
+    }
 
-        if (nowGroupBy === 'field') {
-            // Group by where bunks physically are right now
-            const byPlace = {};
-            rows.forEach(r => {
-                if (!r.entry) return;
-                const place = r.entry.location || r.entry.title || 'Unassigned';
-                (byPlace[place] = byPlace[place] || []).push(r);
+    // Build facility → [{bunk, parent, activity, startMin, endMin}] for a schedule
+    function facilityUsage(sched) {
+        const byFac = {};
+        allBunkRows(sched).forEach(({ bunk, parent }) => {
+            normalizeBunkEntries(bunk, sched).forEach(e => {
+                if (!e.location) return;
+                (byFac[e.location] = byFac[e.location] || []).push({
+                    bunk, parent, activity: e.title, startMin: e.startMin, endMin: e.endMin
+                });
             });
-            const places = Object.keys(byPlace).sort();
-            if (!places.length) { body.innerHTML = emptyHTML('🌙', 'Nothing scheduled at this time.'); return; }
-            body.innerHTML = places.map(place => `
-                <div class="lite-card lite-bunk-card">
-                    <div class="lite-bunk-head">
-                        <span class="lite-bunk-name">📍 ${esc(place)}</span>
-                        <span class="lite-bunk-div">${byPlace[place].length} here</span>
-                    </div>
-                    ${byPlace[place].map(r => `<div class="lite-slot">
-                        <div class="lite-slot-body">
-                            <div class="lite-slot-activity">${esc(r.bunk)}</div>
-                            <div class="lite-slot-loc">${esc(r.parent)} · ${esc(r.entry.title)}</div>
-                        </div>
-                    </div>`).join('')}
-                </div>`).join('');
+        });
+        return byFac;
+    }
+
+    async function renderFacilities() {
+        const view = document.getElementById('view-facilities');
+        view.innerHTML = dateStripHTML()
+            + `<div class="lite-field" style="margin-bottom:10px;">
+                 <input class="lite-input" id="liteFacSearch" type="search" placeholder="Search a facility…" value="${esc(facQuery)}" autocomplete="off">
+               </div>
+               <div id="liteFacBody">${loadingHTML()}</div>`;
+        wireDateStrip(view, () => renderFacilities());
+        const inp = view.querySelector('#liteFacSearch');
+        inp.addEventListener('input', () => { facQuery = inp.value; renderFacBody(view); });
+        await renderFacBody(view);
+    }
+
+    async function renderFacBody(view) {
+        const body = view.querySelector('#liteFacBody');
+        if (!body) return;
+        const sched = await getSchedule(currentDate);
+        if (activeTab !== 'facilities') return;
+        if (!sched || !sched.scheduleAssignments || !Object.keys(sched.scheduleAssignments).length) {
+            body.innerHTML = emptyHTML('🏟️', `No schedule published for ${friendlyDate(currentDate)} yet.`);
             return;
         }
 
-        // Group by division (default)
-        const byDiv = {};
-        rows.forEach(r => { (byDiv[r.parent] = byDiv[r.parent] || []).push(r); });
-        const divs = Object.keys(byDiv);
-        body.innerHTML = divs.map(div => `
-            <div class="lite-card lite-bunk-card">
+        const byFac = facilityUsage(sched);
+        let facs = Object.keys(byFac).sort();
+        const q = facQuery.trim().toLowerCase();
+        if (q) facs = facs.filter(f => f.toLowerCase().includes(q));
+        if (!facs.length) {
+            body.innerHTML = emptyHTML('🏟️', q ? 'No facility matches your search.' : 'No facility bookings for this day.');
+            return;
+        }
+
+        const nowMin = nowMinutes();
+        const isToday = currentDate === todayKey();
+        body.innerHTML = facs.map(f => {
+            const uses = byFac[f].slice().sort((a, b) => (a.startMin ?? 0) - (b.startMin ?? 0));
+            return `<div class="lite-card lite-bunk-card">
                 <div class="lite-bunk-head">
-                    <span class="lite-bunk-name">${esc(div)}</span>
-                    <span class="lite-bunk-div">${byDiv[div].length} bunk${byDiv[div].length === 1 ? '' : 's'}</span>
+                    <span class="lite-bunk-name">📍 ${esc(f)}</span>
+                    <span class="lite-bunk-div">${uses.length} booking${uses.length === 1 ? '' : 's'}</span>
                 </div>
-                ${byDiv[div].map(r => {
-                    if (r.entry) {
-                        return `<div class="lite-slot">
-                            <div class="lite-slot-time"><div class="t1">${esc(r.bunk)}</div></div>
-                            <div class="lite-slot-body">
-                                <div class="lite-slot-activity">${esc(r.entry.title)}</div>
-                                ${r.entry.location && r.entry.location !== r.entry.title ? `<div class="lite-slot-loc">📍 ${esc(r.entry.location)}</div>` : ''}
-                            </div>
-                        </div>`;
-                    }
-                    const up = r.upcoming;
-                    return `<div class="lite-slot">
-                        <div class="lite-slot-time"><div class="t1">${esc(r.bunk)}</div></div>
+                ${uses.map(u => {
+                    const isNow = isToday && u.startMin != null && u.endMin != null && nowMin >= u.startMin && nowMin < u.endMin;
+                    return `<div class="lite-slot${isNow ? ' now' : ''}">
+                        <div class="lite-slot-time">
+                            <div class="t1">${u.startMin != null ? esc(fmtMin(u.startMin)) : '—'}</div>
+                            <div class="t2">${u.endMin != null ? esc(fmtMin(u.endMin)) : ''}</div>
+                        </div>
                         <div class="lite-slot-body">
-                            <div class="lite-slot-activity" style="color:var(--lite-muted);">${up ? `Free · next: ${esc(up.title)} at ${esc(fmtMin(up.startMin))}` : 'Nothing scheduled'}</div>
+                            <div class="lite-slot-activity">${esc(u.bunk)}</div>
+                            <div class="lite-slot-loc">${esc(u.parent)} · ${esc(u.activity)}</div>
                         </div>
                     </div>`;
                 }).join('')}
-            </div>`).join('');
+            </div>`;
+        }).join('');
+    }
+
+    // Merge overlapping [start,end] blocks; return sorted, merged list.
+    function mergeBlocks(blocks) {
+        const bs = blocks.filter(b => b[0] != null && b[1] != null).sort((a, b) => a[0] - b[0]);
+        const out = [];
+        bs.forEach(b => {
+            const last = out[out.length - 1];
+            if (last && b[0] <= last[1]) last[1] = Math.max(last[1], b[1]);
+            else out.push([b[0], b[1]]);
+        });
+        return out;
+    }
+    // Free windows within [dayMin, dayMax] given merged busy blocks.
+    function freeWindows(busy, dayMin, dayMax) {
+        const free = [];
+        let cursor = dayMin;
+        busy.forEach(([s, e]) => {
+            if (s > cursor) free.push([cursor, s]);
+            cursor = Math.max(cursor, e);
+        });
+        if (cursor < dayMax) free.push([cursor, dayMax]);
+        return free;
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1579,55 +1692,121 @@
 
     async function renderReports() {
         const view = document.getElementById('view-reports');
-        view.innerHTML = loadingHTML();
-        const data = await ensureRotation();
-        if (activeTab !== 'reports') return;
+        view.innerHTML = segHTML('liteRepView',
+                [{ val: 'usage', label: 'Rotation & Usage' }, { val: 'avail', label: 'Availability' }], repView)
+            + `<div id="liteRepBody">${loadingHTML()}</div>`;
+        view.querySelectorAll('#liteRepView .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { repView = b.dataset.val; renderReports(); }));
+        const bodyEl = view.querySelector('#liteRepBody');
+        if (repView === 'avail') await renderAvailability(bodyEl);
+        else await renderUsage(bodyEl);
+    }
 
+    // Rotation & Usage — scope toggle + bunk search + per-bunk usage bars
+    async function renderUsage(bodyEl) {
+        const data = await ensureRotation();
+        if (activeTab !== 'reports' || repView !== 'usage') return;
         if (!data || !data.counts) {
-            view.innerHTML = emptyHTML('📊', 'Rotation data isn\'t available yet. Generate a schedule first, or check back after today\'s activities are saved.');
+            bodyEl.innerHTML = emptyHTML('📊', 'Rotation data isn\'t available yet. Generate a schedule first, or check back after today\'s activities are saved.');
             return;
         }
+        bodyEl.innerHTML = segHTML('liteRepScope',
+                [{ val: 'division', label: 'By division' }, { val: 'grade', label: 'By grade' }], repScope)
+            + `<div class="lite-field" style="margin-bottom:10px;">
+                 <input class="lite-input" id="liteRepSearch" type="search" placeholder="Search a bunk…" value="${esc(repBunkQuery)}" autocomplete="off">
+               </div>
+               <div id="liteRepChips"></div><div id="liteRepUsage"></div>`;
+        bodyEl.querySelectorAll('#liteRepScope .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { repScope = b.dataset.val; repSel = null; renderReports(); }));
+        const inp = bodyEl.querySelector('#liteRepSearch');
+        inp.addEventListener('input', () => { repBunkQuery = inp.value; paintUsage(bodyEl, data); });
+        paintUsage(bodyEl, data);
+    }
 
-        const parents = parentDivisions();
-        if (!parents.length) { view.innerHTML = emptyHTML('📊', 'No divisions configured yet.'); return; }
-        if (!reportsDivision || !parents.includes(reportsDivision)) reportsDivision = parents[0];
+    function paintUsage(bodyEl, data) {
+        const chipsEl = bodyEl.querySelector('#liteRepChips');
+        const usageEl = bodyEl.querySelector('#liteRepUsage');
+        const q = repBunkQuery.trim().toLowerCase();
+        let bunks;
+        if (q) {
+            chipsEl.innerHTML = '';
+            bunks = allBunks().filter(b => b.toLowerCase().includes(q));
+        } else {
+            const chips = scopeChips(repScope);
+            if (chips.length) {
+                if (!repSel || !chips.includes(repSel)) repSel = chips[0];
+                chipsEl.innerHTML = chipRowHTML(chips, repSel);
+                chipsEl.querySelectorAll('.lite-chip').forEach(ch =>
+                    ch.addEventListener('click', () => { repSel = ch.dataset.val; paintUsage(bodyEl, data); }));
+            } else chipsEl.innerHTML = '';
+            bunks = bunksForScope(repScope, repSel);
+        }
+        usageEl.innerHTML = bunks.length ? bunks.map(b => usageCardHTML(b, data)).join('')
+                                         : emptyHTML('📊', q ? 'No bunk matches your search.' : 'No bunks here.');
+    }
 
-        view.innerHTML = `<div class="lite-section-label" style="margin-top:4px;">Bunk Rotation &amp; Usage</div>`
-            + chipRowHTML(parents, reportsDivision)
-            + `<div id="liteReportsBody"></div>`;
-        view.querySelectorAll('.lite-chip').forEach(ch =>
-            ch.addEventListener('click', () => { reportsDivision = ch.dataset.val; renderReports(); }));
-
-        const bodyEl = view.querySelector('#liteReportsBody');
-        const bunks = bunksForParent(reportsDivision);
-        if (!bunks.length) { bodyEl.innerHTML = emptyHTML('📊', 'No bunks in this division.'); return; }
-
-        bodyEl.innerHTML = bunks.map(bunk => {
-            const counts = data.counts[bunk] || {};
-            const acts = Object.entries(counts)
-                .filter(([, n]) => n > 0)
-                .sort((a, b) => b[1] - a[1]);
-            const total = acts.reduce((s, [, n]) => s + n, 0);
-            if (!acts.length) {
-                return `<div class="lite-card lite-bunk-card">
-                    <div class="lite-bunk-head"><span class="lite-bunk-name">${esc(bunk)}</span><span class="lite-bunk-div">no activity yet</span></div>
-                </div>`;
-            }
-            const max = acts[0][1];
+    function usageCardHTML(bunk, data) {
+        const counts = data.counts[bunk] || {};
+        const acts = Object.entries(counts).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+        const total = acts.reduce((s, [, n]) => s + n, 0);
+        if (!acts.length) {
             return `<div class="lite-card lite-bunk-card">
-                <div class="lite-bunk-head">
-                    <span class="lite-bunk-name">${esc(bunk)}</span>
-                    <span class="lite-bunk-div">${total} total</span>
-                </div>
-                ${acts.map(([act, n]) => `<div class="lite-usage-row">
-                    <div class="lite-usage-top">
-                        <span class="lite-usage-name">${esc(act)}</span>
-                        <span class="lite-usage-count">${n}×</span>
-                    </div>
-                    <div class="lite-usage-bar"><span style="width:${Math.round((n / max) * 100)}%"></span></div>
-                </div>`).join('')}
+                <div class="lite-bunk-head"><span class="lite-bunk-name">${esc(bunk)}</span><span class="lite-bunk-div">no activity yet</span></div>
             </div>`;
-        }).join('');
+        }
+        const max = acts[0][1];
+        return `<div class="lite-card lite-bunk-card">
+            <div class="lite-bunk-head">
+                <span class="lite-bunk-name">${esc(bunk)}</span>
+                <span class="lite-bunk-div">${total} total</span>
+            </div>
+            ${acts.map(([act, n]) => `<div class="lite-usage-row">
+                <div class="lite-usage-top"><span class="lite-usage-name">${esc(act)}</span><span class="lite-usage-count">${n}×</span></div>
+                <div class="lite-usage-bar"><span style="width:${Math.round((n / max) * 100)}%"></span></div>
+            </div>`).join('')}
+        </div>`;
+    }
+
+    // Availability — what's free and when, per facility, for the selected date
+    async function renderAvailability(bodyEl) {
+        bodyEl.innerHTML = dateStripHTML() + `<div id="liteAvailBody">${loadingHTML()}</div>`;
+        wireDateStrip(bodyEl, () => renderReports());
+        const sched = await getSchedule(currentDate);
+        if (activeTab !== 'reports' || repView !== 'avail') return;
+        const abody = bodyEl.querySelector('#liteAvailBody');
+
+        const byFac = {};
+        let dayMin = Infinity, dayMax = -Infinity;
+        if (sched && sched.scheduleAssignments) {
+            allBunkRows(sched).forEach(({ bunk }) => normalizeBunkEntries(bunk, sched).forEach(e => {
+                if (!e.location || e.startMin == null || e.endMin == null) return;
+                (byFac[e.location] = byFac[e.location] || []).push([e.startMin, e.endMin]);
+                dayMin = Math.min(dayMin, e.startMin); dayMax = Math.max(dayMax, e.endMin);
+            }));
+        }
+        // Configured facilities that were never used are available all day.
+        facilityNames().forEach(f => { if (!byFac[f]) byFac[f] = []; });
+
+        const facs = Object.keys(byFac).sort();
+        if (!facs.length || dayMin === Infinity) {
+            abody.innerHTML = emptyHTML('🏟️', `No facility data for ${friendlyDate(currentDate)}.`);
+            return;
+        }
+        abody.innerHTML = `<div class="lite-note" style="margin:-2px 2px 10px;">Open times on ${esc(friendlyDate(currentDate))} · camp day ${esc(fmtMin(dayMin))}–${esc(fmtMin(dayMax))}</div>`
+            + facs.map(f => {
+                const busy = mergeBlocks(byFac[f]);
+                const free = freeWindows(busy, dayMin, dayMax);
+                const freeTxt = !busy.length ? 'Open all day'
+                    : (free.length ? free.map(([s, e]) => `${fmtMin(s)}–${fmtMin(e)}`).join(' · ') : 'Fully booked');
+                const badge = !busy.length ? 'open' : (free.length ? `${free.length} open` : 'full');
+                return `<div class="lite-card">
+                    <div class="lite-usage-top" style="margin-bottom:6px;">
+                        <span class="lite-usage-name" style="font-weight:700;">📍 ${esc(f)}</span>
+                        <span class="lite-usage-count">${esc(badge)}</span>
+                    </div>
+                    <div class="lite-slot-loc"><b>Available:</b> ${esc(freeTxt)}</div>
+                </div>`;
+            }).join('');
     }
 
     // ════════════════════════════════════════════════════════════════════
