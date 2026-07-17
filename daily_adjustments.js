@@ -7283,8 +7283,12 @@ function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
   if (!container) return;
 
-  const divisions = masterSettings.app1?.divisions || {};
-  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const _rawAvail = window.availableDivisions || masterSettings.app1?.availableDivisions || [];
   // Order by the user's Campistry Me drag order via getUserDivisionOrder.
   // Falls back to the raw list if the helper isn't loaded yet.
   const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
@@ -7367,7 +7371,11 @@ function renderBunkOverridesUI() {
 //   a full-width tile in each bunk's column. Click a tile to override.
 function _boRenderAutoBunkGrid(wrap, divName) {
   if (!wrap) return;
-  const divisions = masterSettings.app1?.divisions || {};
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
@@ -8305,7 +8313,11 @@ function _inputTimeToMinutes(s) {
 
 function _boRenderBunkGrid(wrap, divName) {
   if (!wrap) return;
-  const divisions = masterSettings.app1?.divisions || {};
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
@@ -9219,8 +9231,12 @@ function renderFacilityBunkAccess(containerEl, facilityName, rows) {
   if (!containerEl) return;
   containerEl.innerHTML = '';
 
-  const divisions = masterSettings.app1?.divisions || {};
-  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const _rawAvail = window.availableDivisions || masterSettings.app1?.availableDivisions || [];
   const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
     ? window.getUserDivisionOrder(_rawAvail.slice())
     : _rawAvail.slice();

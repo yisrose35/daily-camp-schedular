@@ -489,7 +489,18 @@
     // ------------------------------------------------------------------------
     function loadAndFilterData() {
         const app1 = getApp1Settings();
-        const bunks = app1.bunks || [];
+        // ★ BUNK SOURCE: same staleness story as divisions below — app1.bunks is
+        //   the legacy settings-blob copy, only rewritten when app1 itself saves.
+        //   A bunk added in Campistry Me lands in campStructure + the live
+        //   registry (window.bunks) immediately, but NOT in the blob — and a bunk
+        //   missing here gets ZERO schedulable blocks, so the generator silently
+        //   skips it (observed live: bunk added mid-season appeared in the DA
+        //   grid but was omitted from every generated day). Prefer the live
+        //   registry; fall back to the blob (early boot / headless).
+        const _liveBunks = (typeof window !== 'undefined'
+            && Array.isArray(window.bunks)
+            && window.bunks.length > 0) ? window.bunks : null;
+        const bunks = _liveBunks || app1.bunks || [];
         const fields = app1.fields || [];
         const specials = getSpecialActivities();
 
