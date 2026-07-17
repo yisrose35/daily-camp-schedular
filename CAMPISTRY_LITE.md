@@ -7,19 +7,21 @@ will split into per-product apps as they grow. Everything is built mobile-first:
 big tap targets, no horizontal scroll, thumb-reachable bottom nav, glanceable
 while standing in the middle of camp.
 
-**Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`), an
-app-store-style list of the Lite apps available to the signed-in user — **Flow
-Lite** live today, **Me Lite** and **Alerts** shown as "Coming soon", and (for
-counselors) **My Camp**. Tapping a tile opens that app (`openApp`) with its own
-bottom tab bar; the header back-chevron returns to the launcher (`goHome`). The
-app config lives in `LITE_APPS` in `campistry_lite.js` — add an entry (id, name,
-tag, tile color, icon, roles, status, tabs) to surface a new Lite app.
+**Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`) that
+mirrors the website dashboard's quick-launch: a compact grid of **product tiles
+using each product's real logo** (`Flow_clean.png`, `Me_clean.png`, …) with the
+product color as a bottom accent. **Flow** is live; the rest of the suite (Me,
+Go, Health, Live, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
+get a single prominent **My Camp** hero tile. Tapping an available tile opens
+that app (`openApp`) with its own bottom tab bar; the header back-chevron returns
+to the launcher (`goHome`). The app config lives in `LITE_APPS` in
+`campistry_lite.js` — add an entry (id, name, logo, color, roles, status, tabs)
+to surface a new Lite app.
 
 **Design.** Coral (`#EE6A53`) is the Lite brand for app chrome; each launcher
-tile carries its parent product's color (Flow = teal, Me = amber, Alerts =
-coral). Fraunces for display type, DM Sans for body, soft layered shadows,
-translucent blurred header/tab bar, safe-area-aware. Tokens live at the top of
-`campistry_lite.css`.
+tile carries its parent product's color. Fraunces for display type, DM Sans for
+body, soft layered shadows, translucent blurred header/tab bar, safe-area-aware.
+Tokens live at the top of `campistry_lite.css`.
 
 | Audience | Tabs | What they can do |
 |---|---|---|

@@ -163,38 +163,45 @@ button { cursor: pointer; border: none; background: none; }
 .lite-app[data-screen="home"] .lite-main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 
 /* ─── HOME LAUNCHER ───────────────────────────────────────────────────── */
-.lite-home-hero { padding: 6px 4px 18px; }
-.lite-home-greeting { font-size: 0.9rem; color: var(--muted); font-weight: 500; }
-.lite-home-title { font-family: var(--font-display); font-size: 1.85rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; margin-top: 2px; }
-.lite-home-camp { font-size: 0.9rem; color: var(--ink-2); margin-top: 6px; display: flex; align-items: center; gap: 6px; }
-.lite-home-camp svg { width: 15px; height: 15px; color: var(--accent); }
+.lite-home-welcome { padding: 4px 2px 18px; }
+.lite-home-welcome .greeting { font-size: 0.85rem; color: var(--muted); font-weight: 500; }
+.lite-home-welcome .camp { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-top: 2px; }
 
-.lite-applist { display: flex; flex-direction: column; gap: 12px; }
-.lite-app-tile {
-    display: flex; align-items: center; gap: 14px; width: 100%; text-align: left;
-    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
-    box-shadow: var(--shadow); padding: 15px 16px; color: var(--ink);
+/* Product-tile grid — mirrors the website quick-launch, phone-compact */
+.lite-launch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+.lite-launch-tile {
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
+    aspect-ratio: 1 / 1; padding: 12px 8px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    border-bottom: 3px solid var(--ql, var(--line-2)); box-shadow: var(--shadow);
     transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
-.lite-app-tile:active { transform: scale(0.985); box-shadow: var(--shadow-sm); }
-.lite-app-tile.soon { opacity: 0.72; box-shadow: var(--shadow-sm); }
-.lite-app-icon {
-    width: 52px; height: 52px; border-radius: 15px; flex: none;
-    display: flex; align-items: center; justify-content: center;
-    background: color-mix(in srgb, var(--tile) 14%, white);
-    color: var(--tile);
+.lite-launch-tile:active { transform: scale(0.95); box-shadow: var(--shadow-sm); }
+.lite-launch-tile.soon { opacity: 0.5; background: var(--bg); box-shadow: var(--shadow-sm); border-bottom-color: var(--line-2); }
+.lite-launch-logo { height: 34px; width: auto; max-width: 76%; object-fit: contain; }
+.lite-launch-name { font-size: 0.76rem; font-weight: 700; color: var(--ink); letter-spacing: 0.01em; }
+.lite-launch-tile.soon .lite-launch-name { color: var(--muted); }
+.lite-launch-soon {
+    position: absolute; top: 7px; right: 7px;
+    font-size: 0.54rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--muted); background: var(--card); border: 1px solid var(--line-2);
+    padding: 2px 6px; border-radius: 999px;
 }
-.lite-app-icon svg { width: 26px; height: 26px; }
-.lite-app-info { flex: 1; min-width: 0; }
-.lite-app-name { font-family: var(--font-display); font-size: 1.08rem; font-weight: 700; letter-spacing: -0.01em; }
-.lite-app-tag { font-size: 0.82rem; color: var(--ink-2); margin-top: 2px; }
+
+/* Single-app hero tile (counselor) */
+.lite-hero-tile {
+    display: flex; align-items: center; gap: 15px; width: 100%; text-align: left;
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+    border-bottom: 3px solid var(--ql, var(--accent)); box-shadow: var(--shadow);
+    padding: 18px; color: var(--ink); transition: transform 0.12s ease;
+}
+.lite-hero-tile:active { transform: scale(0.99); }
+.lite-hero-logo { height: 42px; width: auto; max-width: 90px; object-fit: contain; flex: none; }
+.lite-hero-info { flex: 1; min-width: 0; }
+.lite-hero-name { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; display: block; }
+.lite-hero-tag { font-size: 0.83rem; color: var(--ink-2); margin-top: 2px; display: block; }
 .lite-app-arrow { color: var(--muted); flex: none; }
-.lite-app-arrow svg { width: 20px; height: 20px; display: block; }
-.lite-app-soon {
-    flex: none; font-size: 0.64rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
-    color: var(--ink-2); background: var(--bg); border: 1px solid var(--line-2);
-    padding: 4px 9px; border-radius: 999px;
-}
+.lite-app-arrow svg { width: 22px; height: 22px; display: block; }
 
 /* ─── Bottom tab bar ──────────────────────────────────────────────────── */
 .lite-tabbar {

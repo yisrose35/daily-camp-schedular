@@ -351,25 +351,24 @@
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
     };
 
-    // ─── Lite apps (home launcher) ──────────────────────────────────────
-    const ICON = {
-        flow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14"/><line x1="12" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="14" y2="18"/></svg>',
-        me: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-        alerts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-        counselor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V10l7-6 7 6v11"/><path d="M9 21v-6h6v6"/></svg>'
-    };
-
+    // ─── Lite apps (home launcher) — mirrors the website dashboard suite,
+    //     using each product's real logo. Flow is live; the rest are the
+    //     Lite versions still to come. ────────────────────────────────────
+    const HEAD = ['owner', 'admin', 'scheduler', 'viewer'];
     const LITE_APPS = [
-        { id: 'flow', name: 'Flow Lite', tag: 'Schedules on the go', tile: 'var(--c-flow)', icon: ICON.flow,
-          roles: ['owner', 'admin', 'scheduler', 'viewer'], status: 'available',
+        { id: 'flow', name: 'Flow', title: 'Flow Lite', logo: 'Flow_clean.png', color: '#147D91',
+          roles: HEAD, status: 'available',
           tabs: [{ id: 'today', label: 'Schedule' }, { id: 'now', label: 'Now' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
-        { id: 'counselor', name: 'My Camp', tag: 'Your bunk, day & league', tile: 'var(--coral-500)', icon: ICON.counselor,
-          roles: ['counselor'], status: 'available',
-          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }] },
-        { id: 'me', name: 'Me Lite', tag: 'Rosters & camp setup', tile: 'var(--c-me)', icon: ICON.me,
-          roles: ['owner', 'admin', 'scheduler', 'viewer'], status: 'soon' },
-        { id: 'alerts', name: 'Alerts', tag: 'Daily texts to staff', tile: 'var(--c-alerts)', icon: ICON.alerts,
-          roles: ['owner', 'admin', 'scheduler'], status: 'soon' }
+        { id: 'me',     name: 'Me',     logo: 'Me_clean.png',     color: '#F59E0B', roles: HEAD, status: 'soon' },
+        { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', roles: HEAD, status: 'soon' },
+        { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', roles: HEAD, status: 'soon' },
+        { id: 'live',   name: 'Live',   logo: 'Live_clean.png',   color: '#2563EB', roles: HEAD, status: 'soon' },
+        { id: 'snacks', name: 'Snacks', logo: 'Snacks_clean.png', color: '#78350F', roles: HEAD, status: 'soon' },
+        { id: 'link',   name: 'Link',   logo: 'Link_clean.png',   color: '#2A7A35', roles: HEAD, status: 'soon' },
+        { id: 'notes',  name: 'Notes',  logo: 'Notes_clean.png',  color: '#C4891A', roles: HEAD, status: 'soon' },
+        { id: 'counselor', name: 'My Camp', title: 'My Camp', tag: 'Your bunk, schedule & league',
+          logo: 'Lite_clean.png', color: '#EE6A53', roles: ['counselor'], status: 'available',
+          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }] }
     ];
 
     function appsForRole() { return LITE_APPS.filter(a => a.roles.includes(role)); }
@@ -384,35 +383,40 @@
     function renderHome() {
         const view = document.getElementById('view-home');
         const apps = appsForRole();
-        const avail = apps.filter(a => a.status === 'available');
-        const soon = apps.filter(a => a.status === 'soon');
         const campName = window.AccessControl?.getCampName?.() || '';
         const who = userName ? `, ${esc(firstName(userName))}` : '';
-        const pin = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
-        view.innerHTML = `
-            <div class="lite-home-hero">
-                <div class="lite-home-greeting">${greeting()}${who}</div>
-                <div class="lite-home-title">Campistry <span>Lite</span></div>
-                ${campName ? `<div class="lite-home-camp">${pin} ${esc(campName)}</div>` : ''}
-            </div>
-            ${avail.length ? `<div class="lite-section-label" style="margin-top:6px;">Your apps</div>
-                <div class="lite-applist">${avail.map(appTileHTML).join('')}</div>` : ''}
-            ${soon.length ? `<div class="lite-section-label">Coming soon</div>
-                <div class="lite-applist">${soon.map(appTileHTML).join('')}</div>` : ''}`;
-        view.querySelectorAll('.lite-app-tile[data-app]').forEach(t =>
+        const welcome = `<div class="lite-home-welcome">
+                <div class="greeting">${greeting()}${who}</div>
+                <div class="camp">${esc(campName || 'Campistry Lite')}</div>
+            </div>`;
+
+        // Single-app roles (counselors) get one prominent tile; otherwise a grid.
+        if (apps.length === 1) {
+            const a = apps[0];
+            const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
+            view.innerHTML = welcome + `<button class="lite-hero-tile" data-app="${a.id}" style="--ql:${a.color}">
+                <img src="${a.logo}" class="lite-hero-logo" alt="">
+                <span class="lite-hero-info">
+                    <span class="lite-hero-name">${esc(a.name)}</span>
+                    ${a.tag ? `<span class="lite-hero-tag">${esc(a.tag)}</span>` : ''}
+                </span>
+                <span class="lite-app-arrow">${chevron}</span>
+            </button>`;
+            view.querySelector('[data-app]').addEventListener('click', () => openApp(a.id));
+            return;
+        }
+
+        view.innerHTML = welcome + `<div class="lite-launch-grid">${apps.map(tileHTML).join('')}</div>`;
+        view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
             t.addEventListener('click', () => openApp(t.dataset.app)));
     }
 
-    function appTileHTML(app) {
+    function tileHTML(app) {
         const soon = app.status !== 'available';
-        const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
-        return `<button class="lite-app-tile${soon ? ' soon' : ''}" ${soon ? 'disabled' : `data-app="${app.id}"`} style="--tile:${app.tile}">
-            <span class="lite-app-icon">${app.icon}</span>
-            <span class="lite-app-info">
-                <span class="lite-app-name">${esc(app.name)}</span>
-                <span class="lite-app-tag">${esc(app.tag)}</span>
-            </span>
-            ${soon ? '<span class="lite-app-soon">Soon</span>' : `<span class="lite-app-arrow">${chevron}</span>`}
+        return `<button class="lite-launch-tile${soon ? ' soon' : ''}" ${soon ? 'disabled' : `data-app="${app.id}"`} style="--ql:${app.color}">
+            ${soon ? '<span class="lite-launch-soon">Soon</span>' : ''}
+            <img src="${app.logo}" class="lite-launch-logo" alt="">
+            <span class="lite-launch-name">${esc(app.name)}</span>
         </button>`;
     }
 
@@ -421,7 +425,7 @@
         if (!app || app.status !== 'available') return;
         currentApp = id;
         document.getElementById('view-home').style.display = 'none';
-        setHeader(app.name, window.AccessControl?.getCampName?.() || '');
+        setHeader(app.title || app.name, window.AccessControl?.getCampName?.() || '');
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
         buildTabs(app.tabs);
         switchTab(app.tabs[0].id);
