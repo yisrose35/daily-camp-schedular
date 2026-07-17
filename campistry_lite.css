@@ -103,11 +103,9 @@ button { cursor: pointer; border: none; background: none; }
     -webkit-backdrop-filter: saturate(180%) blur(14px);
     border-bottom: 1px solid var(--line);
 }
-/* In-app: no title bar — header blends into the page, just back + avatar */
-.lite-app[data-screen="app"] .lite-header {
-    background: var(--bg); border-bottom: none;
-    backdrop-filter: none; -webkit-backdrop-filter: none;
-}
+/* No top bar anywhere — home uses the hero settings button; in-app you
+   swipe/back-gesture to return to the launcher (native-app feel). */
+.lite-app[data-screen="app"] .lite-header { display: none; }
 .lite-app[data-screen="app"] .lite-header-titles { display: none; }
 .lite-back {
     width: 40px; height: 40px; border-radius: 12px; flex: none;
@@ -166,11 +164,10 @@ button { cursor: pointer; border: none; background: none; }
 }
 
 /* ─── Main / views ────────────────────────────────────────────────────── */
-.lite-main { flex: 1; padding: 16px 15px calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom)); }
-/* Home has no top header — the hero card is the top element, so it carries
-   the settings button and clears the status bar itself. */
+/* No top header on any screen — content clears the status bar itself. */
+.lite-main { flex: 1; padding: calc(14px + env(safe-area-inset-top)) 15px calc(var(--tabbar-h) + 24px + env(safe-area-inset-bottom)); }
 .lite-app[data-screen="home"] .lite-header { display: none; }
-.lite-app[data-screen="home"] .lite-main { padding-top: calc(14px + env(safe-area-inset-top)); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.lite-app[data-screen="home"] .lite-main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 
 /* ─── HOME LAUNCHER ───────────────────────────────────────────────────── */
 /* Hero card — mirrors the website dashboard hero, in the Lite coral theme.

@@ -50,9 +50,12 @@ SMS is coming back soon).
 
 ### Flow Lite tabs — `Schedule · Locate · Reports`
 
-In-app there is **no title header bar** — just a floating back-chevron (returns to
-the launcher) and the account avatar over the page. The date control is a modern
-pill (date + a "Today" badge) flanked by prev/next chevrons.
+In-app there is **no top bar at all** — no back button or avatar; you return to
+the launcher with the phone's **swipe/back gesture** (native-app feel). This is
+wired via the History API: `openApp` pushes a history entry and a `popstate`
+handler calls `goHome`, so the hardware/browser back returns to the dashboard
+instead of leaving the site. Account/settings live on the home hero. The date
+control is a pill (date + a "Today" badge) flanked by prev/next chevrons.
 
 - **Schedule** — read-only schedule, date pill, with a **By division / By grade / By facility** scope toggle, a search box (bunks, or facilities under the facility scope), and a **Schedule / Now** mode toggle (division/grade scopes only). "Now" is the folded-in whole-camp snapshot — every bunk's current activity grouped by division/grade. **By facility** shows who's using **what facility, when, and by whom** (per-facility booking cards, current booking highlighted) — this replaces the former standalone Facilities tab. Lite can never generate.
 - **Locate** — search any camper → their bunk, current activity, field, and time window (or where they'll be at a chosen time). Reads `app1.camperRoster` + the schedule.
