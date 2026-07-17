@@ -66,9 +66,7 @@
     let schedScope = 'division';      // 'division' | 'grade'
     let schedMode = 'schedule';       // 'schedule' | 'now'
     let schedSel = null;              // selected division/grade chip
-    let bunkQuery = '';               // Schedule bunk search
-    // Facilities tab
-    let facQuery = '';
+    let bunkQuery = '';               // Schedule bunk / facility search
     // Reports tab
     let repView = 'usage';            // 'usage' | 'avail'
     let repScope = 'division';        // 'division' | 'grade'
@@ -430,7 +428,7 @@
         { id: 'flow', name: 'Flow', title: 'Flow Lite', logo: 'Flow_clean.png', color: '#147D91',
           theme: { accent: '#147D91', dark: '#0F5F6E', tint: '#E6F4F7' },
           roles: HEAD, status: 'available',
-          tabs: [{ id: 'today', label: 'Schedule' }, { id: 'facilities', label: 'Facilities' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
+          tabs: [{ id: 'today', label: 'Schedule' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
         { id: 'me',     name: 'Me',     logo: 'Me_clean.png',     color: '#F59E0B', theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'soon' },
         { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
         { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
@@ -599,7 +597,7 @@
         currentApp = id;
         applyTheme(app);
         document.getElementById('view-home').style.display = 'none';
-        setHeader(app.title || app.name, '');   // no camp-name subtitle in-app
+        setHeader('', '');   // no title bar in-app — just back + avatar
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
         buildTabs(app.tabs);
         switchTab(app.tabs[0].id);
@@ -656,7 +654,6 @@
 
     function renderView(id) {
         if (id === 'today') renderToday();
-        else if (id === 'facilities') renderFacilities();
         else if (id === 'locate') renderLocate();
         else if (id === 'reports') renderReports();
         else if (id === 'roster') renderRoster();
@@ -714,19 +711,25 @@
             return;
         }
 
-        // Head staff / viewer: date + mode + search + scope + chips + body
+        // Head staff / viewer: date + scope + (mode) + search + chips + body
+        const isFac = schedScope === 'facility';
         view.innerHTML = dateStripHTML()
-            + segHTML('liteSchedMode', [{ val: 'schedule', label: 'Schedule' }, { val: 'now', label: 'Now' }], schedMode)
+            + segHTML('liteSchedScope', [
+                { val: 'division', label: 'By division' },
+                { val: 'grade', label: 'By grade' },
+                { val: 'facility', label: 'By facility' }
+              ], schedScope)
+            + (isFac ? '' : segHTML('liteSchedMode', [{ val: 'schedule', label: 'Schedule' }, { val: 'now', label: 'Now' }], schedMode))
             + `<div class="lite-field" style="margin-bottom:10px;">
-                 <input class="lite-input" id="liteBunkSearch" type="search" placeholder="Search a bunk…" value="${esc(bunkQuery)}" autocomplete="off">
+                 <input class="lite-input" id="liteBunkSearch" type="search" placeholder="${isFac ? 'Search a facility…' : 'Search a bunk…'}" value="${esc(bunkQuery)}" autocomplete="off">
                </div>`
-            + segHTML('liteSchedScope', [{ val: 'division', label: 'By division' }, { val: 'grade', label: 'By grade' }], schedScope)
             + `<div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
         wireDateStrip(view, () => renderToday());
-        view.querySelectorAll('#liteSchedMode .lite-seg-btn').forEach(b =>
-            b.addEventListener('click', () => { schedMode = b.dataset.val; renderToday(); }));
         view.querySelectorAll('#liteSchedScope .lite-seg-btn').forEach(b =>
-            b.addEventListener('click', () => { schedScope = b.dataset.val; schedSel = null; renderToday(); }));
+            b.addEventListener('click', () => { schedScope = b.dataset.val; schedSel = null; bunkQuery = ''; renderToday(); }));
+        const modeSeg = view.querySelector('#liteSchedMode');
+        if (modeSeg) modeSeg.querySelectorAll('.lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { schedMode = b.dataset.val; renderToday(); }));
         const inp = view.querySelector('#liteBunkSearch');
         inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedChips(view); renderSchedBody(view); });
 
@@ -737,7 +740,8 @@
     function renderSchedChips(view) {
         const el = view.querySelector('#liteSchedChips');
         if (!el) return;
-        if (bunkQuery.trim() || schedMode === 'now') { el.innerHTML = ''; return; }
+        // Facility scope / search / Now mode all show everything → no chips
+        if (schedScope === 'facility' || bunkQuery.trim() || schedMode === 'now') { el.innerHTML = ''; return; }
         const chips = scopeChips(schedScope);
         if (!chips.length) { el.innerHTML = ''; return; }
         if (!schedSel || !chips.includes(schedSel)) schedSel = chips[0];
@@ -757,6 +761,13 @@
         }
 
         const q = bunkQuery.trim().toLowerCase();
+
+        // By facility → who's using what facility, when, and by whom
+        if (schedScope === 'facility') {
+            body.innerHTML = facilityCardsHTML(sched, q);
+            return;
+        }
+
         if (q) {
             const hits = allBunkRows(sched).map(r => r.bunk).filter(b => b.toLowerCase().includes(q));
             body.innerHTML = hits.length ? hits.map(b => bunkCardHTML(b, sched)).join('')
@@ -1497,7 +1508,8 @@
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // VIEW: FACILITIES  (who is using what facility, when, and by whom)
+    // FACILITIES  (who is using what facility, when, and by whom)
+    // Rendered inside Schedule under the "By facility" scope.
     // ════════════════════════════════════════════════════════════════════
 
     // All facility names known to the camp (configured fields ∪ ones in use)
@@ -1524,41 +1536,17 @@
         return byFac;
     }
 
-    async function renderFacilities() {
-        const view = document.getElementById('view-facilities');
-        view.innerHTML = dateStripHTML()
-            + `<div class="lite-field" style="margin-bottom:10px;">
-                 <input class="lite-input" id="liteFacSearch" type="search" placeholder="Search a facility…" value="${esc(facQuery)}" autocomplete="off">
-               </div>
-               <div id="liteFacBody">${loadingHTML()}</div>`;
-        wireDateStrip(view, () => renderFacilities());
-        const inp = view.querySelector('#liteFacSearch');
-        inp.addEventListener('input', () => { facQuery = inp.value; renderFacBody(view); });
-        await renderFacBody(view);
-    }
-
-    async function renderFacBody(view) {
-        const body = view.querySelector('#liteFacBody');
-        if (!body) return;
-        const sched = await getSchedule(currentDate);
-        if (activeTab !== 'facilities') return;
-        if (!sched || !sched.scheduleAssignments || !Object.keys(sched.scheduleAssignments).length) {
-            body.innerHTML = emptyHTML('🏟️', `No schedule published for ${friendlyDate(currentDate)} yet.`);
-            return;
-        }
-
+    // Per-facility booking cards for a schedule, optionally filtered by query.
+    function facilityCardsHTML(sched, q) {
         const byFac = facilityUsage(sched);
         let facs = Object.keys(byFac).sort();
-        const q = facQuery.trim().toLowerCase();
         if (q) facs = facs.filter(f => f.toLowerCase().includes(q));
         if (!facs.length) {
-            body.innerHTML = emptyHTML('🏟️', q ? 'No facility matches your search.' : 'No facility bookings for this day.');
-            return;
+            return emptyHTML('🏟️', q ? 'No facility matches your search.' : 'No facility bookings for this day.');
         }
-
         const nowMin = nowMinutes();
         const isToday = currentDate === todayKey();
-        body.innerHTML = facs.map(f => {
+        return facs.map(f => {
             const uses = byFac[f].slice().sort((a, b) => (a.startMin ?? 0) - (b.startMin ?? 0));
             return `<div class="lite-card lite-bunk-card">
                 <div class="lite-bunk-head">
@@ -1814,14 +1802,17 @@
     // ════════════════════════════════════════════════════════════════════
 
     function dateStripHTML() {
-        return `<div class="lite-datestrip">
-            <button type="button" id="liteDatePrev" aria-label="Previous day">‹</button>
-            <div class="lite-date-label">
-                <div class="day">${esc(friendlyDate(currentDate))}</div>
-                <div class="sub">${currentDate === todayKey() ? 'Today · tap to pick a date' : 'Tap to pick a date'}</div>
-                <input type="date" id="liteDatePick" value="${esc(currentDate)}">
+        const isToday = currentDate === todayKey();
+        const chevL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>';
+        const chevR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>';
+        return `<div class="lite-datebar">
+            <button type="button" class="lite-date-arrow" id="liteDatePrev" aria-label="Previous day">${chevL}</button>
+            <div class="lite-date-pill">
+                <div class="lite-date-day">${esc(friendlyDate(currentDate))}</div>
+                <div class="lite-date-tag${isToday ? ' today' : ''}">${isToday ? 'Today' : 'Tap to change'}</div>
+                <input type="date" id="liteDatePick" value="${esc(currentDate)}" aria-label="Pick a date">
             </div>
-            <button type="button" id="liteDateNext" aria-label="Next day">›</button>
+            <button type="button" class="lite-date-arrow" id="liteDateNext" aria-label="Next day">${chevR}</button>
         </div>`;
     }
 

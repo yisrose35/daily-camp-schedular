@@ -48,10 +48,13 @@ via **My Bunk**. **Staff assignments** and **SMS Alerts** are parked out of Flow
 Lite's nav (the code — `renderStaff`, `renderMessaging`, `send-sms` — is retained;
 SMS is coming back soon).
 
-### Flow Lite tabs — `Schedule · Facilities · Locate · Reports`
+### Flow Lite tabs — `Schedule · Locate · Reports`
 
-- **Schedule** — read-only schedule, date picker, with **By division / By grade** scope toggle, a **bunk search** (jump to any bunk across the camp), and a **Schedule / Now** mode toggle. "Now" is the folded-in whole-camp snapshot — every bunk's current activity grouped by division/grade. Lite can never generate.
-- **Facilities** — who's using **what facility, when, and by whom**. Per-facility cards list each booking (time · bunk · division · activity) for the selected date, current booking highlighted. Facility search included.
+In-app there is **no title header bar** — just a floating back-chevron (returns to
+the launcher) and the account avatar over the page. The date control is a modern
+pill (date + a "Today" badge) flanked by prev/next chevrons.
+
+- **Schedule** — read-only schedule, date pill, with a **By division / By grade / By facility** scope toggle, a search box (bunks, or facilities under the facility scope), and a **Schedule / Now** mode toggle (division/grade scopes only). "Now" is the folded-in whole-camp snapshot — every bunk's current activity grouped by division/grade. **By facility** shows who's using **what facility, when, and by whom** (per-facility booking cards, current booking highlighted) — this replaces the former standalone Facilities tab. Lite can never generate.
 - **Locate** — search any camper → their bunk, current activity, field, and time window (or where they'll be at a chosen time). Reads `app1.camperRoster` + the schedule.
 - **Reports** — two views via a toggle:
   - **Rotation & Usage** — each bunk's activity tallies with usage bars (from `RotationCloud.load()` / `rotation_counts`), with the same **By division / By grade** scope toggle and **bunk search** as Schedule.
