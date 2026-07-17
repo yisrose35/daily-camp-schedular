@@ -61,7 +61,7 @@ control is a pill (date + a "Today" badge) flanked by prev/next chevrons.
 - **Locate** — search any camper → their bunk, current activity, field, and time window (or where they'll be at a chosen time). Reads `app1.camperRoster` + the schedule.
 - **Reports** — two views via a toggle:
   - **Rotation & Usage** — each bunk's activity tallies with usage bars (from `RotationCloud.load()` / `rotation_counts`), with the same **By division / By grade** scope toggle and **bunk search** as Schedule.
-  - **Availability** — "what's available and when": for the selected date, each facility's open windows (free times), computed from the day's bookings vs the configured `fields`. Facilities configured but never used read "Open all day."
+  - **Availability** — the on-the-go "what's free now / at a time" tool. Pick a time (defaults to **now**, with ±15 steppers or tap to jump straight to, say, 1 PM) and it splits every facility into **Free at [time]** (green, with "free until X") and **In use** (with who's there and when it "opens"). A facility search answers "need a basketball court at 1 PM?" instantly. Facility list = the day's bookings ∪ configured `fields`.
 
 It is installable as a PWA ("Add to Home Screen") via `manifest_lite.webmanifest`
 — standalone display, portrait, warm coral theme (`#EE6A53`, ramp defined in

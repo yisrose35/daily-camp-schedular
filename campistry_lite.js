@@ -72,6 +72,7 @@
     let repScope = 'division';        // 'division' | 'grade'
     let repSel = null;
     let repBunkQuery = '';
+    let availQuery = '';              // Availability facility search
     const scheduleCache = {};         // dateKey -> merged schedule data (or null)
     const schedulePending = {};       // dateKey -> Promise
 
@@ -1504,6 +1505,10 @@
         return out;
     }
 
+    function minutesToHHMM(min) {
+        const h = Math.floor(min / 60), m = min % 60;
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
     function timeBarHTML() {
         const eff = effectiveNowMin();
         const live = nowTargetMin == null;
@@ -1511,7 +1516,8 @@
             <button type="button" class="lite-now-step" id="liteNowMinus" aria-label="15 minutes earlier">−15</button>
             <div class="lite-now-label">
                 <div class="t">${esc(fmtMin(eff))}</div>
-                <div class="s">${live ? '● Live now' : 'Peeking ahead · tap Now'}</div>
+                <div class="s">${live ? '● Live now · tap to set a time' : 'Tap to set a time'}</div>
+                <input type="time" id="liteNowPick" value="${esc(minutesToHHMM(eff))}" aria-label="Pick a time">
             </div>
             <button type="button" class="lite-now-step" id="liteNowPlus" aria-label="15 minutes later">+15</button>
             <button type="button" class="lite-now-reset${live ? ' live' : ''}" id="liteNowReset">Now</button>
@@ -1522,6 +1528,13 @@
         view.querySelector('#liteNowMinus').addEventListener('click', () => { nowTargetMin = clamp(effectiveNowMin() - 15); rerender(); });
         view.querySelector('#liteNowPlus').addEventListener('click', () => { nowTargetMin = clamp(effectiveNowMin() + 15); rerender(); });
         view.querySelector('#liteNowReset').addEventListener('click', () => { nowTargetMin = null; rerender(); });
+        const pick = view.querySelector('#liteNowPick');
+        if (pick) pick.addEventListener('change', (e) => {
+            const v = e.target.value;  // "HH:MM"
+            if (!v) return;
+            const [h, m] = v.split(':').map(Number);
+            if (Number.isFinite(h) && Number.isFinite(m)) { nowTargetMin = clamp(h * 60 + m); rerender(); }
+        });
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -1773,45 +1786,71 @@
     }
 
     // Availability — what's free and when, per facility, for the selected date
+    // "What's free right now / at [time]" — the on-the-go HC tool.
     async function renderAvailability(bodyEl) {
-        bodyEl.innerHTML = dateStripHTML() + `<div id="liteAvailBody">${loadingHTML()}</div>`;
+        bodyEl.innerHTML = dateStripHTML() + timeBarHTML()
+            + `<div class="lite-field" style="margin-bottom:10px;">
+                 <input class="lite-input" id="liteAvailSearch" type="search" placeholder="Need a court, field…? Search a facility" value="${esc(availQuery)}" autocomplete="off">
+               </div>
+               <div id="liteAvailBody">${loadingHTML()}</div>`;
         wireDateStrip(bodyEl, () => renderReports());
+        wireTimeBar(bodyEl, () => renderReports());
+        const inp = bodyEl.querySelector('#liteAvailSearch');
+        inp.addEventListener('input', () => { availQuery = inp.value; paintAvail(bodyEl); });
+        await paintAvail(bodyEl);
+    }
+
+    async function paintAvail(bodyEl) {
+        const abody = bodyEl.querySelector('#liteAvailBody');
+        if (!abody) return;
         const sched = await getSchedule(currentDate);
         if (activeTab !== 'reports' || repView !== 'avail') return;
-        const abody = bodyEl.querySelector('#liteAvailBody');
 
-        const byFac = {};
-        let dayMin = Infinity, dayMax = -Infinity;
-        if (sched && sched.scheduleAssignments) {
-            allBunkRows(sched).forEach(({ bunk }) => normalizeBunkEntries(bunk, sched).forEach(e => {
-                if (!e.location || e.startMin == null || e.endMin == null) return;
-                (byFac[e.location] = byFac[e.location] || []).push([e.startMin, e.endMin]);
-                dayMin = Math.min(dayMin, e.startMin); dayMax = Math.max(dayMax, e.endMin);
-            }));
-        }
-        // Configured facilities that were never used are available all day.
+        // facility → sorted bookings (used ∪ configured-but-empty)
+        const byFac = facilityUsage(sched || {});
         facilityNames().forEach(f => { if (!byFac[f]) byFac[f] = []; });
+        let facs = Object.keys(byFac).sort();
+        const q = availQuery.trim().toLowerCase();
+        if (q) facs = facs.filter(f => f.toLowerCase().includes(q));
 
-        const facs = Object.keys(byFac).sort();
-        if (!facs.length || dayMin === Infinity) {
-            abody.innerHTML = emptyHTML('🏟️', `No facility data for ${friendlyDate(currentDate)}.`);
+        if (!facs.length) {
+            abody.innerHTML = emptyHTML('', q ? 'No facility matches your search.' : 'No facilities set up yet.');
             return;
         }
-        abody.innerHTML = `<div class="lite-note" style="margin:-2px 2px 10px;">Open times on ${esc(friendlyDate(currentDate))} · camp day ${esc(fmtMin(dayMin))}–${esc(fmtMin(dayMax))}</div>`
-            + facs.map(f => {
-                const busy = mergeBlocks(byFac[f]);
-                const free = freeWindows(busy, dayMin, dayMax);
-                const freeTxt = !busy.length ? 'Open all day'
-                    : (free.length ? free.map(([s, e]) => `${fmtMin(s)}–${fmtMin(e)}`).join(' · ') : 'Fully booked');
-                const badge = !busy.length ? 'open' : (free.length ? `${free.length} open` : 'full');
-                return `<div class="lite-card">
-                    <div class="lite-usage-top" style="margin-bottom:6px;">
-                        <span class="lite-usage-name" style="font-weight:700;">📍 ${esc(f)}</span>
-                        <span class="lite-usage-count">${esc(badge)}</span>
-                    </div>
-                    <div class="lite-slot-loc"><b>Available:</b> ${esc(freeTxt)}</div>
-                </div>`;
-            }).join('');
+
+        const min = effectiveNowMin();
+        const free = [], busy = [];
+        facs.forEach(f => {
+            const books = byFac[f].slice().sort((a, b) => (a.startMin ?? 0) - (b.startMin ?? 0));
+            const cur = books.find(b => b.startMin != null && b.endMin != null && min >= b.startMin && min < b.endMin);
+            if (cur) {
+                busy.push({ f, occ: cur });
+            } else {
+                const next = books.find(b => b.startMin != null && b.startMin > min);
+                free.push({ f, until: next ? next.startMin : null });
+            }
+        });
+        free.sort((a, b) => (b.until == null) - (a.until == null) || (a.f.localeCompare(b.f)));
+
+        const freeCards = free.length ? free.map(x => `<div class="lite-card lite-avail-card free">
+                <div class="lite-avail-row">
+                    <span class="lite-avail-name">📍 ${esc(x.f)}</span>
+                    <span class="lite-pill green">${x.until != null ? 'free until ' + esc(fmtMin(x.until)) : 'free all day'}</span>
+                </div>
+            </div>`).join('') : `<div class="lite-empty" style="padding:16px;">Nothing free at ${esc(fmtMin(min))}.</div>`;
+
+        const busyCards = busy.map(x => `<div class="lite-card lite-avail-card">
+                <div class="lite-avail-row">
+                    <span class="lite-avail-name">📍 ${esc(x.f)}</span>
+                    <span class="lite-pill gray">opens ${esc(fmtMin(x.occ.endMin))}</span>
+                </div>
+                <div class="lite-slot-loc">In use — ${esc(x.occ.bunk)} · ${esc(x.occ.activity)}</div>
+            </div>`).join('');
+
+        abody.innerHTML =
+            `<div class="lite-section-label" style="margin-top:2px;">✅ Free at ${esc(fmtMin(min))} · ${free.length}</div>`
+            + freeCards
+            + (busy.length ? `<div class="lite-section-label">In use · ${busy.length}</div>` + busyCards : '');
     }
 
     // ════════════════════════════════════════════════════════════════════

@@ -314,9 +314,10 @@ button { cursor: pointer; border: none; background: none; }
 .lite-nowbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .lite-now-step { min-width: 54px; height: 46px; border-radius: 13px; border: 1px solid var(--line-2); background: var(--card); color: var(--ink-2); font-size: 0.85rem; font-weight: 700; box-shadow: var(--shadow-sm); }
 .lite-now-step:active { background: var(--accent-tint); }
-.lite-now-label { flex: 1; text-align: center; }
-.lite-now-label .t { font-family: var(--font-display); font-size: 1.18rem; font-weight: 700; }
+.lite-now-label { flex: 1; text-align: center; position: relative; }
+.lite-now-label .t { font-family: var(--font-body); font-size: 1.15rem; font-weight: 700; }
 .lite-now-label .s { font-size: 0.7rem; color: var(--muted); }
+.lite-now-label input[type="time"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; }
 .lite-now-reset { height: 46px; padding: 0 17px; border-radius: 13px; border: 1px solid var(--line-2); background: var(--card); color: var(--accent-dark); font-size: 0.85rem; font-weight: 700; box-shadow: var(--shadow-sm); }
 .lite-now-reset.live { background: var(--accent); color: #fff; border-color: var(--accent); }
 
@@ -328,6 +329,13 @@ button { cursor: pointer; border: none; background: none; }
 .lite-usage-count { font-size: 0.82rem; font-weight: 800; color: var(--accent-dark); }
 .lite-usage-bar { height: 7px; border-radius: 999px; background: var(--accent-tint); overflow: hidden; }
 .lite-usage-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-dark)); border-radius: 999px; }
+
+/* ─── Availability cards (Reports → what's free) ──────────────────────── */
+.lite-avail-card { padding: 12px 14px; }
+.lite-avail-card.free { border-left: 3px solid #12B76A; }
+.lite-avail-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lite-avail-name { font-weight: 600; font-size: 0.95rem; }
+.lite-avail-card .lite-slot-loc { margin-top: 5px; }
 
 /* ─── Chips ───────────────────────────────────────────────────────────── */
 .lite-chiprow { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 12px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
