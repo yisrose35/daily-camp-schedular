@@ -7,6 +7,20 @@ will split into per-product apps as they grow. Everything is built mobile-first:
 big tap targets, no horizontal scroll, thumb-reachable bottom nav, glanceable
 while standing in the middle of camp.
 
+**Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`), an
+app-store-style list of the Lite apps available to the signed-in user — **Flow
+Lite** live today, **Me Lite** and **Alerts** shown as "Coming soon", and (for
+counselors) **My Camp**. Tapping a tile opens that app (`openApp`) with its own
+bottom tab bar; the header back-chevron returns to the launcher (`goHome`). The
+app config lives in `LITE_APPS` in `campistry_lite.js` — add an entry (id, name,
+tag, tile color, icon, roles, status, tabs) to surface a new Lite app.
+
+**Design.** Coral (`#EE6A53`) is the Lite brand for app chrome; each launcher
+tile carries its parent product's color (Flow = teal, Me = amber, Alerts =
+coral). Fraunces for display type, DM Sans for body, soft layered shadows,
+translucent blurred header/tab bar, safe-area-aware. Tokens live at the top of
+`campistry_lite.css`.
+
 | Audience | Tabs | What they can do |
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |

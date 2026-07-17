@@ -54,6 +54,7 @@
 
     let currentDate = todayKey();
     let activeTab = 'today';
+    let currentApp = null;            // null = home launcher; else a LITE_APPS id
     let selectedDivision = null;      // head-staff Today/Roster division chip
     let rosterQuery = '';
     let nowTargetMin = null;          // Now/Locate time selection; null = live "now"
@@ -132,23 +133,23 @@
             // Camp state (structure, roster, leagues, Lite settings)
             await loadCampState();
 
-            // Reveal app
-            document.getElementById('liteCampName').textContent =
-                window.AccessControl?.getCampName?.() || '';
-            const badge = document.getElementById('liteRoleBadge');
-            badge.textContent = roleLabel(role);
+            // Chrome: avatar, menu identity, role badge
+            const ini = avatarInitials();
+            document.getElementById('liteAvatarInitials').textContent = ini;
+            document.getElementById('liteMenuAvatar').textContent = ini;
+            document.getElementById('liteRoleBadge').textContent = roleLabel(role);
             document.getElementById('liteMenuUser').textContent = userEmail;
             if (!isHeadStaff()) {
                 const dash = document.getElementById('liteMenuDashboard');
                 if (dash) dash.style.display = 'none';
             }
 
-            buildTabs();
             wireChrome();
-            switchTab('today');
 
+            // Always land on the home launcher — the user picks a Lite app there.
             document.getElementById('liteSplash').style.display = 'none';
             document.getElementById('liteApp').style.display = '';
+            goHome();
         } catch (e) {
             console.error('[Lite] Boot failed:', e);
             setSplash('Something went wrong loading Campistry Lite. Pull to refresh or reload.');
@@ -350,35 +351,114 @@
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
     };
 
-    function tabsForRole() {
-        // Flow Lite: comprehensive, read-only, on-the-go view of all of Flow.
-        // Head staff AND viewers get the full read-only picture ("see everything").
-        if (isHeadStaff() || isViewerRole()) {
-            return [
-                { id: 'today', label: 'Schedule' },
-                { id: 'now', label: 'Now' },
-                { id: 'locate', label: 'Locate' },
-                { id: 'reports', label: 'Reports' }
-            ];
-        }
-        // Counselor keeps their bunk-level personal companion.
-        return [
-            { id: 'today', label: 'My Day' },
-            { id: 'roster', label: 'My Bunk' },
-            { id: 'league', label: 'League' }
-        ];
+    // ─── Lite apps (home launcher) ──────────────────────────────────────
+    const ICON = {
+        flow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="8" y1="14" x2="8" y2="14"/><line x1="12" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="14" y2="18"/></svg>',
+        me: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        alerts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        counselor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V10l7-6 7 6v11"/><path d="M9 21v-6h6v6"/></svg>'
+    };
+
+    const LITE_APPS = [
+        { id: 'flow', name: 'Flow Lite', tag: 'Schedules on the go', tile: 'var(--c-flow)', icon: ICON.flow,
+          roles: ['owner', 'admin', 'scheduler', 'viewer'], status: 'available',
+          tabs: [{ id: 'today', label: 'Schedule' }, { id: 'now', label: 'Now' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
+        { id: 'counselor', name: 'My Camp', tag: 'Your bunk, day & league', tile: 'var(--coral-500)', icon: ICON.counselor,
+          roles: ['counselor'], status: 'available',
+          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }] },
+        { id: 'me', name: 'Me Lite', tag: 'Rosters & camp setup', tile: 'var(--c-me)', icon: ICON.me,
+          roles: ['owner', 'admin', 'scheduler', 'viewer'], status: 'soon' },
+        { id: 'alerts', name: 'Alerts', tag: 'Daily texts to staff', tile: 'var(--c-alerts)', icon: ICON.alerts,
+          roles: ['owner', 'admin', 'scheduler'], status: 'soon' }
+    ];
+
+    function appsForRole() { return LITE_APPS.filter(a => a.roles.includes(role)); }
+
+    // ─── Home launcher ──────────────────────────────────────────────────
+    function greeting() {
+        const h = new Date().getHours();
+        return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+    }
+    function firstName(n) { return String(n || '').trim().split(/\s+/)[0]; }
+
+    function renderHome() {
+        const view = document.getElementById('view-home');
+        const apps = appsForRole();
+        const avail = apps.filter(a => a.status === 'available');
+        const soon = apps.filter(a => a.status === 'soon');
+        const campName = window.AccessControl?.getCampName?.() || '';
+        const who = userName ? `, ${esc(firstName(userName))}` : '';
+        const pin = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+        view.innerHTML = `
+            <div class="lite-home-hero">
+                <div class="lite-home-greeting">${greeting()}${who}</div>
+                <div class="lite-home-title">Campistry <span>Lite</span></div>
+                ${campName ? `<div class="lite-home-camp">${pin} ${esc(campName)}</div>` : ''}
+            </div>
+            ${avail.length ? `<div class="lite-section-label" style="margin-top:6px;">Your apps</div>
+                <div class="lite-applist">${avail.map(appTileHTML).join('')}</div>` : ''}
+            ${soon.length ? `<div class="lite-section-label">Coming soon</div>
+                <div class="lite-applist">${soon.map(appTileHTML).join('')}</div>` : ''}`;
+        view.querySelectorAll('.lite-app-tile[data-app]').forEach(t =>
+            t.addEventListener('click', () => openApp(t.dataset.app)));
     }
 
-    function isViewerRole() { return !isHeadStaff() && !isCounselor(); }
+    function appTileHTML(app) {
+        const soon = app.status !== 'available';
+        const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
+        return `<button class="lite-app-tile${soon ? ' soon' : ''}" ${soon ? 'disabled' : `data-app="${app.id}"`} style="--tile:${app.tile}">
+            <span class="lite-app-icon">${app.icon}</span>
+            <span class="lite-app-info">
+                <span class="lite-app-name">${esc(app.name)}</span>
+                <span class="lite-app-tag">${esc(app.tag)}</span>
+            </span>
+            ${soon ? '<span class="lite-app-soon">Soon</span>' : `<span class="lite-app-arrow">${chevron}</span>`}
+        </button>`;
+    }
 
-    function buildTabs() {
+    function openApp(id) {
+        const app = LITE_APPS.find(a => a.id === id);
+        if (!app || app.status !== 'available') return;
+        currentApp = id;
+        document.getElementById('view-home').style.display = 'none';
+        setHeader(app.name, window.AccessControl?.getCampName?.() || '');
+        document.getElementById('liteApp').setAttribute('data-screen', 'app');
+        buildTabs(app.tabs);
+        switchTab(app.tabs[0].id);
+    }
+
+    function goHome() {
+        currentApp = null;
+        document.querySelectorAll('.lite-view').forEach(v => { if (v.id !== 'view-home') v.style.display = 'none'; });
+        document.getElementById('liteApp').setAttribute('data-screen', 'home');
+        setHeaderHome();
+        renderHome();
+        animateIn(document.getElementById('view-home'));
+        try { window.scrollTo({ top: 0 }); } catch (_) {}
+    }
+
+    function setHeader(title, sub) {
+        document.getElementById('liteHeaderTitle').textContent = title;
+        document.getElementById('liteHeaderSub').textContent = sub || '';
+    }
+    function setHeaderHome() {
+        document.getElementById('liteHeaderTitle').innerHTML = 'Campistry <span>Lite</span>';
+        document.getElementById('liteHeaderSub').textContent = window.AccessControl?.getCampName?.() || '';
+    }
+
+    function animateIn(el) {
+        if (!el) return;
+        el.classList.remove('anim'); void el.offsetWidth; el.classList.add('anim');
+    }
+
+    function buildTabs(tabs) {
         const bar = document.getElementById('liteTabbar');
         bar.innerHTML = '';
-        tabsForRole().forEach(t => {
+        (tabs || []).forEach(t => {
             const btn = document.createElement('button');
             btn.className = 'lite-tab';
             btn.dataset.tab = t.id;
-            btn.innerHTML = `${TAB_ICONS[t.id] || ''}<span>${esc(t.label)}</span>`;
+            btn.innerHTML = `<span class="lite-tab-ic">${TAB_ICONS[t.id] || ''}</span><span>${esc(t.label)}</span>`;
             btn.addEventListener('click', () => switchTab(t.id));
             bar.appendChild(btn);
         });
@@ -390,7 +470,7 @@
             b.classList.toggle('active', b.dataset.tab === id));
         document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
         const view = document.getElementById('view-' + id);
-        if (view) view.style.display = '';
+        if (view) { view.style.display = ''; animateIn(view); }
         renderView(id);
         try { window.scrollTo({ top: 0 }); } catch (_) {}
     }
@@ -407,6 +487,7 @@
     }
 
     function wireChrome() {
+        document.getElementById('liteBackBtn').addEventListener('click', goHome);
         const menu = document.getElementById('liteMenu');
         document.getElementById('liteMenuBtn').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -1512,6 +1593,13 @@
         const [y, m, d] = key.split('-').map(Number);
         const dt = new Date(y, m - 1, d);
         return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+
+    function avatarInitials() {
+        const src = (userName && userName.trim()) || (userEmail || '').replace(/@.*/, '') || '?';
+        const parts = src.split(/[.\s_\-]+/).filter(Boolean);
+        const two = ((parts[0] || '')[0] || '') + ((parts[1] || '')[0] || '');
+        return (two || src[0] || '?').toUpperCase();
     }
 
     function roleLabel(r) {
