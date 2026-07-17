@@ -58,6 +58,8 @@
     let currentApp = null;            // null = home launcher; else a LITE_APPS id
     let selectedDivision = null;      // head-staff Roster division chip
     let rosterQuery = '';
+    let meRosterQuery = '';           // Me Lite roster search
+    let meDivision = null;            // Me Lite roster division chip ('' = all)
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -423,6 +425,7 @@
         locate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
         reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
         roster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        meRoster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
@@ -438,7 +441,9 @@
           theme: { accent: '#147D91', dark: '#0F5F6E', tint: '#E6F4F7' },
           roles: HEAD, status: 'available',
           tabs: [{ id: 'today', label: 'Schedule' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
-        { id: 'me',     name: 'Me',     logo: 'Me_clean.png',     color: '#F59E0B', theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'soon' },
+        { id: 'me',     name: 'Me',     title: 'Me Lite', logo: 'Me_clean.png', color: '#F59E0B',
+          theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'available',
+          tabs: [{ id: 'meRoster', label: 'Roster' }] },
         { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
         { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
         { id: 'live',   name: 'Live',   logo: 'Live_clean.png',   color: '#2563EB', theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'soon' },
@@ -669,6 +674,7 @@
         else if (id === 'locate') renderLocate();
         else if (id === 'reports') renderReports();
         else if (id === 'roster') renderRoster();
+        else if (id === 'meRoster') renderMeRoster();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
@@ -1036,6 +1042,255 @@
                 if (d) d.style.display = d.style.display === 'none' ? '' : 'none';
             });
         });
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: ME LITE — full roster + search → tap a camper for everything
+    // ════════════════════════════════════════════════════════════════════
+
+    function renderMeRoster() {
+        const view = document.getElementById('view-meRoster');
+
+        if (!camp.stateLoaded) {
+            view.innerHTML = emptyHTML('', 'Roster data isn\'t available for your role.');
+            return;
+        }
+        if (!Object.keys(camp.roster || {}).length) {
+            view.innerHTML = emptyHTML('', 'No campers in the roster yet.<br>Add campers on the Me page in full Campistry.');
+            return;
+        }
+
+        view.innerHTML = `
+            <div class="lite-field" style="margin-bottom:10px;">
+                <input class="lite-input" id="liteMeSearch" type="search"
+                       placeholder="Search all campers…" value="${esc(meRosterQuery)}">
+            </div>
+            <div id="liteMeBody"></div>`;
+
+        const input = view.querySelector('#liteMeSearch');
+        input.addEventListener('input', () => {
+            meRosterQuery = input.value;
+            renderMeRosterBody(view.querySelector('#liteMeBody'));
+        });
+        renderMeRosterBody(view.querySelector('#liteMeBody'));
+    }
+
+    function renderMeRosterBody(body) {
+        const q = meRosterQuery.trim().toLowerCase();
+
+        // Search mode: flat, ranked list across the whole camp.
+        if (q) {
+            const hits = Object.entries(camp.roster || {})
+                .map(([name, c]) => ({ name, ...c }))
+                .filter(c => meCamperMatches(c, q))
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .slice(0, 60);
+            body.innerHTML = hits.length
+                ? `<div class="lite-section-label">${hits.length} match${hits.length === 1 ? '' : 'es'}</div>`
+                    + hits.map(meCamperRowHTML).join('')
+                : emptyHTML('', 'No campers match your search.');
+            wireMeRoster(body);
+            return;
+        }
+
+        // Browse mode: division chips (+ "All"), then bunk-grouped list.
+        const parents = parentDivisions();
+        const chips = ['All', ...parents];
+        if (meDivision === null) meDivision = 'All';
+        if (!chips.includes(meDivision)) meDivision = 'All';
+
+        let html = chipRowHTML(chips, meDivision) + '<div id="liteMeGroups"></div>';
+        body.innerHTML = html;
+        body.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { meDivision = ch.dataset.val; renderMeRosterBody(body); }));
+
+        const holder = body.querySelector('#liteMeGroups');
+        const divs = meDivision === 'All' ? parents : [meDivision];
+        let out = '';
+        divs.forEach(p => {
+            bunksForParent(p).forEach(b => {
+                const campers = campersInBunk(b);
+                if (!campers.length) return;
+                out += `<div class="lite-section-label">${esc(b)} · ${campers.length}</div>`
+                    + campers.map(meCamperRowHTML).join('');
+            });
+        });
+        holder.innerHTML = out || emptyHTML('', 'No campers in this division.');
+        wireMeRoster(holder);
+    }
+
+    function meCamperMatches(c, q) {
+        const hay = [c.name, c.bunk, c.division, c.grade, c.school,
+                     c.parent1Name, c.parent2Name, c.altFirstName, c.altLastName]
+            .filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+    }
+
+    function meCamperRowHTML(c) {
+        const flags = [];
+        if (c.allergies) flags.push('<span class="lite-flag">Allergy</span>');
+        if (c.medications) flags.push('<span class="lite-flag med">Meds</span>');
+        if (c.dietary) flags.push('<span class="lite-flag diet">Dietary</span>');
+        const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
+        return `<div class="lite-card lite-camper">
+            <button class="lite-camper-row" type="button" data-camper="${esc(c.name)}">
+                <span>
+                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
+                </span>
+                <span class="lite-camper-flags">${flags.join('')}
+                    <svg class="lite-camper-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+                </span>
+            </button>
+        </div>`;
+    }
+
+    function wireMeRoster(root) {
+        root.querySelectorAll('.lite-camper-row[data-camper]').forEach(row =>
+            row.addEventListener('click', () => openCamperDetail(row.dataset.camper)));
+    }
+
+    // ─── Full camper detail (bottom sheet) — every field on file ──────────
+    function openCamperDetail(name) {
+        const c = camp.roster?.[name];
+        if (!c) return;
+        openSheet(camperDetailHTML(name, c));
+        if (sheetEl) {
+            const close = sheetEl.querySelector('#liteCamperClose');
+            if (close) close.addEventListener('click', closeSheet);
+        }
+    }
+
+    function camperDetailHTML(name, c) {
+        const preferred = [c.altFirstName, c.altLastName].filter(Boolean).join(' ').trim();
+        const age = ageFrom(c.dob);
+        const placement = [c.division, c.grade, c.bunk].filter(Boolean).join(' · ');
+
+        const sections = [];
+
+        // Personal
+        sections.push(dSection('Personal', [
+            preferred ? dRow('Preferred name', preferred) : '',
+            c.dob ? dRow('Date of birth', age != null ? `${fmtDate(c.dob)} · ${age} yrs` : fmtDate(c.dob)) : '',
+            dRow('Gender', c.gender)
+        ]));
+
+        // School
+        sections.push(dSection('School', [
+            dRow('School', c.school),
+            dRow('Grade', c.schoolGrade),
+            dRow('Teacher', c.teacher)
+        ]));
+
+        // Placement
+        sections.push(dSection('Placement', [
+            dRow('Division', c.division),
+            dRow('Grade', c.grade),
+            dRow('Bunk', c.bunk)
+        ]));
+
+        // Parents / guardians
+        sections.push(dSection('Parents & guardians', [
+            dRow('Parent 1', c.parent1Name),
+            dRow('Phone', c.parent1Phone, 'tel'),
+            dRow('Email', c.parent1Email, 'mail'),
+            dRow('Parent 2', c.parent2Name),
+            dRow('Phone', c.parent2Phone, 'tel')
+        ]));
+
+        // Address
+        const cityStateZip = ([c.city, c.state].filter(Boolean).join(', ') + (c.zip ? ` ${c.zip}` : '')).trim();
+        sections.push(dSection('Address', [
+            dRow('Street', c.street),
+            dRow('City / State / Zip', cityStateZip)
+        ]));
+
+        // Emergency
+        const emergWho = [c.emergencyName, c.emergencyRel ? `(${c.emergencyRel})` : ''].filter(Boolean).join(' ');
+        sections.push(dSection('Emergency contact', [
+            dRow('Contact', emergWho),
+            dRow('Phone', c.emergencyPhone, 'tel')
+        ]));
+
+        // Teams
+        const teamRows = [];
+        if (c.teams && typeof c.teams === 'object') {
+            Object.entries(c.teams).forEach(([lg, tm]) => { if (tm) teamRows.push(dRow(lg, tm)); });
+        }
+        if (!teamRows.length && c.team) teamRows.push(dRow('Team', c.team));
+        sections.push(dSection('Teams', teamRows));
+
+        // Medical (highlighted) — rendered as its own emphasized block
+        const medRows = [];
+        if (c.allergies) medRows.push(dRow('Allergies', c.allergies));
+        if (c.medications) medRows.push(dRow('Medications', c.medications));
+        if (c.dietary) medRows.push(dRow('Dietary', c.dietary));
+        const medBlock = medRows.length
+            ? `<div class="lite-detail-section lite-detail-med">
+                   <div class="lite-detail-title">Medical</div>
+                   <dl class="lite-detail-dl">${medRows.join('')}</dl>
+               </div>`
+            : '';
+
+        // Notes
+        const notesBlock = c.notes
+            ? `<div class="lite-detail-section">
+                   <div class="lite-detail-title">Notes</div>
+                   <div class="lite-detail-notes">${esc(c.notes)}</div>
+               </div>`
+            : '';
+
+        return `
+            <div class="lite-detail-head">
+                <div>
+                    <div class="lite-sheet-title" style="margin:0;">${esc(name)}</div>
+                    ${placement ? `<div class="lite-detail-sub">${esc(placement)}</div>` : ''}
+                </div>
+                <button class="lite-sheet-close" id="liteCamperClose" aria-label="Close">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            ${medBlock}
+            ${sections.join('')}
+            ${notesBlock}`;
+    }
+
+    // One section: title + <dl> of rows. Skips itself if it has no live rows.
+    function dSection(title, rows) {
+        const live = (rows || []).filter(Boolean);
+        if (!live.length) return '';
+        return `<div class="lite-detail-section">
+            <div class="lite-detail-title">${esc(title)}</div>
+            <dl class="lite-detail-dl">${live.join('')}</dl>
+        </div>`;
+    }
+
+    // One label/value row; returns '' when value is empty so sections self-prune.
+    function dRow(label, value, hrefType) {
+        const v = (value == null ? '' : String(value)).trim();
+        if (!v) return '';
+        let val;
+        if (hrefType === 'tel') val = `<a href="tel:${esc(v.replace(/[^\d+]/g, ''))}">${esc(v)}</a>`;
+        else if (hrefType === 'mail') val = `<a href="mailto:${esc(v)}">${esc(v)}</a>`;
+        else val = esc(v);
+        return `<dt>${esc(label)}</dt><dd>${val}</dd>`;
+    }
+
+    function ageFrom(dob) {
+        if (!dob) return null;
+        const d = new Date(dob);
+        if (isNaN(d.getTime())) return null;
+        const now = new Date();
+        let a = now.getFullYear() - d.getFullYear();
+        const m = now.getMonth() - d.getMonth();
+        if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a--;
+        return (a >= 0 && a < 120) ? a : null;
+    }
+
+    function fmtDate(dob) {
+        const d = new Date(dob);
+        if (isNaN(d.getTime())) return String(dob);
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     }
 
     // ════════════════════════════════════════════════════════════════════
