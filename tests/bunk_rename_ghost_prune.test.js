@@ -32,7 +32,9 @@ function pruneOrphanBunks(assignmentsObj) {
     if (!assignmentsObj || typeof assignmentsObj !== 'object') return 0;
     let gs = null;
     try { gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null; } catch (_) { return 0; }
-    const divs = (gs && gs.app1 && gs.app1.divisions) || null;
+    const _liveDivs = (window.divisions && !Array.isArray(window.divisions)
+        && Object.keys(window.divisions).length > 0) ? window.divisions : null;
+    const divs = _liveDivs || (gs && gs.app1 && gs.app1.divisions) || null;
     if (!divs || Object.keys(divs).length === 0) return 0;
     const valid = new Set();
     Object.values(divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => valid.add(String(b))); });

@@ -765,7 +765,14 @@
             // Still GUARDED below: skip when the structure isn't loaded (_divs empty) or
             // yields no valid bunks (_valid.size === 0) — never wipe a racing/early load.
             const _gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null;
-            const _divs = (_gs && _gs.app1 && _gs.app1.divisions) || null;
+            // ★ Prefer the LIVE registry (window.divisions, built from campStructure):
+            //   the app1.divisions blob is only rewritten when app1 itself saves, so a
+            //   bunk added mid-season in Campistry Me is missing from it — pruning
+            //   against the stale blob would DELETE that bunk's freshly generated
+            //   entries on every load. Blob stays as fallback for non-Flow contexts.
+            const _liveDivs = (window.divisions && !Array.isArray(window.divisions)
+                && Object.keys(window.divisions).length > 0) ? window.divisions : null;
+            const _divs = _liveDivs || (_gs && _gs.app1 && _gs.app1.divisions) || null;
             if (_divs && Object.keys(_divs).length > 0) {
                 const _valid = new Set();
                 Object.values(_divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => _valid.add(String(b))); });
@@ -848,7 +855,12 @@
         if (!assignmentsObj || typeof assignmentsObj !== 'object') return 0;
         let gs = null;
         try { gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null; } catch (_) { return 0; }
-        const divs = (gs && gs.app1 && gs.app1.divisions) || null;
+        // ★ Prefer the LIVE registry (window.divisions) over the app1.divisions blob —
+        //   the blob goes stale between app1 saves (bunk added mid-season in Campistry
+        //   Me), and pruning against it would strip that bunk's real schedule.
+        const _liveDivs = (window.divisions && !Array.isArray(window.divisions)
+            && Object.keys(window.divisions).length > 0) ? window.divisions : null;
+        const divs = _liveDivs || (gs && gs.app1 && gs.app1.divisions) || null;
         if (!divs || Object.keys(divs).length === 0) return 0;
         const valid = new Set();
         Object.values(divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => valid.add(String(b))); });
