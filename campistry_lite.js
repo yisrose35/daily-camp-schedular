@@ -177,11 +177,19 @@
     // DATA
     // ════════════════════════════════════════════════════════════════════
 
+    // Strip debug-copy decoration: "[COPY] Camp Areivim — 2026-07-06 15:44" → "Camp Areivim"
+    function tidyCampName(s) {
+        if (!s) return s;
+        let out = String(s).replace(/^\s*\[copy\]\s*/i, '');
+        out = out.replace(/\s*[—–-]\s*\d{4}-\d{2}-\d{2}[\sT].*$/, '');
+        return out.trim() || String(s).trim();
+    }
+
     // Resolve the real camp name from the first trustworthy source.
     async function resolveCampName() {
         const bad = new Set(['', 'your camp', 'unknown camp', 'my camp']);
         const clean = v => {
-            const s = (v == null ? '' : String(v)).trim();
+            const s = tidyCampName((v == null ? '' : String(v)).trim());
             return (s && !bad.has(s.toLowerCase())) ? s : null;
         };
 
@@ -490,7 +498,6 @@
             <button class="lite-hero-settings" id="liteHeroMenuBtn" aria-label="Account & settings"><span>${esc(avatarInitials())}</span></button>
             <div class="lite-hero-greeting">${greeting()},</div>
             <div class="lite-hero-welcome">Welcome back, <span>${name}</span>!</div>
-            <div class="lite-hero-sub">Your camp, in your pocket — every Campistry app, on the go.</div>
             <div class="lite-hero-widget lite-hero-clock">
                 <div class="time" id="liteClockTime">--:--</div>
                 <div class="date" id="liteClockDate"></div>
@@ -596,6 +603,9 @@
         if (!app || app.status !== 'available') return;
         currentApp = id;
         applyTheme(app);
+        // Push a history entry so the phone's back gesture returns to the
+        // launcher (dashboard) instead of leaving the site.
+        try { history.pushState({ liteApp: id }, ''); } catch (_) {}
         document.getElementById('view-home').style.display = 'none';
         setHeader('', '');   // no title bar in-app — just back + avatar
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
@@ -606,7 +616,8 @@
     function goHome() {
         currentApp = null;
         applyTheme(null);
-        document.querySelectorAll('.lite-view').forEach(v => { if (v.id !== 'view-home') v.style.display = 'none'; });
+        document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
+        document.getElementById('view-home').style.display = '';   // was hidden by openApp
         document.getElementById('liteApp').setAttribute('data-screen', 'home');
         setHeaderHome();
         renderHome();
@@ -669,7 +680,13 @@
     }
 
     function wireChrome() {
-        document.getElementById('liteBackBtn').addEventListener('click', goHome);
+        // Back chevron → return to the launcher (dashboard). Route through
+        // history so the hardware/browser back does the same thing.
+        document.getElementById('liteBackBtn').addEventListener('click', () => {
+            if (history.state && history.state.liteApp) history.back();
+            else goHome();
+        });
+        window.addEventListener('popstate', () => { if (currentApp) goHome(); });
         const menu = document.getElementById('liteMenu');
         document.getElementById('liteMenuBtn').addEventListener('click', toggleMenu);
         document.addEventListener('click', () => { menu.style.display = 'none'; });
@@ -1834,7 +1851,9 @@
     }
 
     function emptyHTML(icon, msg) {
-        return `<div class="lite-empty"><div class="lite-empty-icon">${icon}</div>${msg}</div>`;
+        // icon param kept for call-site compatibility but no longer rendered —
+        // clean text-only empty state (no emoji).
+        return `<div class="lite-empty">${msg}</div>`;
     }
 
     let sheetEl = null;
