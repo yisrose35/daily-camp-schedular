@@ -163,45 +163,51 @@ button { cursor: pointer; border: none; background: none; }
 .lite-app[data-screen="home"] .lite-main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 
 /* ─── HOME LAUNCHER ───────────────────────────────────────────────────── */
-.lite-home-welcome { padding: 4px 2px 18px; }
-.lite-home-welcome .greeting { font-size: 0.85rem; color: var(--muted); font-weight: 500; }
-.lite-home-welcome .camp { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; margin-top: 2px; }
+/* Hero card — mirrors the website dashboard hero, in the Lite coral theme.
+   Always coral regardless of the per-app accent. */
+.lite-hero-card {
+    background: linear-gradient(150deg, #F0765F 0%, #C4402A 100%);
+    border-radius: 24px; padding: 22px 20px; color: #fff; margin-bottom: 18px;
+    box-shadow: 0 16px 36px -14px rgba(196,64,42,0.55);
+}
+.lite-hero-greeting { font-size: 0.98rem; font-weight: 500; opacity: 0.92; }
+.lite-hero-welcome { font-family: var(--font-display); font-size: 1.55rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; margin-top: 4px; }
+.lite-hero-welcome span { color: #FBD38D; }
+.lite-hero-sub { font-size: 0.86rem; opacity: 0.85; margin-top: 10px; line-height: 1.45; }
+.lite-hero-widget {
+    background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 16px; padding: 15px; margin-top: 14px; text-align: center;
+}
+.lite-hero-clock .time { font-family: var(--font-display); font-size: 1.95rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
+.lite-hero-clock .date { font-size: 0.8rem; opacity: 0.85; margin-top: 3px; }
+.lite-hero-weather { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.lite-hero-weather .wx-icon { color: #fff; display: flex; }
+.lite-hero-weather .wx-temp { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; }
+.lite-hero-weather .wx-desc { font-size: 0.8rem; opacity: 0.85; }
 
-/* Product-tile grid — mirrors the website quick-launch, phone-compact */
-.lite-launch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+/* Product tiles — reference style: logo, uppercase name, product-color base.
+   Run down the page in a 2-up grid. */
+.lite-launch-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.lite-launch-grid.single { grid-template-columns: 1fr; }
 .lite-launch-tile {
-    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
-    aspect-ratio: 1 / 1; padding: 12px 8px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
-    border-bottom: 3px solid var(--ql, var(--line-2)); box-shadow: var(--shadow);
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    min-height: 110px; padding: 18px 12px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    border-bottom: 4px solid var(--ql, var(--line-2)); box-shadow: var(--shadow);
     transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
-.lite-launch-tile:active { transform: scale(0.95); box-shadow: var(--shadow-sm); }
+.lite-launch-tile:active { transform: scale(0.96); box-shadow: var(--shadow-sm); }
 .lite-launch-tile.soon { opacity: 0.5; background: var(--bg); box-shadow: var(--shadow-sm); border-bottom-color: var(--line-2); }
-.lite-launch-logo { height: 34px; width: auto; max-width: 76%; object-fit: contain; }
-.lite-launch-name { font-size: 0.76rem; font-weight: 700; color: var(--ink); letter-spacing: 0.01em; }
+.lite-launch-logo { height: 42px; width: auto; max-width: 78%; object-fit: contain; }
+.lite-launch-grid.single .lite-launch-logo { height: 46px; }
+.lite-launch-name { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
 .lite-launch-tile.soon .lite-launch-name { color: var(--muted); }
 .lite-launch-soon {
-    position: absolute; top: 7px; right: 7px;
+    position: absolute; top: 8px; right: 8px;
     font-size: 0.54rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--muted); background: var(--card); border: 1px solid var(--line-2);
     padding: 2px 6px; border-radius: 999px;
 }
-
-/* Single-app hero tile (counselor) */
-.lite-hero-tile {
-    display: flex; align-items: center; gap: 15px; width: 100%; text-align: left;
-    background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
-    border-bottom: 3px solid var(--ql, var(--accent)); box-shadow: var(--shadow);
-    padding: 18px; color: var(--ink); transition: transform 0.12s ease;
-}
-.lite-hero-tile:active { transform: scale(0.99); }
-.lite-hero-logo { height: 42px; width: auto; max-width: 90px; object-fit: contain; flex: none; }
-.lite-hero-info { flex: 1; min-width: 0; }
-.lite-hero-name { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; display: block; }
-.lite-hero-tag { font-size: 0.83rem; color: var(--ink-2); margin-top: 2px; display: block; }
-.lite-app-arrow { color: var(--muted); flex: none; }
-.lite-app-arrow svg { width: 22px; height: 22px; display: block; }
 
 /* ─── Bottom tab bar ──────────────────────────────────────────────────── */
 .lite-tabbar {
@@ -281,7 +287,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-usage-name { font-size: 0.9rem; font-weight: 500; }
 .lite-usage-count { font-size: 0.82rem; font-weight: 800; color: var(--accent-dark); }
 .lite-usage-bar { height: 7px; border-radius: 999px; background: var(--accent-tint); overflow: hidden; }
-.lite-usage-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--coral-500), var(--coral-600)); border-radius: 999px; }
+.lite-usage-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-dark)); border-radius: 999px; }
 
 /* ─── Chips ───────────────────────────────────────────────────────────── */
 .lite-chiprow { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 12px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }

@@ -18,10 +18,16 @@ to the launcher (`goHome`). The app config lives in `LITE_APPS` in
 `campistry_lite.js` — add an entry (id, name, logo, color, roles, status, tabs)
 to surface a new Lite app.
 
-**Design.** Coral (`#EE6A53`) is the Lite brand for app chrome; each launcher
-tile carries its parent product's color. Fraunces for display type, DM Sans for
-body, soft layered shadows, translucent blurred header/tab bar, safe-area-aware.
-Tokens live at the top of `campistry_lite.css`.
+**Design.** The **Lite shell is coral** (`#EE6A53`) — home launcher, hero card,
+avatar, splash. **Each app is themed in its own product color internally**: open
+Flow and the tabs/accents/card-headers turn teal, Me → amber, Go → sky, etc.
+This is driven by `applyTheme(app)`, which sets `--accent`/`--accent-dark`/
+`--accent-tint` on `#liteApp` from the app's `theme` in `LITE_APPS`; `goHome`
+clears them back to coral. The home **hero card** mirrors the website dashboard
+(greeting · "Welcome back, [Camp]!" · live clock · Open-Meteo weather) in a coral
+gradient. Fraunces display type, DM Sans body, soft layered shadows, translucent
+blurred header/tab bar, safe-area-aware. Tokens live at the top of
+`campistry_lite.css`.
 
 | Audience | Tabs | What they can do |
 |---|---|---|

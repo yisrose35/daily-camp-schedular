@@ -355,21 +355,39 @@
     //     using each product's real logo. Flow is live; the rest are the
     //     Lite versions still to come. ────────────────────────────────────
     const HEAD = ['owner', 'admin', 'scheduler', 'viewer'];
+    const CORAL_THEME = { accent: '#EE6A53', dark: '#DA4B32', tint: '#FEF2EF' };
     const LITE_APPS = [
         { id: 'flow', name: 'Flow', title: 'Flow Lite', logo: 'Flow_clean.png', color: '#147D91',
+          theme: { accent: '#147D91', dark: '#0F5F6E', tint: '#E6F4F7' },
           roles: HEAD, status: 'available',
           tabs: [{ id: 'today', label: 'Schedule' }, { id: 'now', label: 'Now' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
-        { id: 'me',     name: 'Me',     logo: 'Me_clean.png',     color: '#F59E0B', roles: HEAD, status: 'soon' },
-        { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', roles: HEAD, status: 'soon' },
-        { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', roles: HEAD, status: 'soon' },
-        { id: 'live',   name: 'Live',   logo: 'Live_clean.png',   color: '#2563EB', roles: HEAD, status: 'soon' },
-        { id: 'snacks', name: 'Snacks', logo: 'Snacks_clean.png', color: '#78350F', roles: HEAD, status: 'soon' },
-        { id: 'link',   name: 'Link',   logo: 'Link_clean.png',   color: '#2A7A35', roles: HEAD, status: 'soon' },
-        { id: 'notes',  name: 'Notes',  logo: 'Notes_clean.png',  color: '#C4891A', roles: HEAD, status: 'soon' },
+        { id: 'me',     name: 'Me',     logo: 'Me_clean.png',     color: '#F59E0B', theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'soon' },
+        { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
+        { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
+        { id: 'live',   name: 'Live',   logo: 'Live_clean.png',   color: '#2563EB', theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'soon' },
+        { id: 'snacks', name: 'Snacks', logo: 'Snacks_clean.png', color: '#78350F', theme: { accent: '#78350F', dark: '#5C2E0E', tint: '#F3EBE3' }, roles: HEAD, status: 'soon' },
+        { id: 'link',   name: 'Link',   logo: 'Link_clean.png',   color: '#2A7A35', theme: { accent: '#2A7A35', dark: '#1F5A28', tint: '#E4F3E6' }, roles: HEAD, status: 'soon' },
+        { id: 'notes',  name: 'Notes',  logo: 'Notes_clean.png',  color: '#C4891A', theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'soon' },
         { id: 'counselor', name: 'My Camp', title: 'My Camp', tag: 'Your bunk, schedule & league',
-          logo: 'Lite_clean.png', color: '#EE6A53', roles: ['counselor'], status: 'available',
+          logo: 'Lite_clean.png', color: '#EE6A53', theme: CORAL_THEME, roles: ['counselor'], status: 'available',
           tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }] }
     ];
+
+    // Per-app internal theming: each app runs in its product color; the Lite
+    // shell (home launcher) reverts to coral.
+    function applyTheme(app) {
+        const root = document.getElementById('liteApp');
+        const t = app && app.theme;
+        if (t) {
+            root.style.setProperty('--accent', t.accent);
+            root.style.setProperty('--accent-dark', t.dark);
+            root.style.setProperty('--accent-tint', t.tint);
+        } else {
+            root.style.removeProperty('--accent');
+            root.style.removeProperty('--accent-dark');
+            root.style.removeProperty('--accent-tint');
+        }
+    }
 
     function appsForRole() { return LITE_APPS.filter(a => a.roles.includes(role)); }
 
@@ -384,31 +402,36 @@
         const view = document.getElementById('view-home');
         const apps = appsForRole();
         const campName = window.AccessControl?.getCampName?.() || '';
-        const who = userName ? `, ${esc(firstName(userName))}` : '';
-        const welcome = `<div class="lite-home-welcome">
-                <div class="greeting">${greeting()}${who}</div>
-                <div class="camp">${esc(campName || 'Campistry Lite')}</div>
-            </div>`;
+        const single = apps.length === 1;
 
-        // Single-app roles (counselors) get one prominent tile; otherwise a grid.
-        if (apps.length === 1) {
-            const a = apps[0];
-            const chevron = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
-            view.innerHTML = welcome + `<button class="lite-hero-tile" data-app="${a.id}" style="--ql:${a.color}">
-                <img src="${a.logo}" class="lite-hero-logo" alt="">
-                <span class="lite-hero-info">
-                    <span class="lite-hero-name">${esc(a.name)}</span>
-                    ${a.tag ? `<span class="lite-hero-tag">${esc(a.tag)}</span>` : ''}
-                </span>
-                <span class="lite-app-arrow">${chevron}</span>
-            </button>`;
-            view.querySelector('[data-app]').addEventListener('click', () => openApp(a.id));
-            return;
-        }
+        view.innerHTML = heroCardHTML(campName)
+            + `<div class="lite-launch-grid${single ? ' single' : ''}">${apps.map(tileHTML).join('')}</div>`;
 
-        view.innerHTML = welcome + `<div class="lite-launch-grid">${apps.map(tileHTML).join('')}</div>`;
         view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
             t.addEventListener('click', () => openApp(t.dataset.app)));
+
+        startClock();
+        renderWeather();
+    }
+
+    function heroCardHTML(campName) {
+        const name = campName ? esc(campName) : 'your camp';
+        return `<div class="lite-hero-card">
+            <div class="lite-hero-greeting">${greeting()},</div>
+            <div class="lite-hero-welcome">Welcome back, <span>${name}</span>!</div>
+            <div class="lite-hero-sub">Your camp, in your pocket — every Campistry app, on the go.</div>
+            <div class="lite-hero-widget lite-hero-clock">
+                <div class="time" id="liteClockTime">--:--</div>
+                <div class="date" id="liteClockDate"></div>
+            </div>
+            <div class="lite-hero-widget lite-hero-weather">
+                <div class="wx-icon" id="liteWxIcon">${WX_SVG.cloud}</div>
+                <div>
+                    <div class="wx-temp" id="liteWxTemp">--°</div>
+                    <div class="wx-desc" id="liteWxDesc">Loading…</div>
+                </div>
+            </div>
+        </div>`;
     }
 
     function tileHTML(app) {
@@ -420,10 +443,88 @@
         </button>`;
     }
 
+    // ─── Clock + weather (hero widgets, ported from the website dashboard) ─
+    let _clockTimer = null;
+    let _weatherCache = null;
+    const WX_SVG = {
+        sun: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+        cloud: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>',
+        rain: '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="15" x2="12" y2="23"/><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg>'
+    };
+
+    function startClock() {
+        updateClock();
+        if (_clockTimer) clearInterval(_clockTimer);
+        _clockTimer = setInterval(updateClock, 10000);
+    }
+    function updateClock() {
+        const t = document.getElementById('liteClockTime');
+        const d = document.getElementById('liteClockDate');
+        if (!t && !d) { if (_clockTimer) { clearInterval(_clockTimer); _clockTimer = null; } return; }
+        const now = new Date();
+        if (t) t.textContent = fmtMin(now.getHours() * 60 + now.getMinutes());
+        if (d) d.textContent = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    }
+
+    function wxDesc(code) {
+        if (code === 0) return 'Clear sky';
+        if (code <= 3) return 'Partly cloudy';
+        if (code <= 49) return 'Foggy';
+        if (code <= 59) return 'Drizzle';
+        if (code <= 69) return 'Rain';
+        if (code <= 79) return 'Snow';
+        if (code <= 86) return 'Showers';
+        if (code >= 95) return 'Thunderstorm';
+        return 'Mixed';
+    }
+    function wxIcon(code) {
+        if (code === 0) return WX_SVG.sun;
+        if (code <= 3) return WX_SVG.cloud;
+        return WX_SVG.rain;
+    }
+    function paintWeather(temp, code) {
+        const tEl = document.getElementById('liteWxTemp');
+        const dEl = document.getElementById('liteWxDesc');
+        const iEl = document.getElementById('liteWxIcon');
+        if (tEl) tEl.textContent = Math.round(temp) + '°F';
+        if (dEl) dEl.textContent = wxDesc(code);
+        if (iEl) iEl.innerHTML = wxIcon(code);
+    }
+    function renderWeather() {
+        if (_weatherCache) { paintWeather(_weatherCache.temperature, _weatherCache.weathercode); return; }
+        if (window.location.protocol === 'file:') {
+            const dEl = document.getElementById('liteWxDesc');
+            if (dEl) dEl.textContent = 'Live weather when deployed';
+            return;
+        }
+        // Open-Meteo, no key. Best-effort geolocation, else a sensible default.
+        const fetchAt = (lat, lon) => {
+            fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data && data.current_weather) {
+                        _weatherCache = data.current_weather;
+                        paintWeather(_weatherCache.temperature, _weatherCache.weathercode);
+                    }
+                })
+                .catch(() => { const d = document.getElementById('liteWxDesc'); if (d) d.textContent = 'Check back later'; });
+        };
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                p => fetchAt(p.coords.latitude, p.coords.longitude),
+                () => fetchAt(40.7128, -74.006),
+                { timeout: 4000, maximumAge: 3600000 }
+            );
+        } else {
+            fetchAt(40.7128, -74.006);
+        }
+    }
+
     function openApp(id) {
         const app = LITE_APPS.find(a => a.id === id);
         if (!app || app.status !== 'available') return;
         currentApp = id;
+        applyTheme(app);
         document.getElementById('view-home').style.display = 'none';
         setHeader(app.title || app.name, window.AccessControl?.getCampName?.() || '');
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
@@ -433,6 +534,7 @@
 
     function goHome() {
         currentApp = null;
+        applyTheme(null);
         document.querySelectorAll('.lite-view').forEach(v => { if (v.id !== 'view-home') v.style.display = 'none'; });
         document.getElementById('liteApp').setAttribute('data-screen', 'home');
         setHeaderHome();
