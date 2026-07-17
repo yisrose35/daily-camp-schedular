@@ -1,13 +1,67 @@
 # Campistry Lite — Mobile Companion
 
-Campistry Lite (`campistry_lite.html`) is a mobile-first companion app with two
-experiences on one page, branched by role:
+**Campistry Lite is a *family* of per-product mobile companions** — each the
+on-the-go, phone-first version of its full Campistry product (Flow Lite, Me Lite,
+…). They live on one page (`campistry_lite.html`) today, branched by role, and
+will split into per-product apps as they grow. Everything is built mobile-first:
+big tap targets, no horizontal scroll, thumb-reachable bottom nav, glanceable
+while standing in the middle of camp.
+
+**Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`) with
+**no top nav bar** — the coral hero card is the top element and carries the
+account/settings button in its top-right corner (`#liteHeroMenuBtn`, opens the
+same menu the in-app header avatar does). The sticky header only appears once
+you're inside an app (back-chevron · app title · avatar). The camp name is
+resolved by `resolveCampName()` from the first trustworthy source
+(`AccessControl.getCampName()` → `camp_state_kv.camp_name` → `camps.name` →
+signup metadata) so the hero reads the real camp name rather than the "Your Camp"
+placeholder. Below the hero sits a compact grid of **product tiles
+using each product's real logo** (`Flow_clean.png`, `Me_clean.png`, …) with the
+product color as a bottom accent. **Flow** is live; the rest of the suite (Me,
+Go, Health, Live, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
+get a single prominent **My Camp** hero tile. Tapping an available tile opens
+that app (`openApp`) with its own bottom tab bar; the header back-chevron returns
+to the launcher (`goHome`). The app config lives in `LITE_APPS` in
+`campistry_lite.js` — add an entry (id, name, logo, color, roles, status, tabs)
+to surface a new Lite app.
+
+**Design.** The **Lite shell is coral** (`#EE6A53`) — home launcher, hero card,
+avatar, splash. **Each app is themed in its own product color internally**: open
+Flow and the tabs/accents/card-headers turn teal, Me → amber, Go → sky, etc.
+This is driven by `applyTheme(app)`, which sets `--accent`/`--accent-dark`/
+`--accent-tint` on `#liteApp` from the app's `theme` in `LITE_APPS`; `goHome`
+clears them back to coral. The home **hero card** mirrors the website dashboard
+(greeting · "Welcome back, [Camp]!" · live clock · Open-Meteo weather) in a coral
+gradient. Fraunces display type, DM Sans body, soft layered shadows, translucent
+blurred header/tab bar, safe-area-aware. Tokens live at the top of
+`campistry_lite.css`.
 
 | Audience | Tabs | What they can do |
 |---|---|---|
-| **Head staff** (owner / admin / scheduler) | Today · Roster · Staff · Alerts | Browse any division/bunk's schedule for any date, search the camper roster, manage counselor↔bunk assignments + invites, configure and send daily SMS blasts |
-| **Counselor** (new `counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
-| **Viewer** | Today · Roster* | Schedule browsing only (*roster requires `camp_state_kv` read, which viewers don't have) |
+| **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
+| **Counselor** (`counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
+| **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
+
+**Roster** (camper browse/search) belongs conceptually to **Me Lite** and has been
+pulled out of Flow Lite's head-staff nav — counselors still get their bunk roster
+via **My Bunk**. **Staff assignments** and **SMS Alerts** are parked out of Flow
+Lite's nav (the code — `renderStaff`, `renderMessaging`, `send-sms` — is retained;
+SMS is coming back soon).
+
+### Flow Lite tabs — `Schedule · Locate · Reports`
+
+In-app there is **no top bar at all** — no back button or avatar; you return to
+the launcher with the phone's **swipe/back gesture** (native-app feel). This is
+wired via the History API: `openApp` pushes a history entry and a `popstate`
+handler calls `goHome`, so the hardware/browser back returns to the dashboard
+instead of leaving the site. Account/settings live on the home hero. The date
+control is a pill (date + a "Today" badge) flanked by prev/next chevrons.
+
+- **Schedule** — read-only schedule, date pill, with a **By division / By grade / By facility** scope toggle, a search box (bunks, or facilities under the facility scope), and a **Schedule / Now** mode toggle (division/grade scopes only). "Now" is the folded-in whole-camp snapshot — every bunk's current activity grouped by division/grade. **By facility** shows who's using **what facility, when, and by whom** (per-facility booking cards, current booking highlighted) — this replaces the former standalone Facilities tab. Lite can never generate.
+- **Locate** — search any camper → their bunk, current activity, field, and time window (or where they'll be at a chosen time). Reads `app1.camperRoster` + the schedule.
+- **Reports** — two views via a toggle:
+  - **Rotation & Usage** — each bunk's activity tallies with usage bars (from `RotationCloud.load()` / `rotation_counts`), with the same **By division / By grade** scope toggle and **bunk search** as Schedule.
+  - **Availability** — "what's available and when": for the selected date, each facility's open windows (free times), computed from the day's bookings vs the configured `fields`. Facilities configured but never used read "Open all day."
 
 It is installable as a PWA ("Add to Home Screen") via `manifest_lite.webmanifest`
 — standalone display, portrait, warm coral theme (`#EE6A53`, ramp defined in

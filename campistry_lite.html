@@ -28,41 +28,54 @@
 
     <!-- Boot / auth splash -->
     <div id="liteSplash" class="lite-splash">
-        <img src="Campistry_clean.png" alt="Campistry" class="lite-splash-logo">
+        <div class="lite-splash-mark">
+            <img src="Campistry_clean.png" alt="Campistry">
+        </div>
         <div class="lite-splash-title">Campistry <span>Lite</span></div>
         <div class="lite-splash-spinner"></div>
         <div class="lite-splash-status" id="liteSplashStatus">Signing you in&hellip;</div>
     </div>
 
     <!-- App shell (hidden until authenticated + hydrated) -->
-    <div id="liteApp" class="lite-app" style="display:none;">
+    <div id="liteApp" class="lite-app" data-screen="home" style="display:none;">
 
-        <header class="lite-header">
-            <div class="lite-header-brand">
-                <img src="Campistry_logo.png" alt="" class="lite-header-logo">
-                <div class="lite-header-text">
-                    <div class="lite-header-title">Campistry <span>Lite</span></div>
-                    <div class="lite-header-sub" id="liteCampName"></div>
-                </div>
+        <header class="lite-header" id="liteHeader">
+            <button class="lite-back" id="liteBackBtn" aria-label="Back to home">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div class="lite-header-titles">
+                <div class="lite-header-title" id="liteHeaderTitle">Campistry <span>Lite</span></div>
+                <div class="lite-header-sub" id="liteHeaderSub"></div>
             </div>
-            <div class="lite-header-actions">
-                <span class="lite-role-badge" id="liteRoleBadge"></span>
-                <button class="lite-icon-btn" id="liteMenuBtn" aria-label="Menu">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-                </button>
-            </div>
+            <button class="lite-avatar" id="liteMenuBtn" aria-label="Account menu"><span id="liteAvatarInitials">·</span></button>
         </header>
 
         <!-- Overflow menu -->
         <div class="lite-menu" id="liteMenu" style="display:none;">
-            <div class="lite-menu-user" id="liteMenuUser"></div>
-            <a href="dashboard.html" class="lite-menu-item" id="liteMenuDashboard">Open full Campistry</a>
-            <button class="lite-menu-item lite-menu-danger" id="liteSignOut">Sign out</button>
+            <div class="lite-menu-head">
+                <div class="lite-menu-avatar" id="liteMenuAvatar">·</div>
+                <div class="lite-menu-id">
+                    <div class="lite-menu-user" id="liteMenuUser"></div>
+                    <div class="lite-menu-role"><span class="lite-role-badge" id="liteRoleBadge"></span></div>
+                </div>
+            </div>
+            <a href="dashboard.html" class="lite-menu-item" id="liteMenuDashboard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+                Open full Campistry
+            </a>
+            <button class="lite-menu-item lite-menu-danger" id="liteSignOut">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                Sign out
+            </button>
         </div>
 
         <main class="lite-main" id="liteMain">
-            <!-- Views are rendered here by campistry_lite.js -->
-            <section class="lite-view" id="view-today"></section>
+            <!-- Home launcher -->
+            <section class="lite-view lite-home" id="view-home"></section>
+            <!-- App views -->
+            <section class="lite-view" id="view-today" style="display:none;"></section>
+            <section class="lite-view" id="view-locate" style="display:none;"></section>
+            <section class="lite-view" id="view-reports" style="display:none;"></section>
             <section class="lite-view" id="view-roster" style="display:none;"></section>
             <section class="lite-view" id="view-league" style="display:none;"></section>
             <section class="lite-view" id="view-staff" style="display:none;"></section>
@@ -70,7 +83,7 @@
         </main>
 
         <nav class="lite-tabbar" id="liteTabbar">
-            <!-- Tabs injected by campistry_lite.js based on role -->
+            <!-- Tabs injected by campistry_lite.js when an app is open -->
         </nav>
     </div>
 
@@ -94,6 +107,7 @@
                     'supabase_permissions.js',
                     'supabase_schedules.js',
                     'division_times_system.js',
+                    'rotation_cloud.js',
                     'campistry_lite.js'
                 ];
                 (function next(i) {
