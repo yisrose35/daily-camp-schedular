@@ -1,13 +1,30 @@
 # Campistry Lite — Mobile Companion
 
-Campistry Lite (`campistry_lite.html`) is a mobile-first companion app with two
-experiences on one page, branched by role:
+**Campistry Lite is a *family* of per-product mobile companions** — each the
+on-the-go, phone-first version of its full Campistry product (Flow Lite, Me Lite,
+…). They live on one page (`campistry_lite.html`) today, branched by role, and
+will split into per-product apps as they grow. Everything is built mobile-first:
+big tap targets, no horizontal scroll, thumb-reachable bottom nav, glanceable
+while standing in the middle of camp.
 
 | Audience | Tabs | What they can do |
 |---|---|---|
-| **Head staff** (owner / admin / scheduler) | Today · Roster · Staff · Alerts | Browse any division/bunk's schedule for any date, search the camper roster, manage counselor↔bunk assignments + invites, configure and send daily SMS blasts |
-| **Counselor** (new `counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
-| **Viewer** | Today · Roster* | Schedule browsing only (*roster requires `camp_state_kv` read, which viewers don't have) |
+| **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
+| **Counselor** (`counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
+| **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
+
+**Roster** (camper browse/search) belongs conceptually to **Me Lite** and has been
+pulled out of Flow Lite's head-staff nav — counselors still get their bunk roster
+via **My Bunk**. **Staff assignments** and **SMS Alerts** are parked out of Flow
+Lite's nav (the code — `renderStaff`, `renderMessaging`, `send-sms` — is retained;
+SMS is coming back soon).
+
+### Flow Lite tabs
+
+- **Schedule** — read-only schedule, division chips, any bunk, date picker. Lite can never generate.
+- **Now** — the roaming head-counselor view. For the current time (with a ±15-min stepper to peek ahead), shows every bunk's current activity + location across the whole camp. Toggle **By division** or **By field** ("who's on the basketball court right now"). Reads today's `daily_schedules`.
+- **Locate** — search any camper → their bunk, current activity, field, and time window (or where they'll be at a chosen time). Reads `app1.camperRoster` + the schedule.
+- **Reports** — **Bunk Rotation & Usage** per division: each bunk's activity tallies with usage bars, straight from `RotationCloud.load()` (`rotation_counts` table). Same numbers as the desktop report, without the desktop DOM coupling.
 
 It is installable as a PWA ("Add to Home Screen") via `manifest_lite.webmanifest`
 — standalone display, portrait, warm coral theme (`#EE6A53`, ramp defined in

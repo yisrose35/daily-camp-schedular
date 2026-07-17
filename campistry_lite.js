@@ -56,6 +56,11 @@
     let activeTab = 'today';
     let selectedDivision = null;      // head-staff Today/Roster division chip
     let rosterQuery = '';
+    let nowTargetMin = null;          // Now/Locate time selection; null = live "now"
+    let nowGroupBy = 'division';      // Now view grouping: 'division' | 'field'
+    let locateQuery = '';
+    let reportsDivision = null;       // Reports division selection
+    let rotationData = null;          // cached RotationCloud.load() result
     const scheduleCache = {};         // dateKey -> merged schedule data (or null)
     const schedulePending = {};       // dateKey -> Promise
 
@@ -336,6 +341,9 @@
 
     const TAB_ICONS = {
         today: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
+        now: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+        locate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+        reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
         roster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
@@ -343,27 +351,25 @@
     };
 
     function tabsForRole() {
-        if (isHeadStaff()) {
+        // Flow Lite: comprehensive, read-only, on-the-go view of all of Flow.
+        // Head staff AND viewers get the full read-only picture ("see everything").
+        if (isHeadStaff() || isViewerRole()) {
             return [
-                { id: 'today', label: 'Today' },
-                { id: 'roster', label: 'Roster' },
-                { id: 'staff', label: 'Staff' },
-                { id: 'messaging', label: 'Alerts' }
+                { id: 'today', label: 'Schedule' },
+                { id: 'now', label: 'Now' },
+                { id: 'locate', label: 'Locate' },
+                { id: 'reports', label: 'Reports' }
             ];
         }
-        if (isCounselor()) {
-            return [
-                { id: 'today', label: 'My Day' },
-                { id: 'roster', label: 'My Bunk' },
-                { id: 'league', label: 'League' }
-            ];
-        }
-        // viewer
+        // Counselor keeps their bunk-level personal companion.
         return [
-            { id: 'today', label: 'Today' },
-            { id: 'roster', label: 'Roster' }
+            { id: 'today', label: 'My Day' },
+            { id: 'roster', label: 'My Bunk' },
+            { id: 'league', label: 'League' }
         ];
     }
+
+    function isViewerRole() { return !isHeadStaff() && !isCounselor(); }
 
     function buildTabs() {
         const bar = document.getElementById('liteTabbar');
@@ -391,6 +397,9 @@
 
     function renderView(id) {
         if (id === 'today') renderToday();
+        else if (id === 'now') renderNow();
+        else if (id === 'locate') renderLocate();
+        else if (id === 'reports') renderReports();
         else if (id === 'roster') renderRoster();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
@@ -1109,6 +1118,281 @@
             console.error('[Lite] SMS send failed:', e);
             return { ok: false, error: e.message || String(e) };
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: NOW  (whole-camp live snapshot — the roaming head-counselor view)
+    // ════════════════════════════════════════════════════════════════════
+
+    function effectiveNowMin() {
+        return (nowTargetMin != null) ? nowTargetMin : nowMinutes();
+    }
+
+    function entryCovering(entries, min) {
+        for (const e of entries) {
+            if (e.startMin != null && e.endMin != null && min >= e.startMin && min < e.endMin) return e;
+        }
+        return null;
+    }
+    function nextEntry(entries, min) {
+        for (const e of entries) { if (e.startMin != null && e.startMin > min) return e; }
+        return null;
+    }
+
+    // Every bunk in the camp, tagged with its parent division (structure first,
+    // then any schedule-only bunks so nothing is hidden — "see everything").
+    function allBunkRows(sched) {
+        const out = [];
+        const parents = parentDivisions();
+        const seen = new Set();
+        parents.forEach(p => bunksForParent(p).forEach(b => {
+            if (!seen.has(b)) { seen.add(b); out.push({ parent: p, bunk: b }); }
+        }));
+        Object.keys((sched && sched.scheduleAssignments) || {}).forEach(b => {
+            if (!seen.has(b)) { seen.add(b); out.push({ parent: parentForBunk(b) || 'Other', bunk: b }); }
+        });
+        return out;
+    }
+
+    function timeBarHTML() {
+        const eff = effectiveNowMin();
+        const live = nowTargetMin == null;
+        return `<div class="lite-nowbar">
+            <button type="button" class="lite-now-step" id="liteNowMinus" aria-label="15 minutes earlier">−15</button>
+            <div class="lite-now-label">
+                <div class="t">${esc(fmtMin(eff))}</div>
+                <div class="s">${live ? '● Live now' : 'Peeking ahead · tap Now'}</div>
+            </div>
+            <button type="button" class="lite-now-step" id="liteNowPlus" aria-label="15 minutes later">+15</button>
+            <button type="button" class="lite-now-reset${live ? ' live' : ''}" id="liteNowReset">Now</button>
+        </div>`;
+    }
+    function wireTimeBar(view, rerender) {
+        const clamp = (m) => Math.max(0, Math.min(24 * 60 - 1, m));
+        view.querySelector('#liteNowMinus').addEventListener('click', () => { nowTargetMin = clamp(effectiveNowMin() - 15); rerender(); });
+        view.querySelector('#liteNowPlus').addEventListener('click', () => { nowTargetMin = clamp(effectiveNowMin() + 15); rerender(); });
+        view.querySelector('#liteNowReset').addEventListener('click', () => { nowTargetMin = null; rerender(); });
+    }
+
+    async function renderNow() {
+        const view = document.getElementById('view-now');
+        view.innerHTML = timeBarHTML()
+            + `<div class="lite-chiprow" id="liteNowGroup">
+                 <button type="button" class="lite-chip ${nowGroupBy === 'division' ? 'active' : ''}" data-g="division">By division</button>
+                 <button type="button" class="lite-chip ${nowGroupBy === 'field' ? 'active' : ''}" data-g="field">By field</button>
+               </div>
+               <div id="liteNowBody">${loadingHTML()}</div>`;
+        wireTimeBar(view, renderNow);
+        view.querySelectorAll('#liteNowGroup .lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { nowGroupBy = ch.dataset.g; renderNow(); }));
+
+        const sched = await getSchedule(todayKey());
+        if (activeTab !== 'now') return;
+        const body = view.querySelector('#liteNowBody');
+        if (!sched || !sched.scheduleAssignments || !Object.keys(sched.scheduleAssignments).length) {
+            body.innerHTML = emptyHTML('📭', 'No schedule published for today yet.');
+            return;
+        }
+
+        const min = effectiveNowMin();
+        const rows = allBunkRows(sched).map(r => {
+            const entries = normalizeBunkEntries(r.bunk, sched);
+            return { ...r, entry: entryCovering(entries, min), upcoming: nextEntry(entries, min) };
+        });
+
+        if (nowGroupBy === 'field') {
+            // Group by where bunks physically are right now
+            const byPlace = {};
+            rows.forEach(r => {
+                if (!r.entry) return;
+                const place = r.entry.location || r.entry.title || 'Unassigned';
+                (byPlace[place] = byPlace[place] || []).push(r);
+            });
+            const places = Object.keys(byPlace).sort();
+            if (!places.length) { body.innerHTML = emptyHTML('🌙', 'Nothing scheduled at this time.'); return; }
+            body.innerHTML = places.map(place => `
+                <div class="lite-card lite-bunk-card">
+                    <div class="lite-bunk-head">
+                        <span class="lite-bunk-name">📍 ${esc(place)}</span>
+                        <span class="lite-bunk-div">${byPlace[place].length} here</span>
+                    </div>
+                    ${byPlace[place].map(r => `<div class="lite-slot">
+                        <div class="lite-slot-body">
+                            <div class="lite-slot-activity">${esc(r.bunk)}</div>
+                            <div class="lite-slot-loc">${esc(r.parent)} · ${esc(r.entry.title)}</div>
+                        </div>
+                    </div>`).join('')}
+                </div>`).join('');
+            return;
+        }
+
+        // Group by division (default)
+        const byDiv = {};
+        rows.forEach(r => { (byDiv[r.parent] = byDiv[r.parent] || []).push(r); });
+        const divs = Object.keys(byDiv);
+        body.innerHTML = divs.map(div => `
+            <div class="lite-card lite-bunk-card">
+                <div class="lite-bunk-head">
+                    <span class="lite-bunk-name">${esc(div)}</span>
+                    <span class="lite-bunk-div">${byDiv[div].length} bunk${byDiv[div].length === 1 ? '' : 's'}</span>
+                </div>
+                ${byDiv[div].map(r => {
+                    if (r.entry) {
+                        return `<div class="lite-slot">
+                            <div class="lite-slot-time"><div class="t1">${esc(r.bunk)}</div></div>
+                            <div class="lite-slot-body">
+                                <div class="lite-slot-activity">${esc(r.entry.title)}</div>
+                                ${r.entry.location && r.entry.location !== r.entry.title ? `<div class="lite-slot-loc">📍 ${esc(r.entry.location)}</div>` : ''}
+                            </div>
+                        </div>`;
+                    }
+                    const up = r.upcoming;
+                    return `<div class="lite-slot">
+                        <div class="lite-slot-time"><div class="t1">${esc(r.bunk)}</div></div>
+                        <div class="lite-slot-body">
+                            <div class="lite-slot-activity" style="color:var(--lite-muted);">${up ? `Free · next: ${esc(up.title)} at ${esc(fmtMin(up.startMin))}` : 'Nothing scheduled'}</div>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>`).join('');
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: LOCATE  (find a camper → where they are right now / at a time)
+    // ════════════════════════════════════════════════════════════════════
+
+    function renderLocate() {
+        const view = document.getElementById('view-locate');
+        if (!camp.stateLoaded || !Object.keys(camp.roster || {}).length) {
+            view.innerHTML = `<div class="lite-field" style="margin-bottom:10px;">
+                    <input class="lite-input" id="liteLocateSearch" type="search" placeholder="Search camper…" disabled>
+                </div>`
+                + emptyHTML('🧒', camp.stateLoaded
+                    ? 'No campers in the roster yet. Add them in Campistry Me.'
+                    : 'Roster data isn\'t available for your role.');
+            return;
+        }
+        view.innerHTML = timeBarHTML()
+            + `<div class="lite-field" style="margin:10px 0;">
+                 <input class="lite-input" id="liteLocateSearch" type="search"
+                        placeholder="Search a camper by name…" value="${esc(locateQuery)}" autocomplete="off">
+               </div>
+               <div id="liteLocateBody"></div>`;
+        wireTimeBar(view, renderLocate);
+        const input = view.querySelector('#liteLocateSearch');
+        input.addEventListener('input', () => { locateQuery = input.value; renderLocateBody(view.querySelector('#liteLocateBody')); });
+        renderLocateBody(view.querySelector('#liteLocateBody'));
+    }
+
+    async function renderLocateBody(body) {
+        const q = locateQuery.trim().toLowerCase();
+        if (!q) { body.innerHTML = emptyHTML('🔎', 'Type a camper\'s name to find where they are.'); return; }
+
+        const matches = Object.keys(camp.roster || {})
+            .filter(n => n.toLowerCase().includes(q))
+            .sort((a, b) => a.localeCompare(b))
+            .slice(0, 20);
+        if (!matches.length) { body.innerHTML = emptyHTML('🚫', `No camper matches "${esc(locateQuery)}".`); return; }
+
+        const sched = await getSchedule(todayKey());
+        if (activeTab !== 'locate') return;
+        const min = effectiveNowMin();
+
+        body.innerHTML = matches.map(name => {
+            const c = camp.roster[name] || {};
+            const bunk = c.bunk;
+            const parent = bunk ? (parentForBunk(bunk) || c.division || '') : (c.division || '');
+            let where = `<div class="lite-slot-loc">No bunk on file</div>`;
+            if (bunk && sched && sched.scheduleAssignments) {
+                const entries = normalizeBunkEntries(bunk, sched);
+                const e = entryCovering(entries, min);
+                if (e) {
+                    where = `<div class="lite-slot-activity">${esc(e.title)}</div>
+                        <div class="lite-slot-loc">${e.location && e.location !== e.title ? '📍 ' + esc(e.location) + ' · ' : ''}${esc(fmtMin(e.startMin))}–${esc(fmtMin(e.endMin))}</div>`;
+                } else {
+                    const up = nextEntry(entries, min);
+                    where = `<div class="lite-slot-loc" style="color:var(--lite-muted);">${up ? `Free now · next: ${esc(up.title)} at ${esc(fmtMin(up.startMin))}` : 'Nothing scheduled at this time'}</div>`;
+                }
+            } else if (bunk) {
+                where = `<div class="lite-slot-loc" style="color:var(--lite-muted);">No schedule published for today</div>`;
+            }
+            return `<div class="lite-card lite-bunk-card">
+                <div class="lite-bunk-head">
+                    <span class="lite-bunk-name">${esc(name)}</span>
+                    <span class="lite-bunk-div">${esc([bunk, parent].filter(Boolean).join(' · '))}</span>
+                </div>
+                <div class="lite-slot"><div class="lite-slot-body">${where}</div></div>
+            </div>`;
+        }).join('');
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: REPORTS  (Bunk Rotation & Usage — from rotation_counts)
+    // ════════════════════════════════════════════════════════════════════
+
+    async function ensureRotation(force) {
+        if (rotationData && !force) return rotationData;
+        if (!window.RotationCloud || !window.RotationCloud.load) return null;
+        try {
+            rotationData = await window.RotationCloud.load(!!force);
+        } catch (e) {
+            console.warn('[Lite] RotationCloud.load failed:', e);
+            rotationData = null;
+        }
+        return rotationData;
+    }
+
+    async function renderReports() {
+        const view = document.getElementById('view-reports');
+        view.innerHTML = loadingHTML();
+        const data = await ensureRotation();
+        if (activeTab !== 'reports') return;
+
+        if (!data || !data.counts) {
+            view.innerHTML = emptyHTML('📊', 'Rotation data isn\'t available yet. Generate a schedule first, or check back after today\'s activities are saved.');
+            return;
+        }
+
+        const parents = parentDivisions();
+        if (!parents.length) { view.innerHTML = emptyHTML('📊', 'No divisions configured yet.'); return; }
+        if (!reportsDivision || !parents.includes(reportsDivision)) reportsDivision = parents[0];
+
+        view.innerHTML = `<div class="lite-section-label" style="margin-top:4px;">Bunk Rotation &amp; Usage</div>`
+            + chipRowHTML(parents, reportsDivision)
+            + `<div id="liteReportsBody"></div>`;
+        view.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { reportsDivision = ch.dataset.val; renderReports(); }));
+
+        const bodyEl = view.querySelector('#liteReportsBody');
+        const bunks = bunksForParent(reportsDivision);
+        if (!bunks.length) { bodyEl.innerHTML = emptyHTML('📊', 'No bunks in this division.'); return; }
+
+        bodyEl.innerHTML = bunks.map(bunk => {
+            const counts = data.counts[bunk] || {};
+            const acts = Object.entries(counts)
+                .filter(([, n]) => n > 0)
+                .sort((a, b) => b[1] - a[1]);
+            const total = acts.reduce((s, [, n]) => s + n, 0);
+            if (!acts.length) {
+                return `<div class="lite-card lite-bunk-card">
+                    <div class="lite-bunk-head"><span class="lite-bunk-name">${esc(bunk)}</span><span class="lite-bunk-div">no activity yet</span></div>
+                </div>`;
+            }
+            const max = acts[0][1];
+            return `<div class="lite-card lite-bunk-card">
+                <div class="lite-bunk-head">
+                    <span class="lite-bunk-name">${esc(bunk)}</span>
+                    <span class="lite-bunk-div">${total} total</span>
+                </div>
+                ${acts.map(([act, n]) => `<div class="lite-usage-row">
+                    <div class="lite-usage-top">
+                        <span class="lite-usage-name">${esc(act)}</span>
+                        <span class="lite-usage-count">${n}×</span>
+                    </div>
+                    <div class="lite-usage-bar"><span style="width:${Math.round((n / max) * 100)}%"></span></div>
+                </div>`).join('')}
+            </div>`;
+        }).join('');
     }
 
     // ════════════════════════════════════════════════════════════════════

@@ -63,6 +63,9 @@
         <main class="lite-main" id="liteMain">
             <!-- Views are rendered here by campistry_lite.js -->
             <section class="lite-view" id="view-today"></section>
+            <section class="lite-view" id="view-now" style="display:none;"></section>
+            <section class="lite-view" id="view-locate" style="display:none;"></section>
+            <section class="lite-view" id="view-reports" style="display:none;"></section>
             <section class="lite-view" id="view-roster" style="display:none;"></section>
             <section class="lite-view" id="view-league" style="display:none;"></section>
             <section class="lite-view" id="view-staff" style="display:none;"></section>
@@ -94,6 +97,7 @@
                     'supabase_permissions.js',
                     'supabase_schedules.js',
                     'division_times_system.js',
+                    'rotation_cloud.js',
                     'campistry_lite.js'
                 ];
                 (function next(i) {
