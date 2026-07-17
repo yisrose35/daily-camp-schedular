@@ -1295,6 +1295,43 @@
                 syncSpine();
             }
 
+            // ★ RECONCILE THE STALE app1 BLOB FROM campStructure.
+            //   campStructure is authoritative for structure; loadData rebuilds
+            //   state.divisions/bunks from it every load and pushes them to
+            //   window.* — but the PERSISTED app1.divisions/app1.bunks blob is
+            //   only rewritten by an explicit saveData() (user action). So a bunk
+            //   added in Campistry Me lives in campStructure + window.* yet stays
+            //   MISSING from the saved blob until the next manual save. Every
+            //   downstream blob reader (solver loader, prune, panels) then omits
+            //   it — and the grid flickers it in (from window.*) then out (a load
+            //   that reads the blob). Persist the fresh derived structure now, on
+            //   the initial/user-driven load, whenever it drifts from the blob, so
+            //   the bunk is part of the camp from the very first render.
+            //   Drift-gated → a no-op (no write, no cloud loop) once reconciled.
+            try {
+                if (!_opts.skipSync && Object.keys(campStructure).length > 0) {
+                    const _blobBunks = Array.isArray(data.bunks) ? data.bunks.map(String) : [];
+                    const _liveBunkSet = new Set((state.bunks || []).map(String));
+                    const _blobBunkSet = new Set(_blobBunks);
+                    const _drift = _liveBunkSet.size !== _blobBunkSet.size
+                        || [..._liveBunkSet].some(b => !_blobBunkSet.has(b))
+                        || [..._blobBunkSet].some(b => !_liveBunkSet.has(b));
+                    if (_drift && typeof window.saveGlobalSettings === 'function') {
+                        const _gs = window.loadGlobalSettings?.() || {};
+                        const _app1 = Object.assign({}, _gs.app1 || {}, {
+                            bunks: state.bunks,
+                            divisions: state.divisions,
+                            availableDivisions: state.availableDivisions
+                        });
+                        window.saveGlobalSettings('app1', _app1);
+                        console.log('[app1 v5.2] ★ reconciled stale app1 blob from campStructure (bunk drift: '
+                            + _blobBunkSet.size + ' → ' + _liveBunkSet.size + ')');
+                    }
+                }
+            } catch (_reconErr) {
+                console.warn('[app1 v5.2] blob reconcile skipped:', _reconErr && _reconErr.message);
+            }
+
             console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
 
         } catch (e) {
