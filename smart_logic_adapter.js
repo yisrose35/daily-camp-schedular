@@ -469,21 +469,53 @@
                 : [];
             const dailyRules = [..._nameRules, ..._locRules];
 
-           // 4. Check time rules (daily override takes precedence over global)
+           // 4. Check time rules — TWO SCOPES, AND-combined (the block is open only
+            //    if BOTH the special's own rules AND any per-date facility rules allow it).
             // ★ Rainy day: bypass time rules if rainyDayAvailableAllDay is set
+            //
+            // ★ BUG FIX: the old code did `dailyRules.length > 0 ? dailyRules : ownRules`,
+            //   so ANY per-date rule keyed to the special's ROOM (_locRules, resolved from
+            //   the special's location) WHOLESALE REPLACED the special's own timeRules —
+            //   silently discarding the special's own Unavailable window. Real case:
+            //   "Cap Making behind Masmidim BM" is closed 12:20–1:25 in its own config, but
+            //   its room "Cap Making" had a per-date availability rule in Resources, so the
+            //   special's Unavailable window was thrown away and it leaked into 12:20–1:25.
+            //   Fix: evaluate each scope separately and block if EITHER says closed. This
+            //   also keeps each scope's Available windows correctly scoped — they are OR'd
+            //   only WITHIN a scope, never merged across scopes (which would loosen one
+            //   scope's availability using the other's window).
+            //
+            //   Scope precedence:
+            //   (a) SPECIAL scope — a per-date override keyed to the special's own NAME
+            //       (_nameRules) REPLACES its config timeRules (intended per-date
+            //       precedence); otherwise the special's config rules apply. Config rules
+            //       are read from BOTH copies (props = activityProperties, special =
+            //       getGlobalSpecialActivities) since they can diverge.
+            //   (b) FACILITY scope — a per-date override keyed to the special's ROOM
+            //       (_locRules) is an ADDITIONAL constraint (room closed today → special
+            //       can't run). It never relaxes the special's own availability.
             const bypassTimeRules = isRainyMode && props.rainyDayAvailableAllDay === true;
-            const effectiveRules = dailyRules.length > 0 ? dailyRules : (props.timeRules || []);
-            
-            if (effectiveRules.length > 0 && !bypassTimeRules) {
-                const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots, divisionName);
-                
-                if (!isOpen) {
-                    log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
-                    return;
+            const _ownTimeRules = (props === special)
+                ? (Array.isArray(props.timeRules) ? props.timeRules : [])
+                : [
+                    ...(Array.isArray(props.timeRules) ? props.timeRules : []),
+                    ...((special && Array.isArray(special.timeRules)) ? special.timeRules : [])
+                  ];
+            const _specialScopeRules = _nameRules.length > 0 ? _nameRules : _ownTimeRules;
+            const _ruleScopes = [];
+            if (_specialScopeRules.length > 0) _ruleScopes.push(_specialScopeRules);
+            if (_locRules.length > 0) _ruleScopes.push(_locRules);
+
+            if (_ruleScopes.length > 0 && !bypassTimeRules) {
+                for (const _scopeRules of _ruleScopes) {
+                    if (!checkTimeRulesForBlock(startMin, endMin, _scopeRules, slots, divisionName)) {
+                        log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
+                        return;
+                    }
                 }
             }
-            if (bypassTimeRules && effectiveRules.length > 0) {
-                log(`    🌧️ ${specialName}: bypassing ${effectiveRules.length} time rule(s) (rainy day override)`);
+            if (bypassTimeRules && _ruleScopes.length > 0) {
+                log(`    🌧️ ${specialName}: bypassing time rule(s) (rainy day override)`);
             }
 
             // 5. Calculate capacity from special_activities.js / fields.js
