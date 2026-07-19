@@ -282,44 +282,47 @@
                 items.push({ bunk, division: divName, field: hasField ? fName : null, activity, startMin, endMin, isSpecial: isSpecialByName(activity) });
 
                 // ★ Custom pinned tiles (and Swim+Elective blocks) RESERVE real fields,
-                //   but store them on _reservedFields/_location while entry.field holds
-                //   the tile's event NAME. The push above therefore credits usage to the
-                //   event name (which isn't a real field), leaving the actual reserved
-                //   field looking FREE in the availability report. Surface every reserved
-                //   field as its own "taken" usage so the report marks it occupied.
-                //   Gate: only when entry.field is NOT itself a real configured field —
-                //   a normal sport/special already credits its real field above, and may
-                //   carry stray candidate fields we must NOT mark as booked.
+                //   but store them on _reservedFields/_specialLocation/_customField/etc.
+                //   while entry.field holds the tile's event NAME. The push above therefore
+                //   credits usage to the event name (which isn't a real field), leaving the
+                //   actual reserved field looking FREE in the availability report. Surface
+                //   every reserved field as its own "taken" usage so the report marks it
+                //   occupied. These mirror the canonical resolver in
+                //   unified_schedule_system.js resolveEntryLocation().
                 const _fieldIsReal = hasField && _realFieldSet.size > 0 && _realFieldSet.has(fName.trim().toLowerCase());
-                if (!_fieldIsReal) {
-                    const _resvSrc = [];
-                    const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
-                    if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
-                    if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
-                    // ★ CB-XX (court-reservation availability bug): a pinned custom/special
-                    //   tile stores its reserved facility in _specialLocation / _customField /
-                    //   _location / _partLocation (entry.field holds the tile's event NAME, not
-                    //   a real field). This mirrors the canonical resolver in
-                    //   unified_schedule_system.js resolveEntryLocation(). Without these three
-                    //   extra sources, a pinned "court one reserved 12–1" tile left court one
-                    //   looking FREE in the availability report even though the solver correctly
-                    //   kept it reserved.
-                    if (typeof entry._specialLocation === 'string' && entry._specialLocation.trim()) _resvSrc.push(entry._specialLocation);
-                    if (typeof entry._customField === 'string' && entry._customField.trim()) _resvSrc.push(entry._customField);
-                    if (typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
-                    if (typeof entry._partLocation === 'string' && entry._partLocation.trim()) _resvSrc.push(entry._partLocation);
-                    _resvSrc.forEach(raw => {
-                        let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
-                        if (n.includes(' – ')) n = n.split(' – ')[0].trim();
-                        else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
-                        if (!n || n === 'Free' || n === 'No Field') return;
-                        if (fName && n.toLowerCase() === fName.toLowerCase()) return; // already credited above
-                        const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
-                        if (_reservedSeen.has(k)) return;
-                        _reservedSeen.add(k);
-                        items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
-                    });
-                }
+                const _resvSrc = [];
+                // GENUINE reservation sources — always surfaced, even when entry.field is
+                // ITSELF a real field. A pinned tile can reserve a real field in .field AND
+                // additionally reserve OTHER courts (e.g. .field='Court 1' plus
+                // _reservedFields=['Court 2']); those extra reservations would otherwise look
+                // FREE in the report. The per-source dedup below (skip when n === fName, plus
+                // the div|field|start|end _reservedSeen key) keeps the real .field from being
+                // double-booked. These properties are only ever set on pinned / elective /
+                // special reservation blocks — never as stale artifacts on a normal sport —
+                // so surfacing them unconditionally is safe.
+                const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
+                if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
+                if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
+                if (typeof entry._specialLocation === 'string' && entry._specialLocation.trim()) _resvSrc.push(entry._specialLocation);
+                if (typeof entry._customField === 'string' && entry._customField.trim()) _resvSrc.push(entry._customField);
+                if (typeof entry._partLocation === 'string' && entry._partLocation.trim()) _resvSrc.push(entry._partLocation);
+                // _location is DELIBERATELY gated behind !_fieldIsReal: field-quality re-opt
+                // rewrites .field but leaves a STALE pre-move _location behind (see
+                // resolveEntryLocation), so surfacing it for a real-field sport would
+                // phantom-book the bunk's PREVIOUS field. Only trust _location when .field
+                // isn't itself a real field.
+                if (!_fieldIsReal && typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
+                _resvSrc.forEach(raw => {
+                    let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
+                    if (n.includes(' – ')) n = n.split(' – ')[0].trim();
+                    else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
+                    if (!n || n === 'Free' || n === 'No Field') return;
+                    if (fName && n.toLowerCase() === fName.toLowerCase()) return; // already credited above
+                    const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
+                    if (_reservedSeen.has(k)) return;
+                    _reservedSeen.add(k);
+                    items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
+                });
             });
         });
 
