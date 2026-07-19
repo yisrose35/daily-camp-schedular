@@ -17,8 +17,8 @@ resolved by `resolveCampName()` from the first trustworthy source
 signup metadata) so the hero reads the real camp name rather than the "Your Camp"
 placeholder. Below the hero sits a compact grid of **product tiles
 using each product's real logo** (`Flow_clean.png`, `Me_clean.png`, …) with the
-product color as a bottom accent. **Flow** and **Me** are live; the rest of the
-suite (Go, Health, Live, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
+product color as a bottom accent. **Flow**, **Me** and **Live** are live; the rest
+of the suite (Go, Health, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
 get a single prominent **My Camp** hero tile. Tapping an available tile opens
 that app (`openApp`) with its own bottom tab bar; the header back-chevron returns
 to the launcher (`goHome`). The app config lives in `LITE_APPS` in
@@ -39,6 +39,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | Audience | Tabs | What they can do |
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
+| **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
 | **Counselor** (`counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
 | **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
@@ -85,6 +86,46 @@ pocket. Three tabs, all **read-only** (reads `app1.camperRoster`,
   (`tel:` link). Answers "who's on Bunk 7 and how do I reach them" instantly.
   Empty until the camp fills in staff assignments (Lite's Staff editor / full
   Campistry).
+
+### Live Lite tabs — `Roll Call · Changes` (blue `#2563EB`)
+
+The on-the-go window into the office **Live** attendance board — was the kid
+here today, and any dismissal changes. Two tabs, **read-only**, with a date pill
+so a head counselor can check any day.
+
+- **Roll Call** — a **Present / Absent / Left-early** headcount strip, then every
+  camper grouped by bunk (`Bunk A · 2/3 here`) with a status pill: **Here**
+  (green), **Absent / Sick / Appointment** (red, reason shown), **Late / not in**
+  (late arrival not yet marked in), or **Left early** (amber, logged as an early
+  pickup). A **By division** chip row scopes it; tapping a camper opens the full
+  camper detail sheet. Status mirrors the office logic (`liveStatusFor`).
+- **Changes** — today's **dismissal changes & late arrivals**, searchable by
+  camper. **Late arrivals** (from absences flagged `late`, with the note/time)
+  and **Dismissal changes & early pickups** (from `earlyPickups`, with pickup
+  time and who's collecting) in two grouped sections.
+
+**How attendance reaches the phone.** The office Live app ("Office Mission
+Control", `campistry_live.js/.html`) keeps the day's roll call — `attendance`,
+`absences`, `earlyPickups` — in the localStorage blob `campistry_live_v1`, which
+on its own never leaves that browser. A small **sync bridge** added to
+`campistry_live.html` mirrors each day to a dedicated `camp_state_kv` row
+**`liveDaily_<date>`** (newest-wins per day; pushes on local change, pulls other
+devices' updates back). Live Lite reads that row on demand via `loadLiveDay()`.
+The bridge writes only that new key, so it can't touch existing camp data.
+_Confirmed parent-submitted dismissal/late requests are already folded into the
+office `earlyPickups`/`absences` on confirmation, so they flow through the same
+key; pending (unconfirmed) parent requests are not surfaced in Lite._
+
+> **Office-app repair (prerequisite).** Wiring this up surfaced that
+> `campistry_live.js` referenced a set of helpers that were never defined —
+> `getRoster`, `getStructure`, `getCampName`, `readGlobal`, `getLive`,
+> `saveLive`, `getTodayKey`, `getTodayData`, `saveTodayData`, `esc`, `toast`,
+> and `openModal`/`closeModal`. The `openModal`/`closeModal` reference in the
+> `window.CampistryLive` export threw at load, so the office Live app never
+> initialized at all (attendance couldn't be recorded). These are now defined
+> in `campistry_live.js`, mirroring the sibling products (Health/Go) and the
+> app's own inline copies — the office Live board is functional again, which is
+> what makes cloud sync (and therefore Live Lite) meaningful.
 
 ### Flow Lite tabs — `Schedule · Locate · Reports`
 
@@ -208,5 +249,7 @@ Send. (A pg_cron → Edge Function pipeline is the natural v2 if wanted.)
 | `manifest_lite.webmanifest` | PWA manifest |
 | `supabase/functions/send-sms/index.ts` | Twilio send Edge Function |
 | `migrations/018_counselor_role_campistry_lite.sql` | Counselor role + RLS |
+| `campistry_live.html` | Office Live app + the `liveDaily_<date>` cloud sync bridge |
+| `campistry_live.js` | Office Live logic; now defines its own data/UI helpers (was crashing at load) |
 | `access_control.js` | `counselor` in ROLES; read-only gates via `isReadOnlyRole` |
 | `invite.html`, `dashboard.js`, `dashboard.html`, `team_subdivisions_ui.js` | Counselor display names/colors, Lite tile, counselor→Lite redirects |

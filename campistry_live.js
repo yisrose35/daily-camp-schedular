@@ -16,6 +16,34 @@
     console.log('[Live] Campistry Live v1.0 loading...');
 
     // =========================================================================
+    // DATA ACCESS — roster comes from Me's global settings; the day's roll call
+    // (attendance / absences / early pickups) lives in the localStorage blob
+    // `campistry_live_v1`, keyed by a noon-anchored date. These mirror the
+    // private copies used by the page's inline scripts (Parent Requests bridge)
+    // so this file is self-contained; both touch the same localStorage keys and
+    // stay consistent. Roster access matches the sibling products (Health/Go).
+    // =========================================================================
+    var GLOBAL_KEY = 'campGlobalSettings_v1';
+    var LIVE_STORE_KEY = 'campistry_live_v1';
+    function readGlobal() { try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; } }
+    function getRoster() { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
+    function getStructure() { return readGlobal().campStructure || {}; }
+    function getCampName() { var g = readGlobal(); return g.camp_name || g.campName || localStorage.getItem('campistry_camp_name') || 'Your Camp'; }
+    function getLive() { try { return JSON.parse(localStorage.getItem(LIVE_STORE_KEY) || '{}'); } catch (e) { return {}; } }
+    function saveLive(d) { try { d.updated_at = new Date().toISOString(); localStorage.setItem(LIVE_STORE_KEY, JSON.stringify(d)); } catch (e) {} }
+    function getTodayKey() { var d = new Date(); d.setHours(12, 0, 0, 0); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+    function getTodayData() { var data = getLive(), key = getTodayKey(); if (!data[key]) data[key] = { attendance: {}, absences: [], earlyPickups: [], notes: '' }; return data[key]; }
+    function saveTodayData(t) { var d = getLive(); d[getTodayKey()] = t; saveLive(d); }
+
+    // Shared UI helpers (each product defines its own, matching Health/Go).
+    function esc(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    function toast(msg) {
+        var el = document.getElementById('toastEl'); if (!el) return;
+        el.textContent = msg; el.className = 'toast';
+        requestAnimationFrame(function () { el.classList.add('show'); setTimeout(function () { el.classList.remove('show'); }, 2500); });
+    }
+
+    // =========================================================================
     // RENDER: ROLL CALL
     // =========================================================================
     let _rcFilter = '';
@@ -1042,6 +1070,15 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
         confirm: scannerConfirm,
         printTemplates: scannerPrintTemplates
     };
+
+    // =========================================================================
+    // MODALS — generic open/close by element id (modals are .modal-overlay,
+    // shown via the .open class; matches the click/Escape handlers in init()).
+    // Referenced by openAbsenceModal / openPickupModal / the scanner and the
+    // public API below, so they must exist before the export is evaluated.
+    // =========================================================================
+    function openModal(id) { const el = document.getElementById(id); if (el) el.classList.add('open'); }
+    function closeModal(id) { const el = document.getElementById(id); if (el) el.classList.remove('open'); }
 
     // =========================================================================
     // PUBLIC API

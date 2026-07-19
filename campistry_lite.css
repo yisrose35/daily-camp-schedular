@@ -459,6 +459,16 @@ button { cursor: pointer; border: none; background: none; }
 .lite-call-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 700; color: #fff; background: var(--accent); padding: 8px 14px; border-radius: 999px; text-decoration: none; }
 .lite-call-btn:active { background: var(--accent-dark); }
 
+/* ─── Live Lite: roll call + changes ──────────────────────────────────── */
+.lite-stat-row.live { grid-template-columns: repeat(3, 1fr); }
+.lite-status { font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
+.lite-status.present { background: #DCFAE6; color: #067647; }
+.lite-status.absent { background: #FEE4E2; color: #B42318; }
+.lite-status.left { background: #FEF0C7; color: #9A6700; }
+.lite-change { padding: 13px 15px; }
+.lite-change-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lite-change-detail { font-size: 0.82rem; color: var(--ink-2); margin-top: 6px; }
+
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }

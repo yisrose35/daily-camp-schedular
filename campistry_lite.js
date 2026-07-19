@@ -63,6 +63,10 @@
     let meMedType = 'All';            // Me Lite medical filter: All/Allergy/Meds/Dietary
     let meMedDivision = 'All';        // Me Lite medical division chip
     let meStaffQuery = '';            // Me Lite staff directory search
+    let liveRollDivision = 'All';     // Live Lite roll-call division chip
+    let liveChangesQuery = '';        // Live Lite changes search
+    const liveDayCache = {};          // dateKey → live daily state (attendance/absences/earlyPickups)
+    const liveDayPending = {};        // dateKey → in-flight promise
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -301,6 +305,35 @@
 
     function invalidateSchedule(dateKey) { delete scheduleCache[dateKey]; }
 
+    // Live daily state (attendance / absences / early pickups) — synced to the
+    // cloud by the office Live app under camp_state_kv key `liveDaily_<date>`.
+    // Read-only here. Returns the day payload or null.
+    function loadLiveDay(dateKey) {
+        if (Object.prototype.hasOwnProperty.call(liveDayCache, dateKey)) {
+            return Promise.resolve(liveDayCache[dateKey]);
+        }
+        if (liveDayPending[dateKey]) return liveDayPending[dateKey];
+        liveDayPending[dateKey] = (async () => {
+            try {
+                const { data, error } = await window.supabase
+                    .from('camp_state_kv').select('value')
+                    .eq('camp_id', campId).eq('key', 'liveDaily_' + dateKey).maybeSingle();
+                if (error) throw error;
+                const payload = (data && data.value) ? data.value : null;
+                liveDayCache[dateKey] = payload;
+                return payload;
+            } catch (e) {
+                console.warn('[Lite] loadLiveDay failed:', e?.message || e);
+                return null;
+            } finally {
+                delete liveDayPending[dateKey];
+            }
+        })();
+        return liveDayPending[dateKey];
+    }
+
+    function invalidateLiveDay(dateKey) { delete liveDayCache[dateKey]; }
+
     // ─── Camp-structure helpers ─────────────────────────────────────────
 
     // Grade-level keys (app1.divisions is grade-keyed: each is a grade with bunks)
@@ -431,6 +464,8 @@
         meRoster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         meMedical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
         meStaff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
+        liveRoll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        liveChanges: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
@@ -451,7 +486,9 @@
           tabs: [{ id: 'meRoster', label: 'Roster' }, { id: 'meMedical', label: 'Medical' }, { id: 'meStaff', label: 'Staff' }] },
         { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
         { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
-        { id: 'live',   name: 'Live',   logo: 'Live_clean.png',   color: '#2563EB', theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'soon' },
+        { id: 'live',   name: 'Live',   title: 'Live Lite', logo: 'Live_clean.png', color: '#2563EB',
+          theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'available',
+          tabs: [{ id: 'liveRoll', label: 'Roll Call' }, { id: 'liveChanges', label: 'Changes' }] },
         { id: 'snacks', name: 'Snacks', logo: 'Snacks_clean.png', color: '#78350F', theme: { accent: '#78350F', dark: '#5C2E0E', tint: '#F3EBE3' }, roles: HEAD, status: 'soon' },
         { id: 'link',   name: 'Link',   logo: 'Link_clean.png',   color: '#2A7A35', theme: { accent: '#2A7A35', dark: '#1F5A28', tint: '#E4F3E6' }, roles: HEAD, status: 'soon' },
         { id: 'notes',  name: 'Notes',  logo: 'Notes_clean.png',  color: '#C4891A', theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'soon' },
@@ -682,6 +719,8 @@
         else if (id === 'meRoster') renderMeRoster();
         else if (id === 'meMedical') renderMeMedical();
         else if (id === 'meStaff') renderMeStaff();
+        else if (id === 'liveRoll') renderLiveRoll();
+        else if (id === 'liveChanges') renderLiveChanges();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
@@ -1518,6 +1557,176 @@
             </div>`;
         }).join('');
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: LIVE LITE — Roll Call (who's here today) + Changes (pickups/late)
+    // ════════════════════════════════════════════════════════════════════
+
+    // A camper's live status for the day, mirroring the office Live logic:
+    //   left    — logged as an early pickup (was here, went home early)
+    //   absent  — in the absences list, or attendance flag false; reason kept
+    //   present — everything else (default)
+    function liveStatusFor(name, day) {
+        const pick = (day.earlyPickups || []).find(p => p.name === name);
+        if (pick) return { status: 'left', pickup: pick };
+        const ab = (day.absences || []).find(a => a.name === name);
+        if (ab) return { status: 'absent', reason: ab.reason || 'absent', absence: ab };
+        if (day.attendance && day.attendance[name] === false) return { status: 'absent', reason: 'absent' };
+        return { status: 'present' };
+    }
+
+    function liveTallies(day) {
+        let present = 0, absent = 0, left = 0, late = 0;
+        Object.keys(camp.roster || {}).forEach(name => {
+            const s = liveStatusFor(name, day);
+            if (s.status === 'left') left++;
+            else if (s.status === 'absent') { absent++; if (s.reason === 'late') late++; }
+            else present++;
+        });
+        return { present, absent, left, late };
+    }
+
+    async function renderLiveRoll() {
+        const view = document.getElementById('view-liveRoll');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Attendance isn\'t available for your role.'); return; }
+
+        view.innerHTML = dateStripHTML() + `<div id="liteRollBody">${loadingHTML()}</div>`;
+        wireDateStrip(view, () => renderLiveRoll());
+        const body = view.querySelector('#liteRollBody');
+
+        const day = await loadLiveDay(currentDate);
+        if (activeTab !== 'liveRoll') return;
+
+        if (!day) {
+            body.innerHTML = emptyHTML('', `No attendance recorded for ${friendlyDate(currentDate)} yet.<br>Roll call happens in the office Live app.`);
+            return;
+        }
+        if (!Object.keys(camp.roster || {}).length) {
+            body.innerHTML = emptyHTML('', 'No campers in the roster yet.');
+            return;
+        }
+
+        const t = liveTallies(day);
+        const parents = parentDivisions();
+        const chips = ['All', ...parents];
+        if (!chips.includes(liveRollDivision)) liveRollDivision = 'All';
+
+        const strip = `<div class="lite-stat-row live">
+            ${statTileHTML(t.present, 'Present')}
+            ${statTileHTML(t.absent, 'Absent')}
+            ${statTileHTML(t.left, 'Left early')}
+        </div>`;
+
+        body.innerHTML = strip + chipRowHTML(chips, liveRollDivision) + '<div id="liteRollGroups"></div>';
+        body.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { liveRollDivision = ch.dataset.val; renderLiveRoll(); }));
+
+        const holder = body.querySelector('#liteRollGroups');
+        const divs = liveRollDivision === 'All' ? parents : [liveRollDivision];
+        let out = '';
+        divs.forEach(p => {
+            bunksForParent(p).forEach(b => {
+                const campers = campersInBunk(b);
+                if (!campers.length) return;
+                const here = campers.filter(c => liveStatusFor(c.name, day).status !== 'absent').length;
+                out += `<div class="lite-section-label">${esc(b)} · ${here}/${campers.length} here</div>`
+                    + campers.map(c => liveRollRowHTML(c, liveStatusFor(c.name, day))).join('');
+            });
+        });
+        holder.innerHTML = out || emptyHTML('', 'No bunks in this division.');
+        wireMeRoster(holder);   // rows are tappable → full camper detail sheet
+    }
+
+    function liveRollRowHTML(c, s) {
+        let pill;
+        if (s.status === 'present') pill = '<span class="lite-status present">Here</span>';
+        else if (s.status === 'left') pill = `<span class="lite-status left">Left early</span>`;
+        else pill = `<span class="lite-status absent">${esc(s.reason === 'late' ? 'Late / not in' : cap(s.reason || 'Absent'))}</span>`;
+        const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
+        return `<div class="lite-card lite-camper">
+            <button class="lite-camper-row" type="button" data-camper="${esc(c.name)}">
+                <span>
+                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
+                </span>
+                <span class="lite-camper-flags">${pill}</span>
+            </button>
+        </div>`;
+    }
+
+    async function renderLiveChanges() {
+        const view = document.getElementById('view-liveChanges');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'This isn\'t available for your role.'); return; }
+
+        view.innerHTML = dateStripHTML()
+            + `<div class="lite-field" style="margin:10px 0;">
+                   <input class="lite-input" id="liteChangesSearch" type="search" placeholder="Search camper…" value="${esc(liveChangesQuery)}">
+               </div>
+               <div id="liteChangesBody">${loadingHTML()}</div>`;
+        wireDateStrip(view, () => renderLiveChanges());
+        const search = view.querySelector('#liteChangesSearch');
+        search.addEventListener('input', () => { liveChangesQuery = search.value; paintLiveChanges(view.querySelector('#liteChangesBody')); });
+
+        const day = await loadLiveDay(currentDate);
+        if (activeTab !== 'liveChanges') return;
+        if (!day) {
+            view.querySelector('#liteChangesBody').innerHTML =
+                emptyHTML('', `No dismissal changes or late arrivals logged for ${friendlyDate(currentDate)}.`);
+            return;
+        }
+        paintLiveChanges(view.querySelector('#liteChangesBody'), day);
+    }
+
+    function paintLiveChanges(body, day) {
+        if (!day) day = liveDayCache[currentDate];
+        if (!day) { body.innerHTML = emptyHTML('', 'Nothing logged for this day.'); return; }
+        const q = liveChangesQuery.trim().toLowerCase();
+        const hit = (n) => !q || String(n || '').toLowerCase().includes(q);
+
+        const late = (day.absences || []).filter(a => a.reason === 'late' && hit(a.name));
+        const pickups = (day.earlyPickups || []).filter(p => hit(p.name));
+
+        if (!late.length && !pickups.length) {
+            body.innerHTML = emptyHTML('', q ? 'No matching changes.'
+                : `No dismissal changes or late arrivals for ${friendlyDate(currentDate)}.`);
+            return;
+        }
+
+        let html = '';
+        if (late.length) {
+            html += `<div class="lite-section-label">Late arrivals · ${late.length}</div>`
+                + late.map(a => changeCardHTML(a.name, 'Late arrival', 'late',
+                    a.notes || '', a.time || '')).join('');
+        }
+        if (pickups.length) {
+            html += `<div class="lite-section-label">Dismissal changes & early pickups · ${pickups.length}</div>`
+                + pickups.map(p => {
+                    const bits = [];
+                    if (p.pickupTime) bits.push('Pickup ' + p.pickupTime);
+                    if (p.pickedUpBy) bits.push('by ' + p.pickedUpBy);
+                    return changeCardHTML(p.name, p.reason || 'Early pickup', 'pickup',
+                        bits.join(' · '), '');
+                }).join('');
+        }
+        body.innerHTML = html;
+        body.querySelectorAll('[data-camper]').forEach(el =>
+            el.addEventListener('click', () => openCamperDetail(el.dataset.camper)));
+    }
+
+    function changeCardHTML(name, label, kind, detail, time) {
+        const c = camp.roster?.[name] || {};
+        const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
+        return `<div class="lite-card lite-change" data-camper="${esc(name)}">
+            <div class="lite-change-top">
+                <span class="lite-camper-name">${esc(name)}</span>
+                <span class="lite-status ${kind === 'late' ? 'absent' : 'left'}">${esc(label)}</span>
+            </div>
+            ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
+            ${detail ? `<div class="lite-change-detail">${esc(detail)}${time ? ` · ${esc(time)}` : ''}</div>` : ''}
+        </div>`;
+    }
+
+    function cap(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
 
     // ════════════════════════════════════════════════════════════════════
     // VIEW: LEAGUE (counselor)

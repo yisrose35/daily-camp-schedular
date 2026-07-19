@@ -635,6 +635,78 @@ var CamperMail = (function(){
   </button>
 </div>
 <script>window.__CAMPISTRY_PRODUCT__='live';</script>
+<script>
+// ── Live daily state → cloud sync ─────────────────────────────────────────────
+// The office roll call (attendance / absences / early pickups) lives in the
+// localStorage blob `campistry_live_v1`. On its own it never leaves this
+// browser, so the Campistry Lite companion (a head counselor's phone) can't see
+// who's here today. This bridge mirrors each day's state to a dedicated
+// camp_state_kv row (`liveDaily_<date>`) so Lite can read it — and pulls other
+// devices' updates back in. It writes ONLY that new key, so it can't touch any
+// existing camp data.
+//
+// Concurrency: newest-wins per day. A pull overwrites local ONLY when there are
+// no un-pushed local edits, or (on a genuine two-device conflict) when the cloud
+// copy is strictly newer. Local edits are pushed within one tick (~2.5s), so the
+// clobber window is small. Good enough for the typical single-secretary office.
+(function(){
+    'use strict';
+    var LIVE_KEY = 'campistry_live_v1';
+    function conn(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{c:c,id:id}:null; }
+    function dayKey(){ var d=new Date(); d.setHours(12,0,0,0); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+    function readAll(){ try{ return JSON.parse(localStorage.getItem(LIVE_KEY)||'{}'); }catch(e){ return {}; } }
+    function writeAll(all){ try{ localStorage.setItem(LIVE_KEY, JSON.stringify(all)); }catch(e){} }
+    function payloadOf(day){ return { attendance: day.attendance||{}, absences: day.absences||[], earlyPickups: day.earlyPickups||[], notes: day.notes||'' }; }
+    function content(p){ return JSON.stringify({ a:p.attendance, b:p.absences, e:p.earlyPickups, n:p.notes }); }
+
+    var agreed = null;      // content() both sides last agreed on (this day)
+    var localPushedAt = ''; // ISO of our last local-origin push (for conflict tie-break)
+
+    function push(){
+        var cn=conn(); if(!cn) return;
+        var all=readAll(), key=dayKey(), day=all[key]; if(!day) return;   // nothing rolled yet
+        var p=payloadOf(day), c=content(p);
+        if(c===agreed) return;                                            // no real change
+        agreed=c; localPushedAt=new Date().toISOString();
+        p.updated_at=localPushedAt;
+        cn.c.from('camp_state_kv').upsert(
+            { camp_id:cn.id, key:'liveDaily_'+key, value:p, updated_at:localPushedAt },
+            { onConflict:'camp_id,key' }
+        ).then(function(res){ if(res&&res.error) console.warn('[Live] cloud push:', res.error.message); });
+    }
+
+    function pull(){
+        var cn=conn(); if(!cn) return;
+        var key=dayKey();
+        cn.c.from('camp_state_kv').select('value').eq('camp_id',cn.id).eq('key','liveDaily_'+key).maybeSingle()
+          .then(function(res){
+            if(!res || res.error || !res.data || !res.data.value) return;
+            var cloud=res.data.value, cc=content(cloud);
+            if(cc===agreed) return;                                       // already in sync
+            var all=readAll(), localDay=all[key];
+            var localContent = localDay ? content(payloadOf(localDay)) : null;
+            var apply = false;
+            if(localContent===agreed || localContent===null){ apply=true; }          // no pending local edits
+            else if((cloud.updated_at||'') > localPushedAt){ apply=true; }            // conflict → cloud is newer
+            if(!apply) return;
+            all[key]={ attendance:cloud.attendance||{}, absences:cloud.absences||[], earlyPickups:cloud.earlyPickups||[], notes:cloud.notes||'', updated_at:cloud.updated_at||'' };
+            writeAll(all);
+            agreed=cc;
+            if(window.CampistryLive && CampistryLive.refresh){ try{ CampistryLive.refresh(); }catch(e){} }
+          });
+    }
+
+    // Detect local edits (any office mutation rewrites the whole blob) → push.
+    var lastSeen='';
+    function tick(){ var all=readAll(), day=all[dayKey()]; var snap=day?content(payloadOf(day)):''; if(snap!==lastSeen){ lastSeen=snap; push(); } }
+
+    function start(){ pull(); setInterval(tick, 2500); setInterval(pull, 20000); }
+    if(window.CampistryDB && window.CampistryDB.ready && window.CampistryDB.ready.then){ window.CampistryDB.ready.then(function(){ setTimeout(start, 400); }); }
+    else { setTimeout(start, 1200); }
+    document.addEventListener('visibilitychange', function(){ if(!document.hidden) pull(); });
+    window.addEventListener('storage', function(e){ if(e.key===LIVE_KEY) push(); });
+})();
+</script>
 <script src="parent_lockout_guard.js"></script>
 <script src="product_access_guard.js"></script>
 </body>
