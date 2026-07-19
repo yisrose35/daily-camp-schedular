@@ -38,6 +38,7 @@
     let campId = null;
     let role = null;
     let userEmail = null;
+    let userId = null;
     let campDisplayName = '';
     let userName = null;
 
@@ -87,6 +88,12 @@
     let linkComposeAttach = { form: null, list: null };
     let linkComposeSubject = '';      // persist across attach re-renders
     let linkComposeBody = '';
+    let notesArr = null;              // cached notes array (campistryNotes:<userId>)
+    let notesPending = null;
+    let notesView = 'all';            // all | pinned | reminders | shared | trash
+    let notesQuery = '';
+    let notesEditorId = null;         // null = list view; else editing this note id
+    let notesSaveTimer = null;
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -169,6 +176,7 @@
                 || localStorage.getItem('campistry_role')
                 || 'viewer';
             userName = window.AccessControl?.getUserName?.() || null;
+            userId = window.CampistryDB?.getUserId?.() || localStorage.getItem('campistry_auth_user_id') || null;
 
             if (!campId) {
                 setSplash('No camp found for this account. Ask your camp owner for an invite.');
@@ -461,6 +469,59 @@
 
     function linkLabelOf(item) { return item && (item.name || item.title || item.label || 'Untitled'); }
 
+    // ─── Notes data (personal, cloud-synced) ────────────────────────────
+    // Stored in camp_state_kv key `campistryNotes:<userId>` (per user), the same
+    // store the desktop Notes app writes via its sync bridge. Merge by note id,
+    // newest updatedAt wins, so edits from either device converge.
+    function notesKey() { return 'campistryNotes:' + (userId || 'anon'); }
+
+    function loadNotes(force) {
+        if (notesArr && !force) return Promise.resolve(notesArr);
+        if (notesPending) return notesPending;
+        notesPending = (async () => {
+            try {
+                const { data, error } = await window.supabase
+                    .from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', notesKey()).maybeSingle();
+                if (error) throw error;
+                const val = (data && data.value) || {};
+                notesArr = Array.isArray(val.notes) ? val.notes : [];
+            } catch (e) { console.warn('[Lite] loadNotes failed:', e?.message || e); notesArr = notesArr || []; }
+            finally { notesPending = null; }
+            return notesArr;
+        })();
+        return notesPending;
+    }
+
+    function mergeNotes(a, b) {
+        const byId = {};
+        (a || []).concat(b || []).forEach(n => {
+            if (!n || !n.id) return;
+            const cur = byId[n.id];
+            if (!cur || (n.updatedAt || 0) >= (cur.updatedAt || 0)) byId[n.id] = n;
+        });
+        return Object.values(byId);
+    }
+
+    // Read-latest → merge our change → write, so a concurrent desktop edit isn't
+    // clobbered by a stale copy. Debounced for autosave-while-typing.
+    async function persistNotes() {
+        try {
+            const { data } = await window.supabase
+                .from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', notesKey()).maybeSingle();
+            const cloud = (data && data.value && Array.isArray(data.value.notes)) ? data.value.notes : [];
+            const merged = mergeNotes(cloud, notesArr || []);
+            notesArr = merged;
+            await saveKV(notesKey(), { notes: merged, updated_at: new Date().toISOString() });
+        } catch (e) { console.warn('[Lite] persistNotes failed:', e?.message || e); }
+    }
+    function scheduleNotesSave() {
+        clearTimeout(notesSaveTimer);
+        notesSaveTimer = setTimeout(persistNotes, 700);
+    }
+
+    const NOTE_COLORS = ['yellow', 'peach', 'pink', 'blue', 'green', 'purple', 'slate'];
+    function noteById(id) { return (notesArr || []).find(n => n.id === id); }
+
     // Update a link_messages flag column (read/important/archived), cloud + local.
     async function updateLinkFlag(id, field, value) {
         const patch = {}; patch[field] = !!value;
@@ -671,6 +732,7 @@
         healthTrip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 19V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M4 19h16"/><path d="M12 8v7"/></svg>',
         linkMessages: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
         linkCompose: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+        notesList: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
@@ -696,11 +758,12 @@
         { id: 'live',   name: 'Live',   title: 'Live Lite', logo: 'Live_clean.png', color: '#2563EB',
           theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'liveRoll', label: 'Roll Call' }, { id: 'liveChanges', label: 'Changes' }] },
-        { id: 'snacks', name: 'Snacks', logo: 'Snacks_clean.png', color: '#78350F', theme: { accent: '#78350F', dark: '#5C2E0E', tint: '#F3EBE3' }, roles: HEAD, status: 'soon' },
         { id: 'link',   name: 'Link',   title: 'Link Lite', logo: 'Link_clean.png', color: '#2A7A35',
           theme: { accent: '#2A7A35', dark: '#1F5A28', tint: '#E4F3E6' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'linkMessages', label: 'Messages' }, { id: 'linkCompose', label: 'Compose' }] },
-        { id: 'notes',  name: 'Notes',  logo: 'Notes_clean.png',  color: '#C4891A', theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'soon' },
+        { id: 'notes',  name: 'Notes',  title: 'Notes Lite', logo: 'Notes_clean.png', color: '#C4891A',
+          theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'available',
+          tabs: [{ id: 'notesList', label: 'Notes' }] },
         { id: 'counselor', name: 'My Camp', title: 'My Camp', tag: 'Your bunk, schedule & league',
           logo: 'Lite_clean.png', color: '#EE6A53', theme: CORAL_THEME, roles: ['counselor'], status: 'available',
           tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }] }
@@ -874,6 +937,7 @@
         currentApp = null;
         settingsOpen = false;
         applyTheme(null);
+        showNotesFab(false);
         document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
         document.getElementById('view-home').style.display = '';   // was hidden by openApp
         document.getElementById('liteApp').setAttribute('data-screen', 'home');
@@ -912,6 +976,7 @@
 
     function switchTab(id) {
         activeTab = id;
+        if (id !== 'notesList') { notesEditorId = null; showNotesFab(false); }
         document.querySelectorAll('.lite-tab').forEach(b =>
             b.classList.toggle('active', b.dataset.tab === id));
         document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
@@ -936,6 +1001,7 @@
         else if (id === 'healthTrip') renderHealthTrip();
         else if (id === 'linkMessages') renderLinkMessages();
         else if (id === 'linkCompose') renderLinkCompose();
+        else if (id === 'notesList') renderNotes();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
@@ -953,6 +1019,7 @@
 
     function openSettings() {
         settingsOpen = true;
+        showNotesFab(false);
         try { history.pushState({ liteSettings: true }, ''); } catch (_) {}
         document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
         const v = document.getElementById('view-settings');
@@ -2744,6 +2811,167 @@
         if (diff < 86400000) return Math.floor(diff / 3600000) + 'h';
         return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: NOTES LITE — list (grid) + full-screen editor
+    // ════════════════════════════════════════════════════════════════════
+
+    const NOTES_VIEWS = [
+        ['all', 'All'], ['pinned', 'Pinned'], ['reminders', 'Reminders'], ['shared', 'Shared'], ['trash', 'Trash']
+    ];
+    function notesMatchesView(n) {
+        if (notesView === 'trash') return !!n.trashed;
+        if (n.trashed) return false;
+        if (notesView === 'pinned') return !!n.pinned;
+        if (notesView === 'reminders') return !!n.reminder;
+        if (notesView === 'shared') return !!n.isShared;
+        return true;
+    }
+
+    async function renderNotes() {
+        const view = document.getElementById('view-notesList');
+        if (notesArr === null) { view.innerHTML = loadingHTML(); await loadNotes(); }
+        if (activeTab !== 'notesList') return;
+        if (notesEditorId) { renderNoteEditor(); return; }
+        paintNotesList();
+    }
+
+    function paintNotesList() {
+        const view = document.getElementById('view-notesList');
+        const q = notesQuery.trim().toLowerCase();
+        let list = (notesArr || []).filter(notesMatchesView);
+        if (q) list = list.filter(n => ((n.title || '') + ' ' + (n.body || '')).toLowerCase().includes(q));
+        list.sort((a, b) => {
+            if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+            return (b.updatedAt || 0) - (a.updatedAt || 0);
+        });
+
+        const chips = `<div class="lite-chiprow">${NOTES_VIEWS.map(([v, l]) =>
+            `<button type="button" class="lite-chip${v === notesView ? ' active' : ''}" data-nv="${v}">${l}</button>`).join('')}</div>`;
+
+        const cards = list.length ? `<div class="lite-notes-grid">${list.map(noteCardHTML).join('')}</div>`
+            : emptyHTML('', q ? 'No notes match your search.'
+                : notesView === 'trash' ? 'Trash is empty.'
+                : notesView === 'all' ? 'No notes yet. Tap + to write one.'
+                : `No ${notesView} notes.`);
+
+        view.innerHTML = `
+            <div class="lite-field" style="margin-bottom:10px;">
+                <input class="lite-input" id="liteNotesSearch" type="search" placeholder="Search notes…" value="${esc(notesQuery)}">
+            </div>
+            ${chips}
+            <div id="liteNotesBody">${cards}</div>`;
+
+        const s = view.querySelector('#liteNotesSearch');
+        s.addEventListener('input', () => { notesQuery = s.value; paintNotesBody(); });
+        view.querySelectorAll('[data-nv]').forEach(c => c.addEventListener('click', () => { notesView = c.dataset.nv; paintNotesList(); }));
+        showNotesFab(true);
+        wireNoteCards(view);
+    }
+
+    // The FAB is a standalone element in #liteApp (outside the animated views);
+    // show it only on the notes list, wire its click once.
+    function showNotesFab(show) {
+        const fab = document.getElementById('liteNoteNew');
+        if (!fab) return;
+        fab.style.display = show ? '' : 'none';
+        if (show && !fab._wired) { fab._wired = true; fab.addEventListener('click', createNote); }
+    }
+
+    function paintNotesBody() {
+        // lighter repaint on search (keeps focus in the search box)
+        const body = document.getElementById('liteNotesBody');
+        if (!body) return;
+        const q = notesQuery.trim().toLowerCase();
+        let list = (notesArr || []).filter(notesMatchesView);
+        if (q) list = list.filter(n => ((n.title || '') + ' ' + (n.body || '')).toLowerCase().includes(q));
+        list.sort((a, b) => (!!a.pinned !== !!b.pinned) ? (a.pinned ? -1 : 1) : (b.updatedAt || 0) - (a.updatedAt || 0));
+        body.innerHTML = list.length ? `<div class="lite-notes-grid">${list.map(noteCardHTML).join('')}</div>`
+            : emptyHTML('', q ? 'No notes match your search.' : 'No notes here.');
+        wireNoteCards(body);
+    }
+
+    function noteCardHTML(n) {
+        const title = n.title ? esc(n.title) : '';
+        const body = n.body ? esc(n.body) : '<span class="lite-note-empty">Empty note</span>';
+        const when = n.updatedAt ? new Date(n.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+        return `<button class="lite-note-card" data-note="${esc(n.id)}" data-color="${esc(n.color || 'yellow')}">
+            ${n.pinned ? '<span class="lite-note-pin">📌</span>' : ''}
+            ${title ? `<div class="lite-note-title">${title}</div>` : ''}
+            <div class="lite-note-body">${body}</div>
+            <div class="lite-note-foot">${n.reminder ? '<span class="lite-note-badge">⏰</span>' : ''}${n.isShared ? '<span class="lite-note-badge">↗</span>' : ''}<span class="lite-note-date">${esc(when)}</span></div>
+        </button>`;
+    }
+    function wireNoteCards(root) {
+        root.querySelectorAll('.lite-note-card[data-note]').forEach(c =>
+            c.addEventListener('click', () => { notesEditorId = c.dataset.note; renderNoteEditor(); }));
+    }
+
+    function createNote() {
+        const n = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: '', body: '', color: 'yellow', pinned: false, trashed: false, createdAt: Date.now(), updatedAt: Date.now() };
+        notesArr = (notesArr || []).concat(n);
+        notesEditorId = n.id;
+        persistNotes();
+        renderNoteEditor();
+    }
+
+    // ─── Full-screen note editor ─────────────────────────────────────────
+    function renderNoteEditor() {
+        showNotesFab(false);
+        const view = document.getElementById('view-notesList');
+        const n = noteById(notesEditorId);
+        if (!n) { notesEditorId = null; paintNotesList(); return; }
+        const inTrash = !!n.trashed;
+        view.innerHTML = `
+            <div class="lite-note-editor">
+                <div class="lite-note-ed-head">
+                    <button class="lite-settings-back" id="liteNoteBack" aria-label="Back to notes">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+                    </button>
+                    <div class="lite-note-ed-actions">
+                        <button class="lite-note-act${n.pinned ? ' on' : ''}" id="liteNotePin" aria-label="Pin">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="${n.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+                        </button>
+                        <button class="lite-note-act" id="liteNoteTrash" aria-label="${inTrash ? 'Restore' : 'Delete'}">
+                            ${inTrash
+                                ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"/><path d="M3 3v5h5"/></svg>'
+                                : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'}
+                        </button>
+                    </div>
+                </div>
+                <input class="lite-note-title-input" id="liteNoteTitle" placeholder="Title" value="${esc(n.title || '')}" ${inTrash ? 'disabled' : ''}>
+                <textarea class="lite-note-body-input" id="liteNoteBody" placeholder="Start writing…" ${inTrash ? 'disabled' : ''}>${esc(n.body || '')}</textarea>
+                <div class="lite-note-colors">${NOTE_COLORS.map(c =>
+                    `<button class="lite-note-dot${c === (n.color || 'yellow') ? ' on' : ''}" data-color="${c}" data-c="${c}" aria-label="${c}"></button>`).join('')}</div>
+                <div class="lite-note-meta">${inTrash ? 'In Trash · ' : ''}Edited ${n.updatedAt ? new Date(n.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</div>
+                ${inTrash ? '<button class="lite-btn danger block" id="liteNotePurge" style="margin-top:14px;">Delete forever</button>' : ''}
+            </div>`;
+        view.setAttribute('data-color', n.color || 'yellow');
+
+        view.querySelector('#liteNoteBack').addEventListener('click', () => { flushNoteSave(); notesEditorId = null; paintNotesList(); });
+        const titleEl = view.querySelector('#liteNoteTitle');
+        const bodyEl = view.querySelector('#liteNoteBody');
+        const onEdit = () => { const nn = noteById(notesEditorId); if (!nn) return; nn.title = titleEl.value; nn.body = bodyEl.value; nn.updatedAt = Date.now(); scheduleNotesSave(); };
+        titleEl.addEventListener('input', onEdit);
+        bodyEl.addEventListener('input', onEdit);
+        view.querySelector('#liteNotePin').addEventListener('click', () => {
+            const nn = noteById(notesEditorId); if (!nn) return; nn.pinned = !nn.pinned; nn.updatedAt = Date.now(); persistNotes(); renderNoteEditor();
+        });
+        view.querySelector('#liteNoteTrash').addEventListener('click', () => {
+            const nn = noteById(notesEditorId); if (!nn) return; nn.trashed = !nn.trashed; nn.updatedAt = Date.now(); persistNotes();
+            toast(nn.trashed ? 'Moved to Trash' : 'Restored');
+            notesEditorId = null; paintNotesList();
+        });
+        view.querySelectorAll('.lite-note-dot').forEach(d => d.addEventListener('click', () => {
+            const nn = noteById(notesEditorId); if (!nn) return; nn.color = d.dataset.color; nn.updatedAt = Date.now(); persistNotes(); renderNoteEditor();
+        }));
+        const purge = view.querySelector('#liteNotePurge');
+        if (purge) purge.addEventListener('click', () => {
+            notesArr = (notesArr || []).filter(x => x.id !== notesEditorId);
+            persistNotes(); toast('Note deleted'); notesEditorId = null; paintNotesList();
+        });
+    }
+    function flushNoteSave() { if (notesSaveTimer) { clearTimeout(notesSaveTimer); notesSaveTimer = null; persistNotes(); } }
 
     // ════════════════════════════════════════════════════════════════════
     // VIEW: LEAGUE (counselor)

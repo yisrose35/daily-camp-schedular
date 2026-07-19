@@ -240,6 +240,9 @@
     </button>
 </div>
 
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
 <script src="campistry_notes.js"></script>
 <script>
 // Grid/list toggle
@@ -260,6 +263,44 @@ function createAndOpen() {
 // Sidebar count IDs need to match what updateCounts() targets
 // updateCounts() queries [data-view] .nt-nav-count — the spans above have id="cnt-X" too
 // But the function uses querySelector — ensure it works: already done in renderGrid/updateCounts
+</script>
+
+<script>
+// ── Notes ↔ cloud sync ────────────────────────────────────────────────────────
+// Notes were localStorage-only (campistry_notes_v1) on this standalone page, so
+// they never reached the Campistry Lite companion. This bridge mirrors them to a
+// per-user camp_state_kv row (`campistryNotes:<userId>`) — the same store Lite
+// reads/writes. Notes are personal, so the key is scoped by the signed-in user.
+//
+// MERGE, not overwrite: notes from both devices are unioned by id, newest
+// updatedAt wins — so an edit on the phone and one on the desktop converge and
+// nothing is lost. Writes only that one key. No-ops gracefully if not signed in.
+(function(){
+    'use strict';
+    var STORE = 'campistry_notes_v1';
+    function conn(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, camp=d.getCampId?d.getCampId():null, uid=d.getUserId?d.getUserId():null; return (c&&camp&&uid&&c.from)?{c:c,camp:camp,key:'campistryNotes:'+uid}:null; }
+    function readLocal(){ try{ var s=JSON.parse(localStorage.getItem(STORE)||'{}'); return Array.isArray(s.notes)?s.notes:[]; }catch(e){ return []; } }
+    function writeLocal(arr){ try{ var s=JSON.parse(localStorage.getItem(STORE)||'{}'); s.notes=arr; localStorage.setItem(STORE, JSON.stringify(s)); }catch(e){} }
+    function merge(a,b){ var byId={}; (a||[]).concat(b||[]).forEach(function(n){ if(!n||!n.id) return; var cur=byId[n.id]; if(!cur||(n.updatedAt||0)>=(cur.updatedAt||0)) byId[n.id]=n; }); return Object.keys(byId).map(function(k){ return byId[k]; }); }
+    function content(arr){ return JSON.stringify((arr||[]).map(function(n){ return [n.id, n.updatedAt||0]; }).sort(function(x,y){ return x[0]<y[0]?-1:1; })); }
+    function sync(){
+        var cn=conn(); if(!cn) return;
+        cn.c.from('camp_state_kv').select('value').eq('camp_id',cn.camp).eq('key',cn.key).maybeSingle().then(function(res){
+            var cloud=(res && !res.error && res.data && res.data.value && Array.isArray(res.data.value.notes)) ? res.data.value.notes : [];
+            var local=readLocal();
+            var merged=merge(cloud, local), mstr=content(merged);
+            if(content(local)!==mstr){ writeLocal(merged); if(typeof renderGrid==='function'){ try{ renderGrid(); }catch(e){} } }
+            if(content(cloud)!==mstr){
+                cn.c.from('camp_state_kv').upsert({ camp_id:cn.camp, key:cn.key, value:{ notes:merged, updated_at:new Date().toISOString() } }, { onConflict:'camp_id,key' })
+                    .then(function(r){ if(r && r.error) console.warn('[Notes] cloud sync push:', r.error.message); });
+            }
+        });
+    }
+    function start(){ sync(); setInterval(sync, 12000); }
+    if(window.CampistryDB && window.CampistryDB.ready && window.CampistryDB.ready.then){ window.CampistryDB.ready.then(function(){ setTimeout(start, 500); }); }
+    else { setTimeout(start, 1400); }
+    document.addEventListener('visibilitychange', function(){ if(!document.hidden) sync(); });
+})();
 </script>
 </body>
 </html>
