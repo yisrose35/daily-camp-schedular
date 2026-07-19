@@ -483,6 +483,34 @@ button { cursor: pointer; border: none; background: none; }
 .lite-trip-summary { background: var(--accent-tint); color: var(--accent-dark); border-radius: 12px; padding: 11px 14px; font-size: 0.88rem; margin-bottom: 12px; }
 .lite-trip-summary b { font-weight: 800; }
 
+/* ─── Link Lite: messages + compose ───────────────────────────────────── */
+.lite-thread { padding: 12px 15px; }
+.lite-thread-top { display: flex; align-items: center; gap: 8px; }
+.lite-thread-top .lite-camper-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lite-unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
+.lite-thread-time { font-size: 0.72rem; color: var(--muted); flex: none; }
+.lite-thread-preview { font-size: 0.83rem; color: var(--ink-2); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lite-thread-scroll { max-height: 52dvh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 0 12px; }
+.lite-bubble { max-width: 82%; padding: 9px 12px; border-radius: 15px; font-size: 0.88rem; line-height: 1.4; word-break: break-word; }
+.lite-bubble.in { align-self: flex-start; background: var(--bg); border-bottom-left-radius: 5px; }
+.lite-bubble.out { align-self: flex-end; background: var(--accent-tint); border-bottom-right-radius: 5px; }
+.lite-bubble-subj { font-weight: 700; margin-bottom: 2px; }
+.lite-bubble-time { font-size: 0.66rem; color: var(--muted); margin-top: 4px; }
+.lite-bubble-attach { margin-top: 6px; }
+.lite-attach-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem; font-weight: 700; background: var(--accent-tint); color: var(--accent-dark); padding: 4px 10px; border-radius: 999px; margin: 3px 5px 0 0; }
+.lite-attach-chip button { color: var(--accent-dark); font-size: 0.95rem; line-height: 1; padding: 0 2px; }
+.lite-reply-row { display: flex; gap: 8px; align-items: center; padding-top: 10px; border-top: 1px solid var(--line); }
+.lite-reply-row .lite-input { flex: 1; }
+.lite-lbl { display: block; font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 12px 2px 5px; }
+.lite-compose .lite-lbl:first-child { margin-top: 0; }
+.lite-recipient { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--card); border: 1px solid var(--line-2); border-radius: 13px; padding: 11px 13px; }
+.lite-link-btn { color: var(--accent-dark); font-weight: 700; font-size: 0.82rem; }
+.lite-rec-hit { display: block; width: 100%; text-align: left; padding: 11px 13px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); margin-top: 6px; }
+.lite-attach-row { margin-top: 10px; }
+.lite-compose-actions { display: flex; gap: 10px; margin-top: 16px; }
+.lite-compose-actions .lite-btn { flex: 1; }
+.lite-pick-row { display: block; width: 100%; text-align: left; padding: 12px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); margin-top: 7px; }
+
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }

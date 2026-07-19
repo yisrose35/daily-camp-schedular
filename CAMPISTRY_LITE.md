@@ -17,8 +17,9 @@ resolved by `resolveCampName()` from the first trustworthy source
 signup metadata) so the hero reads the real camp name rather than the "Your Camp"
 placeholder. Below the hero sits a compact grid of **product tiles
 using each product's real logo** (`Flow_clean.png`, `Me_clean.png`, …) with the
-product color as a bottom accent. **Flow**, **Me**, **Live** and **Health** are
-live; the rest of the suite (Go, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
+product color as a bottom accent. **Flow**, **Me**, **Live**, **Health** and
+**Link** are live; the rest of the suite (Go, Snacks, Notes) show as dimmed
+"Soon" tiles. Counselors
 get a single prominent **My Camp** hero tile. Tapping an available tile opens
 that app (`openApp`) with its own bottom tab bar; the header back-chevron returns
 to the launcher (`goHome`). The app config lives in `LITE_APPS` in
@@ -39,6 +40,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | Audience | Tabs | What they can do |
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
+| **Head staff** — **Link Lite** | Messages · Compose | Parent communication on the go. **Messages:** the inbox as parent-threaded conversations (received + sent), tap a thread to read it and fire off a quick reply. **Compose:** search a camper → message their parent, and **attach an existing form or list** (created on the desktop) via a picker — Lite can attach them, never create them. Sends a real `link_messages` row the parent portal reads. Photos: next phase (needs a cloud photo store). |
 | **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
@@ -127,6 +129,44 @@ key; pending (unconfirmed) parent requests are not surfaced in Lite._
 > in `campistry_live.js`, mirroring the sibling products (Health/Go) and the
 > app's own inline copies — the office Live board is functional again, which is
 > what makes cloud sync (and therefore Live Lite) meaningful.
+
+### Link Lite tabs — `Messages · Compose` (green `#2A7A35`)
+
+The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
+**messaging + attach forms/lists**. Photos are a separate phase (see below).
+
+- **Messages** — the message inbox as **parent-threaded conversations**, grouped
+  by `thread_id` (received `in` + sent `out`), newest first, with an unread dot
+  and a one-line preview (attachment tokens stripped). Tap a thread → the full
+  conversation as bubbles (parent left, staff right; attachments shown as chips)
+  and a **quick reply** box that sends straight back to that parent. Search
+  across all threads. Reads `link_messages` directly (`camp_id`-scoped by RLS).
+- **Compose** — search a **camper** → message their parent (`parent1Name` /
+  `parent1Email` from the roster). Subject + body, then **Attach form / list**:
+  a picker of the forms & lists that exist in `camp_state_kv` (`link_forms`,
+  `link_lists`). Selecting one appends the desktop's own invisible body token —
+  `[[form:<id>:<camper>]]` or `[[list:<id>]]` — which the parent portal renders
+  as an "Open & fill" / "View list" button. **Lite attaches, never creates**
+  forms/lists (matching the requirement).
+
+**Sending** replicates the desktop's `link_messages` insert (`id` uuid,
+`camp_id`, `thread_id`, `direction:'out'`, `parent_name/email`, `camper_name`,
+`subject`, `body`, `channels`, `read`) — the parent portal reads that table, so
+no edge function is needed (the desktop's email/SMS channels are best-effort
+placeholders anyway). Compose subject/body are held in module state so they
+survive the attach-picker re-render.
+
+> **Photos — deferred, needs new infrastructure.** The Link photo system is a
+> desktop **face-recognition engine** that stores camp photos as **base64
+> `dataUrl` blobs in the desktop browser's localStorage** (`campistry_link_photos_v1`);
+> the only thing that syncs to the cloud is the face-*index descriptors* (vectors
+> via RPCs), **not the images**. There is **no Supabase Storage bucket anywhere
+> in the repo**, so a phone has nothing to read or upload to. Putting pictures on
+> mobile therefore requires building cloud photo infrastructure first — a Storage
+> bucket + an index table + RLS (a migration) — with the face-recognition ML
+> staying on the desktop (a phone uploads to / views the shared cloud store; the
+> desktop keeps auto-tagging and running the "Photo Roundup"). That's the next
+> phase and is tracked separately from this messaging slice.
 
 ### Health Lite tabs — `Meds · Roster · Trip` (purple `#6B21A8`)
 

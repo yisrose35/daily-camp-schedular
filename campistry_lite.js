@@ -73,6 +73,16 @@
     let healthRosterQuery = '';       // Health Lite roster search
     let healthDivision = 'All';       // Health Lite meds/roster division chip
     let healthTripScope = null;       // Health Lite trip: selected division ('All' = whole camp)
+    let linkMsgs = null;              // cached link_messages rows
+    let linkMsgPending = null;
+    let linkForms = null;             // flattened forms from camp_state_kv link_forms
+    let linkLists = null;             // link_lists from camp_state_kv
+    let linkThreadQuery = '';         // Link Lite messages search
+    let linkComposeCamper = null;     // { name, parentName, parentEmail }
+    let linkComposeQuery = '';        // Link Lite compose recipient search
+    let linkComposeAttach = { form: null, list: null };
+    let linkComposeSubject = '';      // persist across attach re-renders
+    let linkComposeBody = '';
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -387,6 +397,59 @@
     // (Swap this one predicate for a `nurse` role check later.)
     function canGiveMeds() { return ['owner', 'admin', 'scheduler'].includes(role); }
 
+    // ─── Link data (messages + forms/lists) ─────────────────────────────
+    function loadLinkMessages(force) {
+        if (linkMsgs && !force) return Promise.resolve(linkMsgs);
+        if (linkMsgPending) return linkMsgPending;
+        linkMsgPending = (async () => {
+            try {
+                const { data, error } = await window.supabase
+                    .from('link_messages')
+                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,created_at')
+                    .eq('camp_id', campId).order('created_at', { ascending: true }).limit(500);
+                if (error) throw error;
+                linkMsgs = data || [];
+            } catch (e) { console.warn('[Lite] loadLinkMessages failed:', e?.message || e); linkMsgs = linkMsgs || []; }
+            finally { linkMsgPending = null; }
+            return linkMsgs;
+        })();
+        return linkMsgPending;
+    }
+
+    async function loadLinkFormsLists() {
+        try {
+            const { data, error } = await window.supabase
+                .from('camp_state_kv').select('key,value').eq('camp_id', campId).in('key', ['link_forms', 'link_lists']);
+            if (error) throw error;
+            const byKey = {}; (data || []).forEach(r => { byKey[r.key] = r.value; });
+            const lf = byKey.link_forms || {};
+            linkForms = [].concat(
+                (lf.digital || []).map(f => ({ ...f, _cat: 'Form' })),
+                (lf.printReturn || []).map(f => ({ ...f, _cat: 'Print & return' })),
+                (lf.documents || []).map(f => ({ ...f, _cat: 'Document' }))
+            ).filter(Boolean);
+            linkLists = Array.isArray(byKey.link_lists) ? byKey.link_lists : [];
+        } catch (e) { console.warn('[Lite] loadLinkFormsLists failed:', e?.message || e); linkForms = linkForms || []; linkLists = linkLists || []; }
+    }
+
+    // Send a message the same way the desktop does — a link_messages row the
+    // parent portal reads (email/SMS channels are best-effort placeholders there).
+    async function sendLinkMessage(opts) {
+        const id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+        const row = {
+            id, camp_id: campId, thread_id: opts.threadId || id, direction: 'out',
+            parent_name: opts.parentName || '', parent_email: opts.parentEmail || '',
+            camper_name: opts.camperName || null, subject: opts.subject || '',
+            body: opts.body || '', channels: ['app'], read: false
+        };
+        const { error } = await window.supabase.from('link_messages').insert(row);
+        if (error) throw error;
+        if (linkMsgs) linkMsgs.push({ ...row, created_at: new Date().toISOString() });
+        return row;
+    }
+
+    function linkLabelOf(item) { return item && (item.name || item.title || item.label || 'Untitled'); }
+
     // ─── Camp-structure helpers ─────────────────────────────────────────
 
     // Grade-level keys (app1.divisions is grade-keyed: each is a grade with bunks)
@@ -522,6 +585,8 @@
         healthMeds: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 20.5 3.5 13.5a5 5 0 0 1 7-7l7 7a5 5 0 0 1-7 7z"/><path d="m8.5 8.5 7 7"/></svg>',
         healthRoster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         healthTrip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 19V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M4 19h16"/><path d="M12 8v7"/></svg>',
+        linkMessages: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        linkCompose: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
@@ -548,7 +613,9 @@
           theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'liveRoll', label: 'Roll Call' }, { id: 'liveChanges', label: 'Changes' }] },
         { id: 'snacks', name: 'Snacks', logo: 'Snacks_clean.png', color: '#78350F', theme: { accent: '#78350F', dark: '#5C2E0E', tint: '#F3EBE3' }, roles: HEAD, status: 'soon' },
-        { id: 'link',   name: 'Link',   logo: 'Link_clean.png',   color: '#2A7A35', theme: { accent: '#2A7A35', dark: '#1F5A28', tint: '#E4F3E6' }, roles: HEAD, status: 'soon' },
+        { id: 'link',   name: 'Link',   title: 'Link Lite', logo: 'Link_clean.png', color: '#2A7A35',
+          theme: { accent: '#2A7A35', dark: '#1F5A28', tint: '#E4F3E6' }, roles: HEAD, status: 'available',
+          tabs: [{ id: 'linkMessages', label: 'Messages' }, { id: 'linkCompose', label: 'Compose' }] },
         { id: 'notes',  name: 'Notes',  logo: 'Notes_clean.png',  color: '#C4891A', theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'soon' },
         { id: 'counselor', name: 'My Camp', title: 'My Camp', tag: 'Your bunk, schedule & league',
           logo: 'Lite_clean.png', color: '#EE6A53', theme: CORAL_THEME, roles: ['counselor'], status: 'available',
@@ -782,6 +849,8 @@
         else if (id === 'healthMeds') renderHealthMeds();
         else if (id === 'healthRoster') renderHealthRoster();
         else if (id === 'healthTrip') renderHealthTrip();
+        else if (id === 'linkMessages') renderLinkMessages();
+        else if (id === 'linkCompose') renderLinkCompose();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
@@ -2028,6 +2097,241 @@
         ).join('');
         body.innerHTML = header + `<div id="liteTripList">${list}</div>`;
         wireHealthGive(body.querySelector('#liteTripList'), paintHealthTrip);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: LINK LITE — Messages (inbox + threads + reply) · Compose
+    // ════════════════════════════════════════════════════════════════════
+
+    // Group messages into threads keyed by thread_id (fallback parent|camper).
+    function linkThreads() {
+        const map = new Map();
+        (linkMsgs || []).forEach(m => {
+            const key = m.thread_id || ((m.parent_name || '') + '|' + (m.camper_name || ''));
+            if (!map.has(key)) map.set(key, { key, parentName: m.parent_name || '', parentEmail: m.parent_email || '', camperName: m.camper_name || '', msgs: [] });
+            const t = map.get(key);
+            t.msgs.push(m);
+            if (m.parent_name && !t.parentName) t.parentName = m.parent_name;
+            if (m.parent_email && !t.parentEmail) t.parentEmail = m.parent_email;
+            if (m.camper_name && !t.camperName) t.camperName = m.camper_name;
+        });
+        const arr = [...map.values()].map(t => {
+            t.msgs.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            t.last = t.msgs[t.msgs.length - 1];
+            t.unread = t.msgs.filter(m => m.direction === 'in' && !m.read).length;
+            return t;
+        });
+        arr.sort((a, b) => new Date(b.last.created_at) - new Date(a.last.created_at));
+        return arr;
+    }
+
+    async function renderLinkMessages() {
+        const view = document.getElementById('view-linkMessages');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Messages aren\'t available for your role.'); return; }
+        view.innerHTML = `
+            <div class="lite-field" style="margin-bottom:10px;">
+                <input class="lite-input" id="liteLinkSearch" type="search" placeholder="Search messages…" value="${esc(linkThreadQuery)}">
+            </div>
+            <div id="liteLinkBody">${loadingHTML()}</div>`;
+        const input = view.querySelector('#liteLinkSearch');
+        input.addEventListener('input', () => { linkThreadQuery = input.value; paintLinkThreads(); });
+        await loadLinkMessages();
+        if (activeTab !== 'linkMessages') return;
+        paintLinkThreads();
+    }
+
+    function paintLinkThreads() {
+        const body = document.getElementById('liteLinkBody');
+        if (!body) return;
+        const q = linkThreadQuery.trim().toLowerCase();
+        let threads = linkThreads();
+        if (q) threads = threads.filter(t =>
+            (t.parentName + ' ' + t.camperName + ' ' + (t.last.subject || '') + ' ' + (t.last.body || '')).toLowerCase().includes(q));
+        if (!threads.length) {
+            body.innerHTML = emptyHTML('', q ? 'No messages match your search.' : 'No messages yet. Tap Compose to write a parent.');
+            return;
+        }
+        body.innerHTML = threads.map(t => {
+            const who = t.parentName || 'Parent';
+            const sub = [t.camperName ? esc(t.camperName) : '', t.last.subject ? esc(t.last.subject) : ''].filter(Boolean).join(' · ');
+            const dir = t.last.direction === 'in' ? '' : 'You: ';
+            const preview = esc((t.last.body || '').replace(/\[\[(form|list):[^\]]+\]\]/g, '').trim().slice(0, 80));
+            return `<div class="lite-card lite-thread" data-key="${esc(t.key)}">
+                <div class="lite-thread-top">
+                    <span class="lite-camper-name">${esc(who)}</span>
+                    ${t.unread ? `<span class="lite-unread-dot" aria-label="${t.unread} unread"></span>` : ''}
+                    <span class="lite-thread-time">${esc(shortWhen(t.last.created_at))}</span>
+                </div>
+                ${sub ? `<div class="lite-camper-meta">${sub}</div>` : ''}
+                <div class="lite-thread-preview">${dir}${preview || '(attachment)'}</div>
+            </div>`;
+        }).join('');
+        body.querySelectorAll('.lite-thread[data-key]').forEach(el =>
+            el.addEventListener('click', () => openLinkThread(el.dataset.key)));
+    }
+
+    function openLinkThread(key) {
+        const t = linkThreads().find(x => x.key === key);
+        if (!t) return;
+        // mark incoming as read locally (best-effort; a cloud read-flag write is optional)
+        const bubbles = t.msgs.map(m => {
+            const tokens = (m.body || '').match(/\[\[(form|list):[^\]]+\]\]/g) || [];
+            const clean = esc((m.body || '').replace(/\[\[(form|list):[^\]]+\]\]/g, '').trim());
+            const chips = tokens.map(tok => {
+                const isForm = tok.startsWith('[[form');
+                return `<span class="lite-attach-chip">${isForm ? 'Form' : 'List'} attached</span>`;
+            }).join('');
+            return `<div class="lite-bubble ${m.direction === 'in' ? 'in' : 'out'}">
+                ${m.subject ? `<div class="lite-bubble-subj">${esc(m.subject)}</div>` : ''}
+                ${clean ? `<div>${clean}</div>` : ''}
+                ${chips ? `<div class="lite-bubble-attach">${chips}</div>` : ''}
+                <div class="lite-bubble-time">${esc(shortWhen(m.created_at))}</div>
+            </div>`;
+        }).join('');
+        const canReply = t.parentName || t.parentEmail;
+        openSheet(`
+            <div class="lite-detail-head">
+                <div><div class="lite-sheet-title" style="margin:0;">${esc(t.parentName || 'Conversation')}</div>
+                    ${t.camperName ? `<div class="lite-detail-sub">${esc(t.camperName)}</div>` : ''}</div>
+                <button class="lite-sheet-close" id="liteThreadClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-thread-scroll">${bubbles}</div>
+            ${canReply ? `<div class="lite-reply-row">
+                <input class="lite-input" id="liteReplyInput" type="text" placeholder="Reply to ${esc(t.parentName || 'parent')}…">
+                <button class="lite-btn" id="liteReplySend">Send</button>
+            </div>` : `<div class="lite-note">No parent contact on file to reply to.</div>`}`);
+        if (!sheetEl) return;
+        sheetEl.querySelector('#liteThreadClose').addEventListener('click', closeSheet);
+        const sendBtn = sheetEl.querySelector('#liteReplySend');
+        if (sendBtn) sendBtn.addEventListener('click', async () => {
+            const inp = sheetEl.querySelector('#liteReplyInput');
+            const text = (inp.value || '').trim();
+            if (!text) return;
+            sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+            try {
+                await sendLinkMessage({ threadId: t.key.includes('|') ? undefined : t.key, parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, subject: t.last.subject ? ('Re: ' + t.last.subject.replace(/^Re:\s*/i, '')) : 'Message', body: text });
+                toast('Reply sent');
+                closeSheet();
+                paintLinkThreads();
+            } catch (e) { sendBtn.disabled = false; sendBtn.textContent = 'Send'; toast('Could not send — try again'); }
+        });
+    }
+
+    // ─── Compose ─────────────────────────────────────────────────────────
+    async function renderLinkCompose() {
+        const view = document.getElementById('view-linkCompose');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Compose isn\'t available for your role.'); return; }
+        if (linkForms === null || linkLists === null) await loadLinkFormsLists();
+        if (activeTab !== 'linkCompose') return;
+        paintLinkCompose();
+    }
+
+    function paintLinkCompose() {
+        const view = document.getElementById('view-linkCompose');
+        const rec = linkComposeCamper;
+        const attach = linkComposeAttach;
+        const attachChips = [
+            attach.form ? `<span class="lite-attach-chip">Form · ${esc(linkLabelOf(attach.form))} <button data-clear="form">×</button></span>` : '',
+            attach.list ? `<span class="lite-attach-chip">List · ${esc(linkLabelOf(attach.list))} <button data-clear="list">×</button></span>` : ''
+        ].filter(Boolean).join('');
+        view.innerHTML = `
+            <div class="lite-compose">
+                <label class="lite-lbl">To</label>
+                ${rec
+                    ? `<div class="lite-recipient"><div><div class="lite-camper-name">${esc(rec.parentName || 'No parent contact')}</div><div class="lite-camper-meta">${esc(rec.name)}${rec.parentEmail ? ' · ' + esc(rec.parentEmail) : ''}</div></div><button class="lite-link-btn" id="liteRecChange">Change</button></div>`
+                    : `<input class="lite-input" id="liteRecSearch" type="search" placeholder="Search a camper to message their parent…" value="${esc(linkComposeQuery)}"><div id="liteRecResults"></div>`}
+                <label class="lite-lbl">Subject</label>
+                <input class="lite-input" id="liteMsgSubj" type="text" placeholder="Subject" value="${esc(linkComposeSubject)}">
+                <label class="lite-lbl">Message</label>
+                <textarea class="lite-input lite-textarea" id="liteMsgBody" rows="5" placeholder="Write your message…">${esc(linkComposeBody)}</textarea>
+                ${attachChips ? `<div class="lite-attach-row">${attachChips}</div>` : ''}
+                <div class="lite-compose-actions">
+                    <button class="lite-btn secondary" id="liteAttachBtn">Attach form / list</button>
+                    <button class="lite-btn" id="liteSendBtn">Send</button>
+                </div>
+            </div>`;
+
+        if (!rec) {
+            const search = view.querySelector('#liteRecSearch');
+            const results = view.querySelector('#liteRecResults');
+            const paintResults = () => {
+                const q = (search.value || '').trim().toLowerCase();
+                linkComposeQuery = search.value;
+                if (!q) { results.innerHTML = ''; return; }
+                const hits = Object.entries(camp.roster || {})
+                    .filter(([n]) => n.toLowerCase().includes(q)).slice(0, 8);
+                results.innerHTML = hits.map(([n, c]) =>
+                    `<button class="lite-rec-hit" data-name="${esc(n)}"><span class="lite-camper-name">${esc(n)}</span><div class="lite-camper-meta">${esc([c.bunk, c.parent1Name].filter(Boolean).join(' · ') || 'No parent on file')}</div></button>`).join('')
+                    || `<div class="lite-note">No campers match.</div>`;
+                results.querySelectorAll('.lite-rec-hit').forEach(btn => btn.addEventListener('click', () => {
+                    const c = camp.roster[btn.dataset.name] || {};
+                    linkComposeCamper = { name: btn.dataset.name, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' };
+                    paintLinkCompose();
+                }));
+            };
+            search.addEventListener('input', paintResults);
+            paintResults();
+        } else {
+            view.querySelector('#liteRecChange').addEventListener('click', () => { linkComposeCamper = null; linkComposeQuery = ''; paintLinkCompose(); });
+        }
+
+        const subjEl = view.querySelector('#liteMsgSubj');
+        const bodyEl = view.querySelector('#liteMsgBody');
+        subjEl.addEventListener('input', () => { linkComposeSubject = subjEl.value; });
+        bodyEl.addEventListener('input', () => { linkComposeBody = bodyEl.value; });
+        view.querySelectorAll('[data-clear]').forEach(btn => btn.addEventListener('click', () => { linkComposeAttach[btn.dataset.clear] = null; paintLinkCompose(); }));
+        view.querySelector('#liteAttachBtn').addEventListener('click', openAttachPicker);
+        view.querySelector('#liteSendBtn').addEventListener('click', doComposeSend);
+    }
+
+    function openAttachPicker() {
+        const forms = linkForms || [], lists = linkLists || [];
+        if (!forms.length && !lists.length) { toast('No forms or lists were created on the desktop yet'); return; }
+        const item = (kind, it) => `<button class="lite-pick-row" data-kind="${kind}" data-id="${esc(it.id)}"><span class="lite-camper-name">${esc(linkLabelOf(it))}</span><div class="lite-camper-meta">${kind === 'form' ? esc(it._cat || 'Form') : (it.items ? it.items.length + ' items' : 'List')}</div></button>`;
+        openSheet(`
+            <div class="lite-sheet-title">Attach a form or list</div>
+            <div class="lite-note" style="margin-top:-6px;">These come from the desktop — Lite can attach them, not create them.</div>
+            ${forms.length ? `<div class="lite-section-label">Forms</div>${forms.map(f => item('form', f)).join('')}` : ''}
+            ${lists.length ? `<div class="lite-section-label">Lists</div>${lists.map(l => item('list', l)).join('')}` : ''}`);
+        if (!sheetEl) return;
+        sheetEl.querySelectorAll('.lite-pick-row').forEach(btn => btn.addEventListener('click', () => {
+            const kind = btn.dataset.kind;
+            const src = kind === 'form' ? forms : lists;
+            const it = src.find(x => String(x.id) === btn.dataset.id);
+            if (it) linkComposeAttach[kind] = it;
+            closeSheet(); paintLinkCompose();
+        }));
+    }
+
+    async function doComposeSend() {
+        const view = document.getElementById('view-linkCompose');
+        const rec = linkComposeCamper;
+        if (!rec || !(rec.parentName || rec.parentEmail)) { toast('Pick a camper whose parent has contact info'); return; }
+        const subj = ((view.querySelector('#liteMsgSubj') || {}).value ?? linkComposeSubject).trim();
+        let body = ((view.querySelector('#liteMsgBody') || {}).value ?? linkComposeBody).trim();
+        const attach = linkComposeAttach;
+        if (!subj) { toast('Subject is required'); return; }
+        if (!body && !attach.form && !attach.list) { toast('Write a message or attach a form/list'); return; }
+        if (attach.form) body += `\n\n[[form:${attach.form.id}:${rec.name || ''}]]`;
+        if (attach.list) body += `\n\n[[list:${attach.list.id}]]`;
+        const btn = view.querySelector('#liteSendBtn'); btn.disabled = true; btn.textContent = 'Sending…';
+        try {
+            await sendLinkMessage({ parentName: rec.parentName, parentEmail: rec.parentEmail, camperName: rec.name, subject: subj, body });
+            toast('Message sent to ' + (rec.parentName || rec.name));
+            linkComposeCamper = null; linkComposeQuery = ''; linkComposeAttach = { form: null, list: null };
+            linkComposeSubject = ''; linkComposeBody = '';
+            paintLinkCompose();
+        } catch (e) { btn.disabled = false; btn.textContent = 'Send'; toast('Could not send — try again'); }
+    }
+
+    function shortWhen(iso) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        const now = new Date(), diff = now - d;
+        if (diff < 60000) return 'now';
+        if (diff < 3600000) return Math.floor(diff / 60000) + 'm';
+        if (diff < 86400000) return Math.floor(diff / 3600000) + 'h';
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
 
     // ════════════════════════════════════════════════════════════════════
