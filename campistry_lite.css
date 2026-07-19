@@ -520,6 +520,17 @@ button { cursor: pointer; border: none; background: none; }
 .lite-rec-hit.on { border-color: var(--accent); background: var(--accent-tint); }
 .lite-rec-hit.on::after { content: '✓'; float: right; color: var(--accent-dark); font-weight: 800; }
 
+/* ─── Swipe to act (thread cards) ─────────────────────────────────────── */
+.lite-swipe { position: relative; margin-bottom: 12px; border-radius: var(--r); overflow: hidden; }
+.lite-swipe-bg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: space-between; border-radius: var(--r); padding: 0 20px; font-weight: 800; font-size: 0.9rem; color: #fff; opacity: 0; transition: opacity 0.12s ease; }
+.lite-swipe-arch { color: #fff; }
+.lite-swipe-del { color: #fff; margin-left: auto; }
+.lite-swipe.reveal-arch .lite-swipe-bg { opacity: 1; background: #F79009; }
+.lite-swipe.reveal-arch .lite-swipe-del { display: none; }
+.lite-swipe.reveal-del .lite-swipe-bg { opacity: 1; background: #D92D20; }
+.lite-swipe.reveal-del .lite-swipe-arch { display: none; }
+.lite-swipe-fg { position: relative; margin-bottom: 0; touch-action: pan-y; will-change: transform; }
+
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }

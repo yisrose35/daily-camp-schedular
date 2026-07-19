@@ -474,6 +474,32 @@
         await Promise.all(unread.map(m => updateLinkFlag(m.id, 'read', true)));
     }
 
+    // Hard delete is owner/admin only (the link_messages_delete RLS policy).
+    function canDeleteMessages() { return ['owner', 'admin'].includes(role); }
+    async function deleteThread(thread) {
+        try {
+            await Promise.all(thread.msgs.map(m =>
+                window.supabase.from('link_messages').delete().eq('id', m.id).eq('camp_id', campId)));
+            const ids = new Set(thread.msgs.map(m => m.id));
+            linkMsgs = (linkMsgs || []).filter(m => !ids.has(m.id));
+            toast('Conversation deleted');
+        } catch (e) { toast('Could not delete — try again'); }
+        paintLinkThreads();
+    }
+    function confirmDeleteThread(key) {
+        const t = linkThreads().find(x => x.key === key);
+        if (!t) return;
+        openSheet(`<div class="lite-sheet-title">Delete conversation?</div>
+            <div class="lite-note" style="margin-top:-6px;">This removes the whole conversation with <b>${esc(t.parentName || 'this parent')}</b> for both sides. It can't be undone.</div>
+            <div class="lite-compose-actions">
+                <button class="lite-btn secondary" id="liteDelCancel">Cancel</button>
+                <button class="lite-btn danger" id="liteDelConfirm">Delete</button>
+            </div>`);
+        if (!sheetEl) return;
+        sheetEl.querySelector('#liteDelCancel').addEventListener('click', closeSheet);
+        sheetEl.querySelector('#liteDelConfirm').addEventListener('click', () => { closeSheet(); deleteThread(t); });
+    }
+
     // Grade names (structure order), for compose "by grade".
     function allGrades() {
         const out = [];
@@ -2208,16 +2234,23 @@
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>`;
             const readBtn = t.unread ? `<button class="lite-thread-act" data-act="read" data-key="${esc(t.key)}" title="Mark read">
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>` : '';
-            return `<div class="lite-card lite-thread" data-key="${esc(t.key)}">
-                <div class="lite-thread-top">
-                    <span class="lite-camper-name">${esc(who)}</span>
-                    ${t.unread ? `<span class="lite-unread-dot" aria-label="${t.unread} unread"></span>` : ''}
-                    ${t.important ? '<span class="lite-imp-dot" title="Important"></span>' : ''}
-                    <span class="lite-thread-time">${esc(shortWhen(t.last.created_at))}</span>
+            const archLabel = t.archived ? 'Unarchive' : 'Archive';
+            return `<div class="lite-swipe">
+                <div class="lite-swipe-bg">
+                    <span class="lite-swipe-arch">${archLabel}</span>
+                    <span class="lite-swipe-del">Delete</span>
                 </div>
-                ${sub ? `<div class="lite-camper-meta">${sub}</div>` : ''}
-                <div class="lite-thread-preview">${dir}${preview || '(attachment)'}</div>
-                <div class="lite-thread-actions">${star}${arch}${readBtn}</div>
+                <div class="lite-card lite-thread lite-swipe-fg" data-key="${esc(t.key)}">
+                    <div class="lite-thread-top">
+                        <span class="lite-camper-name">${esc(who)}</span>
+                        ${t.unread ? `<span class="lite-unread-dot" aria-label="${t.unread} unread"></span>` : ''}
+                        ${t.important ? '<span class="lite-imp-dot" title="Important"></span>' : ''}
+                        <span class="lite-thread-time">${esc(shortWhen(t.last.created_at))}</span>
+                    </div>
+                    ${sub ? `<div class="lite-camper-meta">${sub}</div>` : ''}
+                    <div class="lite-thread-preview">${dir}${preview || '(attachment)'}</div>
+                    <div class="lite-thread-actions">${star}${arch}${readBtn}</div>
+                </div>
             </div>`;
         }).join('') : emptyHTML('', q ? 'No messages match your search.'
             : linkMsgFilter === 'all' ? 'No messages yet. Tap Compose to write a parent.'
@@ -2237,8 +2270,55 @@
                 else if (act === 'read') await markThreadRead(t);
                 paintLinkThreads();
             }));
-        body.querySelectorAll('.lite-thread[data-key]').forEach(el =>
-            el.addEventListener('click', () => openLinkThread(el.dataset.key)));
+        body.querySelectorAll('.lite-swipe-fg[data-key]').forEach(el =>
+            el.addEventListener('click', () => { if (el.dataset.swiped !== '1') openLinkThread(el.dataset.key); }));
+        wireThreadSwipe(body);
+    }
+
+    // Swipe a thread card: right-to-left → delete, left-to-right → archive.
+    // Pointer events (mouse + touch); vertical scroll stays with the browser.
+    function wireThreadSwipe(root) {
+        const THRESH = 78;
+        root.querySelectorAll('.lite-swipe').forEach(sw => {
+            const fg = sw.querySelector('.lite-swipe-fg');
+            if (!fg) return;
+            let startX = 0, startY = 0, dx = 0, dragging = false, decided = false, horiz = false;
+            fg.addEventListener('pointerdown', (e) => {
+                if (e.target.closest('.lite-thread-act')) return;
+                dragging = true; decided = false; horiz = false; startX = e.clientX; startY = e.clientY; dx = 0;
+                fg.style.transition = 'none';
+            });
+            fg.addEventListener('pointermove', (e) => {
+                if (!dragging) return;
+                const mx = e.clientX - startX, my = e.clientY - startY;
+                if (!decided && (Math.abs(mx) > 8 || Math.abs(my) > 8)) { decided = true; horiz = Math.abs(mx) > Math.abs(my); }
+                if (!horiz) return;
+                e.preventDefault();
+                try { fg.setPointerCapture(e.pointerId); } catch (_) {}
+                dx = mx;
+                fg.style.transform = `translateX(${Math.max(-150, Math.min(150, dx))}px)`;
+                sw.classList.toggle('reveal-del', dx < -18);
+                sw.classList.toggle('reveal-arch', dx > 18);
+                fg.dataset.swiped = Math.abs(dx) > 8 ? '1' : '';
+            });
+            const end = () => {
+                if (!dragging) return;
+                dragging = false;
+                fg.style.transition = ''; fg.style.transform = '';
+                sw.classList.remove('reveal-del', 'reveal-arch');
+                const key = fg.dataset.key;
+                if (horiz && dx < -THRESH) {
+                    if (canDeleteMessages()) confirmDeleteThread(key);
+                    else toast('Only an owner or admin can delete');
+                } else if (horiz && dx > THRESH) {
+                    const t = linkThreads().find(x => x.key === key);
+                    if (t) setThreadFlag(t, 'archived', !t.archived).then(() => { toast(t.archived ? 'Unarchived' : 'Archived'); paintLinkThreads(); });
+                }
+                setTimeout(() => { fg.dataset.swiped = ''; }, 60);
+            };
+            fg.addEventListener('pointerup', end);
+            fg.addEventListener('pointercancel', end);
+        });
     }
 
     function openLinkThread(key) {

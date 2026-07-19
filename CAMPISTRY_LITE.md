@@ -143,7 +143,12 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
   quick actions — **star (important)**, **archive**, and **mark-read** — that
   write the `link_messages` `important` / `archived` / `read` columns (cloud, so
   the desktop sees them too); a thread flag is applied to every message in it.
-  Opening a thread auto-marks its incoming messages read. Tap a thread → the full
+  Opening a thread auto-marks its incoming messages read. Cards also **swipe**
+  (pointer/touch): **right-to-left reveals red Delete** (confirm sheet → hard
+  delete, owner/admin only per the `link_messages_delete` RLS policy), **left-to-
+  right reveals amber Archive** (toggles archived, so it un-archives from the
+  Archived tab). Vertical scroll is preserved (`touch-action: pan-y`); a swipe
+  suppresses the tap-to-open. Tap a thread → the full
   conversation as bubbles (parent left, staff right; attachments shown as chips)
   and a **quick reply** box. Search across all threads. Reads `link_messages`
   directly (`camp_id`-scoped by RLS).
