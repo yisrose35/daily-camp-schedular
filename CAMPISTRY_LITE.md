@@ -155,10 +155,11 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
     (parent-side delete) so both inboxes behave like email. Gated to owner/admin.
     _Both surfaces changed: `campistry_link_data.js` (`_deleteMessageRow` now
     UPDATEs `hidden_for_admin`, and `loadCloudMessages` filters it) and Lite._
-  - **Confirm-before-delete is a preference.** The account menu has a **"Confirm
-    before deleting"** toggle (on by default, stored in `campistry_lite_prefs`).
-    With it off, a delete-swipe removes the conversation immediately with no
-    confirm sheet. Tap a thread → the full
+  - **Confirm-before-delete is a preference.** The delete confirm sheet has a
+    **"Don't ask again"** checkbox, and the account menu has a matching **"Confirm
+    before deleting"** toggle (both drive `confirmDelete` in `campistry_lite_prefs`,
+    on by default; the menu toggle re-syncs each time it opens, so the two stay in
+    step). With it off, a delete-swipe hides the conversation immediately, no sheet. Tap a thread → the full
   conversation as bubbles (parent left, staff right; attachments shown as chips)
   and a **quick reply** box. Search across all threads. Reads `link_messages`
   directly (`camp_id`-scoped by RLS).
@@ -172,6 +173,15 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
   invisible body token — `[[form:<id>:<thatCamper>]]` or `[[list:<id>]]` — which
   the parent portal renders as an "Open & fill" / "View list" button. **Lite
   attaches, never creates** forms/lists (matching the requirement).
+
+**Same cloud as the desktop.** Lite reads/writes the same `link_messages` table
+the desktop inbox uses, scoped by the **same `camp_id`**: Lite now resolves
+`campId` via `CampistryDB.getCampId()` first (the DB-verified `campistry_camp_id`),
+matching the desktop. Previously it preferred `AccessControl.getCampId()`, which
+falls back to the *user's own id* — fine for an owner, but for a team-member/admin
+that isn't the camp id, so Lite could have read a different camp's messages/state
+than the desktop. All Lite cloud reads (messages, roster, health, …) go through
+this one `campId`, so the fix aligns everything, not just messages.
 
 **Sending** replicates the desktop's `link_messages` insert (`id` uuid,
 `camp_id`, `thread_id`, `direction:'out'`, `parent_name/email`, `camper_name`,

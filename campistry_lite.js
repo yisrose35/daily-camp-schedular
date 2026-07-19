@@ -154,8 +154,13 @@
             try { if (window.CampistryDB?.ready) await window.CampistryDB.ready; } catch (_) {}
             try { await window.AccessControl?.initialize?.(); } catch (e) { console.warn('[Lite] AccessControl init:', e); }
 
-            campId = window.AccessControl?.getCampId?.()
-                  || window.CampistryDB?.getCampId?.()
+            // Resolve camp_id the SAME way the desktop does — CampistryDB first
+            // (the DB-verified `campistry_camp_id`). AccessControl.getCampId()
+            // falls back to the user's own id, which for a team-member/admin is
+            // NOT the camp id, so preferring it made Lite read a different camp's
+            // messages/state than the desktop. CampistryDB is the shared source.
+            campId = window.CampistryDB?.getCampId?.()
+                  || window.AccessControl?.getCampId?.()
                   || localStorage.getItem('campistry_camp_id');
             role = window.AccessControl?.getCurrentRole?.()
                 || window.CampistryDB?.getRole?.()
@@ -501,14 +506,19 @@
         const t = linkThreads().find(x => x.key === key);
         if (!t) return;
         openSheet(`<div class="lite-sheet-title">Delete conversation?</div>
-            <div class="lite-note" style="margin-top:-6px;">This removes the whole conversation with <b>${esc(t.parentName || 'this parent')}</b> for both sides. It can't be undone.</div>
+            <div class="lite-note" style="margin-top:-6px;">This removes the conversation with <b>${esc(t.parentName || 'this parent')}</b> from your inbox. The parent keeps their copy.</div>
+            <label class="lite-check-row"><input type="checkbox" id="liteDontAsk"><span>Don't ask again</span></label>
             <div class="lite-compose-actions">
                 <button class="lite-btn secondary" id="liteDelCancel">Cancel</button>
                 <button class="lite-btn danger" id="liteDelConfirm">Delete</button>
             </div>`);
         if (!sheetEl) return;
         sheetEl.querySelector('#liteDelCancel').addEventListener('click', closeSheet);
-        sheetEl.querySelector('#liteDelConfirm').addEventListener('click', () => { closeSheet(); deleteThread(t); });
+        sheetEl.querySelector('#liteDelConfirm').addEventListener('click', () => {
+            if (sheetEl.querySelector('#liteDontAsk')?.checked) setLitePref('confirmDelete', false);
+            closeSheet();
+            deleteThread(t);
+        });
     }
 
     // Grade names (structure order), for compose "by grade".
@@ -930,7 +940,13 @@
     function toggleMenu(e) {
         if (e) e.stopPropagation();
         const menu = document.getElementById('liteMenu');
-        menu.style.display = menu.style.display === 'none' ? '' : 'none';
+        const opening = menu.style.display === 'none';
+        menu.style.display = opening ? '' : 'none';
+        if (opening) syncDelToggle();   // reflect the pref (may have changed via the delete sheet)
+    }
+    function syncDelToggle() {
+        const el = document.getElementById('liteDelConfirmToggle');
+        if (el) el.classList.toggle('on', litePref('confirmDelete', true));
     }
 
     function wireChrome() {
@@ -948,14 +964,12 @@
 
         // "Confirm before deleting" preference toggle (stays open on tap).
         const delToggle = document.getElementById('liteMenuDelConfirm');
-        const delSwitch = document.getElementById('liteDelConfirmToggle');
-        const applyDelToggle = () => delSwitch && delSwitch.classList.toggle('on', litePref('confirmDelete', true));
-        if (delToggle && delSwitch) {
-            applyDelToggle();
+        if (delToggle) {
+            syncDelToggle();
             delToggle.addEventListener('click', (e) => {
                 e.stopPropagation();
                 setLitePref('confirmDelete', !litePref('confirmDelete', true));
-                applyDelToggle();
+                syncDelToggle();
             });
         }
 
