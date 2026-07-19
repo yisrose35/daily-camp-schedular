@@ -1156,6 +1156,7 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
         var selectedTimesByDiv = {};   // div  -> Set(slotStartMin)
         var affectedDivs = new Set();
         var unmapped = 0;
+        var _selMapped = new Set();    // "bunk#idx" — one entry per mapped selection (stable count)
         selections.forEach(function (sel) {
             var bunk = String(sel.bunk);
             var dn = bunkToDiv[bunk];
@@ -1176,9 +1177,28 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
             if (idx < 0) { unmapped++; return; }
             if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
             regenByBunk[bunk].add(idx);
+            _selMapped.add(bunk + '#' + idx);
             affectedDivs.add(dn);
             if (!selectedTimesByDiv[dn]) selectedTimesByDiv[dn] = new Set();
             selectedTimesByDiv[dn].add(_trSlotStart(slots[idx]));
+
+            // ★ Whole-tile window: a selected skeleton tile can cover SEVERAL
+            //   boundary-union slots (overlapping tiles — e.g. a pinned trip over
+            //   regular periods — slice the grid at every boundary). Mapping only
+            //   the tile's START slot left the rest of its window out of the regen
+            //   set, so "regenerate this tile" only re-rolled its first sub-slot.
+            //   Include every slot fully inside [startMin, endMin] so a selected
+            //   tile always regenerates as a whole.
+            if (sel.endMin != null) {
+                for (var w = 0; w < slots.length; w++) {
+                    if (w === idx) continue;
+                    var ws = _trSlotStart(slots[w]), we = _trSlotEnd(slots[w]);
+                    if (ws != null && we != null && ws >= sel.startMin - 2 && we <= sel.endMin + 2) {
+                        regenByBunk[bunk].add(w);
+                        selectedTimesByDiv[dn].add(ws);
+                    }
+                }
+            }
 
             // Multi-period guard: a spanned activity regenerates as a whole block.
             var arr = sa[bunk] || [];
@@ -1204,8 +1224,10 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
             }
         });
 
-        var selectedSlotCount = 0;
-        Object.keys(regenByBunk).forEach(function (b) { selectedSlotCount += regenByBunk[b].size; });
+        // Count mapped SELECTIONS (deduped), not raw regen slots — the whole-tile
+        // window above can add several sub-slots per selected tile, and the count
+        // is shown to the user as "Regenerate N tiles".
+        var selectedSlotCount = _selMapped.size;
         if (affectedDivs.size === 0 || selectedSlotCount === 0) {
             return { ok: false, reason: 'none-mapped', unmapped: unmapped, selectedSlotCount: 0 };
         }
@@ -1251,16 +1273,136 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
                 var regen = regenByBunk[bunk] || new Set();
                 var arr = sa[bunk] || [];
                 var keep = {}, orig = {}, safe = true, seen = {};
-                for (var i = 0; i < arr.length; i++) {
+
+                // ── Group entries into per-fill units before re-keying ──
+                // fillBlock stamps every CONTINUATION slot of a multi-slot fill
+                // with the BLOCK's own _startMin (all members share one start),
+                // and travel TRANSITION glue carries NO _startMin at all. The old
+                // per-entry re-key saw the continuation as "two entries, one
+                // slot" and the transition as "un-addressable" — both degraded
+                // the bunk to a FULL re-roll, so regenerating one tile silently
+                // re-rolled the whole day (observed live: partial regen after
+                // editing a pinned tile's reserved fields changed tiles at other
+                // times). Group each fill instead — [pre-travel…] lead [cont…]
+                // [post-travel…] — and map the group onto the slots fully inside
+                // the lead's [_startMin, _endMin] window (which spans the travel,
+                // since _startMin/_endMin are the original tile times).
+                var _grpList = [];
+                var _cur = null;
+                var _flushGrp = function () { if (_cur) { _grpList.push(_cur); _cur = null; } };
+                for (var i = 0; i < arr.length && safe; i++) {
                     var e = arr[i];
-                    if (!e) continue;
-                    if (e._startMin == null) { safe = false; break; }       // un-addressable → full re-roll
-                    var j = _trFindByTime(slots, e._startMin, 2);
-                    if (j < 0) { droppedEntries++; continue; }              // its period no longer exists
-                    if (seen[j]) { safe = false; break; }                    // two entries, one slot → ambiguous
-                    seen[j] = true;
-                    if (regen.has(j)) orig[j] = JSON.parse(JSON.stringify(e));
-                    else keep[j] = JSON.parse(JSON.stringify(e));
+                    if (!e) { _flushGrp(); continue; }
+                    var _isGlue = e._isTransition === true && e._startMin == null;
+                    var _adjacent = _cur && _cur.lastIdx === i - 1;
+                    if (e.continuation) {
+                        // a continuation extends the unit directly before it
+                        if (_adjacent) { _cur.members.push({ i: i, e: e }); _cur.lastIdx = i; }
+                        else safe = false;                       // orphan continuation
+                    } else if (_isGlue) {
+                        var _dir = String(e._transitionType || '').toLowerCase();
+                        if (_adjacent && _cur.lead && _dir !== 'pre') {
+                            // post-travel of the current fill
+                            _cur.members.push({ i: i, e: e }); _cur.lastIdx = i;
+                        } else {
+                            // pre-travel of the NEXT fill → opens a new group
+                            _flushGrp();
+                            _cur = { members: [{ i: i, e: e }], lead: null, lastIdx: i };
+                        }
+                    } else if (e._startMin == null) {
+                        safe = false;                            // un-addressable → full re-roll
+                    } else {
+                        if (_cur && !_cur.lead && _adjacent) {
+                            // lead arriving after its pre-travel glue
+                            _cur.members.push({ i: i, e: e }); _cur.lead = e; _cur.lastIdx = i;
+                        } else {
+                            _flushGrp();
+                            _cur = { members: [{ i: i, e: e }], lead: e, lastIdx: i };
+                        }
+                    }
+                }
+                _flushGrp();
+
+                // Map each group onto the NEW geometry.
+                for (var g = 0; g < _grpList.length && safe; g++) {
+                    var grp = _grpList[g];
+                    if (!grp.lead) { safe = false; break; }      // dangling glue → full re-roll
+                    var Ls = grp.lead._startMin, Le = grp.lead._endMin;
+                    if (grp.members.length === 1) {
+                        var j = _trFindByTime(slots, Ls, 2);
+                        if (j < 0) { grp.dropped = true; droppedEntries++; continue; }
+                        if (seen[j]) { safe = false; break; }    // two fills, one slot → ambiguous
+                        seen[j] = true;
+                        grp.newIdxs = [j];
+                    } else {
+                        if (Le == null) { safe = false; break; }
+                        var win = [];
+                        for (var q = 0; q < slots.length; q++) {
+                            var qs = _trSlotStart(slots[q]), qe = _trSlotEnd(slots[q]);
+                            if (qs != null && qe != null && qs >= Ls - 2 && qe <= Le + 2) win.push(q);
+                        }
+                        if (win.length === 0) {
+                            // the fill's whole window no longer exists → drop it
+                            grp.dropped = true; droppedEntries += grp.members.length; continue;
+                        }
+                        // the window must fit the fill exactly — a reshaped span
+                        // (boundary added/removed inside it) can't be re-keyed
+                        if (win.length !== grp.members.length
+                            || Math.abs(_trSlotStart(slots[win[0]]) - Ls) > 2) { safe = false; break; }
+                        for (var m = 0; m < win.length; m++) {
+                            if (seen[win[m]]) { safe = false; break; }
+                            seen[win[m]] = true;
+                        }
+                        if (!safe) break;
+                        grp.newIdxs = win;
+                    }
+                }
+
+                if (safe) {
+                    _grpList.forEach(function (grp2) {
+                        if (grp2.dropped || !grp2.newIdxs) return;
+                        // A fill straddling the selection regenerates as a whole
+                        // (its travel glue re-rolls with it, so stale travel from
+                        // a replaced fill never survives).
+                        if (grp2.newIdxs.some(function (x) { return regen.has(x); })) {
+                            grp2.newIdxs.forEach(function (x) { regen.add(x); });
+                        }
+                        grp2.members.forEach(function (mm, k) {
+                            var nj = grp2.newIdxs[k];
+                            var cp = JSON.parse(JSON.stringify(mm.e));
+                            if (regen.has(nj)) { orig[nj] = cp; return; }
+                            // ★ Refresh a KEPT skeleton-pinned fill's facility stamps
+                            //   from the CURRENT skeleton tile. The availability report
+                            //   and post-edit field picker read reservations off the
+                            //   ENTRY's _reservedFields — so when the user switches a
+                            //   pinned tile's reserved field and then partial-regens
+                            //   OTHER tiles, the kept entries would keep advertising
+                            //   the OLD field while STEP 2.45 locks the NEW one
+                            //   (observed live: "the changed reserved field was not
+                            //   being used"). The pin's placement isn't re-solved —
+                            //   only its metadata is brought in line with the skeleton
+                            //   this very regen enforces.
+                            var meta = slots[nj];
+                            if (cp._pinned === true && meta
+                                && (cp._activity === meta.event || cp.field === meta.event)) {
+                                var mt = String(meta.type || '');
+                                if (mt === 'pinned' || mt === 'swim_elective') {
+                                    var mrf = Array.isArray(meta.reservedFields)
+                                        ? meta.reservedFields.filter(Boolean) : [];
+                                    if (mrf.length) cp._reservedFields = mrf.slice();
+                                    else if (cp._reservedFields) delete cp._reservedFields;
+                                    if (mt === 'pinned') {
+                                        if (typeof meta.location === 'string' && meta.location.trim()) cp._location = meta.location.trim();
+                                        else if (cp._location) delete cp._location;
+                                    } else {
+                                        if (Array.isArray(meta.electiveActivities)) cp._electiveActivities = meta.electiveActivities.slice();
+                                        if (meta.swimLocation) cp._swimLocation = meta.swimLocation;
+                                    }
+                                }
+                            }
+                            keep[nj] = cp;
+                        });
+                    });
                 }
                 if (!safe) {
                     // Whole-bunk regeneration: valid schedule guaranteed (pinned tiles
