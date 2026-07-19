@@ -60,6 +60,9 @@
     let rosterQuery = '';
     let meRosterQuery = '';           // Me Lite roster search
     let meDivision = null;            // Me Lite roster division chip ('' = all)
+    let meMedType = 'All';            // Me Lite medical filter: All/Allergy/Meds/Dietary
+    let meMedDivision = 'All';        // Me Lite medical division chip
+    let meStaffQuery = '';            // Me Lite staff directory search
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -426,6 +429,8 @@
         reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
         roster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
         meRoster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        meMedical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+        meStaff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
@@ -443,7 +448,7 @@
           tabs: [{ id: 'today', label: 'Schedule' }, { id: 'locate', label: 'Locate' }, { id: 'reports', label: 'Reports' }] },
         { id: 'me',     name: 'Me',     title: 'Me Lite', logo: 'Me_clean.png', color: '#F59E0B',
           theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'available',
-          tabs: [{ id: 'meRoster', label: 'Roster' }] },
+          tabs: [{ id: 'meRoster', label: 'Roster' }, { id: 'meMedical', label: 'Medical' }, { id: 'meStaff', label: 'Staff' }] },
         { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
         { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
         { id: 'live',   name: 'Live',   logo: 'Live_clean.png',   color: '#2563EB', theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'soon' },
@@ -675,6 +680,8 @@
         else if (id === 'reports') renderReports();
         else if (id === 'roster') renderRoster();
         else if (id === 'meRoster') renderMeRoster();
+        else if (id === 'meMedical') renderMeMedical();
+        else if (id === 'meStaff') renderMeStaff();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
@@ -1093,13 +1100,13 @@
             return;
         }
 
-        // Browse mode: division chips (+ "All"), then bunk-grouped list.
+        // Browse mode: at-a-glance strip, then division chips (+ "All"), then bunk-grouped list.
         const parents = parentDivisions();
         const chips = ['All', ...parents];
         if (meDivision === null) meDivision = 'All';
         if (!chips.includes(meDivision)) meDivision = 'All';
 
-        let html = chipRowHTML(chips, meDivision) + '<div id="liteMeGroups"></div>';
+        let html = campGlanceHTML() + chipRowHTML(chips, meDivision) + '<div id="liteMeGroups"></div>';
         body.innerHTML = html;
         body.querySelectorAll('.lite-chip').forEach(ch =>
             ch.addEventListener('click', () => { meDivision = ch.dataset.val; renderMeRosterBody(body); }));
@@ -1291,6 +1298,225 @@
         const d = new Date(dob);
         if (isNaN(d.getTime())) return String(dob);
         return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    // ─── At-a-glance: headcounts + birthdays (top of Roster tab) ──────────
+    function campStats() {
+        const roster = camp.roster || {};
+        const names = Object.keys(roster);
+        const bunkSet = new Set();
+        let medical = 0;
+        names.forEach(n => {
+            const c = roster[n];
+            if (c?.bunk) bunkSet.add(c.bunk);
+            if (c && (c.allergies || c.medications || c.dietary)) medical++;
+        });
+        return { total: names.length, bunks: bunkSet.size, divisions: parentDivisions().length, medical };
+    }
+
+    function statTileHTML(num, label) {
+        return `<div class="lite-stat"><div class="lite-stat-num">${num}</div><div class="lite-stat-lbl">${esc(label)}</div></div>`;
+    }
+
+    // Month/day of a dob, timezone-safe for ISO strings (no Date() drift).
+    function dobMonthDay(dob) {
+        if (!dob) return null;
+        const s = String(dob);
+        const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (m) return { month: +m[2], day: +m[3] };
+        const d = new Date(s);
+        if (isNaN(d.getTime())) return null;
+        return { month: d.getMonth() + 1, day: d.getDate() };
+    }
+
+    // Campers whose birthday falls within the next 7 days (today included).
+    function birthdaysThisWeek() {
+        const today = new Date();
+        const out = [];
+        Object.entries(camp.roster || {}).forEach(([name, c]) => {
+            const md = dobMonthDay(c?.dob);
+            if (!md) return;
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+                if (d.getMonth() + 1 === md.month && d.getDate() === md.day) {
+                    out.push({ name, bunk: c.bunk, inDays: i,
+                        when: i === 0 ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'short' }) });
+                    break;
+                }
+            }
+        });
+        return out.sort((a, b) => a.inDays - b.inDays);
+    }
+
+    function campGlanceHTML() {
+        const s = campStats();
+        const bdays = birthdaysThisWeek();
+        let html = `<div class="lite-stat-row">
+            ${statTileHTML(s.total, 'Campers')}
+            ${statTileHTML(s.bunks, 'Bunks')}
+            ${statTileHTML(s.divisions, s.divisions === 1 ? 'Division' : 'Divisions')}
+            ${statTileHTML(s.medical, 'Medical')}
+        </div>`;
+        if (bdays.length) {
+            html += `<div class="lite-bday-card">
+                <div class="lite-bday-head">🎂 Birthdays this week</div>
+                ${bdays.slice(0, 8).map(b => `<div class="lite-bday-row">
+                    <span class="lite-bday-name">${esc(b.name)}</span>
+                    <span class="lite-bday-meta">${b.bunk ? esc(b.bunk) + ' · ' : ''}<b>${esc(b.when)}</b></span>
+                </div>`).join('')}
+                ${bdays.length > 8 ? `<div class="lite-bday-more">+${bdays.length - 8} more</div>` : ''}
+            </div>`;
+        }
+        return html;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: ME LITE — Medical (camp-wide allergy / meds / dietary safety list)
+    // ════════════════════════════════════════════════════════════════════
+
+    function renderMeMedical() {
+        const view = document.getElementById('view-meMedical');
+        if (!camp.stateLoaded) {
+            view.innerHTML = emptyHTML('', 'Roster data isn\'t available for your role.');
+            return;
+        }
+
+        const types = ['All', 'Allergy', 'Meds', 'Dietary'];
+        if (!types.includes(meMedType)) meMedType = 'All';
+        const parents = parentDivisions();
+        const divChips = ['All', ...parents];
+        if (!divChips.includes(meMedDivision)) meMedDivision = 'All';
+
+        view.innerHTML = `
+            <div class="lite-seg" id="liteMedSeg">${types.map(t =>
+                `<button type="button" class="lite-seg-btn${t === meMedType ? ' active' : ''}" data-val="${t}">${t}</button>`).join('')}</div>
+            ${chipRowHTML(divChips, meMedDivision)}
+            <div id="liteMedBody"></div>`;
+
+        view.querySelectorAll('#liteMedSeg .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { meMedType = b.dataset.val; renderMeMedical(); }));
+        view.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { meMedDivision = ch.dataset.val; renderMeMedical(); }));
+
+        const body = view.querySelector('#liteMedBody');
+        const inDiv = (c) => meMedDivision === 'All' || (c.division === meMedDivision)
+            || bunksForParent(meMedDivision).includes(c.bunk);
+        const typeMatch = (c) =>
+            (meMedType === 'All' && (c.allergies || c.medications || c.dietary)) ||
+            (meMedType === 'Allergy' && c.allergies) ||
+            (meMedType === 'Meds' && c.medications) ||
+            (meMedType === 'Dietary' && c.dietary);
+
+        const hits = Object.entries(camp.roster || {})
+            .map(([name, c]) => ({ name, ...c }))
+            .filter(c => typeMatch(c) && inDiv(c))
+            .sort((a, b) => (a.bunk || '').localeCompare(b.bunk || '') || a.name.localeCompare(b.name));
+
+        if (!hits.length) {
+            body.innerHTML = emptyHTML('', meMedType === 'All'
+                ? 'No campers have medical info on file for this division.'
+                : `No campers flagged for ${meMedType.toLowerCase()} here.`);
+            return;
+        }
+
+        // Group by bunk for quick "who at the pool right now" scanning.
+        const byBunk = {};
+        hits.forEach(c => { (byBunk[c.bunk || 'Unassigned'] = byBunk[c.bunk || 'Unassigned'] || []).push(c); });
+        body.innerHTML = `<div class="lite-section-label">${hits.length} camper${hits.length === 1 ? '' : 's'}</div>`
+            + Object.entries(byBunk).map(([bunk, list]) =>
+                `<div class="lite-section-label">${esc(bunk)} · ${list.length}</div>` + list.map(medRowHTML).join('')
+            ).join('');
+        wireMeRoster(body);
+    }
+
+    function medRowHTML(c) {
+        const facts = [];
+        if (c.allergies) facts.push(`<div class="lite-med-fact allergy"><span>Allergy</span>${esc(c.allergies)}</div>`);
+        if (c.medications) facts.push(`<div class="lite-med-fact meds"><span>Meds</span>${esc(c.medications)}</div>`);
+        if (c.dietary) facts.push(`<div class="lite-med-fact diet"><span>Dietary</span>${esc(c.dietary)}</div>`);
+        const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
+        return `<div class="lite-card lite-med-card">
+            <button class="lite-camper-row" type="button" data-camper="${esc(c.name)}">
+                <span>
+                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
+                </span>
+                <svg class="lite-camper-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <div class="lite-med-facts">${facts.join('')}</div>
+        </div>`;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: ME LITE — Staff (bunk → counselor contact directory, tap-to-call)
+    // ════════════════════════════════════════════════════════════════════
+
+    function renderMeStaff() {
+        const view = document.getElementById('view-meStaff');
+        if (!camp.stateLoaded) {
+            view.innerHTML = emptyHTML('', 'Staff data isn\'t available for your role.');
+            return;
+        }
+        const staff = camp.staff || {};
+        if (!Object.keys(staff).length) {
+            view.innerHTML = emptyHTML('', 'No staff assignments yet.<br>Assign counselors to bunks in full Campistry to see the directory here.');
+            return;
+        }
+
+        view.innerHTML = `
+            <div class="lite-field" style="margin-bottom:10px;">
+                <input class="lite-input" id="liteStaffSearch" type="search"
+                       placeholder="Search bunk or counselor…" value="${esc(meStaffQuery)}">
+            </div>
+            <div id="liteStaffBody"></div>`;
+        const input = view.querySelector('#liteStaffSearch');
+        input.addEventListener('input', () => { meStaffQuery = input.value; renderMeStaffBody(view.querySelector('#liteStaffBody')); });
+        renderMeStaffBody(view.querySelector('#liteStaffBody'));
+    }
+
+    function renderMeStaffBody(body) {
+        const staff = camp.staff || {};
+        const q = meStaffQuery.trim().toLowerCase();
+
+        // Build bunk → [{name, phone, email}] from the assignments.
+        const byBunk = {};
+        Object.entries(staff).forEach(([email, rec]) => {
+            const person = { name: rec.name || email, phone: rec.phone || '', email };
+            (rec.bunks || []).forEach(b => { (byBunk[b] = byBunk[b] || []).push(person); });
+        });
+
+        // Order bunks by camp structure, then any extras.
+        const ordered = allBunks().filter(b => byBunk[b]);
+        Object.keys(byBunk).forEach(b => { if (!ordered.includes(b)) ordered.push(b); });
+
+        const rows = ordered.filter(bunk => {
+            if (!q) return true;
+            if (bunk.toLowerCase().includes(q)) return true;
+            return byBunk[bunk].some(p => (p.name || '').toLowerCase().includes(q));
+        });
+
+        if (!rows.length) {
+            body.innerHTML = emptyHTML('', q ? 'No bunk or counselor matches your search.' : 'No bunks assigned yet.');
+            return;
+        }
+
+        body.innerHTML = rows.map(bunk => {
+            const people = byBunk[bunk];
+            const parent = parentForBunk(bunk);
+            return `<div class="lite-card lite-staff-card">
+                <div class="lite-staff-bunk">${esc(bunk)}${parent ? `<span>${esc(parent)}</span>` : ''}</div>
+                ${people.map(p => `<div class="lite-staff-person">
+                    <div class="lite-staff-who">
+                        <div class="lite-staff-name">${esc(p.name)}</div>
+                        ${p.phone ? `<div class="lite-staff-meta">${esc(p.phone)}</div>` : '<div class="lite-staff-meta">No phone on file</div>'}
+                    </div>
+                    ${p.phone ? `<a class="lite-call-btn" href="tel:${esc(p.phone.replace(/[^\d+]/g, ''))}" aria-label="Call ${esc(p.name)}">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                        Call
+                    </a>` : ''}
+                </div>`).join('')}
+            </div>`;
+        }).join('');
     }
 
     // ════════════════════════════════════════════════════════════════════

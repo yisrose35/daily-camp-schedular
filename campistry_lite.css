@@ -428,6 +428,37 @@ button { cursor: pointer; border: none; background: none; }
 .lite-detail-med .lite-detail-dl dd { color: #912018; font-weight: 600; }
 .lite-detail-notes { font-size: 0.88rem; color: var(--ink-2); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
+/* ─── Me Lite: at-a-glance stats + birthdays ──────────────────────────── */
+.lite-stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+.lite-stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 11px 4px; text-align: center; }
+.lite-stat-num { font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; color: var(--accent-dark); line-height: 1; }
+.lite-stat-lbl { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-top: 5px; }
+.lite-bday-card { background: var(--accent-tint); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; }
+.lite-bday-head { font-size: 0.78rem; font-weight: 800; color: var(--accent-dark); margin-bottom: 7px; }
+.lite-bday-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 0.86rem; }
+.lite-bday-name { font-weight: 600; }
+.lite-bday-meta { font-size: 0.78rem; color: var(--ink-2); }
+.lite-bday-more { font-size: 0.76rem; color: var(--muted); padding-top: 4px; }
+
+/* ─── Me Lite: medical safety list ────────────────────────────────────── */
+.lite-med-card { padding: 0; overflow: hidden; }
+.lite-med-card .lite-camper-row { padding: 12px 15px 8px; }
+.lite-med-facts { padding: 0 15px 12px; display: flex; flex-direction: column; gap: 6px; }
+.lite-med-fact { font-size: 0.83rem; color: var(--ink); line-height: 1.35; padding-left: 10px; border-left: 3px solid var(--line-2); }
+.lite-med-fact span { display: inline-block; font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; margin-right: 7px; padding: 2px 6px; border-radius: 999px; vertical-align: middle; }
+.lite-med-fact.allergy { border-left-color: #F97066; } .lite-med-fact.allergy span { background: #FDE4E1; color: #B42318; }
+.lite-med-fact.meds { border-left-color: #528BFF; } .lite-med-fact.meds span { background: #E0EAFF; color: #3538CD; }
+.lite-med-fact.diet { border-left-color: #FDB022; } .lite-med-fact.diet span { background: #FEF0C7; color: #9A6700; }
+
+/* ─── Me Lite: staff contact directory ────────────────────────────────── */
+.lite-staff-card { padding: 0; overflow: hidden; }
+.lite-staff-bunk { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-dark); padding: 11px 15px 8px; display: flex; align-items: center; gap: 8px; }
+.lite-staff-bunk span { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 0.72rem; }
+.lite-staff-person { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 15px; border-top: 1px solid var(--line); }
+.lite-staff-who { min-width: 0; }
+.lite-call-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; font-weight: 700; color: #fff; background: var(--accent); padding: 8px 14px; border-radius: 999px; text-decoration: none; }
+.lite-call-btn:active { background: var(--accent-dark); }
+
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }

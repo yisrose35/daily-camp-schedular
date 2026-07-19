@@ -39,7 +39,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | Audience | Tabs | What they can do |
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
-| **Head staff** — **Me Lite** | Roster | The full camper roster, searchable across the whole camp, grouped by bunk with medical flags. Tap any camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). Read-only. |
+| **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
 | **Counselor** (`counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
 | **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
 
@@ -49,26 +49,42 @@ via **My Bunk**. **Staff assignments** and **SMS Alerts** are parked out of Flow
 Lite's nav (the code — `renderStaff`, `renderMessaging`, `send-sms` — is retained;
 SMS is coming back soon).
 
-### Me Lite tabs — `Roster` (amber `#F59E0B`)
+### Me Lite tabs — `Roster · Medical · Staff` (amber `#F59E0B`)
 
-The on-the-go version of the **Me** page for head staff — the full camper roster
-in your pocket. One tab today: **Roster**.
+The on-the-go version of the **Me** page for head staff — camp *people* in your
+pocket. Three tabs, all **read-only** (reads `app1.camperRoster`,
+`campStructure`, `liteStaffAssignments`; no writes).
 
-- **Roster** — a **search bar over the whole camp** (matches name, bunk, division,
-  grade, school, or parent name) plus a **By division** chip row (`All` +
-  each parent division). No search → campers are grouped by bunk (`Bunk A · 3`);
-  searching → a flat ranked list of up to 60 hits. Each camper is a big tap row
-  showing name, `bunk · division`, and medical flags (**Allergy / Meds / Dietary**).
-- **Tap a camper → full detail sheet** (`camperDetailHTML` in a bottom sheet):
-  **every field on file**, grouped — a highlighted **Medical** block first
-  (allergies / medications / dietary), then **Personal** (preferred name, DOB +
-  computed age, gender), **School** (school / grade / teacher), **Placement**
-  (division / grade / bunk), **Parents & guardians** (both parents, with
-  tap-to-call `tel:` and tap-to-email `mailto:` links), **Address**,
-  **Emergency contact** (name · relationship · phone), **Teams** (per-league
-  team membership), and **Notes**. Sections self-prune — a camper with no school
-  info simply doesn't show a School block. Reads `app1.camperRoster`; no writes
-  (Me Lite is read-only, same as Flow Lite).
+- **Roster** — an **at-a-glance strip** on top (headcounts: campers / bunks /
+  divisions / # with medical info) plus a **"Birthdays this week"** card (derived
+  from `dob`, timezone-safe month/day match over the next 7 days). Below: a
+  **search bar over the whole camp** (matches name, bunk, division, grade, school,
+  or parent name) and a **By division** chip row (`All` + each parent division).
+  No search → campers grouped by bunk (`Bunk A · 3`); searching → a flat ranked
+  list of up to 60 hits, and the glance strip hides to give search room. Each
+  camper is a big tap row showing name, `bunk · division`, and medical flags
+  (**Allergy / Meds / Dietary**).
+  - **Tap a camper → full detail sheet** (`camperDetailHTML` in a bottom sheet):
+    **every field on file**, grouped — a highlighted **Medical** block first
+    (allergies / medications / dietary), then **Personal** (preferred name, DOB +
+    computed age, gender), **School** (school / grade / teacher), **Placement**
+    (division / grade / bunk), **Parents & guardians** (both parents, with
+    tap-to-call `tel:` and tap-to-email `mailto:` links), **Address**,
+    **Emergency contact** (name · relationship · phone), **Teams** (per-league
+    team membership), and **Notes**. Sections self-prune — a camper with no school
+    info simply doesn't show a School block.
+- **Medical** — a **camp-wide allergy / meds / dietary safety list** for quick
+  field reference ("who has an EpiPen at the pool right now"). A segmented
+  **All / Allergy / Meds / Dietary** filter + a **By division** chip row, then the
+  matching campers grouped by bunk, with their medical facts shown **inline and
+  color-coded** (allergy = red, meds = blue, dietary = amber) — no tap needed to
+  read them. Tapping still opens the full camper sheet.
+- **Staff** — a **bunk → counselor contact directory** (from `liteStaffAssignments`).
+  Search by bunk or counselor name; results are bunk cards (in camp-structure
+  order) listing each assigned counselor with a one-tap **Call** button
+  (`tel:` link). Answers "who's on Bunk 7 and how do I reach them" instantly.
+  Empty until the camp fills in staff assignments (Lite's Staff editor / full
+  Campistry).
 
 ### Flow Lite tabs — `Schedule · Locate · Reports`
 
