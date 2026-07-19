@@ -296,7 +296,18 @@
                     const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
                     if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
                     if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
+                    // ★ CB-XX (court-reservation availability bug): a pinned custom/special
+                    //   tile stores its reserved facility in _specialLocation / _customField /
+                    //   _location / _partLocation (entry.field holds the tile's event NAME, not
+                    //   a real field). This mirrors the canonical resolver in
+                    //   unified_schedule_system.js resolveEntryLocation(). Without these three
+                    //   extra sources, a pinned "court one reserved 12–1" tile left court one
+                    //   looking FREE in the availability report even though the solver correctly
+                    //   kept it reserved.
+                    if (typeof entry._specialLocation === 'string' && entry._specialLocation.trim()) _resvSrc.push(entry._specialLocation);
+                    if (typeof entry._customField === 'string' && entry._customField.trim()) _resvSrc.push(entry._customField);
                     if (typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
+                    if (typeof entry._partLocation === 'string' && entry._partLocation.trim()) _resvSrc.push(entry._partLocation);
                     _resvSrc.forEach(raw => {
                         let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
                         if (n.includes(' – ')) n = n.split(' – ')[0].trim();
