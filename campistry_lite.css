@@ -531,6 +531,12 @@ button { cursor: pointer; border: none; background: none; }
 .lite-swipe.reveal-del .lite-swipe-arch { display: none; }
 .lite-swipe-fg { position: relative; margin-bottom: 0; touch-action: pan-y; will-change: transform; }
 
+/* ─── Toggle switch (menu preference) ─────────────────────────────────── */
+.lite-toggle { flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line-2); position: relative; transition: background 0.15s ease; }
+.lite-toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.25); transition: transform 0.15s ease; }
+.lite-toggle.on { background: var(--coral-500, #EE6A53); }
+.lite-toggle.on::after { transform: translateX(16px); }
+
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }

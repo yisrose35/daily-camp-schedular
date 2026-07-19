@@ -144,11 +144,21 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
   write the `link_messages` `important` / `archived` / `read` columns (cloud, so
   the desktop sees them too); a thread flag is applied to every message in it.
   Opening a thread auto-marks its incoming messages read. Cards also **swipe**
-  (pointer/touch): **right-to-left reveals red Delete** (confirm sheet → hard
-  delete, owner/admin only per the `link_messages_delete` RLS policy), **left-to-
-  right reveals amber Archive** (toggles archived, so it un-archives from the
-  Archived tab). Vertical scroll is preserved (`touch-action: pan-y`); a swipe
-  suppresses the tap-to-open. Tap a thread → the full
+  (pointer/touch): **right-to-left reveals red Delete**, **left-to-right reveals
+  amber Archive** (toggles archived, so it un-archives from the Archived tab).
+  Vertical scroll is preserved (`touch-action: pan-y`); a swipe suppresses the
+  tap-to-open.
+  - **Delete is a per-party soft hide, not a hard delete.** It sets
+    `hidden_for_admin = true` (migration `044`) — the conversation leaves the
+    staff inbox but **the parent keeps their copy** (`get_my_messages` never
+    references the column). This mirrors the existing `hidden_for_parent`
+    (parent-side delete) so both inboxes behave like email. Gated to owner/admin.
+    _Both surfaces changed: `campistry_link_data.js` (`_deleteMessageRow` now
+    UPDATEs `hidden_for_admin`, and `loadCloudMessages` filters it) and Lite._
+  - **Confirm-before-delete is a preference.** The account menu has a **"Confirm
+    before deleting"** toggle (on by default, stored in `campistry_lite_prefs`).
+    With it off, a delete-swipe removes the conversation immediately with no
+    confirm sheet. Tap a thread → the full
   conversation as bubbles (parent left, staff right; attachments shown as chips)
   and a **quick reply** box. Search across all threads. Reads `link_messages`
   directly (`camp_id`-scoped by RLS).
@@ -352,5 +362,7 @@ Send. (A pg_cron → Edge Function pipeline is the natural v2 if wanted.)
 | `campistry_live.html` | Office Live app + the `liveDaily_<date>` cloud sync bridge |
 | `campistry_live.js` | Office Live logic; now defines its own data/UI helpers (was crashing at load) |
 | `campistry_health.html` | Office Health app + the `campistryHealth` merge sync bridge |
+| `campistry_link_data.js` | Desktop Link data bridge; admin delete is now a soft hide (`hidden_for_admin`) |
+| `migrations/044_link_messages_admin_hide.sql` | `hidden_for_admin` column so admin delete doesn't wipe the parent's copy |
 | `access_control.js` | `counselor` in ROLES; read-only gates via `isReadOnlyRole` |
 | `invite.html`, `dashboard.js`, `dashboard.html`, `team_subdivisions_ui.js` | Counselor display names/colors, Lite tile, counselor→Lite redirects |

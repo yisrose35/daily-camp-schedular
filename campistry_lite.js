@@ -407,10 +407,11 @@
             try {
                 const { data, error } = await window.supabase
                     .from('link_messages')
-                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,archived,important,created_at')
+                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,archived,important,hidden_for_admin,created_at')
                     .eq('camp_id', campId).order('created_at', { ascending: true }).limit(500);
                 if (error) throw error;
-                linkMsgs = data || [];
+                // Exclude anything hidden from the admin/staff inbox (soft delete).
+                linkMsgs = (data || []).filter(m => !m.hidden_for_admin);
             } catch (e) { console.warn('[Lite] loadLinkMessages failed:', e?.message || e); linkMsgs = linkMsgs || []; }
             finally { linkMsgPending = null; }
             return linkMsgs;
@@ -474,12 +475,22 @@
         await Promise.all(unread.map(m => updateLinkFlag(m.id, 'read', true)));
     }
 
-    // Hard delete is owner/admin only (the link_messages_delete RLS policy).
     function canDeleteMessages() { return ['owner', 'admin'].includes(role); }
+    // Per-user Lite preferences (localStorage). `confirmDelete` defaults on.
+    function litePref(key, def) {
+        try { const p = JSON.parse(localStorage.getItem('campistry_lite_prefs') || '{}'); return key in p ? p[key] : def; }
+        catch (e) { return def; }
+    }
+    function setLitePref(key, val) {
+        try { const p = JSON.parse(localStorage.getItem('campistry_lite_prefs') || '{}'); p[key] = val; localStorage.setItem('campistry_lite_prefs', JSON.stringify(p)); }
+        catch (e) {}
+    }
+    // "Delete" is an admin-side soft hide (hidden_for_admin) — it disappears from
+    // the staff inbox but the parent keeps their copy (get_my_messages ignores it).
     async function deleteThread(thread) {
         try {
             await Promise.all(thread.msgs.map(m =>
-                window.supabase.from('link_messages').delete().eq('id', m.id).eq('camp_id', campId)));
+                window.supabase.from('link_messages').update({ hidden_for_admin: true }).eq('id', m.id).eq('camp_id', campId)));
             const ids = new Set(thread.msgs.map(m => m.id));
             linkMsgs = (linkMsgs || []).filter(m => !ids.has(m.id));
             toast('Conversation deleted');
@@ -934,6 +945,19 @@
         document.getElementById('liteMenuBtn').addEventListener('click', toggleMenu);
         document.addEventListener('click', () => { menu.style.display = 'none'; });
         menu.addEventListener('click', (e) => e.stopPropagation());
+
+        // "Confirm before deleting" preference toggle (stays open on tap).
+        const delToggle = document.getElementById('liteMenuDelConfirm');
+        const delSwitch = document.getElementById('liteDelConfirmToggle');
+        const applyDelToggle = () => delSwitch && delSwitch.classList.toggle('on', litePref('confirmDelete', true));
+        if (delToggle && delSwitch) {
+            applyDelToggle();
+            delToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                setLitePref('confirmDelete', !litePref('confirmDelete', true));
+                applyDelToggle();
+            });
+        }
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
             try { await window.supabase.auth.signOut(); } catch (_) {}
@@ -2308,8 +2332,9 @@
                 sw.classList.remove('reveal-del', 'reveal-arch');
                 const key = fg.dataset.key;
                 if (horiz && dx < -THRESH) {
-                    if (canDeleteMessages()) confirmDeleteThread(key);
-                    else toast('Only an owner or admin can delete');
+                    if (!canDeleteMessages()) toast('Only an owner or admin can delete');
+                    else if (litePref('confirmDelete', true)) confirmDeleteThread(key);
+                    else { const t = linkThreads().find(x => x.key === key); if (t) deleteThread(t); }
                 } else if (horiz && dx > THRESH) {
                     const t = linkThreads().find(x => x.key === key);
                     if (t) setThreadFlag(t, 'archived', !t.archived).then(() => { toast(t.archived ? 'Unarchived' : 'Archived'); paintLinkThreads(); });

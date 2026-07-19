@@ -219,13 +219,16 @@
      */
     function _deleteMessageRow(id) {
         var db = _db(); if (!db) return Promise.resolve({ error: 'no_db' });
+        // Admin delete is a soft hide (hidden_for_admin), NOT a hard delete —
+        // the parent keeps their copy of the conversation (get_my_messages
+        // never references this column). The admin inbox filters it out.
         return db.client
             .from('link_messages')
-            .delete()
+            .update({ hidden_for_admin: true })
             .eq('id', id)
             .eq('camp_id', db.campId)
             .then(function(res) {
-                if (res.error) console.warn('[Link] link_messages delete error:', res.error.message);
+                if (res.error) console.warn('[Link] link_messages hide error:', res.error.message);
                 return res;
             });
     }
@@ -255,7 +258,7 @@
         limit = limit || 200;
         db.client
             .from('link_messages')
-            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, archived, important, recipient_user_id, recipient_label, created_at')
+            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, archived, important, hidden_for_admin, recipient_user_id, recipient_label, created_at')
             .eq('camp_id', db.campId)
             .order('created_at', { ascending: false })
             .limit(limit)
@@ -266,6 +269,12 @@
                 _store.messages.forEach(function(m) { byId[m.id] = m; });
                 var changed = false;
                 rows.forEach(function(row) {
+                    // Admin-hidden (soft-deleted) rows drop out of the admin inbox,
+                    // even if a stale copy lingers in this device's local store.
+                    if (row.hidden_for_admin) {
+                        if (byId[row.id]) { _store.messages = _store.messages.filter(function(m) { return m.id !== row.id; }); changed = true; }
+                        return;
+                    }
                     var existing = byId[row.id];
                     if (existing) {
                         // Row already known locally (e.g. just sent from this browser) —
