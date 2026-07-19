@@ -78,8 +78,10 @@
     let linkForms = null;             // flattened forms from camp_state_kv link_forms
     let linkLists = null;             // link_lists from camp_state_kv
     let linkThreadQuery = '';         // Link Lite messages search
-    let linkComposeCamper = null;     // { name, parentName, parentEmail }
-    let linkComposeQuery = '';        // Link Lite compose recipient search
+    let linkMsgFilter = 'all';        // all | unread | important | archived
+    let linkComposeMode = 'camper';   // division | grade | camper
+    let linkComposeRecipients = [];   // [{ type:'division'|'grade'|'camper', name }]
+    let linkComposeQuery = '';        // Link Lite compose camper search
     let linkComposeAttach = { form: null, list: null };
     let linkComposeSubject = '';      // persist across attach re-renders
     let linkComposeBody = '';
@@ -405,7 +407,7 @@
             try {
                 const { data, error } = await window.supabase
                     .from('link_messages')
-                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,created_at')
+                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,archived,important,created_at')
                     .eq('camp_id', campId).order('created_at', { ascending: true }).limit(500);
                 if (error) throw error;
                 linkMsgs = data || [];
@@ -449,6 +451,38 @@
     }
 
     function linkLabelOf(item) { return item && (item.name || item.title || item.label || 'Untitled'); }
+
+    // Update a link_messages flag column (read/important/archived), cloud + local.
+    async function updateLinkFlag(id, field, value) {
+        const patch = {}; patch[field] = !!value;
+        const m = (linkMsgs || []).find(x => x.id === id);
+        if (m) m[field] = !!value;   // optimistic
+        try {
+            const { error } = await window.supabase.from('link_messages').update(patch).eq('id', id).eq('camp_id', campId);
+            if (error) throw error;
+        } catch (e) { console.warn('[Lite] link flag update failed:', e?.message || e); }
+    }
+
+    // Thread-level flag: apply to every message in the thread (matches how the
+    // desktop stores per-message flags; a thread reads as important/archived).
+    async function setThreadFlag(thread, field, value) {
+        await Promise.all(thread.msgs.map(m => updateLinkFlag(m.id, field, value)));
+    }
+    async function markThreadRead(thread) {
+        const unread = thread.msgs.filter(m => m.direction === 'in' && !m.read);
+        if (!unread.length) return;
+        await Promise.all(unread.map(m => updateLinkFlag(m.id, 'read', true)));
+    }
+
+    // Grade names (structure order), for compose "by grade".
+    function allGrades() {
+        const out = [];
+        Object.values(camp.structure || {}).forEach(s =>
+            (s.gradeOrder || Object.keys(s.grades || {})).forEach(g => { if (!out.includes(g)) out.push(g); }));
+        if (out.length) return out;
+        Object.values(camp.roster || {}).forEach(c => { if (c && c.grade && !out.includes(c.grade)) out.push(c.grade); });
+        return out;
+    }
 
     // ─── Camp-structure helpers ─────────────────────────────────────────
 
@@ -2119,6 +2153,8 @@
             t.msgs.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
             t.last = t.msgs[t.msgs.length - 1];
             t.unread = t.msgs.filter(m => m.direction === 'in' && !m.read).length;
+            t.important = t.msgs.some(m => m.important);
+            t.archived = t.msgs.length > 0 && t.msgs.every(m => m.archived);
             return t;
         });
         arr.sort((a, b) => new Date(b.last.created_at) - new Date(a.last.created_at));
@@ -2140,32 +2176,67 @@
         paintLinkThreads();
     }
 
+    const LINK_FILTERS = ['all', 'unread', 'important', 'archived'];
+    const LINK_FILTER_LABEL = { all: 'All', unread: 'Unread', important: 'Important', archived: 'Archived' };
+
     function paintLinkThreads() {
         const body = document.getElementById('liteLinkBody');
         if (!body) return;
         const q = linkThreadQuery.trim().toLowerCase();
         let threads = linkThreads();
+        // Filter: archived is its own bucket; the others exclude archived.
+        if (linkMsgFilter === 'archived') threads = threads.filter(t => t.archived);
+        else {
+            threads = threads.filter(t => !t.archived);
+            if (linkMsgFilter === 'unread') threads = threads.filter(t => t.unread);
+            else if (linkMsgFilter === 'important') threads = threads.filter(t => t.important);
+        }
         if (q) threads = threads.filter(t =>
             (t.parentName + ' ' + t.camperName + ' ' + (t.last.subject || '') + ' ' + (t.last.body || '')).toLowerCase().includes(q));
-        if (!threads.length) {
-            body.innerHTML = emptyHTML('', q ? 'No messages match your search.' : 'No messages yet. Tap Compose to write a parent.');
-            return;
-        }
-        body.innerHTML = threads.map(t => {
+
+        const chips = `<div class="lite-seg" id="liteMsgFilter">${LINK_FILTERS.map(f =>
+            `<button type="button" class="lite-seg-btn${f === linkMsgFilter ? ' active' : ''}" data-val="${f}">${LINK_FILTER_LABEL[f]}</button>`).join('')}</div>`;
+
+        const list = threads.length ? threads.map(t => {
             const who = t.parentName || 'Parent';
             const sub = [t.camperName ? esc(t.camperName) : '', t.last.subject ? esc(t.last.subject) : ''].filter(Boolean).join(' · ');
             const dir = t.last.direction === 'in' ? '' : 'You: ';
             const preview = esc((t.last.body || '').replace(/\[\[(form|list):[^\]]+\]\]/g, '').trim().slice(0, 80));
+            const star = `<button class="lite-thread-act${t.important ? ' on' : ''}" data-act="important" data-key="${esc(t.key)}" title="${t.important ? 'Unmark important' : 'Mark important'}">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="${t.important ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>`;
+            const arch = `<button class="lite-thread-act" data-act="archive" data-key="${esc(t.key)}" title="${t.archived ? 'Unarchive' : 'Archive'}">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>`;
+            const readBtn = t.unread ? `<button class="lite-thread-act" data-act="read" data-key="${esc(t.key)}" title="Mark read">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></button>` : '';
             return `<div class="lite-card lite-thread" data-key="${esc(t.key)}">
                 <div class="lite-thread-top">
                     <span class="lite-camper-name">${esc(who)}</span>
                     ${t.unread ? `<span class="lite-unread-dot" aria-label="${t.unread} unread"></span>` : ''}
+                    ${t.important ? '<span class="lite-imp-dot" title="Important"></span>' : ''}
                     <span class="lite-thread-time">${esc(shortWhen(t.last.created_at))}</span>
                 </div>
                 ${sub ? `<div class="lite-camper-meta">${sub}</div>` : ''}
                 <div class="lite-thread-preview">${dir}${preview || '(attachment)'}</div>
+                <div class="lite-thread-actions">${star}${arch}${readBtn}</div>
             </div>`;
-        }).join('');
+        }).join('') : emptyHTML('', q ? 'No messages match your search.'
+            : linkMsgFilter === 'all' ? 'No messages yet. Tap Compose to write a parent.'
+            : `No ${LINK_FILTER_LABEL[linkMsgFilter].toLowerCase()} messages.`);
+
+        body.innerHTML = chips + list;
+        body.querySelectorAll('#liteMsgFilter .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { linkMsgFilter = b.dataset.val; paintLinkThreads(); }));
+        body.querySelectorAll('.lite-thread-act[data-act]').forEach(btn =>
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const t = linkThreads().find(x => x.key === btn.dataset.key);
+                if (!t) return;
+                const act = btn.dataset.act;
+                if (act === 'important') await setThreadFlag(t, 'important', !t.important);
+                else if (act === 'archive') await setThreadFlag(t, 'archived', !t.archived);
+                else if (act === 'read') await markThreadRead(t);
+                paintLinkThreads();
+            }));
         body.querySelectorAll('.lite-thread[data-key]').forEach(el =>
             el.addEventListener('click', () => openLinkThread(el.dataset.key)));
     }
@@ -2173,7 +2244,8 @@
     function openLinkThread(key) {
         const t = linkThreads().find(x => x.key === key);
         if (!t) return;
-        // mark incoming as read locally (best-effort; a cloud read-flag write is optional)
+        // Opening a thread marks its incoming messages read (cloud + local).
+        if (t.unread) markThreadRead(t).then(() => { if (activeTab === 'linkMessages') paintLinkThreads(); });
         const bubbles = t.msgs.map(m => {
             const tokens = (m.body || '').match(/\[\[(form|list):[^\]]+\]\]/g) || [];
             const clean = esc((m.body || '').replace(/\[\[(form|list):[^\]]+\]\]/g, '').trim());
@@ -2226,20 +2298,54 @@
         paintLinkCompose();
     }
 
+    function hasRecipient(type, name) {
+        return linkComposeRecipients.some(r => r.type === type && r.name === name);
+    }
+    function toggleRecipient(type, name) {
+        const i = linkComposeRecipients.findIndex(r => r.type === type && r.name === name);
+        if (i >= 0) linkComposeRecipients.splice(i, 1);
+        else linkComposeRecipients.push({ type, name });
+    }
+    function campersForRecipient(r) {
+        if (r.type === 'camper') return [r.name];
+        const field = r.type === 'grade' ? 'grade' : 'division';
+        return Object.entries(camp.roster || {}).filter(([, c]) => c && c[field] === r.name).map(([n]) => n);
+    }
+    // Resolve all selected recipients → de-duped parent targets (contact required).
+    function resolveComposeTargets() {
+        const seen = new Set(), out = [];
+        linkComposeRecipients.forEach(r => campersForRecipient(r).forEach(name => {
+            if (seen.has(name)) return;
+            const c = camp.roster[name]; if (!c) return;
+            if (!(c.parent1Name || c.parent1Email)) return;
+            seen.add(name);
+            out.push({ camperName: name, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' });
+        }));
+        return out;
+    }
+
     function paintLinkCompose() {
         const view = document.getElementById('view-linkCompose');
-        const rec = linkComposeCamper;
         const attach = linkComposeAttach;
         const attachChips = [
             attach.form ? `<span class="lite-attach-chip">Form · ${esc(linkLabelOf(attach.form))} <button data-clear="form">×</button></span>` : '',
             attach.list ? `<span class="lite-attach-chip">List · ${esc(linkLabelOf(attach.list))} <button data-clear="list">×</button></span>` : ''
         ].filter(Boolean).join('');
+        const recipChips = linkComposeRecipients.map((r, i) => {
+            const tag = r.type === 'division' ? 'Division' : r.type === 'grade' ? 'Grade' : '';
+            return `<span class="lite-attach-chip">${tag ? tag + ' · ' : ''}${esc(r.name)} <button data-remove="${i}">×</button></span>`;
+        }).join('');
+        const targets = resolveComposeTargets();
+        const modes = [['division', 'By division'], ['grade', 'By grade'], ['camper', 'Campers']];
+
         view.innerHTML = `
             <div class="lite-compose">
                 <label class="lite-lbl">To</label>
-                ${rec
-                    ? `<div class="lite-recipient"><div><div class="lite-camper-name">${esc(rec.parentName || 'No parent contact')}</div><div class="lite-camper-meta">${esc(rec.name)}${rec.parentEmail ? ' · ' + esc(rec.parentEmail) : ''}</div></div><button class="lite-link-btn" id="liteRecChange">Change</button></div>`
-                    : `<input class="lite-input" id="liteRecSearch" type="search" placeholder="Search a camper to message their parent…" value="${esc(linkComposeQuery)}"><div id="liteRecResults"></div>`}
+                ${recipChips ? `<div class="lite-recip-chips">${recipChips}</div>
+                    <div class="lite-note" style="margin:2px 2px 8px;">${targets.length} parent${targets.length === 1 ? '' : 's'}</div>` : ''}
+                <div class="lite-seg" id="liteRecMode">${modes.map(([m, l]) =>
+                    `<button type="button" class="lite-seg-btn${m === linkComposeMode ? ' active' : ''}" data-val="${m}">${l}</button>`).join('')}</div>
+                <div id="liteRecPicker"></div>
                 <label class="lite-lbl">Subject</label>
                 <input class="lite-input" id="liteMsgSubj" type="text" placeholder="Subject" value="${esc(linkComposeSubject)}">
                 <label class="lite-lbl">Message</label>
@@ -2251,29 +2357,11 @@
                 </div>
             </div>`;
 
-        if (!rec) {
-            const search = view.querySelector('#liteRecSearch');
-            const results = view.querySelector('#liteRecResults');
-            const paintResults = () => {
-                const q = (search.value || '').trim().toLowerCase();
-                linkComposeQuery = search.value;
-                if (!q) { results.innerHTML = ''; return; }
-                const hits = Object.entries(camp.roster || {})
-                    .filter(([n]) => n.toLowerCase().includes(q)).slice(0, 8);
-                results.innerHTML = hits.map(([n, c]) =>
-                    `<button class="lite-rec-hit" data-name="${esc(n)}"><span class="lite-camper-name">${esc(n)}</span><div class="lite-camper-meta">${esc([c.bunk, c.parent1Name].filter(Boolean).join(' · ') || 'No parent on file')}</div></button>`).join('')
-                    || `<div class="lite-note">No campers match.</div>`;
-                results.querySelectorAll('.lite-rec-hit').forEach(btn => btn.addEventListener('click', () => {
-                    const c = camp.roster[btn.dataset.name] || {};
-                    linkComposeCamper = { name: btn.dataset.name, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' };
-                    paintLinkCompose();
-                }));
-            };
-            search.addEventListener('input', paintResults);
-            paintResults();
-        } else {
-            view.querySelector('#liteRecChange').addEventListener('click', () => { linkComposeCamper = null; linkComposeQuery = ''; paintLinkCompose(); });
-        }
+        paintRecPicker(view.querySelector('#liteRecPicker'));
+        view.querySelectorAll('#liteRecMode .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { linkComposeMode = b.dataset.val; paintRecPicker(view.querySelector('#liteRecPicker')); }));
+        view.querySelectorAll('.lite-recip-chips [data-remove]').forEach(btn =>
+            btn.addEventListener('click', () => { linkComposeRecipients.splice(+btn.dataset.remove, 1); paintLinkCompose(); }));
 
         const subjEl = view.querySelector('#liteMsgSubj');
         const bodyEl = view.querySelector('#liteMsgBody');
@@ -2282,6 +2370,40 @@
         view.querySelectorAll('[data-clear]').forEach(btn => btn.addEventListener('click', () => { linkComposeAttach[btn.dataset.clear] = null; paintLinkCompose(); }));
         view.querySelector('#liteAttachBtn').addEventListener('click', openAttachPicker);
         view.querySelector('#liteSendBtn').addEventListener('click', doComposeSend);
+    }
+
+    function paintRecPicker(box) {
+        if (!box) return;
+        const mode = linkComposeMode;
+        if (mode === 'division' || mode === 'grade') {
+            const items = mode === 'division' ? parentDivisions() : allGrades();
+            box.innerHTML = items.length
+                ? `<div class="lite-chiprow wrap">${items.map(n =>
+                    `<button type="button" class="lite-chip${hasRecipient(mode, n) ? ' active' : ''}" data-pick="${esc(n)}">${esc(n)}</button>`).join('')}</div>`
+                : `<div class="lite-note">None configured.</div>`;
+            box.querySelectorAll('[data-pick]').forEach(btn =>
+                btn.addEventListener('click', () => { toggleRecipient(mode, btn.dataset.pick); paintLinkCompose(); }));
+            return;
+        }
+        // Camper mode: search + tap to toggle
+        box.innerHTML = `<input class="lite-input" id="liteRecSearch" type="search" placeholder="Search campers…" value="${esc(linkComposeQuery)}"><div id="liteRecResults"></div>`;
+        const search = box.querySelector('#liteRecSearch');
+        const results = box.querySelector('#liteRecResults');
+        const paint = () => {
+            const q = (search.value || '').trim().toLowerCase();
+            linkComposeQuery = search.value;
+            if (!q) { results.innerHTML = ''; return; }
+            const hits = Object.entries(camp.roster || {}).filter(([n]) => n.toLowerCase().includes(q)).slice(0, 10);
+            results.innerHTML = hits.length ? hits.map(([n, c]) => {
+                const on = hasRecipient('camper', n);
+                const contact = [c.bunk, c.parent1Name].filter(Boolean).join(' · ') || 'No parent on file';
+                return `<button class="lite-rec-hit${on ? ' on' : ''}" data-name="${esc(n)}"><span class="lite-camper-name">${esc(n)}</span><div class="lite-camper-meta">${esc(contact)}</div></button>`;
+            }).join('') : `<div class="lite-note">No campers match.</div>`;
+            results.querySelectorAll('.lite-rec-hit').forEach(btn =>
+                btn.addEventListener('click', () => { toggleRecipient('camper', btn.dataset.name); paintLinkCompose(); }));
+        };
+        search.addEventListener('input', paint);
+        paint();
     }
 
     function openAttachPicker() {
@@ -2305,20 +2427,25 @@
 
     async function doComposeSend() {
         const view = document.getElementById('view-linkCompose');
-        const rec = linkComposeCamper;
-        if (!rec || !(rec.parentName || rec.parentEmail)) { toast('Pick a camper whose parent has contact info'); return; }
+        const targets = resolveComposeTargets();
+        if (!targets.length) { toast('Add a recipient with a parent on file'); return; }
         const subj = ((view.querySelector('#liteMsgSubj') || {}).value ?? linkComposeSubject).trim();
-        let body = ((view.querySelector('#liteMsgBody') || {}).value ?? linkComposeBody).trim();
+        const baseBody = ((view.querySelector('#liteMsgBody') || {}).value ?? linkComposeBody).trim();
         const attach = linkComposeAttach;
         if (!subj) { toast('Subject is required'); return; }
-        if (!body && !attach.form && !attach.list) { toast('Write a message or attach a form/list'); return; }
-        if (attach.form) body += `\n\n[[form:${attach.form.id}:${rec.name || ''}]]`;
-        if (attach.list) body += `\n\n[[list:${attach.list.id}]]`;
+        if (!baseBody && !attach.form && !attach.list) { toast('Write a message or attach a form/list'); return; }
         const btn = view.querySelector('#liteSendBtn'); btn.disabled = true; btn.textContent = 'Sending…';
         try {
-            await sendLinkMessage({ parentName: rec.parentName, parentEmail: rec.parentEmail, camperName: rec.name, subject: subj, body });
-            toast('Message sent to ' + (rec.parentName || rec.name));
-            linkComposeCamper = null; linkComposeQuery = ''; linkComposeAttach = { form: null, list: null };
+            // One message per parent; the form token carries that camper's name.
+            for (const t of targets) {
+                let body = baseBody;
+                if (attach.form) body += `\n\n[[form:${attach.form.id}:${t.camperName || ''}]]`;
+                if (attach.list) body += `\n\n[[list:${attach.list.id}]]`;
+                await sendLinkMessage({ parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, subject: subj, body });
+            }
+            toast(targets.length === 1 ? ('Message sent to ' + (targets[0].parentName || targets[0].camperName))
+                : ('Sent to ' + targets.length + ' parents'));
+            linkComposeRecipients = []; linkComposeQuery = ''; linkComposeAttach = { form: null, list: null };
             linkComposeSubject = ''; linkComposeBody = '';
             paintLinkCompose();
         } catch (e) { btn.disabled = false; btn.textContent = 'Send'; toast('Could not send — try again'); }

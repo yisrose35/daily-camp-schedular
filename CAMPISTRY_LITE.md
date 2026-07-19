@@ -136,18 +136,27 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
 **messaging + attach forms/lists**. Photos are a separate phase (see below).
 
 - **Messages** — the message inbox as **parent-threaded conversations**, grouped
-  by `thread_id` (received `in` + sent `out`), newest first, with an unread dot
-  and a one-line preview (attachment tokens stripped). Tap a thread → the full
+  by `thread_id` (received `in` + sent `out`), newest first, with an unread dot,
+  an **important** marker, and a one-line preview (attachment tokens stripped). A
+  segmented **All / Unread / Important / Archived** filter sits on top (the first
+  three exclude archived; Archived is its own bucket). Each thread card carries
+  quick actions — **star (important)**, **archive**, and **mark-read** — that
+  write the `link_messages` `important` / `archived` / `read` columns (cloud, so
+  the desktop sees them too); a thread flag is applied to every message in it.
+  Opening a thread auto-marks its incoming messages read. Tap a thread → the full
   conversation as bubbles (parent left, staff right; attachments shown as chips)
-  and a **quick reply** box that sends straight back to that parent. Search
-  across all threads. Reads `link_messages` directly (`camp_id`-scoped by RLS).
-- **Compose** — search a **camper** → message their parent (`parent1Name` /
-  `parent1Email` from the roster). Subject + body, then **Attach form / list**:
-  a picker of the forms & lists that exist in `camp_state_kv` (`link_forms`,
-  `link_lists`). Selecting one appends the desktop's own invisible body token —
-  `[[form:<id>:<camper>]]` or `[[list:<id>]]` — which the parent portal renders
-  as an "Open & fill" / "View list" button. **Lite attaches, never creates**
-  forms/lists (matching the requirement).
+  and a **quick reply** box. Search across all threads. Reads `link_messages`
+  directly (`camp_id`-scoped by RLS).
+- **Compose** — a **By division / By grade / Campers** recipient selector with
+  **multi-select**: tap divisions and/or grades and/or search individual campers,
+  and they accumulate as removable "To" chips with a live parent count. On send,
+  every selection is expanded to its campers, de-duped to **one message per
+  parent who has contact info** (`parent1Name` / `parent1Email`). Subject + body,
+  then **Attach form / list**: a picker of the forms & lists in `camp_state_kv`
+  (`link_forms`, `link_lists`). Each recipient's message gets the desktop's own
+  invisible body token — `[[form:<id>:<thatCamper>]]` or `[[list:<id>]]` — which
+  the parent portal renders as an "Open & fill" / "View list" button. **Lite
+  attaches, never creates** forms/lists (matching the requirement).
 
 **Sending** replicates the desktop's `link_messages` insert (`id` uuid,
 `camp_id`, `thread_id`, `direction:'out'`, `parent_name/email`, `camper_name`,

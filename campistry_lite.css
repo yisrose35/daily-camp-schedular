@@ -510,6 +510,15 @@ button { cursor: pointer; border: none; background: none; }
 .lite-compose-actions { display: flex; gap: 10px; margin-top: 16px; }
 .lite-compose-actions .lite-btn { flex: 1; }
 .lite-pick-row { display: block; width: 100%; text-align: left; padding: 12px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); margin-top: 7px; }
+.lite-imp-dot { width: 8px; height: 8px; border-radius: 2px; transform: rotate(45deg); background: #F79009; flex: none; }
+.lite-thread-actions { display: flex; gap: 4px; margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--line-2); }
+.lite-thread-act { width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: var(--muted); background: var(--bg); }
+.lite-thread-act.on { color: #F79009; }
+.lite-thread-act:active { background: var(--accent-tint); }
+.lite-recip-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.lite-chiprow.wrap { flex-wrap: wrap; overflow: visible; }
+.lite-rec-hit.on { border-color: var(--accent); background: var(--accent-tint); }
+.lite-rec-hit.on::after { content: '✓'; float: right; color: var(--accent-dark); font-weight: 800; }
 
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
