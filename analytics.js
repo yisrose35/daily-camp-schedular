@@ -365,6 +365,66 @@
             });
         });
 
+        // ═══════════════════════════════════════════════════════════════
+        // Manual-skeleton facility RESERVATIONS (custom/pinned tiles).
+        // ───────────────────────────────────────────────────────────────
+        // A manual custom/pinned tile that reserves a field (reservedFields /
+        // location) is the DISPLAY source of truth on the bunk grid — the grid
+        // reads it straight off the skeleton block (see scheduler_core_main.js
+        // ~L5035). But the reservation only gets stamped into scheduleAssignments
+        // (_reservedFields) when the schedule is (re)generated. So a freshly
+        // dragged "Grandslam Park reserved for 8th grade" tile shows on the grid
+        // AND is honored by the solver, yet — before regeneration — is absent from
+        // scheduleAssignments, leaving the field looking FREE in this report.
+        // Surface reservations straight from the skeleton so the availability
+        // report matches the grid immediately. Dedup shares _reservedSeen with the
+        // scheduleAssignments pass above, so a post-generation reservation isn't
+        // drawn twice.
+        // For historical dates read that day's saved manualSkeleton (only present
+        // for days built in manual mode). For the live date use the in-memory
+        // dailyOverrideSkeleton, but ONLY in manual mode — in auto mode it can hold
+        // a stale manual skeleton from a prior session that would draw phantom
+        // reservations.
+        const _skeleton = (dateKey && dateKey !== liveDate)
+            ? (allDaily[dateKey]?.manualSkeleton || [])
+            : (window._daBuilderMode === 'auto'
+                ? []
+                : (window.dailyOverrideSkeleton || window.loadCurrentDailyData?.()?.manualSkeleton || []));
+        if (Array.isArray(_skeleton)) {
+            _skeleton.forEach(block => {
+                if (!block || block.continuation) return;
+                const divName = Array.isArray(block.division)
+                    ? (block.division[0] || 'Unknown') : (block.division || 'Unknown');
+                // Resolve the block's time window (numeric minutes preferred, else parse the strings).
+                let startMin = (typeof block.startMin === 'number') ? block.startMin
+                    : parseTimeToMinutes(block.startTime);
+                let endMin = (typeof block.endMin === 'number') ? block.endMin
+                    : parseTimeToMinutes(block.endTime);
+                if (startMin == null || endMin == null || isNaN(startMin) || isNaN(endMin)) return;
+
+                // Collect every reserved facility: the reservedFields array plus a
+                // single-field `location` (custom pins with one reserved field store
+                // it on both). The event NAME itself is never a facility, so it's not
+                // collected — only real reserved locations.
+                const _skSrc = [];
+                if (Array.isArray(block.reservedFields)) block.reservedFields.forEach(x => _skSrc.push(x));
+                if (typeof block.location === 'string' && block.location.trim()) _skSrc.push(block.location);
+                if (!_skSrc.length) return;
+
+                const activity = block.event || block.type || 'Reserved';
+                _skSrc.forEach(raw => {
+                    let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
+                    if (n.includes(' – ')) n = n.split(' – ')[0].trim();
+                    else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
+                    if (!n || n === 'Free' || n === 'No Field') return;
+                    const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
+                    if (_reservedSeen.has(k)) return;
+                    _reservedSeen.add(k);
+                    items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
+                });
+            });
+        }
+
         return items;
     }
 
