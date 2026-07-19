@@ -202,6 +202,12 @@
         catch (e) { console.warn('🛡️ bunk-only check failed:', e); }
 
         // =====================================================================
+        // 11b. ★★★ LEAGUE-RESERVED SPORTS (standing "Reserve for League Play") ★★★
+        // =====================================================================
+        try { checkLeagueReservedSports(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ league-reserved-sport check failed:', e); }
+
+        // =====================================================================
         // 12+13. ★★★ v3.1: LEAGUE/EVENT-AWARE TIMELINE + FIELD QUALITY ★★★
         // 15.    ★★★ v3.2: SPORT PLAYER COUNTS (min/max players) ★★★
         // =====================================================================
@@ -1378,6 +1384,39 @@
                     ? `${actName} on ${rawField}` : (actName || rawField);
                 errors.push(
                     `[[Bunk-only]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${target} - bunk-only access reserves it for other bunks today`
+                );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ CHECK 11b: LEAGUE-RESERVED SPORTS. A league with "Reserve for League
+     * Play" enabled keeps its sport(s) out of REGULAR play for its divisions —
+     * any non-league placement of a reserved sport is a violation. League
+     * entries are exempt (that's exactly where the sport is supposed to live).
+     * Skips silently when the helper is unavailable.
+     */
+    function checkLeagueReservedSports(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const U = window.SchedulerCoreUtils;
+        if (!U || typeof U.isSportReservedForLeague !== 'function') return errors;
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
+                const act = entry._activity || entry.sport || null;
+                const actName = typeof act === 'string' ? act : act?.name;
+                if (!actName) return;
+                let reserved = false;
+                try { reserved = U.isSportReservedForLeague(divName, actName) === true; } catch (e) { /* fail open */ }
+                if (!reserved) return;
+                const si = divSlots[idx];
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
+                errors.push(
+                    `[[League-only]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - reserved for league play (league setting), not allowed as a regular activity`
                 );
             });
         });

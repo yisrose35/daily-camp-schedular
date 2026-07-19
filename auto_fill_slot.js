@@ -408,6 +408,8 @@
                 if (_blockedOnField && _blockedOnField.indexOf(actName) !== -1) return;
                 // ★ Per-date bunk-only restriction (sport actName / facility f.name)
                 if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, actName, f.name, divName)) return;
+                // ★ League-reserved sport — standing rule; never offer/fill it as a regular activity
+                if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(divName, actName)) return;
                 // ★ Same-activity-when-sharing: skip a sport whose field is already held
                 //   by a DIFFERENT activity at this time (mismatch double-book).
                 if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps, actName)) return;
@@ -459,6 +461,9 @@
                     const _rHost = loc || (window.getLocationForActivity && window.getLocationForActivity(s.name)) || null;
                     if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, s.name, _rHost, divName)) return;
                 }
+                // ★ League-reserved sport — a special sharing a reserved sport's name is
+                //   equally off-limits as a regular activity for the league's divisions.
+                if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(divName, s.name)) return;
                 // ★ Special's host facility shut off in Facilities config. Resolve the host
                 //   robustly: this camp duplicates specials cap/lowercase and the dup's own
                 //   .location is often blank, so fall back to getLocationForActivity (the same

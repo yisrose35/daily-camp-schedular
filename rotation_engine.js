@@ -1158,6 +1158,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   Auto rotation gate for special/sport targets (matches by activity name).
         //   Facility targets are enforced in the field gate (isFieldAvailable).
         if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return _blk(bunkName, activityName, 'per-date-bunk-restriction');
+        // ★ LEAGUE-RESERVED SPORT — standing rule: this division plays this sport
+        //   in a league with "Reserve for League Play" on, so rotation must never
+        //   pick it as a regular activity. League game placement doesn't score
+        //   through here, so league play itself is unaffected.
+        if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(divisionName, activityName)) return _blk(bunkName, activityName, 'league-reserved-sport');
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
 

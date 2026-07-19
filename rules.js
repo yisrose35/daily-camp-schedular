@@ -1229,6 +1229,9 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                 if (!roomOpen(f.name, f.sharableWith)) continue;
                 for (let ai = 0; ai < f.activities.length; ai++) {
                     const A = f.activities[ai]; if (!A || done[_nmR(A)]) continue;
+                    // ★ League-reserved sport (standing rule) — the repair filler must not
+                    //   hand a division a sport its league reserves for league play.
+                    if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, A)) continue;
                     if (isCandidateAllowed({ type: 'sport', event: A, field: f.name, startMin: s, endMin: e }, template, { mode: mode }))
                         return { field: f.name, act: A, isSpecial: false };
                 }
@@ -1240,6 +1243,7 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                 const sp = _specialsR[si]; if (!sp || !sp.name || done[_nmR(sp.name)]) continue;
                 const room = sp.location || sp.name;
                 if (!_accessOk(sp.accessRestrictions, grade)) continue;
+                if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, sp.name)) continue; // league-reserved name parity
                 if (!roomOpen(room, sp.sharableWith)) continue;
                 let dur = null;
                 if (Array.isArray(sp.durations) && sp.durations.filter(Boolean).length) dur = Math.min.apply(null, sp.durations.filter(Boolean));

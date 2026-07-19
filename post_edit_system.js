@@ -2294,6 +2294,8 @@
     function peiFieldUsableByGrade(field, sportName, divName, bunk) {
         // Per-date "only these bunk(s) today" restriction (field- or sport-scoped).
         if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, sportName, field.name, divName)) return false;
+        // League-reserved sport (standing rule) — never suggest it as a regular activity.
+        if (sportName && window.SchedulerCoreUtils?.isSportReservedForLeague?.(divName, sportName)) return false;
         // Per-date sport-disabled-on-this-field ("Kickball off Baseball Field 1 today").
         const dd = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
         const blocked = dd[field.name];
@@ -2309,6 +2311,8 @@
             try { return window.isSpecialAvailableForBunk(special.name, divName, bunk, settings); } catch (_) { /* fall through */ }
         }
         if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, special.name, null, divName)) return false;
+        // League-reserved sport (standing rule) — covers a special sharing a reserved sport's name.
+        if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(divName, special.name)) return false;
         return peiAccessRestrictionsAllow(special.accessRestrictions, divName, bunk);
     }
 
