@@ -56,6 +56,8 @@
     let currentDate = todayKey();
     let activeTab = 'today';
     let currentApp = null;            // null = home launcher; else a LITE_APPS id
+    let settingsOpen = false;         // Settings screen visible
+    let appUnlocked = false;          // biometric lock cleared this session
     let selectedDivision = null;      // head-staff Roster division chip
     let rosterQuery = '';
     let meRosterQuery = '';           // Me Lite roster search
@@ -197,6 +199,7 @@
             document.getElementById('liteSplash').style.display = 'none';
             document.getElementById('liteApp').style.display = '';
             goHome();
+            maybeLockOnBoot();   // biometric app lock, if enabled
         } catch (e) {
             console.error('[Lite] Boot failed:', e);
             setSplash('Something went wrong loading Campistry Lite. Pull to refresh or reload.');
@@ -869,6 +872,7 @@
 
     function goHome() {
         currentApp = null;
+        settingsOpen = false;
         applyTheme(null);
         document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
         document.getElementById('view-home').style.display = '';   // was hidden by openApp
@@ -940,13 +944,167 @@
     function toggleMenu(e) {
         if (e) e.stopPropagation();
         const menu = document.getElementById('liteMenu');
-        const opening = menu.style.display === 'none';
-        menu.style.display = opening ? '' : 'none';
-        if (opening) syncDelToggle();   // reflect the pref (may have changed via the delete sheet)
+        menu.style.display = menu.style.display === 'none' ? '' : 'none';
     }
-    function syncDelToggle() {
-        const el = document.getElementById('liteDelConfirmToggle');
-        if (el) el.classList.toggle('on', litePref('confirmDelete', true));
+
+    // ════════════════════════════════════════════════════════════════════
+    // SETTINGS SCREEN  (chrome — not a Lite app)
+    // ════════════════════════════════════════════════════════════════════
+
+    function openSettings() {
+        settingsOpen = true;
+        try { history.pushState({ liteSettings: true }, ''); } catch (_) {}
+        document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
+        const v = document.getElementById('view-settings');
+        v.style.display = '';
+        document.getElementById('liteApp').setAttribute('data-screen', 'settings');
+        renderSettings();
+        animateIn(v);
+        try { window.scrollTo({ top: 0 }); } catch (_) {}
+    }
+
+    async function renderSettings() {
+        const v = document.getElementById('view-settings');
+        const bioAvail = await biometricAvailable();
+        const bioOn = !!litePref('biometricLock', false);
+        const confirmDel = !!litePref('confirmDelete', true);
+        const roleLabel = cap(role || 'viewer');
+        const camp = campDisplayName ? esc(campDisplayName) : '';
+
+        v.innerHTML = `
+            <div class="lite-settings-head">
+                <button class="lite-settings-back" id="liteSettingsBack" aria-label="Back">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <div class="lite-settings-title">Settings</div>
+            </div>
+
+            <div class="lite-set-account">
+                <div class="lite-set-avatar">${esc(avatarInitials())}</div>
+                <div class="lite-set-id">
+                    <div class="lite-set-name">${esc(userName || userEmail || 'Your account')}</div>
+                    <div class="lite-set-sub">${esc(userEmail || '')}</div>
+                    <div class="lite-set-tags"><span class="lite-pill">${esc(roleLabel)}</span>${camp ? `<span class="lite-pill gray">${camp}</span>` : ''}</div>
+                </div>
+            </div>
+
+            <div class="lite-set-section-label">Security</div>
+            <div class="lite-card lite-set-row" id="liteBioRow">
+                <div class="lite-set-row-main">
+                    <div class="lite-set-row-title">Biometric app lock</div>
+                    <div class="lite-set-row-sub" id="liteBioSub">${bioAvail
+                        ? 'Require Face ID / fingerprint to open Campistry Lite'
+                        : 'Not available on this device or browser'}</div>
+                </div>
+                <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
+            </div>
+            ${bioOn ? `<button class="lite-link-row" id="liteBioTest">Test unlock now</button>` : ''}
+
+            <div class="lite-set-section-label">Messages</div>
+            <div class="lite-card lite-set-row" id="liteConfirmRow">
+                <div class="lite-set-row-main">
+                    <div class="lite-set-row-title">Confirm before deleting</div>
+                    <div class="lite-set-row-sub">Ask for confirmation on a delete swipe</div>
+                </div>
+                <span class="lite-toggle${confirmDel ? ' on' : ''}" id="liteConfirmToggle"></span>
+            </div>
+
+            <div class="lite-set-section-label">This app</div>
+            <div class="lite-set-guide">
+                <p><b>Campistry Lite is your camp, on your phone.</b> It's a standalone app — add it to your home screen (Share → <i>Add to Home Screen</i>) and it opens full-screen like any native app.</p>
+                <p><b>Signing in.</b> You stay signed in on this device; use <i>Sign out</i> below to switch accounts. For a shared or lost phone, turn on <b>Biometric app lock</b> above so only you can open it.</p>
+                <p><b>What you can do here</b> depends on your role (<b>${esc(roleLabel)}</b>): head staff get Flow, Me, Live, Health and Link; counselors get their bunk. Everything reads from the same cloud as the desktop Campistry.</p>
+            </div>
+            <a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>
+            <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
+            <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}</div>`;
+
+        v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
+        v.querySelector('#liteConfirmToggle').addEventListener('click', () => { setLitePref('confirmDelete', !litePref('confirmDelete', true)); renderSettings(); });
+        v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
+        const bioToggle = v.querySelector('#liteBioToggle');
+        if (bioAvail) bioToggle.addEventListener('click', () => toggleBiometric(!bioOn));
+        const bioTest = v.querySelector('#liteBioTest');
+        if (bioTest) bioTest.addEventListener('click', async () => { const ok = await verifyBiometric(); toast(ok ? 'Unlocked ✓' : 'Could not verify'); });
+    }
+
+    // ─── Biometric app lock (WebAuthn platform authenticator) ────────────
+    function biometricAvailable() {
+        try {
+            if (!window.PublicKeyCredential || !window.isSecureContext) return Promise.resolve(false);
+            return PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false);
+        } catch (e) { return Promise.resolve(false); }
+    }
+    function randomBytes(n) { const a = new Uint8Array(n); (window.crypto || {}).getRandomValues?.(a); return a; }
+    function b64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+    function unb64(s) { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+
+    async function toggleBiometric(on) {
+        if (on) {
+            try {
+                const cred = await navigator.credentials.create({ publicKey: {
+                    challenge: randomBytes(32),
+                    rp: { name: 'Campistry Lite' },
+                    user: { id: randomBytes(16), name: userEmail || 'campistry', displayName: userName || 'Campistry user' },
+                    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+                    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+                    timeout: 60000
+                } });
+                if (!cred) throw new Error('no credential');
+                localStorage.setItem('lite_biometric_cred', b64(cred.rawId));
+                setLitePref('biometricLock', true);
+                appUnlocked = true;
+                toast('Biometric lock on');
+            } catch (e) { toast('Could not set up biometrics'); }
+        } else {
+            localStorage.removeItem('lite_biometric_cred');
+            setLitePref('biometricLock', false);
+            toast('Biometric lock off');
+        }
+        renderSettings();
+    }
+
+    async function verifyBiometric() {
+        try {
+            const idB64 = localStorage.getItem('lite_biometric_cred');
+            const allow = idB64 ? [{ type: 'public-key', id: unb64(idB64) }] : [];
+            const assertion = await navigator.credentials.get({ publicKey: {
+                challenge: randomBytes(32),
+                allowCredentials: allow,
+                userVerification: 'required',
+                timeout: 60000
+            } });
+            return !!assertion;
+        } catch (e) { return false; }
+    }
+
+    // Show the lock screen on boot / resume when enabled; returns true if locked.
+    function biometricLockEnabled() {
+        return !!litePref('biometricLock', false) && !!localStorage.getItem('lite_biometric_cred');
+    }
+    function showLock() {
+        appUnlocked = false;
+        const el = document.getElementById('liteLock');
+        const sub = document.getElementById('liteLockSub');
+        if (sub) sub.textContent = campDisplayName ? campDisplayName : 'Locked';
+        if (el) el.style.display = '';
+    }
+    function hideLock() {
+        appUnlocked = true;
+        const el = document.getElementById('liteLock');
+        if (el) el.style.display = 'none';
+    }
+    async function attemptUnlock() {
+        const ok = await verifyBiometric();
+        if (ok) hideLock();
+        else toast('Could not verify — try again');
+    }
+    function maybeLockOnBoot() {
+        if (!biometricLockEnabled()) { appUnlocked = true; return; }
+        showLock();
+        // Prompt immediately (some platforms require a user gesture; the Unlock
+        // button is the fallback if the auto-prompt is blocked).
+        attemptUnlock();
     }
 
     function wireChrome() {
@@ -956,22 +1114,29 @@
             if (history.state && history.state.liteApp) history.back();
             else goHome();
         });
-        window.addEventListener('popstate', () => { if (currentApp) goHome(); });
+        window.addEventListener('popstate', () => { if (settingsOpen) { settingsOpen = false; goHome(); } else if (currentApp) goHome(); });
         const menu = document.getElementById('liteMenu');
         document.getElementById('liteMenuBtn').addEventListener('click', toggleMenu);
         document.addEventListener('click', () => { menu.style.display = 'none'; });
         menu.addEventListener('click', (e) => e.stopPropagation());
 
-        // "Confirm before deleting" preference toggle (stays open on tap).
-        const delToggle = document.getElementById('liteMenuDelConfirm');
-        if (delToggle) {
-            syncDelToggle();
-            delToggle.addEventListener('click', (e) => {
-                e.stopPropagation();
-                setLitePref('confirmDelete', !litePref('confirmDelete', true));
-                syncDelToggle();
-            });
-        }
+        // Settings screen entry point.
+        const settingsBtn = document.getElementById('liteMenuSettings');
+        if (settingsBtn) settingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.getElementById('liteMenu').style.display = 'none';
+            openSettings();
+        });
+
+        // Biometric lock screen buttons.
+        const lockBtn = document.getElementById('liteLockUnlock');
+        if (lockBtn) lockBtn.addEventListener('click', () => attemptUnlock());
+        const lockOut = document.getElementById('liteLockSignout');
+        if (lockOut) lockOut.addEventListener('click', () => document.getElementById('liteSignOut').click());
+        // Re-lock when the app returns to the foreground.
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && appUnlocked && biometricLockEnabled()) { showLock(); attemptUnlock(); }
+        });
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
             try { await window.supabase.auth.signOut(); } catch (_) {}

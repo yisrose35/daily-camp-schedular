@@ -7,6 +7,22 @@ will split into per-product apps as they grow. Everything is built mobile-first:
 big tap targets, no horizontal scroll, thumb-reachable bottom nav, glanceable
 while standing in the middle of camp.
 
+**Settings & app lock.** The account menu (hero/​header avatar) has a **Settings**
+item that opens a full **Settings screen** (`#view-settings`, `renderSettings`) —
+Lite runs as its own installable app, so this is its home for account and
+security. It shows the account (name · email · role · camp), a short **standalone-app
+guide** (add-to-home-screen, sign-in, what your role can do), links to full
+Campistry, and **Sign out**. Two toggles live here: **Confirm before deleting**
+(moved out of the quick menu; also settable via the delete sheet's "Don't ask
+again") and **Biometric app lock**. Biometrics use **WebAuthn** platform
+authenticators (Face ID / Touch ID / fingerprint) via
+`isUserVerifyingPlatformAuthenticatorAvailable` + `navigator.credentials`; enabling
+registers a platform credential and, on **boot and on resume**, shows a full-screen
+lock (`#liteLock`) that requires biometric verification (`navigator.credentials.get`)
+before the app is usable — with graceful "not available" degradation off HTTPS or
+on unsupported devices, and a "Sign out instead" escape. It's a local device lock
+layered on top of the Supabase session, not a replacement for it.
+
 **Home launcher.** Lite opens to a home screen (`renderHome` → `#view-home`) with
 **no top nav bar** — the coral hero card is the top element and carries the
 account/settings button in its top-right corner (`#liteHeroMenuBtn`, opens the
@@ -156,10 +172,10 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
     _Both surfaces changed: `campistry_link_data.js` (`_deleteMessageRow` now
     UPDATEs `hidden_for_admin`, and `loadCloudMessages` filters it) and Lite._
   - **Confirm-before-delete is a preference.** The delete confirm sheet has a
-    **"Don't ask again"** checkbox, and the account menu has a matching **"Confirm
-    before deleting"** toggle (both drive `confirmDelete` in `campistry_lite_prefs`,
-    on by default; the menu toggle re-syncs each time it opens, so the two stay in
-    step). With it off, a delete-swipe hides the conversation immediately, no sheet. Tap a thread → the full
+    **"Don't ask again"** checkbox, and **Settings → Messages** has a matching
+    **"Confirm before deleting"** toggle (both drive `confirmDelete` in
+    `campistry_lite_prefs`, on by default). With it off, a delete-swipe hides the
+    conversation immediately, no sheet. Tap a thread → the full
   conversation as bubbles (parent left, staff right; attachments shown as chips)
   and a **quick reply** box. Search across all threads. Reads `link_messages`
   directly (`camp_id`-scoped by RLS).

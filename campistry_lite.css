@@ -538,6 +538,41 @@ button { cursor: pointer; border: none; background: none; }
 .lite-toggle.on::after { transform: translateX(16px); }
 .lite-check-row { display: flex; align-items: center; gap: 10px; padding: 12px 2px 4px; font-size: 0.9rem; color: var(--ink-2); cursor: pointer; }
 .lite-check-row input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.lite-toggle.disabled { opacity: 0.4; pointer-events: none; }
+
+/* ─── Settings screen ─────────────────────────────────────────────────── */
+.lite-app[data-screen="settings"] .lite-header { display: none; }
+.lite-app[data-screen="settings"] .lite-tabbar { display: none; }
+.lite-app[data-screen="settings"] .lite-main { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+.lite-settings-head { display: flex; align-items: center; gap: 8px; margin: 2px 0 16px; }
+.lite-settings-back { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--ink); background: var(--card); border: 1px solid var(--line); }
+.lite-settings-title { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; }
+.lite-set-account { display: flex; align-items: center; gap: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; margin-bottom: 8px; }
+.lite-set-avatar { width: 52px; height: 52px; border-radius: 50%; background: var(--coral-500, #EE6A53); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.1rem; flex: none; }
+.lite-set-name { font-weight: 700; font-size: 1.02rem; }
+.lite-set-sub { font-size: 0.8rem; color: var(--muted); margin: 1px 0 6px; word-break: break-word; }
+.lite-set-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.lite-set-section-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 20px 4px 8px; }
+.lite-set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lite-set-row-title { font-weight: 600; font-size: 0.95rem; }
+.lite-set-row-sub { font-size: 0.78rem; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+.lite-link-row { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 14px 15px; font-size: 0.92rem; font-weight: 600; color: var(--accent-dark); margin-top: 8px; text-decoration: none; }
+.lite-link-row.danger { color: #C0392B; }
+.lite-set-guide { background: var(--accent-tint, #FEF2EF); border-radius: 14px; padding: 14px 16px; font-size: 0.86rem; line-height: 1.55; color: var(--ink-2); }
+.lite-set-guide p { margin: 0 0 10px; }
+.lite-set-guide p:last-child { margin-bottom: 0; }
+.lite-set-guide b { color: var(--ink); }
+.lite-set-version { text-align: center; font-size: 0.74rem; color: var(--muted); margin: 20px 0 8px; }
+
+/* ─── Biometric lock overlay ──────────────────────────────────────────── */
+.lite-lock { position: fixed; inset: 0; z-index: 300; background: linear-gradient(160deg, var(--coral-500, #EE6A53), var(--coral-700, #DA4B32)); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.lite-lock-inner { text-align: center; color: #fff; max-width: 320px; width: 100%; }
+.lite-lock-icon { width: 84px; height: 84px; border-radius: 50%; background: rgba(255,255,255,0.18); display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; color: #fff; }
+.lite-lock-title { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; }
+.lite-lock-title span { opacity: 0.85; }
+.lite-lock-sub { font-size: 0.9rem; opacity: 0.9; margin: 4px 0 26px; }
+.lite-lock .lite-btn { background: #fff; color: var(--coral-700, #DA4B32); }
+.lite-lock-signout { display: block; width: 100%; margin-top: 14px; color: #fff; opacity: 0.85; font-size: 0.86rem; font-weight: 600; background: none; }
 
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
