@@ -266,34 +266,45 @@ function createAndOpen() {
 </script>
 
 <script>
-// ── Notes ↔ cloud sync ────────────────────────────────────────────────────────
-// Notes were localStorage-only (campistry_notes_v1) on this standalone page, so
-// they never reached the Campistry Lite companion. This bridge mirrors them to a
-// per-user camp_state_kv row (`campistryNotes:<userId>`) — the same store Lite
-// reads/writes. Notes are personal, so the key is scoped by the signed-in user.
+// ── Notes ↔ cloud sync (campistry_notes table) ────────────────────────────────
+// Notes were localStorage-only (campistry_notes_v1) on this standalone page. They
+// now live in the `campistry_notes` table (migration 045) with per-user RLS —
+// private to their owner, plus notes shared by email that the recipient can read.
+// This bridge mirrors that table ↔ localStorage so the desktop and the Campistry
+// Lite companion show the same notes.
 //
-// MERGE, not overwrite: notes from both devices are unioned by id, newest
-// updatedAt wins — so an edit on the phone and one on the desktop converge and
-// nothing is lost. Writes only that one key. No-ops gracefully if not signed in.
+//   - Pull every row RLS returns (my own + notes shared with me) into local.
+//   - Push only notes I OWN that are new or newer than the cloud copy (RLS blocks
+//     writing someone else's note anyway). Merge by id, newest updatedAt wins.
+// No-ops gracefully when signed out.
 (function(){
     'use strict';
     var STORE = 'campistry_notes_v1';
-    function conn(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, camp=d.getCampId?d.getCampId():null, uid=d.getUserId?d.getUserId():null; return (c&&camp&&uid&&c.from)?{c:c,camp:camp,key:'campistryNotes:'+uid}:null; }
+    function conn(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, camp=d.getCampId?d.getCampId():null, uid=d.getUserId?d.getUserId():null; return (c&&camp&&uid&&c.from)?{c:c,camp:camp,uid:uid}:null; }
     function readLocal(){ try{ var s=JSON.parse(localStorage.getItem(STORE)||'{}'); return Array.isArray(s.notes)?s.notes:[]; }catch(e){ return []; } }
     function writeLocal(arr){ try{ var s=JSON.parse(localStorage.getItem(STORE)||'{}'); s.notes=arr; localStorage.setItem(STORE, JSON.stringify(s)); }catch(e){} }
-    function merge(a,b){ var byId={}; (a||[]).concat(b||[]).forEach(function(n){ if(!n||!n.id) return; var cur=byId[n.id]; if(!cur||(n.updatedAt||0)>=(cur.updatedAt||0)) byId[n.id]=n; }); return Object.keys(byId).map(function(k){ return byId[k]; }); }
-    function content(arr){ return JSON.stringify((arr||[]).map(function(n){ return [n.id, n.updatedAt||0]; }).sort(function(x,y){ return x[0]<y[0]?-1:1; })); }
+    function ms(t){ if(typeof t==='number') return t; var n=Date.parse(t); return isNaN(n)?0:n; }
+    function rowToNote(r){ return { id:r.id, ownerId:r.owner_id, title:r.title||'', body:r.body||'', color:r.color||'yellow', pinned:!!r.pinned, tags:r.tags||[], sharedWith:Array.isArray(r.shared_with)?r.shared_with:[], isShared:!!r.is_shared, reminder:r.reminder||null, trashed:!!r.trashed, createdAt:ms(r.created_at)||Date.now(), updatedAt:ms(r.updated_at)||Date.now() }; }
+    function noteToRow(n, uid, camp){ return { id:n.id, camp_id:camp, owner_id:uid, title:n.title||'', body:n.body||'', color:n.color||'yellow', pinned:!!n.pinned, tags:n.tags||[], shared_with:(n.sharedWith||[]).map(function(e){ return String(e).trim().toLowerCase(); }).filter(Boolean), is_shared:!!n.isShared, reminder:n.reminder||null, trashed:!!n.trashed, updated_at:new Date(ms(n.updatedAt)||Date.now()).toISOString() }; }
+    function mergeById(a,b){ var byId={}; a.concat(b).forEach(function(n){ if(!n||!n.id) return; var cur=byId[n.id]; if(!cur||(n.updatedAt||0)>=(cur.updatedAt||0)) byId[n.id]=n; }); return Object.keys(byId).map(function(k){ return byId[k]; }); }
+    function content(arr){ return JSON.stringify(arr.map(function(n){ return [n.id, n.updatedAt||0, n.trashed?1:0]; }).sort(function(x,y){ return x[0]<y[0]?-1:1; })); }
     function sync(){
         var cn=conn(); if(!cn) return;
-        cn.c.from('camp_state_kv').select('value').eq('camp_id',cn.camp).eq('key',cn.key).maybeSingle().then(function(res){
-            var cloud=(res && !res.error && res.data && res.data.value && Array.isArray(res.data.value.notes)) ? res.data.value.notes : [];
+        cn.c.from('campistry_notes').select('*').eq('camp_id',cn.camp).then(function(res){
+            if(res.error){ console.warn('[Notes] load:', res.error.message); return; }
+            var cloudById={}; (res.data||[]).forEach(function(r){ cloudById[r.id]=r; });
+            var cloudNotes=(res.data||[]).map(rowToNote);
             var local=readLocal();
-            var merged=merge(cloud, local), mstr=content(merged);
-            if(content(local)!==mstr){ writeLocal(merged); if(typeof renderGrid==='function'){ try{ renderGrid(); }catch(e){} } }
-            if(content(cloud)!==mstr){
-                cn.c.from('camp_state_kv').upsert({ camp_id:cn.camp, key:cn.key, value:{ notes:merged, updated_at:new Date().toISOString() } }, { onConflict:'camp_id,key' })
-                    .then(function(r){ if(r && r.error) console.warn('[Notes] cloud sync push:', r.error.message); });
-            }
+            var merged=mergeById(cloudNotes, local);
+            if(content(merged)!==content(local)){ writeLocal(merged); if(typeof renderGrid==='function'){ try{ renderGrid(); }catch(e){} } }
+            // Push my owned notes that the cloud doesn't have or that are older there.
+            merged.forEach(function(n){
+                if(n.ownerId && n.ownerId!==cn.uid) return;   // shared-to-me → don't push
+                var cr=cloudById[n.id];
+                if(cr && ms(cr.updated_at) >= (n.updatedAt||0)) return;
+                cn.c.from('campistry_notes').upsert(noteToRow(n, cn.uid, cn.camp), { onConflict:'id' })
+                    .then(function(r){ if(r && r.error) console.warn('[Notes] push:', r.error.message); });
+            });
         });
     }
     function start(){ sync(); setInterval(sync, 12000); }

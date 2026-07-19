@@ -610,6 +610,10 @@ button { cursor: pointer; border: none; background: none; }
 .lite-note-dot[data-c="green"] { background: #86EFAC; } .lite-note-dot[data-c="purple"] { background: #D8B4FE; }
 .lite-note-dot[data-c="slate"] { background: #CBD5E1; }
 .lite-note-meta { font-size: 0.76rem; color: var(--muted); padding: 2px; }
+.lite-note-ro { display: inline-block; font-size: 0.72rem; font-weight: 700; color: var(--accent-dark); background: var(--accent-tint); padding: 4px 10px; border-radius: 999px; margin-bottom: 6px; }
+.lite-note-section { border-top: 1px solid var(--line); padding: 12px 0 4px; margin-top: 8px; }
+.lite-note-sec-label { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 8px; }
+.lite-note-section .lite-attach-row { margin: 0 0 8px; }
 
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }

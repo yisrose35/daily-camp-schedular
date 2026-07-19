@@ -469,11 +469,31 @@
 
     function linkLabelOf(item) { return item && (item.name || item.title || item.label || 'Untitled'); }
 
-    // ─── Notes data (personal, cloud-synced) ────────────────────────────
-    // Stored in camp_state_kv key `campistryNotes:<userId>` (per user), the same
-    // store the desktop Notes app writes via its sync bridge. Merge by note id,
-    // newest updatedAt wins, so edits from either device converge.
-    function notesKey() { return 'campistryNotes:' + (userId || 'anon'); }
+    // ─── Notes data (per-user, private-unless-shared) ───────────────────
+    // Stored in the `campistry_notes` table with per-user RLS (owner sees + edits
+    // their own; recipients read notes shared with their email). One row per note.
+    function rowToNote(r) {
+        return {
+            id: r.id, ownerId: r.owner_id, title: r.title || '', body: r.body || '',
+            color: r.color || 'yellow', pinned: !!r.pinned, tags: r.tags || [],
+            sharedWith: Array.isArray(r.shared_with) ? r.shared_with : [], isShared: !!r.is_shared,
+            reminder: r.reminder || null, trashed: !!r.trashed,
+            createdAt: r.created_at ? Date.parse(r.created_at) : Date.now(),
+            updatedAt: r.updated_at ? Date.parse(r.updated_at) : Date.now()
+        };
+    }
+    function noteToRow(n) {
+        return {
+            id: n.id, camp_id: campId, owner_id: userId,
+            title: n.title || '', body: n.body || '', color: n.color || 'yellow',
+            pinned: !!n.pinned, tags: n.tags || [],
+            shared_with: (n.sharedWith || []).map(e => String(e).trim().toLowerCase()).filter(Boolean),
+            is_shared: !!n.isShared, reminder: n.reminder || null, trashed: !!n.trashed,
+            updated_at: new Date().toISOString()
+        };
+    }
+    // A note is editable only by its owner (a note created locally has no ownerId yet).
+    function canEditNote(n) { return !!n && (!n.ownerId || n.ownerId === userId); }
 
     function loadNotes(force) {
         if (notesArr && !force) return Promise.resolve(notesArr);
@@ -481,10 +501,9 @@
         notesPending = (async () => {
             try {
                 const { data, error } = await window.supabase
-                    .from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', notesKey()).maybeSingle();
+                    .from('campistry_notes').select('*').eq('camp_id', campId);
                 if (error) throw error;
-                const val = (data && data.value) || {};
-                notesArr = Array.isArray(val.notes) ? val.notes : [];
+                notesArr = (data || []).map(rowToNote);
             } catch (e) { console.warn('[Lite] loadNotes failed:', e?.message || e); notesArr = notesArr || []; }
             finally { notesPending = null; }
             return notesArr;
@@ -492,31 +511,21 @@
         return notesPending;
     }
 
-    function mergeNotes(a, b) {
-        const byId = {};
-        (a || []).concat(b || []).forEach(n => {
-            if (!n || !n.id) return;
-            const cur = byId[n.id];
-            if (!cur || (n.updatedAt || 0) >= (cur.updatedAt || 0)) byId[n.id] = n;
-        });
-        return Object.values(byId);
-    }
-
-    // Read-latest → merge our change → write, so a concurrent desktop edit isn't
-    // clobbered by a stale copy. Debounced for autosave-while-typing.
-    async function persistNotes() {
+    async function upsertNote(n) {
+        if (!canEditNote(n)) return;
+        n.ownerId = userId; n.updatedAt = Date.now();
         try {
-            const { data } = await window.supabase
-                .from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', notesKey()).maybeSingle();
-            const cloud = (data && data.value && Array.isArray(data.value.notes)) ? data.value.notes : [];
-            const merged = mergeNotes(cloud, notesArr || []);
-            notesArr = merged;
-            await saveKV(notesKey(), { notes: merged, updated_at: new Date().toISOString() });
-        } catch (e) { console.warn('[Lite] persistNotes failed:', e?.message || e); }
+            const { error } = await window.supabase.from('campistry_notes').upsert(noteToRow(n), { onConflict: 'id' });
+            if (error) throw error;
+        } catch (e) { console.warn('[Lite] upsertNote failed:', e?.message || e); }
     }
-    function scheduleNotesSave() {
+    async function deleteNoteRow(id) {
+        try { const { error } = await window.supabase.from('campistry_notes').delete().eq('id', id); if (error) throw error; }
+        catch (e) { console.warn('[Lite] deleteNoteRow failed:', e?.message || e); }
+    }
+    function scheduleNoteSave(n) {
         clearTimeout(notesSaveTimer);
-        notesSaveTimer = setTimeout(persistNotes, 700);
+        notesSaveTimer = setTimeout(() => upsertNote(n), 700);
     }
 
     const NOTE_COLORS = ['yellow', 'peach', 'pink', 'blue', 'green', 'purple', 'slate'];
@@ -2908,10 +2917,10 @@
     }
 
     function createNote() {
-        const n = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: '', body: '', color: 'yellow', pinned: false, trashed: false, createdAt: Date.now(), updatedAt: Date.now() };
+        const n = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ownerId: userId, title: '', body: '', color: 'yellow', pinned: false, trashed: false, sharedWith: [], isShared: false, reminder: null, createdAt: Date.now(), updatedAt: Date.now() };
         notesArr = (notesArr || []).concat(n);
         notesEditorId = n.id;
-        persistNotes();
+        upsertNote(n);
         renderNoteEditor();
     }
 
@@ -2922,13 +2931,19 @@
         const n = noteById(notesEditorId);
         if (!n) { notesEditorId = null; paintNotesList(); return; }
         const inTrash = !!n.trashed;
+        const canEdit = canEditNote(n);
+        const ro = !canEdit || inTrash;           // read-only inputs
+        const reminderVal = n.reminder ? toLocalDatetime(n.reminder) : '';
+        const shareChips = (n.sharedWith || []).map(e =>
+            `<span class="lite-attach-chip">${esc(e)}${canEdit ? ` <button data-unshare="${esc(e)}">×</button>` : ''}</span>`).join('');
+
         view.innerHTML = `
             <div class="lite-note-editor">
                 <div class="lite-note-ed-head">
                     <button class="lite-settings-back" id="liteNoteBack" aria-label="Back to notes">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
                     </button>
-                    <div class="lite-note-ed-actions">
+                    ${canEdit ? `<div class="lite-note-ed-actions">
                         <button class="lite-note-act${n.pinned ? ' on' : ''}" id="liteNotePin" aria-label="Pin">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="${n.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
                         </button>
@@ -2937,41 +2952,87 @@
                                 ? '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"/><path d="M3 3v5h5"/></svg>'
                                 : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'}
                         </button>
-                    </div>
+                    </div>` : ''}
                 </div>
-                <input class="lite-note-title-input" id="liteNoteTitle" placeholder="Title" value="${esc(n.title || '')}" ${inTrash ? 'disabled' : ''}>
-                <textarea class="lite-note-body-input" id="liteNoteBody" placeholder="Start writing…" ${inTrash ? 'disabled' : ''}>${esc(n.body || '')}</textarea>
-                <div class="lite-note-colors">${NOTE_COLORS.map(c =>
-                    `<button class="lite-note-dot${c === (n.color || 'yellow') ? ' on' : ''}" data-color="${c}" data-c="${c}" aria-label="${c}"></button>`).join('')}</div>
-                <div class="lite-note-meta">${inTrash ? 'In Trash · ' : ''}Edited ${n.updatedAt ? new Date(n.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</div>
-                ${inTrash ? '<button class="lite-btn danger block" id="liteNotePurge" style="margin-top:14px;">Delete forever</button>' : ''}
+                ${!canEdit ? '<div class="lite-note-ro">Shared with you · read-only</div>' : ''}
+                <input class="lite-note-title-input" id="liteNoteTitle" placeholder="Title" value="${esc(n.title || '')}" ${ro ? 'disabled' : ''}>
+                <textarea class="lite-note-body-input" id="liteNoteBody" placeholder="Start writing…" ${ro ? 'disabled' : ''}>${esc(n.body || '')}</textarea>
+                ${canEdit && !inTrash ? `<div class="lite-note-colors">${NOTE_COLORS.map(c =>
+                    `<button class="lite-note-dot${c === (n.color || 'yellow') ? ' on' : ''}" data-color="${c}" data-c="${c}" aria-label="${c}"></button>`).join('')}</div>` : ''}
+
+                ${canEdit && !inTrash ? `
+                <div class="lite-note-section">
+                    <div class="lite-note-sec-label">Reminder</div>
+                    <input class="lite-input" id="liteNoteReminder" type="datetime-local" value="${esc(reminderVal)}">
+                    ${n.reminder ? '<button class="lite-link-btn" id="liteNoteReminderClear">Clear reminder</button>' : ''}
+                </div>
+                <div class="lite-note-section">
+                    <div class="lite-note-sec-label">Shared with</div>
+                    ${shareChips ? `<div class="lite-attach-row">${shareChips}</div>` : '<div class="lite-note" style="margin:0 0 6px;">Not shared yet</div>'}
+                    <div class="lite-reply-row">
+                        <input class="lite-input" id="liteNoteShareEmail" type="email" placeholder="Add someone by email…">
+                        <button class="lite-btn" id="liteNoteShareAdd">Share</button>
+                    </div>
+                </div>` : (shareChips ? `<div class="lite-note-section"><div class="lite-note-sec-label">Shared with</div><div class="lite-attach-row">${shareChips}</div></div>` : '')}
+
+                <div class="lite-note-meta">${inTrash ? 'In Trash · ' : ''}${n.reminder ? '⏰ ' + fmtDate(n.reminder) + ' · ' : ''}Edited ${n.updatedAt ? new Date(n.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</div>
+                ${canEdit && inTrash ? '<button class="lite-btn danger block" id="liteNotePurge" style="margin-top:14px;">Delete forever</button>' : ''}
             </div>`;
         view.setAttribute('data-color', n.color || 'yellow');
 
         view.querySelector('#liteNoteBack').addEventListener('click', () => { flushNoteSave(); notesEditorId = null; paintNotesList(); });
+        if (!canEdit) return;   // shared-to-me notes are read-only; no edit wiring
+
         const titleEl = view.querySelector('#liteNoteTitle');
         const bodyEl = view.querySelector('#liteNoteBody');
-        const onEdit = () => { const nn = noteById(notesEditorId); if (!nn) return; nn.title = titleEl.value; nn.body = bodyEl.value; nn.updatedAt = Date.now(); scheduleNotesSave(); };
-        titleEl.addEventListener('input', onEdit);
-        bodyEl.addEventListener('input', onEdit);
-        view.querySelector('#liteNotePin').addEventListener('click', () => {
-            const nn = noteById(notesEditorId); if (!nn) return; nn.pinned = !nn.pinned; nn.updatedAt = Date.now(); persistNotes(); renderNoteEditor();
-        });
-        view.querySelector('#liteNoteTrash').addEventListener('click', () => {
-            const nn = noteById(notesEditorId); if (!nn) return; nn.trashed = !nn.trashed; nn.updatedAt = Date.now(); persistNotes();
-            toast(nn.trashed ? 'Moved to Trash' : 'Restored');
-            notesEditorId = null; paintNotesList();
+        const onEdit = () => { const nn = noteById(notesEditorId); if (!nn) return; nn.title = titleEl.value; nn.body = bodyEl.value; scheduleNoteSave(nn); };
+        if (titleEl && !ro) titleEl.addEventListener('input', onEdit);
+        if (bodyEl && !ro) bodyEl.addEventListener('input', onEdit);
+
+        const pinBtn = view.querySelector('#liteNotePin');
+        if (pinBtn) pinBtn.addEventListener('click', () => { const nn = noteById(notesEditorId); if (!nn) return; nn.pinned = !nn.pinned; upsertNote(nn); renderNoteEditor(); });
+        const trashBtn = view.querySelector('#liteNoteTrash');
+        if (trashBtn) trashBtn.addEventListener('click', () => {
+            const nn = noteById(notesEditorId); if (!nn) return; nn.trashed = !nn.trashed; upsertNote(nn);
+            toast(nn.trashed ? 'Moved to Trash' : 'Restored'); notesEditorId = null; paintNotesList();
         });
         view.querySelectorAll('.lite-note-dot').forEach(d => d.addEventListener('click', () => {
-            const nn = noteById(notesEditorId); if (!nn) return; nn.color = d.dataset.color; nn.updatedAt = Date.now(); persistNotes(); renderNoteEditor();
+            const nn = noteById(notesEditorId); if (!nn) return; nn.color = d.dataset.color; upsertNote(nn); renderNoteEditor();
+        }));
+        const remEl = view.querySelector('#liteNoteReminder');
+        if (remEl) remEl.addEventListener('change', () => {
+            const nn = noteById(notesEditorId); if (!nn) return; nn.reminder = remEl.value ? new Date(remEl.value).toISOString() : null; upsertNote(nn); renderNoteEditor();
+        });
+        const remClear = view.querySelector('#liteNoteReminderClear');
+        if (remClear) remClear.addEventListener('click', () => { const nn = noteById(notesEditorId); if (!nn) return; nn.reminder = null; upsertNote(nn); renderNoteEditor(); });
+        const shareAdd = view.querySelector('#liteNoteShareAdd');
+        const shareInp = view.querySelector('#liteNoteShareEmail');
+        if (shareAdd) shareAdd.addEventListener('click', () => {
+            const nn = noteById(notesEditorId); if (!nn) return;
+            const email = (shareInp.value || '').trim().toLowerCase();
+            if (!email || !email.includes('@')) { toast('Enter a valid email'); return; }
+            nn.sharedWith = Array.from(new Set([...(nn.sharedWith || []), email]));
+            nn.isShared = nn.sharedWith.length > 0; upsertNote(nn); renderNoteEditor();
+            toast('Shared with ' + email);
+        });
+        view.querySelectorAll('[data-unshare]').forEach(btn => btn.addEventListener('click', () => {
+            const nn = noteById(notesEditorId); if (!nn) return;
+            nn.sharedWith = (nn.sharedWith || []).filter(e => e !== btn.dataset.unshare);
+            nn.isShared = nn.sharedWith.length > 0; upsertNote(nn); renderNoteEditor();
         }));
         const purge = view.querySelector('#liteNotePurge');
         if (purge) purge.addEventListener('click', () => {
-            notesArr = (notesArr || []).filter(x => x.id !== notesEditorId);
-            persistNotes(); toast('Note deleted'); notesEditorId = null; paintNotesList();
+            const id = notesEditorId;
+            notesArr = (notesArr || []).filter(x => x.id !== id);
+            deleteNoteRow(id); toast('Note deleted'); notesEditorId = null; paintNotesList();
         });
     }
-    function flushNoteSave() { if (notesSaveTimer) { clearTimeout(notesSaveTimer); notesSaveTimer = null; persistNotes(); } }
+    function flushNoteSave() { if (notesSaveTimer) { clearTimeout(notesSaveTimer); notesSaveTimer = null; const nn = noteById(notesEditorId); if (nn) upsertNote(nn); } }
+    function toLocalDatetime(iso) {
+        const d = new Date(iso); if (isNaN(d.getTime())) return '';
+        const pad = x => String(x).padStart(2, '0');
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
 
     // ════════════════════════════════════════════════════════════════════
     // VIEW: LEAGUE (counselor)

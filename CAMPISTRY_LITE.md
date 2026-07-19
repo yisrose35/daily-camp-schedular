@@ -56,7 +56,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | Audience | Tabs | What they can do |
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
-| **Head staff** — **Notes Lite** | Notes | Personal notes, same as the desktop Notes app, mobile-friendly: a colored masonry card grid (pinned first) with All / Pinned / Reminders / Shared / Trash filters and search; a **+** FAB creates a note; tapping one opens a full-screen editor (title, autosaving body, 7 note colors, pin, trash / restore / delete-forever). Personal & cloud-synced — the **same notes appear on the desktop and every device**. |
+| **Head staff** — **Notes Lite** | Notes | Notes, same as the desktop Notes app, mobile-friendly: a colored masonry card grid (pinned first) with All / Pinned / Reminders / Shared / Trash filters and search; a **+** FAB creates a note; tapping one opens a full-screen editor (title, autosaving body, 7 colors, pin, trash/restore/delete-forever, **reminder**, and **share by email**). **Per-user & private unless shared** (own `campistry_notes` table with RLS) — the same notes appear on the desktop and every device; a note shared with you opens read-only. |
 | **Head staff** — **Link Lite** | Messages · Compose | Parent communication on the go. **Messages:** the inbox as parent-threaded conversations (received + sent), tap a thread to read it and fire off a quick reply. **Compose:** search a camper → message their parent, and **attach an existing form or list** (created on the desktop) via a picker — Lite can attach them, never create them. Sends a real `link_messages` row the parent portal reads. Photos: next phase (needs a cloud photo store). |
 | **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
@@ -118,29 +118,27 @@ features, phone-friendly.
   viewport-fixed FAB living outside the animated views) creates a note.
 - **Editor** — tapping a card opens a **full-screen editor**: title, an
   **autosaving** body (debounced ~700ms), the **7 note colors** (yellow, peach,
-  pink, blue, green, purple, slate), a **pin** toggle, and **trash** (with
-  **restore** and **delete-forever** from the Trash filter). Reminders and
-  per-note sharing are preserved through sync but authored on the desktop for now.
+  pink, blue, green, purple, slate), a **pin** toggle, **trash** (with **restore**
+  and **delete-forever** from the Trash filter), a **reminder** (datetime), and a
+  **Shared with** section — add/remove people by email. A note **shared with you**
+  opens **read-only** ("Shared with you") since only the owner can edit.
 
-**Notes are personal and cloud-synced.** They live in `camp_state_kv` under a
-**per-user** key **`campistryNotes:<userId>`** (scoped by the signed-in user, so
-they follow you across devices — the same notes on desktop and phone). Both
-surfaces **merge** rather than overwrite: notes are unioned by id, newest
-`updatedAt` wins, so an edit on the phone and one on the desktop converge with
-nothing lost. Lite writes with a read-latest → merge → upsert so a concurrent
-desktop edit isn't clobbered.
+**Notes are per-user, private unless shared.** They live in their own
+**`campistry_notes` table** (migration `045`) with **row-level security**: you see
+and edit **your own** notes, and can **read** any note whose `shared_with` (emails,
+stored lowercased) contains your email — recipients get read-only access (only the
+owner can INSERT/UPDATE/DELETE). One row per note; Lite `upsert`s the edited note
+(`onConflict: id`) and hard-`delete`s on delete-forever. `owner_id = auth.uid()`.
+Both surfaces converge by **merge** (union by id, newest `updatedAt` wins).
 
 > **Desktop bridge.** The standalone desktop Notes page (`campistry_notes.html`)
 > was localStorage-only (`campistry_notes_v1`) and loaded **no Supabase client at
-> all**, so its notes never reached the cloud. It now loads the client stack
-> (`config.js` → `supabase-js` → `supabase_client.js`) plus a small **merge sync
-> bridge** that mirrors `campistry_notes_v1` ↔ `campistryNotes:<userId>` (same
-> union-by-id / newest-wins as Lite). No-ops gracefully when signed out.
->
-> _Note on privacy:_ `camp_state_kv` is camp-scoped, so this per-user key is
-> technically readable by other camp admins (owner/admin/scheduler) — acceptable
-> for operational camp notes; a dedicated per-user-RLS notes table is the
-> hardening follow-up if notes need to be truly private.
+> all**. It now loads the client stack (`config.js` → `supabase-js` →
+> `supabase_client.js`) plus a **table sync bridge**: it pulls every row RLS
+> returns (own + shared-with-me) into localStorage, and pushes back only the notes
+> it **owns** that are new or newer than the cloud copy (RLS blocks writing someone
+> else's note). No-ops gracefully when signed out. **Migration 045 must be applied
+> on Supabase.**
 
 ### Live Lite tabs — `Roll Call · Changes` (blue `#2563EB`)
 
@@ -425,7 +423,8 @@ Send. (A pg_cron → Edge Function pipeline is the natural v2 if wanted.)
 | `campistry_live.js` | Office Live logic; now defines its own data/UI helpers (was crashing at load) |
 | `campistry_health.html` | Office Health app + the `campistryHealth` merge sync bridge |
 | `campistry_link_data.js` | Desktop Link data bridge; admin delete is now a soft hide (`hidden_for_admin`) |
-| `campistry_notes.html` | Desktop Notes app + Supabase client stack + the `campistryNotes:<userId>` sync bridge |
+| `campistry_notes.html` | Desktop Notes app + Supabase client stack + the `campistry_notes` table sync bridge |
+| `migrations/045_campistry_notes.sql` | Per-user notes table with RLS (owner-private + shared-by-email read) |
 | `migrations/044_link_messages_admin_hide.sql` | `hidden_for_admin` column so admin delete doesn't wipe the parent's copy |
 | `access_control.js` | `counselor` in ROLES; read-only gates via `isReadOnlyRole` |
 | `invite.html`, `dashboard.js`, `dashboard.html`, `team_subdivisions_ui.js` | Counselor display names/colors, Lite tile, counselor→Lite redirects |
