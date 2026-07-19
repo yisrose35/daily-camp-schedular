@@ -17,8 +17,8 @@ resolved by `resolveCampName()` from the first trustworthy source
 signup metadata) so the hero reads the real camp name rather than the "Your Camp"
 placeholder. Below the hero sits a compact grid of **product tiles
 using each product's real logo** (`Flow_clean.png`, `Me_clean.png`, …) with the
-product color as a bottom accent. **Flow**, **Me** and **Live** are live; the rest
-of the suite (Go, Health, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
+product color as a bottom accent. **Flow**, **Me**, **Live** and **Health** are
+live; the rest of the suite (Go, Snacks, Link, Notes) show as dimmed "Soon" tiles. Counselors
 get a single prominent **My Camp** hero tile. Tapping an available tile opens
 that app (`openApp`) with its own bottom tab bar; the header back-chevron returns
 to the launcher (`goHome`). The app config lives in `LITE_APPS` in
@@ -39,6 +39,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | Audience | Tabs | What they can do |
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
+| **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
 | **Counselor** (`counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
@@ -126,6 +127,51 @@ key; pending (unconfirmed) parent requests are not surfaced in Lite._
 > in `campistry_live.js`, mirroring the sibling products (Health/Go) and the
 > app's own inline copies — the office Live board is functional again, which is
 > what makes cloud sync (and therefore Live Lite) meaningful.
+
+### Health Lite tabs — `Meds · Roster · Trip` (purple `#6B21A8`)
+
+The on-the-go version of **Health** for the nurse/health office. Reads
+medications + allergies from the camper roster, and reads/writes the shared
+health log. **This is the first Lite app that writes.**
+
+- **Meds** — today's **medication dispensing board**. A `On meds / Given /
+  Remaining` count strip, then every camper with meds grouped by bunk, each with
+  an **allergy banner** (red, safety-first) and a row per medication showing a
+  live status: **Given · <time>** (green) or a **Give** button. Tapping **Give**
+  logs a dispensing (camper · med · nurse · time) to the cloud so everyone sees
+  it live; the camper name opens the full detail sheet. Search by camper or
+  medication; **By division** chip filter.
+- **Roster** — allergy + medication + dietary reference for **every** camper
+  (inline, color-coded), searchable and by-division; tap for full detail.
+- **Trip** — "what meds to pack." Pick the group going out (**All / a division**)
+  → a `N campers need M meds` summary and the consolidated per-bunk med list for
+  that group, each med with the same live give-status (and Give buttons for head
+  staff). Answers "we're taking Bunk A on a trip — what medication comes along."
+
+**Who can mark meds.** Marking a med given writes to the cloud, so it's gated:
+`canGiveMeds()` currently allows **owner / admin / scheduler** (they already have
+camp_state_kv write); counselors/viewers see the board **read-only**. Give a
+nurse an admin/scheduler login for now — swapping that one predicate for a
+dedicated `nurse` role (migration + RLS) is the natural follow-up.
+
+**Data + sync.** Health data (`dispensingLog`, `sickVisits`, …) lives in the
+`camp_state_kv` key **`campistryHealth`** — the same slot the office Health app
+and global settings use. Lite reads it via `loadHealth()` and appends a
+dispensing with a **read-latest → append → upsert** so a concurrent write isn't
+clobbered by a stale copy. Medications and allergies come straight from the
+camper roster (`medications`, `allergies`). "Given today" = a `dispensingLog`
+entry whose `date` matches today (UTC, matching the office's `todayISO`).
+
+> **Office-app bridge.** The office Health app ("Health office", `campistry_health.js/.html`)
+> stored its log **only in localStorage** on this page — it doesn't load the
+> authoritative `saveGlobalSettings`, so desktop-marked meds never reached the
+> cloud. A sync bridge added to `campistry_health.html` keeps the desktop and
+> Lite in sync through `campistryHealth`. Because **both** surfaces write, it
+> **merges** rather than overwrites: append-only logs are unioned (deduped by a
+> stable per-entry key), `medicalForms` shallow-merged — no give-log entry from
+> either side is ever lost, so a nurse marking on the desktop and another in Lite
+> converge. (Unlike Live's office app, Health's was otherwise healthy — all its
+> helpers were already defined.)
 
 ### Flow Lite tabs — `Schedule · Locate · Reports`
 
@@ -251,5 +297,6 @@ Send. (A pg_cron → Edge Function pipeline is the natural v2 if wanted.)
 | `migrations/018_counselor_role_campistry_lite.sql` | Counselor role + RLS |
 | `campistry_live.html` | Office Live app + the `liveDaily_<date>` cloud sync bridge |
 | `campistry_live.js` | Office Live logic; now defines its own data/UI helpers (was crashing at load) |
+| `campistry_health.html` | Office Health app + the `campistryHealth` merge sync bridge |
 | `access_control.js` | `counselor` in ROLES; read-only gates via `isReadOnlyRole` |
 | `invite.html`, `dashboard.js`, `dashboard.html`, `team_subdivisions_ui.js` | Counselor display names/colors, Lite tile, counselor→Lite redirects |

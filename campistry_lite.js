@@ -67,6 +67,12 @@
     let liveChangesQuery = '';        // Live Lite changes search
     const liveDayCache = {};          // dateKey → live daily state (attendance/absences/earlyPickups)
     const liveDayPending = {};        // dateKey → in-flight promise
+    let healthData = null;            // cached campistryHealth (dispensingLog, …)
+    let healthPending = null;         // in-flight load promise
+    let healthMedsQuery = '';         // Health Lite meds board search
+    let healthRosterQuery = '';       // Health Lite roster search
+    let healthDivision = 'All';       // Health Lite meds/roster division chip
+    let healthTripScope = null;       // Health Lite trip: selected division ('All' = whole camp)
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -334,6 +340,53 @@
 
     function invalidateLiveDay(dateKey) { delete liveDayCache[dateKey]; }
 
+    // Health data (dispensingLog, …) — stored in camp_state_kv key `campistryHealth`
+    // (the same key the office Health app / global settings use). Read + write here.
+    function loadHealth(force) {
+        if (healthData && !force) return Promise.resolve(healthData);
+        if (healthPending) return healthPending;
+        healthPending = (async () => {
+            try {
+                const { data, error } = await window.supabase
+                    .from('camp_state_kv').select('value')
+                    .eq('camp_id', campId).eq('key', 'campistryHealth').maybeSingle();
+                if (error) throw error;
+                healthData = (data && data.value) ? data.value : {};
+            } catch (e) {
+                console.warn('[Lite] loadHealth failed:', e?.message || e);
+                healthData = healthData || {};
+            } finally {
+                healthPending = null;
+            }
+            return healthData;
+        })();
+        return healthPending;
+    }
+
+    // Append a dispensing record and persist. Read-latest → append → upsert so a
+    // concurrent office/other-device write isn't clobbered by a stale copy.
+    async function logMedGiven(camperName, medication) {
+        const fresh = await loadHealth(true);
+        const hd = Object.assign({ dispensingLog: [], sickVisits: [], doctorVisits: [], bedwettingLog: [], medicalForms: {} }, fresh);
+        if (!Array.isArray(hd.dispensingLog)) hd.dispensingLog = [];
+        hd.dispensingLog.push({
+            camperName, medication, status: 'Given',
+            nurse: userName || 'Staff',
+            timestamp: new Date().toISOString(),
+            date: healthTodayISO(), time: healthNowTime()
+        });
+        await saveKV('campistryHealth', hd);
+        healthData = hd;   // reflect immediately
+        return hd;
+    }
+
+    function healthTodayISO() { return new Date().toISOString().split('T')[0]; }
+    function healthNowTime() { return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); }
+
+    // Only head staff mark meds; everyone else sees the live status read-only.
+    // (Swap this one predicate for a `nurse` role check later.)
+    function canGiveMeds() { return ['owner', 'admin', 'scheduler'].includes(role); }
+
     // ─── Camp-structure helpers ─────────────────────────────────────────
 
     // Grade-level keys (app1.divisions is grade-keyed: each is a grade with bunks)
@@ -466,6 +519,9 @@
         meStaff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         liveRoll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
         liveChanges: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+        healthMeds: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 20.5 3.5 13.5a5 5 0 0 1 7-7l7 7a5 5 0 0 1-7 7z"/><path d="m8.5 8.5 7 7"/></svg>',
+        healthRoster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        healthTrip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 19V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M4 19h16"/><path d="M12 8v7"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
@@ -485,7 +541,9 @@
           theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'meRoster', label: 'Roster' }, { id: 'meMedical', label: 'Medical' }, { id: 'meStaff', label: 'Staff' }] },
         { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
-        { id: 'health', name: 'Health', logo: 'Health_clean.png', color: '#6B21A8', theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'soon' },
+        { id: 'health', name: 'Health', title: 'Health Lite', logo: 'Health_clean.png', color: '#6B21A8',
+          theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'available',
+          tabs: [{ id: 'healthMeds', label: 'Meds' }, { id: 'healthRoster', label: 'Roster' }, { id: 'healthTrip', label: 'Trip' }] },
         { id: 'live',   name: 'Live',   title: 'Live Lite', logo: 'Live_clean.png', color: '#2563EB',
           theme: { accent: '#2563EB', dark: '#1D4ED8', tint: '#DBEAFE' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'liveRoll', label: 'Roll Call' }, { id: 'liveChanges', label: 'Changes' }] },
@@ -721,6 +779,9 @@
         else if (id === 'meStaff') renderMeStaff();
         else if (id === 'liveRoll') renderLiveRoll();
         else if (id === 'liveChanges') renderLiveChanges();
+        else if (id === 'healthMeds') renderHealthMeds();
+        else if (id === 'healthRoster') renderHealthRoster();
+        else if (id === 'healthTrip') renderHealthTrip();
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
@@ -1727,6 +1788,247 @@
     }
 
     function cap(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+    // ════════════════════════════════════════════════════════════════════
+    // VIEW: HEALTH LITE — Meds board (live give-status) · Roster · Trip
+    // ════════════════════════════════════════════════════════════════════
+
+    function camperMeds(c) {
+        return String((c && c.medications) || '').split(',').map(m => m.trim()).filter(Boolean);
+    }
+
+    // name||med → the dispensing entry for a med given today (status Given).
+    function givenTodayMap(hd) {
+        const m = new Map(), today = healthTodayISO();
+        ((hd && hd.dispensingLog) || []).forEach(d => {
+            if (d && d.date === today && (d.status === 'Given' || !d.status)) m.set(d.camperName + '||' + d.medication, d);
+        });
+        return m;
+    }
+
+    function inHealthScope(c, division) {
+        return division === 'All' || c.division === division || bunksForParent(division).includes(c.bunk);
+    }
+
+    // A camper's meds as give/receive rows + an allergy banner. Shared by the
+    // Meds board and the Trip pack list.
+    function healthCamperBlockHTML(name, c, gmap, canGive) {
+        const meds = camperMeds(c);
+        if (!meds.length) return '';
+        const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
+        const allergy = c.allergies ? `<div class="lite-health-allergy">Allergy · ${esc(c.allergies)}</div>` : '';
+        const rows = meds.map(med => {
+            const entry = gmap.get(name + '||' + med);
+            let right;
+            if (entry) right = `<span class="lite-status present">Given${entry.time ? ' · ' + esc(entry.time) : ''}</span>`;
+            else if (canGive) right = `<button class="lite-give-btn" data-give-name="${esc(name)}" data-give-med="${esc(med)}">Give</button>`;
+            else right = `<span class="lite-status absent">Not given</span>`;
+            return `<div class="lite-med-line"><span class="lite-med-nm">${esc(med)}</span>${right}</div>`;
+        }).join('');
+        return `<div class="lite-card lite-health-card">
+            <div class="lite-health-head" data-camper="${esc(name)}">
+                <span class="lite-camper-name">${esc(name)}</span>
+                ${meta ? `<span class="lite-camper-meta">${esc(meta)}</span>` : ''}
+            </div>
+            ${allergy}
+            <div class="lite-health-meds">${rows}</div>
+        </div>`;
+    }
+
+    function wireHealthGive(root, rerender) {
+        root.querySelectorAll('.lite-health-head[data-camper]').forEach(h =>
+            h.addEventListener('click', () => openCamperDetail(h.dataset.camper)));
+        root.querySelectorAll('.lite-give-btn').forEach(btn =>
+            btn.addEventListener('click', async () => {
+                btn.disabled = true; btn.textContent = 'Saving…';
+                try {
+                    await logMedGiven(btn.dataset.giveName, btn.dataset.giveMed);
+                    toast(btn.dataset.giveMed + ' given to ' + btn.dataset.giveName);
+                    rerender();
+                } catch (e) {
+                    btn.disabled = false; btn.textContent = 'Give';
+                    toast('Could not save — try again');
+                }
+            }));
+    }
+
+    // ─── Meds board (today) ──────────────────────────────────────────────
+    async function renderHealthMeds() {
+        const view = document.getElementById('view-healthMeds');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Health data isn\'t available for your role.'); return; }
+        view.innerHTML = `<div class="lite-health-today">Today · ${esc(friendlyDate(todayKey()))}</div>
+            <div class="lite-field" style="margin-bottom:10px;">
+                <input class="lite-input" id="liteHealthSearch" type="search" placeholder="Search camper or medication…" value="${esc(healthMedsQuery)}">
+            </div>
+            <div id="liteHealthBody">${loadingHTML()}</div>`;
+        const input = view.querySelector('#liteHealthSearch');
+        input.addEventListener('input', () => { healthMedsQuery = input.value; paintHealthMeds(); });
+        await loadHealth();
+        if (activeTab !== 'healthMeds') return;
+        paintHealthMeds();
+    }
+
+    function paintHealthMeds() {
+        const body = document.getElementById('liteHealthBody');
+        if (!body) return;
+        const hd = healthData || {};
+        const gmap = givenTodayMap(hd);
+        const canGive = canGiveMeds();
+        const q = healthMedsQuery.trim().toLowerCase();
+        const parents = parentDivisions();
+        const chips = ['All', ...parents];
+        if (!chips.includes(healthDivision)) healthDivision = 'All';
+
+        const withMeds = Object.entries(camp.roster || {})
+            .map(([n, c]) => ({ name: n, ...c }))
+            .filter(c => camperMeds(c).length);
+        const totalDoses = withMeds.reduce((s, c) => s + camperMeds(c).length, 0);
+        const givenToday = gmap.size;
+
+        const strip = `<div class="lite-stat-row live">
+            ${statTileHTML(withMeds.length, 'On meds')}
+            ${statTileHTML(givenToday, 'Given')}
+            ${statTileHTML(Math.max(0, totalDoses - givenToday), 'Remaining')}
+        </div>`;
+
+        const match = (c) => {
+            if (!inHealthScope(c, healthDivision)) return false;
+            if (!q) return true;
+            return c.name.toLowerCase().includes(q) || camperMeds(c).some(m => m.toLowerCase().includes(q));
+        };
+        const shown = withMeds.filter(match);
+
+        let list = '';
+        if (!withMeds.length) list = emptyHTML('', 'No medications on file. Add med info to campers in Campistry Me.');
+        else if (!shown.length) list = emptyHTML('', 'No campers match here.');
+        else {
+            const byBunk = {};
+            shown.forEach(c => { (byBunk[c.bunk || 'No bunk'] = byBunk[c.bunk || 'No bunk'] || []).push(c); });
+            list = Object.entries(byBunk).map(([bunk, arr]) =>
+                `<div class="lite-section-label">${esc(bunk)} · ${arr.length}</div>`
+                + arr.map(c => healthCamperBlockHTML(c.name, c, gmap, canGive)).join('')
+            ).join('');
+        }
+
+        body.innerHTML = strip + chipRowHTML(chips, healthDivision) + `<div id="liteHealthList">${list}</div>`;
+        body.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { healthDivision = ch.dataset.val; paintHealthMeds(); }));
+        wireHealthGive(body.querySelector('#liteHealthList'), paintHealthMeds);
+        if (!canGive) {
+            const note = document.createElement('div');
+            note.className = 'lite-note';
+            note.textContent = 'Read-only — ask a head-staff account to mark meds given.';
+            body.appendChild(note);
+        }
+    }
+
+    // ─── Health roster (allergy + med reference) ─────────────────────────
+    function renderHealthRoster() {
+        const view = document.getElementById('view-healthRoster');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Roster isn\'t available for your role.'); return; }
+        if (!Object.keys(camp.roster || {}).length) { view.innerHTML = emptyHTML('', 'No campers in the roster yet.'); return; }
+        view.innerHTML = `
+            <div class="lite-field" style="margin-bottom:10px;">
+                <input class="lite-input" id="liteHRSearch" type="search" placeholder="Search campers…" value="${esc(healthRosterQuery)}">
+            </div>
+            <div id="liteHRBody"></div>`;
+        const input = view.querySelector('#liteHRSearch');
+        input.addEventListener('input', () => { healthRosterQuery = input.value; paintHealthRoster(); });
+        paintHealthRoster();
+    }
+
+    function paintHealthRoster() {
+        const body = document.getElementById('liteHRBody');
+        if (!body) return;
+        const q = healthRosterQuery.trim().toLowerCase();
+        const parents = parentDivisions();
+        const chips = ['All', ...parents];
+        if (!chips.includes(healthDivision)) healthDivision = 'All';
+
+        const rowFor = (name, c) => {
+            const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
+            const facts = [];
+            if (c.allergies) facts.push(`<div class="lite-med-fact allergy"><span>Allergy</span>${esc(c.allergies)}</div>`);
+            if (c.medications) facts.push(`<div class="lite-med-fact meds"><span>Meds</span>${esc(c.medications)}</div>`);
+            if (c.dietary) facts.push(`<div class="lite-med-fact diet"><span>Dietary</span>${esc(c.dietary)}</div>`);
+            return `<div class="lite-card lite-med-card">
+                <button class="lite-camper-row" type="button" data-camper="${esc(name)}">
+                    <span><span class="lite-camper-name">${esc(name)}</span>${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}</span>
+                    <svg class="lite-camper-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                ${facts.length ? `<div class="lite-med-facts">${facts.join('')}</div>` : ''}
+            </div>`;
+        };
+
+        if (q) {
+            const hits = Object.entries(camp.roster || {})
+                .map(([n, c]) => ({ name: n, ...c }))
+                .filter(c => meCamperMatches(c, q))
+                .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 60);
+            body.innerHTML = (hits.length ? `<div class="lite-section-label">${hits.length} match${hits.length === 1 ? '' : 'es'}</div>`
+                + hits.map(c => rowFor(c.name, c)).join('') : emptyHTML('', 'No campers match your search.'));
+            wireMeRoster(body);
+            return;
+        }
+
+        const divs = healthDivision === 'All' ? parents : [healthDivision];
+        let out = '';
+        divs.forEach(p => bunksForParent(p).forEach(b => {
+            const campers = campersInBunk(b);
+            if (!campers.length) return;
+            out += `<div class="lite-section-label">${esc(b)} · ${campers.length}</div>` + campers.map(c => rowFor(c.name, c)).join('');
+        }));
+        body.innerHTML = chipRowHTML(chips, healthDivision) + `<div id="liteHRGroups">${out || emptyHTML('', 'No campers in this division.')}</div>`;
+        body.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { healthDivision = ch.dataset.val; paintHealthRoster(); }));
+        wireMeRoster(body.querySelector('#liteHRGroups'));
+    }
+
+    // ─── Trip pack list (required meds for a group) ──────────────────────
+    async function renderHealthTrip() {
+        const view = document.getElementById('view-healthTrip');
+        if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Health data isn\'t available for your role.'); return; }
+        const parents = parentDivisions();
+        const chips = ['All', ...parents];
+        if (healthTripScope === null || !chips.includes(healthTripScope)) healthTripScope = 'All';
+        view.innerHTML = `<div class="lite-note">Meds &amp; allergies to take along — pick the group going on the trip.</div>`
+            + chipRowHTML(chips, healthTripScope) + `<div id="liteTripBody">${loadingHTML()}</div>`;
+        view.querySelectorAll('.lite-chip').forEach(ch =>
+            ch.addEventListener('click', () => { healthTripScope = ch.dataset.val; renderHealthTrip(); }));
+        await loadHealth();
+        if (activeTab !== 'healthTrip') return;
+        paintHealthTrip();
+    }
+
+    function paintHealthTrip() {
+        const body = document.getElementById('liteTripBody');
+        if (!body) return;
+        const hd = healthData || {};
+        const gmap = givenTodayMap(hd);
+        const canGive = canGiveMeds();
+        const parents = parentDivisions();
+        const divs = healthTripScope === 'All' ? parents : [healthTripScope];
+
+        const groups = [];
+        let camperCount = 0, doseCount = 0;
+        divs.forEach(p => bunksForParent(p).forEach(b => {
+            const withMeds = campersInBunk(b).filter(c => camperMeds(c).length);
+            if (!withMeds.length) return;
+            camperCount += withMeds.length;
+            withMeds.forEach(c => { doseCount += camperMeds(c).length; });
+            groups.push({ bunk: b, campers: withMeds });
+        }));
+
+        if (!groups.length) { body.innerHTML = emptyHTML('', 'No medications needed for this group — nothing to pack.'); return; }
+
+        const header = `<div class="lite-trip-summary"><b>${camperCount}</b> camper${camperCount === 1 ? '' : 's'} need ${doseCount} med${doseCount === 1 ? '' : 's'} on this trip</div>`;
+        const list = groups.map(g =>
+            `<div class="lite-section-label">${esc(g.bunk)} · ${g.campers.length}</div>`
+            + g.campers.map(c => healthCamperBlockHTML(c.name, c, gmap, canGive)).join('')
+        ).join('');
+        body.innerHTML = header + `<div id="liteTripList">${list}</div>`;
+        wireHealthGive(body.querySelector('#liteTripList'), paintHealthTrip);
+    }
 
     // ════════════════════════════════════════════════════════════════════
     // VIEW: LEAGUE (counselor)

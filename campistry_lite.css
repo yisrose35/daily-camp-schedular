@@ -469,6 +469,20 @@ button { cursor: pointer; border: none; background: none; }
 .lite-change-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .lite-change-detail { font-size: 0.82rem; color: var(--ink-2); margin-top: 6px; }
 
+/* ─── Health Lite: meds board + trip ──────────────────────────────────── */
+.lite-health-today { font-size: 0.8rem; font-weight: 700; color: var(--accent-dark); margin: 2px 2px 12px; }
+.lite-health-card { padding: 0; overflow: hidden; }
+.lite-health-head { padding: 12px 15px 8px; display: flex; flex-direction: column; gap: 1px; cursor: pointer; }
+.lite-health-allergy { margin: 0 15px 6px; font-size: 0.78rem; font-weight: 700; color: #B42318; background: #FEF3F2; border: 1px solid #FECDCA; border-radius: 9px; padding: 6px 9px; }
+.lite-health-meds { padding: 0 15px 12px; display: flex; flex-direction: column; gap: 7px; }
+.lite-med-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.lite-med-nm { font-size: 0.9rem; font-weight: 600; color: var(--ink); }
+.lite-give-btn { flex: none; font-size: 0.8rem; font-weight: 800; color: #fff; background: var(--accent); padding: 7px 16px; border-radius: 999px; }
+.lite-give-btn:active { background: var(--accent-dark); }
+.lite-give-btn:disabled { opacity: 0.6; }
+.lite-trip-summary { background: var(--accent-tint); color: var(--accent-dark); border-radius: 12px; padding: 11px 14px; font-size: 0.88rem; margin-bottom: 12px; }
+.lite-trip-summary b { font-weight: 800; }
+
 @media (min-width: 720px) {
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }

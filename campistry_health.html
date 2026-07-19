@@ -341,6 +341,61 @@ window.addEventListener('campistry-cloud-hydrated', function(){
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
 <script src="campistry_notes_quick.js"></script>
 <script>window.__CAMPISTRY_PRODUCT__='health';</script>
+<script>
+// ── Health data ↔ cloud sync ──────────────────────────────────────────────────
+// The office Health app keeps its data (dispensingLog, sickVisits, …) in the
+// `campistryHealth` slot of the localStorage global-settings blob and, on this
+// page, never pushes it to the cloud (the authoritative saveGlobalSettings isn't
+// loaded here). That means a med marked "given" on this desktop wouldn't reach
+// the Campistry Lite companion a nurse carries. This bridge keeps the two in
+// sync via the shared camp_state_kv key `campistryHealth`.
+//
+// Both surfaces write here, so it MERGES rather than overwrites: append-only
+// logs are unioned (deduped by a stable per-entry key), medicalForms shallow-
+// merged. No entry from either side is ever lost, so concurrent give-logging on
+// the desktop and in Lite converges. Writes only that one key.
+(function(){
+    'use strict';
+    var GKEY='campGlobalSettings_v1', HKEY='campistryHealth';
+    function conn(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{c:c,id:id}:null; }
+    function readG(){ try{ return JSON.parse(localStorage.getItem(GKEY)||'{}'); }catch(e){ return {}; } }
+    function localHealth(){ var h=readG()[HKEY]; return h||null; }
+    function writeLocalHealth(h){ try{ var g=readG(); g[HKEY]=h; localStorage.setItem(GKEY, JSON.stringify(g)); }catch(e){} }
+    function uniq(a,b,kf){ var seen={}, out=[]; (a||[]).concat(b||[]).forEach(function(x){ if(!x) return; var k=kf(x); if(!(k in seen)){ seen[k]=1; out.push(x); } }); return out; }
+    function disKey(d){ return [d.camperName, d.medication, d.timestamp||(d.date+' '+d.time)].join('|'); }
+    function visKey(v){ return [v.camperName, v.timestamp||(v.date+' '+v.time)].join('|'); }
+    function merge(local, cloud){
+        local=local||{}; cloud=cloud||{};
+        return {
+            dispensingLog: uniq(cloud.dispensingLog, local.dispensingLog, disKey),
+            sickVisits:    uniq(cloud.sickVisits,    local.sickVisits,    visKey),
+            doctorVisits:  uniq(cloud.doctorVisits,  local.doctorVisits,  visKey),
+            bedwettingLog: uniq(cloud.bedwettingLog, local.bedwettingLog, visKey),
+            medicalForms:  Object.assign({}, cloud.medicalForms||{}, local.medicalForms||{})
+        };
+    }
+    function refreshUI(){ var H=window.CampistryHealth; if(!H) return; ['renderDashboard','renderMedications','renderAllergies','renderCamperDirectory'].forEach(function(fn){ try{ H[fn] && H[fn](); }catch(e){} }); }
+    function sync(){
+        var cn=conn(); if(!cn) return;
+        cn.c.from('camp_state_kv').select('value').eq('camp_id',cn.id).eq('key',HKEY).maybeSingle().then(function(res){
+            var cloud=(res && !res.error && res.data && res.data.value) ? res.data.value : null;
+            var local=localHealth();
+            if(local===null && cloud===null) return;
+            var merged=merge(local, cloud), mstr=JSON.stringify(merged);
+            if(JSON.stringify(local||{})!==mstr){ writeLocalHealth(merged); refreshUI(); }
+            if(JSON.stringify(cloud||{})!==mstr){
+                cn.c.from('camp_state_kv').upsert({ camp_id:cn.id, key:HKEY, value:merged, updated_at:new Date().toISOString() }, { onConflict:'camp_id,key' })
+                    .then(function(r){ if(r && r.error) console.warn('[Health] cloud sync push:', r.error.message); });
+            }
+        });
+    }
+    function start(){ sync(); setInterval(sync, 15000); }
+    if(window.CampistryDB && window.CampistryDB.ready && window.CampistryDB.ready.then){ window.CampistryDB.ready.then(function(){ setTimeout(start, 500); }); }
+    else { setTimeout(start, 1300); }
+    document.addEventListener('visibilitychange', function(){ if(!document.hidden) sync(); });
+    window.addEventListener('storage', function(e){ if(e.key===GKEY) sync(); });
+})();
+</script>
 <script src="parent_lockout_guard.js"></script>
 <script src="product_access_guard.js"></script>
 </body>
