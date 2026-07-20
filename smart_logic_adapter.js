@@ -763,14 +763,28 @@
                 : 0;
         });
 
+        // ★ Avoid-unless-needed (Rules tab): a special on the grade's avoid list is
+        //   pushed to the very bottom of the ranking with a huge additive term, so a
+        //   Smart Tile only lands it when it is the sole usable special (better than
+        //   an empty tile). It stays in usableSpecials — this is a rank-down, never a
+        //   veto — so "give it rather than a Free tile" holds. Sports never route
+        //   through here (Smart Tiles place specials), so this only bites a special
+        //   whose name the user avoid-listed. Resolved once per special.
+        const _AVOID = 1e9;
+        const _avoidOf = {};
+        const _divForAvoid = (typeof window.getDivisionForBunk === 'function') ? window.getDivisionForBunk(bunk) : null;
+        usableSpecials.forEach(sp => {
+            _avoidOf[sp.name] = (_divForAvoid && window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(_divForAvoid, sp.name)) ? _AVOID : 0;
+        });
+
         const sorted = [...usableSpecials].sort((a, b) => {
             // Base score = all-time usage (least-used-first = variety). Below-floor
             // specials get a strong negative escalation pull (period-scoped) so they
             // sort ahead of every non-floor special — floors are near-mandatory.
             const countA = bunkHistory[a.name] || 0;
             const countB = bunkHistory[b.name] || 0;
-            const scoreA = countA - (_floorEsc[a.name] || 0);
-            const scoreB = countB - (_floorEsc[b.name] || 0);
+            const scoreA = countA - (_floorEsc[a.name] || 0) + (_avoidOf[a.name] || 0);
+            const scoreB = countB - (_floorEsc[b.name] || 0) + (_avoidOf[b.name] || 0);
             if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
         });

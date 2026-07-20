@@ -201,6 +201,12 @@
         try { checkBunkOnlyAccess(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('🛡️ bunk-only check failed:', e); }
 
+        // 11b. Avoid-unless-needed sports (SOFT rule → warning, not error: the
+        //      scheduler may legitimately place these when the slot would
+        //      otherwise be Free — surface it so the user can double-check).
+        try { checkAvoidUnlessNeededSports(assignments, bunkDivMap, divisionTimes).forEach(w => warnings.push(w)); }
+        catch (e) { console.warn('🛡️ avoid-unless-needed check failed:', e); }
+
         // =====================================================================
         // 12+13. ★★★ v3.1: LEAGUE/EVENT-AWARE TIMELINE + FIELD QUALITY ★★★
         // 15.    ★★★ v3.2: SPORT PLAYER COUNTS (min/max players) ★★★
@@ -1382,6 +1388,39 @@
             });
         });
         return errors;
+    }
+
+    /**
+     * ★ CHECK 11b: AVOID-UNLESS-NEEDED SPORTS (Rules tab → "Don't Give Unless
+     * Needed"). SOFT rule — placement is legal when the alternative was a Free
+     * slot, so this reports a WARNING (not an error) wherever a rule-listed
+     * sport landed on the rule's grade as a regular activity. League entries
+     * are exempt.
+     */
+    function checkAvoidUnlessNeededSports(assignments, bunkDivMap, divisionTimes) {
+        const warnings = [];
+        const U = window.SchedulerCoreUtils;
+        if (!U || typeof U.isSportAvoidedUnlessNeeded !== 'function') return warnings;
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
+                const act = entry._activity || entry.sport || null;
+                const actName = typeof act === 'string' ? act : act?.name;
+                if (!actName) return;
+                let avoided = false;
+                try { avoided = U.isSportAvoidedUnlessNeeded(divName, actName) === true; } catch (e) { /* fail open */ }
+                if (!avoided) return;
+                const si = divSlots[idx];
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
+                warnings.push(
+                    `[[Avoid-listed]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - on the "Don't Give Unless Needed" list; placed only when nothing else fit`
+                );
+            });
+        });
+        return warnings;
     }
 
     /**

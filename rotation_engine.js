@@ -155,7 +155,17 @@ LOW_COVERAGE_BONUS: -3500,             // Bunk has tried <50% of activities
         // TIE-BREAKER CONFIGURATION
         // =====================================================================
         TIE_BREAKER_RANGE: 500,
-        TIE_BREAKER_RANDOMNESS: 300
+        TIE_BREAKER_RANDOMNESS: 300,
+
+        // =====================================================================
+        // AVOID-UNLESS-NEEDED (Rules tab "Don't Give Unless Needed")
+        // =====================================================================
+        // Huge FINITE penalty: ranks the sport below every organic candidate
+        // (worst realistic combined score is ~150k) but keeps it feasible, so
+        // it is chosen only when the alternative is a Free slot. Kept below the
+        // auto engine's 999999 Infinity-mapping so hard-blocked candidates
+        // still rank worse than avoided-but-allowed ones.
+        AVOID_UNLESS_NEEDED_PENALTY: 500000
     };
 
     // Expose config for external access and tuning
@@ -1441,6 +1451,18 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return Infinity;
         }
 
+        // ★ AVOID-UNLESS-NEEDED (Rules tab): soft "don't give unless needed" rule.
+        //   A huge finite penalty — NOT Infinity — so the sport ranks below every
+        //   normal candidate but stays feasible; it is placed only when the
+        //   alternative would be a Free slot. All engines rank through this
+        //   function, so the penalty steers auto, manual, fills and suggestions.
+        var avoidPenalty = 0;
+        try {
+            if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divisionName, activityName)) {
+                avoidPenalty = CONFIG.AVOID_UNLESS_NEEDED_PENALTY;
+            }
+        } catch (e) { /* fail open */ }
+
         // Combine with weights
         var totalScore = (
             recencyScore * CONFIG.WEIGHTS.recency +
@@ -1449,7 +1471,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             varietyScore * CONFIG.WEIGHTS.variety +
             distributionScore * CONFIG.WEIGHTS.distribution +
             coverageScore * CONFIG.WEIGHTS.coverage +
-            limitScore
+            limitScore +
+            avoidPenalty
         );
 
         if (_gt) {
@@ -1457,7 +1480,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 bunk: bunkName, activity: activityName, slot: beforeSlotIndex, division: divisionName,
                 recency: recencyScore, streak: streakScore, frequency: frequencyScore,
                 variety: varietyScore, distribution: distributionScore, coverage: coverageScore,
-                limit: limitScore, total: Math.round(totalScore)
+                limit: limitScore, avoid: avoidPenalty, total: Math.round(totalScore)
             });
         }
 

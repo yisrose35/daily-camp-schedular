@@ -731,6 +731,49 @@
     };
 
     /**
+     * ★ AVOID-UNLESS-NEEDED (Rules tab → "Don't Give Unless Needed") — SOFT rule:
+     * the user picks a grade and sport(s) the scheduler should try very hard NOT
+     * to give that grade. Unlike the league-reserve rule this is NOT a hard block:
+     * the rotation engine applies a huge finite score penalty instead, so the
+     * sport is picked only when the alternative is a Free slot.
+     *
+     * This helper is only the RULE LOOKUP (does a rule match this grade+activity).
+     * Consumers: rotation_engine (score penalty), rules.js repair filler
+     * (second-pass only), post_edit auto-fill (rank last), validator (warning).
+     * Rules live in settings.schedulingRules.avoidUnlessNeeded:
+     *   [{ id, grade, sports: [] }]
+     * Cached for 3s — this runs inside scoring hot loops and loadGlobalSettings
+     * parses the whole settings blob. Fail-open on any read error.
+     */
+    let _aunCache = { t: 0, rules: null };
+    Utils.isSportAvoidedUnlessNeeded = function (divName, activityName) {
+        if (!divName || !activityName) return false;
+        const now = Date.now();
+        if (!_aunCache.rules || (now - _aunCache.t) > 3000) {
+            let rules = [];
+            try {
+                const sr = (window.loadGlobalSettings?.() || {}).schedulingRules || {};
+                if (Array.isArray(sr.avoidUnlessNeeded)) rules = sr.avoidUnlessNeeded;
+            } catch (e) { /* fail open */ }
+            _aunCache = { t: now, rules: rules };
+        }
+        const rules = _aunCache.rules;
+        if (!rules.length) return false;
+        const div = String(divName).toLowerCase().trim();
+        const act = String(activityName).toLowerCase().trim();
+        if (!div || !act) return false;
+        for (let i = 0; i < rules.length; i++) {
+            const r = rules[i];
+            if (!r || !r.grade || !Array.isArray(r.sports)) continue;
+            if (String(r.grade).toLowerCase().trim() !== div) continue;
+            if (r.sports.some(s => s && String(s).toLowerCase().trim() === act)) return true;
+        }
+        return false;
+    };
+    // Invalidate the cache immediately when the Rules tab saves a change.
+    Utils.invalidateAvoidRulesCache = function () { _aunCache = { t: 0, rules: null }; };
+
+    /**
      * =========================================================================
      * MAIN FIT CHECK - DIVISION-AWARE LOCK CHECKING FOR ELECTIVES
      * =========================================================================

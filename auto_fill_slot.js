@@ -640,6 +640,15 @@
                 }
             }
 
+            // ★ Avoid-unless-needed (Rules tab soft rule): keep the candidate but
+            //   rank it below every normal one — this last-resort fill only hands
+            //   it out when the alternative is leaving the slot Free. Mirrors the
+            //   rotation engine's AVOID_UNLESS_NEEDED_PENALTY, scaled to this
+            //   scorer's local range (±9000).
+            if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, act)) {
+                score += 1000000;
+            }
+
             // Small random tie-breaker so repeated calls vary
             score += Math.random() * 50;
 
