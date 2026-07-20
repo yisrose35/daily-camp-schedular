@@ -2369,6 +2369,9 @@
                 if (daysSince === null) score += 20;
                 else if (daysSince >= 7) score += 10;
                 else if (daysSince >= 3) score += 5;
+                // ★ Avoid-unless-needed (soft rule): keep it available but rank it
+                //   dead last so auto-fill only reaches for it when nothing else fits.
+                if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, sn)) score -= 100000;
                 candidates.push({ activity: sn, field: f.name, score });
             });
         });
@@ -2403,6 +2406,8 @@
             if (daysSince === null) score += 20;
             else if (daysSince >= 7) score += 10;
             else if (daysSince >= 3) score += 5;
+            // ★ Avoid-unless-needed parity for a special sharing a rule-listed name.
+            if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, s.name)) score -= 100000;
             candidates.push({ activity: s.name, field: s.name, score });
         });
 

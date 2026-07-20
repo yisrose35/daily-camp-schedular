@@ -99,6 +99,35 @@ function saveCooldownRules(rules) {
     saveKey('schedulingRules', sr);
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// AVOID-UNLESS-NEEDED RULES ("Don't Give Unless Needed") — data access
+// ──────────────────────────────────────────────────────────────────────────
+// SOFT rule: pick a grade + sport(s); the scheduler tries very hard not to
+// give that grade those sports — via a huge rotation-score penalty — but WILL
+// give them when the only alternative is a Free slot. Shape:
+//   settings.schedulingRules.avoidUnlessNeeded = [{ id, grade, sports: [] }]
+function getAvoidRules() {
+    const s = loadSettings();
+    const sr = s.schedulingRules || {};
+    return Array.isArray(sr.avoidUnlessNeeded) ? sr.avoidUnlessNeeded : [];
+}
+function saveAvoidRules(rules) {
+    const s = loadSettings();
+    const sr = s.schedulingRules || {};
+    sr.avoidUnlessNeeded = rules || [];
+    saveKey('schedulingRules', sr);
+    // The engine helper caches rules for its scoring hot loop — drop it now so
+    // the very next generation sees this edit.
+    window.SchedulerCoreUtils?.invalidateAvoidRulesCache?.();
+}
+function getGradeNames() {
+    const divs = window.divisions || (window.getGlobalDivisions && window.getGlobalDivisions()) || {};
+    const names = Object.keys(divs);
+    if (names.length) return names;
+    const s = loadSettings();
+    return Object.keys(s.divisions || {});
+}
+
 // Descriptor matching.
 // Descriptor shape: { kind: 'any' | 'type' | 'activity' | 'facility', value: string }
 function blockMatchesDescriptor(block, desc) {
@@ -1017,6 +1046,128 @@ function renderCooldownList() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// AVOID-UNLESS-NEEDED CARD ("Don't Give Unless Needed")
+// ──────────────────────────────────────────────────────────────────────────
+function updateAvoidBadge() {
+    const badgeEl = document.getElementById('rules-aun-badge');
+    if (!badgeEl) return;
+    const count = getAvoidRules().filter(r => r && r.grade && Array.isArray(r.sports) && r.sports.length).length;
+    badgeEl.innerHTML = count
+        ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>`
+        : '';
+}
+
+function renderAvoidCard(container) {
+    if (!container) return;
+    const count = getAvoidRules().filter(r => r && r.grade && Array.isArray(r.sports) && r.sports.length).length;
+    container.innerHTML = `
+        <div class="rules-card">
+            <div class="rules-card-header" id="rules-aun-toggle">
+                <div>
+                    <div class="rules-card-title">
+                        Don't Give Unless Needed
+                        <span id="rules-aun-badge">${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}</span>
+                    </div>
+                    <div class="rules-card-subtitle">Pick a grade and sports the scheduler should avoid for it. The grade only gets them when the alternative is a Free period.</div>
+                </div>
+                <span class="rules-caret" id="rules-aun-caret">
+                    <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </span>
+            </div>
+            <div class="rules-card-body" id="rules-aun-body" style="display:none;">
+                <div class="rules-helper">
+                    Example: 7th grade plays a volleyball league, so don't hand out <em>Volleyball</em> to <em>7th grade</em>
+                    as a regular activity — unless skipping it would leave the bunk with a Free slot.
+                    League games are never affected by this rule.
+                </div>
+                <div id="rules-aun-list" style="margin-top:14px;"></div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end;">
+                    <button class="rules-btn-dark" id="rules-aun-add">+ Add Rule</button>
+                </div>
+            </div>
+        </div>`;
+
+    document.getElementById('rules-aun-toggle').onclick = () => {
+        const body = document.getElementById('rules-aun-body');
+        const caret = document.getElementById('rules-aun-caret');
+        const hidden = body.style.display === 'none';
+        body.style.display = hidden ? 'block' : 'none';
+        caret.classList.toggle('open', hidden);
+    };
+
+    document.getElementById('rules-aun-add').onclick = () => {
+        const current = getAvoidRules();
+        const grades = getGradeNames();
+        current.push({ id: uid('aun_'), grade: grades[0] || '', sports: [] });
+        saveAvoidRules(current);
+        renderAvoidList();
+    };
+
+    renderAvoidList();
+}
+
+function renderAvoidList() {
+    const listEl = document.getElementById('rules-aun-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    updateAvoidBadge();
+    const rules = getAvoidRules();
+    if (rules.length === 0) {
+        listEl.innerHTML = '<div class="rules-empty">No rules yet. Click <strong>+ Add Rule</strong> to create one.</div>';
+        return;
+    }
+
+    const grades = getGradeNames();
+    const sports = getSportNames();
+
+    rules.forEach((rule, idx) => {
+        const card = document.createElement('div');
+        card.className = 'cd-row';
+        const gradeOpts = grades.map(g =>
+            `<option value="${escapeHtml(g)}"${String(rule.grade) === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('');
+        const selected = new Set((rule.sports || []).map(s => String(s)));
+        const sportChecks = sports.map(sp => `
+            <label class="fq-check-label">
+                <input type="checkbox" class="aun-sport-check" value="${escapeHtml(sp)}"${selected.has(sp) ? ' checked' : ''}>
+                <span>${escapeHtml(sp)}</span>
+            </label>`).join('');
+        card.innerHTML = `
+            <div class="cd-fields" style="flex-direction:column; align-items:stretch; gap:8px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="cd-label">Avoid giving</span>
+                    <select class="rules-select" id="aun-grade-${idx}">${gradeOpts || '<option value="">No grades configured</option>'}</select>
+                    <span class="cd-label">these sports (unless the slot would be Free):</span>
+                </div>
+                <div class="fq-fields-grid">${sportChecks || '<div class="rules-empty" style="padding:4px 0;">No sports configured yet.</div>'}</div>
+            </div>
+            <div class="cd-delete-wrap">
+                <button class="rules-btn-ghost-danger" id="aun-del-${idx}" title="Remove this rule">Remove</button>
+            </div>`;
+        listEl.appendChild(card);
+
+        const gradeEl = document.getElementById('aun-grade-' + idx);
+        function persist() {
+            const all = getAvoidRules();
+            const r = all[idx];
+            if (!r) return;
+            r.grade = gradeEl ? gradeEl.value : r.grade;
+            r.sports = [...card.querySelectorAll('.aun-sport-check:checked')].map(c => c.value);
+            saveAvoidRules(all);
+            updateAvoidBadge();
+        }
+        if (gradeEl) gradeEl.addEventListener('change', persist);
+        card.querySelectorAll('.aun-sport-check').forEach(cb => cb.addEventListener('change', persist));
+        const delBtn = document.getElementById('aun-del-' + idx);
+        if (delBtn) delBtn.onclick = () => {
+            const all = getAvoidRules();
+            all.splice(idx, 1);
+            saveAvoidRules(all);
+            renderAvoidList();
+        };
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // TAB INIT
 // ──────────────────────────────────────────────────────────────────────────
 function initRulesTab() {
@@ -1035,12 +1186,14 @@ function initRulesTab() {
             </div>
 
             <div id="rules-cd-section"></div>
+            <div id="rules-aun-section"></div>
             <div id="rules-sport-section"></div>
             <div id="rules-fq-section"></div>
           </section>
         </div>`;
 
     renderCooldownCard(document.getElementById('rules-cd-section'));
+    renderAvoidCard(document.getElementById('rules-aun-section'));
     renderSportsRulesCard(document.getElementById('rules-sport-section'));
     renderFieldQualityCard(document.getElementById('rules-fq-section'));
 
@@ -1218,7 +1371,7 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
             if (!occ.sameGradeOnly) return false;
             return occ.count < _capOfSW(sw);
         };
-        const trySport = function () {
+        const trySport = function (includeAvoided) {
             for (let fi = 0; fi < _fieldsR.length; fi++) {
                 const f = _fieldsR[fi]; if (!f || !f.name) continue;
                 if (_specialRoomR[_nmR(f.name)]) continue;                       // not a special room
@@ -1232,18 +1385,22 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                     // ★ League-reserved sport (standing rule) — the repair filler must not
                     //   hand a division a sport its league reserves for league play.
                     if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, A)) continue;
+                    // ★ Avoid-unless-needed (soft rule): first pass skips avoided sports;
+                    //   the second pass (includeAvoided) lets them in — better than Free.
+                    if (!includeAvoided && window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(grade, A)) continue;
                     if (isCandidateAllowed({ type: 'sport', event: A, field: f.name, startMin: s, endMin: e }, template, { mode: mode }))
                         return { field: f.name, act: A, isSpecial: false };
                 }
             }
             return null;
         };
-        const trySpecial = function () {
+        const trySpecial = function (includeAvoided) {
             for (let si = 0; si < _specialsR.length; si++) {
                 const sp = _specialsR[si]; if (!sp || !sp.name || done[_nmR(sp.name)]) continue;
                 const room = sp.location || sp.name;
                 if (!_accessOk(sp.accessRestrictions, grade)) continue;
                 if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, sp.name)) continue; // league-reserved name parity
+                if (!includeAvoided && window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(grade, sp.name)) continue; // avoid-unless-needed parity
                 if (!roomOpen(room, sp.sharableWith)) continue;
                 let dur = null;
                 if (Array.isArray(sp.durations) && sp.durations.filter(Boolean).length) dur = Math.min.apply(null, sp.durations.filter(Boolean));
@@ -1254,7 +1411,11 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
             }
             return null;
         };
-        return (demotedType === 'special') ? (trySpecial() || trySport()) : (trySport() || trySpecial());
+        // Two passes: prefer anything that is NOT avoid-listed; only when the slot
+        // would otherwise stay Free does the second pass allow avoided sports.
+        const _firstPass = (demotedType === 'special') ? (trySpecial(false) || trySport(false)) : (trySport(false) || trySpecial(false));
+        if (_firstPass) return _firstPass;
+        return (demotedType === 'special') ? (trySpecial(true) || trySport(true)) : (trySport(true) || trySpecial(true));
     }
 
     Object.keys(scheduleAssignments).forEach(function (bunk) {
