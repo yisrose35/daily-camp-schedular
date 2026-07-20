@@ -38,6 +38,7 @@
     let _store = {
         messages: [],       // { id, from, to, toType, subject, body, channels, date, read, replied, threadId }
         broadcasts: [],     // { id, subject, body, channels, recipientFilter, recipientCount, date, readRate }
+        scheduled: [],      // { id, subject, body, channels, scope, scopeValues, individualNames, scheduledFor, status, createdAt, sentAt, recipientCount }
         notifications: [],  // { id, camperName, parentEmail, parentPhone, type, subject, body, channels, date, status }
         templates: [],      // { id, name, type, subject, bodyTemplate, dataFields }
         drafts: [],         // { id, subject, body, channels, recipients, savedAt }
@@ -47,6 +48,7 @@
             smsProvider: 'none',        // 'none' | 'twilio' | 'vonage'
             smsApiKey: '',
             smsFromNumber: '',
+            smsPrefixCampName: true,    // outgoing texts start with the camp's name
             defaultChannels: ['app'],
             autoNotifyBusRoutes: false,
             autoNotifyScheduleChanges: false,
@@ -82,10 +84,12 @@
                 _store = Object.assign({}, _store, parsed);
                 _store.settings = Object.assign({
                     emailProvider: 'none', emailApiKey: '', smsProvider: 'none',
-                    smsApiKey: '', smsFromNumber: '', defaultChannels: ['app'],
+                    smsApiKey: '', smsFromNumber: '', smsPrefixCampName: true,
+                    defaultChannels: ['app'],
                     autoNotifyBusRoutes: false, autoNotifyScheduleChanges: false,
                     branding: { logo: '', brandColor: '#2A7A35', footer: '' }
                 }, parsed.settings || {});
+                if (!Array.isArray(_store.scheduled)) _store.scheduled = [];
                 if (!_store.settings.branding || typeof _store.settings.branding !== 'object') {
                     _store.settings.branding = { logo: '', brandColor: '#2A7A35', footer: '' };
                 }
@@ -147,6 +151,40 @@
                     });
                 });
                 console.log('[Link] Cloud history loaded:', rows.length, 'records');
+            });
+    }
+
+    /**
+     * Hydrate still-pending scheduled broadcasts from the cloud so a broadcast
+     * queued on one device shows up (and fires) on another.
+     */
+    function loadCloudScheduled() {
+        var db = _db(); if (!db) return;
+        db.client
+            .from('link_broadcasts')
+            .select('id, subject, body, channels, recipient_filter, recipient_count, scheduled_for, status')
+            .eq('camp_id', db.campId)
+            .eq('status', 'scheduled')
+            .then(function(res) {
+                if (res.error) { console.warn('[Link] loadCloudScheduled error:', res.error.message); return; }
+                var rows = res.data || [];
+                var existing = new Set(_store.scheduled.map(function(b) { return b.id; }));
+                rows.forEach(function(row) {
+                    if (existing.has(row.id)) return;
+                    var f = row.recipient_filter || {};
+                    _store.scheduled.push({
+                        id: row.id,
+                        subject: row.subject || '', body: row.body || '',
+                        channels: row.channels || ['app'],
+                        scope: f.scope || 'all', scopeValues: f.values || [],
+                        individualNames: f.individuals || [],
+                        scheduledFor: row.scheduled_for, status: 'scheduled',
+                        createdAt: null, sentAt: null,
+                        recipientCount: row.recipient_count || 0, _fromCloud: true
+                    });
+                });
+                if (rows.length) { saveStore(); msg.runDueBroadcasts(); }
+                console.log('[Link] Cloud scheduled broadcasts loaded:', rows.length);
             });
     }
 
@@ -322,15 +360,51 @@
         db.client
             .from('link_broadcasts')
             .insert({
+                id:               _isUuid(b.id) ? b.id : undefined,
                 camp_id:          db.campId,
                 subject:          b.subject || '',
                 body:             b.body    || '',
                 channels:         b.channels || ['app'],
-                recipient_filter: b.recipientFilter || null,
-                recipient_count:  b.recipientCount  || 0
+                recipient_filter: b.recipientFilter || _filterFromScheduled(b),
+                recipient_count:  b.recipientCount  || 0,
+                recipients:       b.recipients || null,
+                scheduled_for:    b.scheduledFor || null,
+                status:           b.status || 'sent'
             })
             .then(function(res) {
                 if (res.error) console.warn('[Link] link_broadcasts insert error:', res.error.message);
+            });
+    }
+
+    /** Patch an existing link_broadcasts row (status transitions, cancel). */
+    function _updateBroadcastRow(id, patch) {
+        var db = _db(); if (!db || !_isUuid(id)) return;
+        db.client
+            .from('link_broadcasts')
+            .update(patch)
+            .eq('id', id)
+            .eq('camp_id', db.campId)
+            .then(function(res) {
+                if (res.error) console.warn('[Link] link_broadcasts update error:', res.error.message);
+            });
+    }
+
+    function _isUuid(s) {
+        return typeof s === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    }
+
+    function _filterFromScheduled(b) {
+        if (!b || !b.scope) return null;
+        return { scope: b.scope, values: b.scopeValues || [], individuals: b.individualNames || [] };
+    }
+
+    function _uuid() {
+        return (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
             });
     }
 
@@ -747,6 +821,140 @@
         _insertBroadcastRow(b);
         saveStore();
         return b;
+    };
+
+    // =========================================================================
+    // SCHEDULED BROADCASTS — compose now, send later
+    // =========================================================================
+    var _core = function() {
+        return (typeof window !== 'undefined' && window.CampistryBroadcastCore) || null;
+    };
+    var _deliverer = null; // fn(record) -> number recipients sent, registered by the UI
+
+    /** The UI registers how a due broadcast resolves recipients and actually sends. */
+    msg.setBroadcastDeliverer = function(fn) { _deliverer = (typeof fn === 'function') ? fn : null; };
+
+    /**
+     * Queue a broadcast to go out at a future time.
+     * @returns {{ok:boolean, error?:string, record?:object}}
+     */
+    msg.scheduleBroadcast = function(opts) {
+        opts = opts || {};
+        var core = _core();
+        var nowMs = Date.now();
+        if (core && core.validateScheduleTime) {
+            var v = core.validateScheduleTime(opts.scheduledFor, nowMs, 60000);
+            if (!v.ok) return { ok: false, error: v.error };
+        } else if (!opts.scheduledFor || Date.parse(opts.scheduledFor) <= nowMs) {
+            return { ok: false, error: 'Pick a valid future date and time.' };
+        }
+        var rec = {
+            id:              _uuid(),
+            subject:         opts.subject || '',
+            body:            opts.body || '',
+            channels:        opts.channels || ['app'],
+            scope:           opts.scope || 'all',
+            scopeValues:     opts.scopeValues || [],
+            individualNames: opts.individualNames || [],
+            scheduledFor:    opts.scheduledFor,
+            status:          'scheduled',
+            createdAt:       new Date().toISOString(),
+            sentAt:          null,
+            recipientCount:  opts.recipientCount || (opts.recipients ? opts.recipients.length : 0),
+            recipients:      opts.recipients || null,  // resolved snapshot for server-side send
+            metadata:        opts.metadata || {}
+        };
+        _store.scheduled.push(rec);
+        saveStore();
+        _insertBroadcastRow(rec); // persists with status='scheduled', scheduled_for set
+        return { ok: true, record: rec };
+    };
+
+    /** All still-pending scheduled broadcasts, soonest first. */
+    msg.getScheduled = function() {
+        return _store.scheduled
+            .filter(function(b) { return b.status === 'scheduled'; })
+            .sort(function(a, b) { return Date.parse(a.scheduledFor) - Date.parse(b.scheduledFor); });
+    };
+
+    msg.getScheduledById = function(id) {
+        return _store.scheduled.find(function(b) { return b.id === id; }) || null;
+    };
+
+    /** Cancel a pending scheduled broadcast (no-op if already sent). */
+    msg.cancelScheduled = function(id) {
+        var rec = _store.scheduled.find(function(b) { return b.id === id; });
+        if (!rec || rec.status !== 'scheduled') return false;
+        rec.status = 'canceled';
+        rec.canceledAt = new Date().toISOString();
+        saveStore();
+        _updateBroadcastRow(id, { status: 'canceled' });
+        return true;
+    };
+
+    /**
+     * Fire any scheduled broadcasts whose time has arrived. Client-side driver:
+     * runs while the admin tab is open. The Supabase edge function
+     * (send-scheduled-broadcasts) is the server-side driver for sends while the
+     * tab is closed — both mark the same row 'sent', so a broadcast fires once.
+     * @param {number} [nowMs]
+     * @returns {Array} records that were dispatched this tick
+     */
+    msg.runDueBroadcasts = function(nowMs) {
+        nowMs = (typeof nowMs === 'number') ? nowMs : Date.now();
+        var core = _core();
+        var due = core && core.selectDue
+            ? core.selectDue(_store.scheduled, nowMs)
+            : _store.scheduled.filter(function(b) {
+                return b.status === 'scheduled' && b.scheduledFor && Date.parse(b.scheduledFor) <= nowMs;
+              });
+        // No deliverer registered yet (UI still booting) — leave everything
+        // 'scheduled' so a due broadcast is never marked sent to nobody. The
+        // next tick, once the UI registered its deliverer, picks it up.
+        if (!_deliverer) return [];
+
+        var fired = [];
+        due.forEach(function(rec) {
+            // Flip status BEFORE delivering so a slow deliverer can't be re-entered
+            // by the next interval tick and double-send. Also claim the cloud row
+            // (best-effort) so the server edge function's status='scheduled' guard
+            // won't also pick it up.
+            rec.status = 'sending';
+            _updateBroadcastRow(rec.id, { status: 'sending' });
+            var count = 0;
+            try {
+                if (_deliverer) count = _deliverer(rec) || 0;
+            } catch (e) {
+                console.warn('[Link] scheduled broadcast delivery error:', e);
+                rec.status = 'scheduled'; // leave it for a later retry
+                return;
+            }
+            rec.status = 'sent';
+            rec.sentAt = new Date().toISOString();
+            rec.recipientCount = count || rec.recipientCount || 0;
+            // Also record it in the broadcast history summary.
+            _store.broadcasts.push({
+                id: 'bc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                subject: rec.subject, body: rec.body, channels: rec.channels,
+                recipientFilter: _filterFromScheduled(rec), recipientCount: rec.recipientCount,
+                date: rec.sentAt, readRate: 0, fromScheduled: rec.id
+            });
+            _updateBroadcastRow(rec.id, { status: 'sent', recipient_count: rec.recipientCount });
+            fired.push(rec);
+            window.dispatchEvent(new CustomEvent('campistry-link-scheduled-sent', { detail: rec }));
+        });
+        if (fired.length) saveStore();
+        return fired;
+    };
+
+    var _schedulerTimer = null;
+    /** Start the client-side scheduler (idempotent). */
+    msg.startScheduler = function(intervalMs) {
+        if (_schedulerTimer) return;
+        msg.runDueBroadcasts();
+        _schedulerTimer = setInterval(function() {
+            try { msg.runDueBroadcasts(); } catch (e) { console.warn('[Link] scheduler tick error:', e); }
+        }, intervalMs || 30000);
     };
 
     msg.markRead = function(msgId) {
@@ -1184,6 +1392,10 @@
     }
 
     function _sendSMS(record) {
+        // Outgoing texts start with the camp's name so parents always know
+        // exactly who's reaching them (idempotent — never double-prefixes).
+        record.smsBody = _formatSmsBody(record.body || '');
+
         var provider = _store.settings.smsProvider;
         if (provider === 'none' || !_store.settings.smsApiKey) {
             console.log('[Link] SMS dispatch — no provider configured. Would send to:', record.parentPhone);
@@ -1192,9 +1404,20 @@
             return;
         }
 
-        console.log('[Link] SMS → ' + record.parentPhone + ': ' + record.subject);
+        console.log('[Link] SMS → ' + record.parentPhone + ': ' + record.smsBody);
         record.smsStatus = 'queued';
         window.dispatchEvent(new CustomEvent('campistry-link-sms-sent', { detail: record }));
+    }
+
+    /** Prefix an outgoing text with the camp name (delegates to broadcast core). */
+    function _formatSmsBody(body) {
+        var core = (typeof window !== 'undefined' && window.CampistryBroadcastCore) || null;
+        var campName = data.getCampName ? data.getCampName() : '';
+        var enabled = _store.settings.smsPrefixCampName !== false;
+        if (core && core.formatOutgoingSms) return core.formatOutgoingSms(body, campName, { enabled: enabled });
+        // Fallback if the core module didn't load
+        if (!enabled || !campName) return body || '';
+        return (String(body || '').toLowerCase().indexOf(campName.toLowerCase()) === 0) ? body : campName + ': ' + body;
     }
 
     /** Get email-ready export (for copy/paste into external email tool) */
@@ -1292,18 +1515,26 @@
             if (_db()) {
                 loadCloudHistory(100);
                 loadCloudMessages(200);
+                loadCloudScheduled();
             } else {
                 // CampistryDB fires campistry-db-ready once campId is resolved
                 window.addEventListener('campistry-db-ready', function onDbReady() {
                     window.removeEventListener('campistry-db-ready', onDbReady);
                     loadCloudHistory(100);
                     loadCloudMessages(200);
+                    loadCloudScheduled();
                 }, { once: true });
             }
         }
         // Small delay so CampistryDB auth detection can complete first
         setTimeout(tryLoadCloud, 1500);
     })();
+
+    // Client-side scheduled-broadcast driver — fires due broadcasts while the
+    // admin tab is open (server edge function covers tab-closed sends).
+    if (typeof window !== 'undefined') {
+        setTimeout(function() { try { msg.startScheduler(30000); } catch (e) {} }, 3000);
+    }
 
     // Debug: log what we actually found
     var _roster = data.getRoster();
@@ -1332,7 +1563,8 @@
         refresh: function() { loadStore(); },
         save: saveStore,
         loadCloudHistory: loadCloudHistory,
-        loadCloudMessages: loadCloudMessages
+        loadCloudMessages: loadCloudMessages,
+        loadCloudScheduled: loadCloudScheduled
     };
 
     console.log('[Link] Data Bridge ready. Parents:', data.getParentDirectory().length, '| Campers:', Object.keys(data.getRoster()).length);

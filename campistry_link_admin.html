@@ -336,7 +336,13 @@
     <div class="lk-tabs" id="msgTopTabs" style="margin-bottom:18px;">
         <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
         <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Sent</button>
+        <button class="lk-tab" data-msgtab="scheduled" onclick="switchMsgTab('scheduled',this)">Scheduled <span id="schedCount" style="display:none;background:var(--link-color);color:#fff;border-radius:999px;font-size:.62rem;padding:1px 6px;margin-left:2px;"></span></button>
         <button class="lk-tab" data-msgtab="myinbox" onclick="switchMsgTab('myinbox',this)" id="msgTabMyInboxBtn" style="display:none;">Assigned to me <span id="myInboxCount" style="display:none;background:var(--link-color);color:#fff;border-radius:999px;font-size:.62rem;padding:1px 6px;margin-left:2px;"></span></button>
+    </div>
+
+    <!-- ── SCHEDULED ─────────────────────────────────── -->
+    <div id="msgTabScheduled" style="display:none;">
+        <div id="scheduledList"></div>
     </div>
 
     <!-- ── INBOX ─────────────────────────────────────── -->
@@ -590,12 +596,32 @@
                     SMS
                 </button>
             </div>
-            <div style="display:flex;gap:8px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
+                <button class="btn btn-ghost btn-sm" style="border:1px solid var(--border-light);" onclick="sendTestToMe()" title="Send yourself a real copy with merge tags filled in">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    Send test to me
+                </button>
+                <button class="btn btn-secondary btn-sm" id="cScheduleBtn" onclick="toggleScheduleRow()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+                    Schedule
+                </button>
                 <button class="btn btn-primary" onclick="sendCompose()">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                    Send
+                    Send now
                 </button>
+            </div>
+        </div>
+        <!-- Schedule row (revealed by the Schedule button) -->
+        <div id="cScheduleRow" style="display:none;margin-top:12px;padding:12px 14px;background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <label style="font-size:.8rem;font-weight:600;color:var(--slate-700);margin:0;">Send on</label>
+                <input type="datetime-local" class="lk-input" id="cScheduleAt" style="max-width:230px;" oninput="_updateScheduleHint()">
+                <button class="btn btn-primary btn-sm" onclick="scheduleCompose()">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+                    Schedule broadcast
+                </button>
+                <span id="cScheduleHint" style="font-size:.75rem;color:var(--text-muted);"></span>
             </div>
         </div>
         <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
@@ -1157,6 +1183,7 @@
 <script src="campistry_security.js"></script>
 <script src="integration_hooks.js"></script>
 <script src="campistry_cloud_bootstrap.js"></script>
+<script src="campistry_broadcast_core.js"></script>
 <script src="campistry_link_data.js"></script>
 <script src="face_match_core.js"></script>
 <script src="campistry_face_shared.js"></script>
@@ -1297,10 +1324,22 @@ function switchMsgTab(tab, btn) {
     });
     document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
+    var sc = document.getElementById('msgTabScheduled'); if (sc) sc.style.display = tab === 'scheduled' ? '' : 'none';
     var mi = document.getElementById('msgTabMyInbox'); if (mi) mi.style.display = tab === 'myinbox' ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
+    if (tab === 'scheduled') { renderScheduledList(); }
     if (tab === 'myinbox'){ renderMyStaffInbox(); }
+    _updateSchedCount();
+}
+
+// Badge the Scheduled tab with the count of pending broadcasts.
+function _updateSchedCount() {
+    var el = document.getElementById('schedCount'); if (!el) return;
+    var cl = CL();
+    var n = cl ? cl.msg.getScheduled().length : 0;
+    if (n > 0) { el.textContent = n; el.style.display = ''; }
+    else el.style.display = 'none';
 }
 
 // ─── STAFF INBOX: messages a parent routed to this specific user (migration 027) ─
@@ -2338,6 +2377,259 @@ function sendCompose() {
     document.getElementById('cIndivChips').innerHTML        = '';
     closeComposeDrawer();
     if (currentMsgTab === 'outbox') renderSentList();
+}
+
+// ─── SCHEDULED BROADCASTS + TEST SEND ────────────────────────────────────────
+// DOM-independent recipient resolver — the compose drawer's scope selectors are
+// gone by the time a scheduled broadcast fires, so resolution must work from a
+// stored {scope, values, individualNames} snapshot instead of the live DOM.
+function _resolveTargetsFor(scope, values, individualNames) {
+    var cl = CL(); if (!cl) return [];
+    var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
+    values = values || [];
+    if (scope === 'individual') {
+        var dir = cl.data.getParentDirectory();
+        var targets = [];
+        (individualNames || []).forEach(function(parentName) {
+            var entry = dir.find(function(p) { return p.parentName === parentName; });
+            if (!entry) return;
+            entry.children.forEach(function(child) {
+                if (inactive[child.name]) return;
+                targets.push({
+                    camperName: child.name, parentName: entry.parentName,
+                    parentEmail: entry.parentEmail || '', parentPhone: entry.parentPhone || '',
+                    bunk: child.bunk || '', division: child.division || '', grade: child.grade || '',
+                    familyName: entry.familyName || ''
+                });
+            });
+        });
+        return targets;
+    }
+    var map = cl.data.getCamperParentMap();
+    var targets = [];
+    Object.entries(map).forEach(function(entry) {
+        var name = entry[0], c = entry[1];
+        if (!c.parentName || inactive[name]) return;
+        var match = (scope === 'all') ||
+            (scope === 'division' && values.indexOf(c.division) >= 0) ||
+            (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
+            (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
+        if (!match) return;
+        targets.push({
+            camperName: name, parentName: c.parentName,
+            parentEmail: c.parentEmail || '', parentPhone: c.parentPhone || '',
+            bunk: c.bunk || '', division: c.division || '', grade: c.grade || '',
+            familyName: c.familyName || (name.split(' ').pop() + ' Family')
+        });
+    });
+    return targets;
+}
+
+// Snapshot the compose drawer's current recipient scope into a plain object.
+function _getComposeScopeSnapshot() {
+    var scope = (document.getElementById('cScope') || {}).value || 'all';
+    var values = (typeof _getSelectedScopeVals === 'function') ? _getSelectedScopeVals() : [];
+    var individualNames = [];
+    if (scope === 'individual') {
+        document.querySelectorAll('#cIndivChips [data-name]').forEach(function(chip) {
+            individualNames.push(chip.dataset.name);
+        });
+    }
+    return { scope: scope, values: values, individualNames: individualNames };
+}
+
+// Deliverer the data layer calls when a scheduled broadcast comes due while the
+// admin tab is open. Resolves live recipients and sends one message each.
+function _deliverScheduledBroadcast(rec) {
+    var cl = CL(); if (!cl) return 0;
+    var targets = _resolveTargetsFor(rec.scope, rec.scopeValues, rec.individualNames);
+    if (!targets.length) return 0;
+    var busMap = _buildBusRouteMap();
+    var isGroup = targets.length > 1;
+    targets.forEach(function(t) {
+        cl.msg.send({
+            to: t.parentName, toType: 'individual',
+            subject: _applyMergeTags(rec.subject, t, busMap),
+            body:    _applyMergeTags(rec.body, t, busMap),
+            channels: rec.channels || ['app'],
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup, scheduledBroadcast: rec.id }
+        });
+    });
+    return targets.length;
+}
+
+function toggleScheduleRow() {
+    var row = document.getElementById('cScheduleRow');
+    if (!row) return;
+    var showing = row.style.display !== 'none';
+    row.style.display = showing ? 'none' : 'block';
+    if (!showing) {
+        // Default to one hour from now, rounded to the minute, in local time.
+        var el = document.getElementById('cScheduleAt');
+        if (el && !el.value) {
+            var d = new Date(Date.now() + 3600000);
+            d.setSeconds(0, 0);
+            var pad = function(n) { return String(n).padStart(2, '0'); };
+            el.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+                       'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        }
+        _updateScheduleHint();
+    }
+}
+
+function _updateScheduleHint() {
+    var el = document.getElementById('cScheduleAt');
+    var hint = document.getElementById('cScheduleHint');
+    if (!el || !hint) return;
+    if (!el.value) { hint.textContent = ''; return; }
+    var when = new Date(el.value);
+    if (isNaN(when)) { hint.textContent = ''; return; }
+    var mins = Math.round((when.getTime() - Date.now()) / 60000);
+    if (mins <= 0) { hint.textContent = '⚠ that time is in the past'; hint.style.color = '#b91c1c'; return; }
+    hint.style.color = '';
+    var rel = mins < 60 ? mins + ' min' : (mins < 1440 ? Math.round(mins / 60) + ' hr' : Math.round(mins / 1440) + ' days');
+    hint.textContent = 'goes out in ' + rel;
+}
+
+function scheduleCompose() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    if (!subj) { toast('Subject is required'); return; }
+    if (!body) { toast('Write a message to schedule'); return; }
+    var atRaw = (document.getElementById('cScheduleAt') || {}).value;
+    if (!atRaw) { toast('Pick a date and time'); return; }
+    var when = new Date(atRaw); // datetime-local is in the admin's local time
+    if (isNaN(when)) { toast('That date and time is not valid'); return; }
+    var snap = _getComposeScopeSnapshot();
+    var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames);
+    if (!targets.length) { toast('Select a recipient or group'); return; }
+
+    // Snapshot resolved recipients so the server edge function can send even
+    // with the tab closed and camp state unavailable to it.
+    var busMap = _buildBusRouteMap();
+    var recipients = targets.map(function(t) {
+        return {
+            name: t.parentName, email: t.parentEmail || '', phone: t.parentPhone || '',
+            subject: _applyMergeTags(subj, t, busMap),
+            body:    _applyMergeTags(body, t, busMap)
+        };
+    });
+
+    var res = cl.msg.scheduleBroadcast({
+        subject: subj, body: body, channels: compChannels,
+        scope: snap.scope, scopeValues: snap.values, individualNames: snap.individualNames,
+        scheduledFor: when.toISOString(),
+        recipientCount: targets.length, recipients: recipients
+    });
+    if (!res.ok) { toast(res.error || 'Could not schedule'); return; }
+
+    toast('📅 Broadcast scheduled — ' + targets.length + ' recipient' + (targets.length === 1 ? '' : 's') +
+          ' on ' + when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }));
+    document.getElementById('cSubj').value = '';
+    document.getElementById('cBody').value = '';
+    document.getElementById('cScheduleAt').value = '';
+    document.getElementById('cScheduleRow').style.display = 'none';
+    document.getElementById('cPreviewWrap').style.display = 'none';
+    document.getElementById('cScopeCount').textContent = '';
+    document.getElementById('cIndivChips').innerHTML = '';
+    closeComposeDrawer();
+    if (typeof renderScheduledList === 'function') renderScheduledList();
+}
+
+// "Send test to me" — show exactly what the first recipient will receive, with
+// merge tags filled in and the SMS camp-name prefix applied, in a modal.
+function sendTestToMe() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    if (!subj && !body) { toast('Write a subject or message first'); return; }
+    var snap = _getComposeScopeSnapshot();
+    var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames);
+    var sample = targets[0] || {
+        camperName: 'Sample Camper', parentName: 'Sample Parent', bunk: 'B3',
+        division: 'Seniors', grade: '8', familyName: 'Sample Family'
+    };
+    var busMap = _buildBusRouteMap();
+    var rSubj = _applyMergeTags(subj, sample, busMap);
+    var rBody = _applyMergeTags(body, sample, busMap);
+    var core = window.CampistryBroadcastCore;
+    var campName = cl.data.getCampName ? cl.data.getCampName() : '';
+    var smsBody = (core && core.formatOutgoingSms)
+        ? core.formatOutgoingSms(rBody, campName, { enabled: (cl.settings.get().smsPrefixCampName !== false) })
+        : rBody;
+    var chans = compChannels || ['app'];
+
+    var html =
+        '<div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">' +
+            'Test preview — as ' + esc(sample.parentName) + (sample.camperName ? ' (' + esc(sample.camperName) + ')' : '') + '</div>';
+    if (chans.indexOf('app') >= 0 || chans.indexOf('email') >= 0) {
+        html += '<div style="font-size:.7rem;font-weight:600;color:var(--text-muted);margin-bottom:4px;">In-app / Email</div>' +
+            '<div style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:8px;padding:11px 13px;font-size:.82rem;margin-bottom:12px;">' +
+            _brandedPreviewHtml(rSubj, rBody) + '</div>';
+    }
+    if (chans.indexOf('sms') >= 0) {
+        html += '<div style="font-size:.7rem;font-weight:600;color:var(--text-muted);margin-bottom:4px;">Text message</div>' +
+            '<div style="background:#e7f6e9;border:1px solid #b8e0bf;border-radius:14px;padding:9px 13px;font-size:.83rem;white-space:pre-wrap;color:#14351b;max-width:88%;">' +
+            esc(smsBody) + '</div>';
+    }
+    _showTestModal(html);
+}
+
+function _showTestModal(innerHtml) {
+    var old = document.getElementById('lkTestModal');
+    if (old) old.remove();
+    var wrap = document.createElement('div');
+    wrap.id = 'lkTestModal';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(3px);z-index:1200;display:flex;align-items:center;justify-content:center;padding:18px;';
+    wrap.onclick = function(e) { if (e.target === wrap) wrap.remove(); };
+    wrap.innerHTML =
+        '<div style="background:#fff;border-radius:16px;max-width:460px;width:100%;max-height:90vh;overflow-y:auto;padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.25);">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">' +
+                '<h3 style="margin:0;font-size:1.05rem;font-weight:700;">Test preview</h3>' +
+                '<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'lkTestModal\').remove()" style="padding:4px 10px;">✕</button>' +
+            '</div>' + innerHtml +
+            '<div style="margin-top:16px;font-size:.75rem;color:var(--text-muted);">This is exactly what recipients will get — merge tags are filled with a real recipient\'s details.</div>' +
+        '</div>';
+    document.body.appendChild(wrap);
+}
+
+// ─── SCHEDULED LIST ──────────────────────────────────────────────────────────
+function renderScheduledList() {
+    if (typeof _updateSchedCount === 'function') _updateSchedCount();
+    var host = document.getElementById('scheduledList');
+    if (!host) return;
+    var cl = CL();
+    var items = cl ? cl.msg.getScheduled() : [];
+    if (!items.length) {
+        host.innerHTML = '<div style="padding:14px 4px;font-size:.82rem;color:var(--text-muted);">No scheduled broadcasts. Use “Schedule” in the compose window to queue one.</div>';
+        return;
+    }
+    var core = window.CampistryBroadcastCore;
+    host.innerHTML = items.map(function(b) {
+        var when = new Date(b.scheduledFor);
+        var whenStr = isNaN(when) ? '—' : when.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        var who = (core && core.summarizeRecipients) ? core.summarizeRecipients(b.scope, b.scopeValues, b.recipientCount) : (b.recipientCount + ' recipients');
+        var chans = (b.channels || []).map(function(c) { return c === 'app' ? 'In-app' : c === 'sms' ? 'Text' : 'Email'; }).join(' · ');
+        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border:1px solid var(--border-light);border-radius:12px;margin-bottom:8px;background:#fff;">' +
+            '<div style="flex-shrink:0;width:34px;height:34px;border-radius:9px;background:#eef6ef;display:flex;align-items:center;justify-content:center;color:#2A7A35;">' +
+                '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg></div>' +
+            '<div style="flex:1;min-width:0;">' +
+                '<div style="font-weight:700;font-size:.87rem;">' + esc(b.subject || '(No subject)') + '</div>' +
+                '<div style="font-size:.76rem;color:var(--text-muted);margin-top:2px;">' + esc((b.body || '').slice(0, 90)) + '</div>' +
+                '<div style="font-size:.74rem;color:var(--link-color);margin-top:5px;font-weight:600;">📅 ' + esc(whenStr) + ' · ' + esc(who) + ' · ' + esc(chans) + '</div>' +
+            '</div>' +
+            '<button class="btn btn-ghost btn-sm" style="border:1px solid var(--border-light);flex-shrink:0;" onclick="cancelScheduled(\'' + esc(b.id) + '\')">Cancel</button>' +
+        '</div>';
+    }).join('');
+}
+
+function cancelScheduled(id) {
+    var cl = CL(); if (!cl) return;
+    if (cl.msg.cancelScheduled(id)) {
+        toast('Scheduled broadcast canceled');
+        renderScheduledList();
+    }
 }
 
 function updateSmartBadge() {} // kept for compat — badge removed in new UI
@@ -4473,6 +4765,17 @@ function boot() {
     renderDash();
     renderAdminMsgs('all');
     _loadFormSubmissions();
+
+    // Scheduled broadcasts: tell the data layer how to resolve+send a due
+    // broadcast, and keep the list fresh when one fires or lands from cloud.
+    if (window.CampistryLink && window.CampistryLink.msg && window.CampistryLink.msg.setBroadcastDeliverer) {
+        window.CampistryLink.msg.setBroadcastDeliverer(_deliverScheduledBroadcast);
+    }
+    window.addEventListener('campistry-link-scheduled-sent', function(e) {
+        if (typeof renderScheduledList === 'function') renderScheduledList();
+        toast('📤 Scheduled broadcast sent — ' + ((e.detail && e.detail.recipientCount) || 0) + ' recipient(s)');
+    });
+    if (typeof _updateSchedCount === 'function') _updateSchedCount();
 
     // Pull parent form responses, camper mail, and tips from the cloud once
     // the DB client is ready
