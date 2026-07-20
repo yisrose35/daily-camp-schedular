@@ -633,20 +633,39 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var history = RotationEngine.getBunkHistory(bunkName);
         var actHistory = history.byActivity[actLower];
         if (actHistory) {
-            var best = null, minAll = null;
+            var best = null, minAll = null, bestKey = null;
             var dates = actHistory.dates || [];
             for (var i = 0; i < dates.length; i++) {
                 var d = dates[i];
                 if (!d || typeof d.daysAgo !== 'number') continue;
                 if (minAll === null || d.daysAgo < minAll) minAll = d.daysAgo;
-                if (d.dateKey && String(d.dateKey) >= epoch && (best === null || d.daysAgo < best)) best = d.daysAgo;
+                if (d.dateKey && String(d.dateKey) >= epoch && (best === null || d.daysAgo < best)) {
+                    best = d.daysAgo;
+                    bestKey = String(d.dateKey);
+                }
             }
             // A daysSinceLast fresher than every scanned date came from the
             // cloud lastDone overlay (mergeCloudData) — post-epoch by
             // construction, since RotationCloud.load is epoch-filtered (HR-7).
             var dsl = actHistory.daysSinceLast;
-            if (dsl != null && (minAll === null || dsl < minAll) && (best === null || dsl < best)) best = dsl;
-            if (best !== null) return best;
+            var _dslWins = false;
+            if (dsl != null && (minAll === null || dsl < minAll) && (best === null || dsl < best)) { best = dsl; _dslWins = true; }
+            if (best !== null) {
+                // ★ Cooldown gap is measured in SCHEDULE-days, not calendar days:
+                //   a day the grade isn't at camp (no schedule) must not count
+                //   toward "min N days between visits". Convert the most-recent
+                //   post-epoch occurrence's dateKey to a schedule-day gap. The
+                //   cloud-overlay dsl has no dateKey to anchor from, so it falls
+                //   through to its raw (calendar) value.
+                if (bestKey && !_dslWins && window.SchedulerCoreUtils && window.SchedulerCoreUtils.scheduledDaysBetween) {
+                    var _todayCD = window.currentScheduleDate
+                        ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+                        : new Date().toISOString().split('T')[0];
+                    var _gapCD = window.SchedulerCoreUtils.scheduledDaysBetween(bunkName, bestKey, _todayCD, null);
+                    if (typeof _gapCD === 'number' && _gapCD > 0) return _gapCD;
+                }
+                return best;
+            }
         }
 
         // Utils fallback — HR-6 already epoch-floors its timestamp and its

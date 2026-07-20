@@ -5668,7 +5668,11 @@
                             if (Array.isArray(_cdSlots) && _cdSlots.some(function(e) {
                                 return e && !e.continuation && (e._activity === s.name || e.field === s.name);
                             })) {
-                                const _cdDiff = Math.floor((new Date(currentDate) - new Date(_cdKeys[_cdk])) / 86400000);
+                                // Gap in SCHEDULE-days, not calendar days: a day the
+                                // grade isn't at camp (no schedule) doesn't count.
+                                const _cdDiff = window.SchedulerCoreUtils?.scheduledDaysBetween
+                                    ? window.SchedulerCoreUtils.scheduledDaysBetween(bunk, _cdKeys[_cdk], currentDate, allDailyData)
+                                    : Math.floor((new Date(currentDate) - new Date(_cdKeys[_cdk])) / 86400000);
                                 if (_cdDiff < _cdDays) {
                                     log('[cooldown] skip ' + s.name + ' for ' + bunk + ' (' + _cdDiff + 'd since last, need ' + _cdDays + 'd)');
                                     return;
@@ -24067,6 +24071,20 @@
             const _specials = _app1.specialActivities || [];
             const fld = _fields.find(f => f && f.name === fieldName);
             const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
+            // ★ Sport/facility limits (maxUsage / exactFrequency / frequencyDays)
+            //   live in activityProperties — buildActivityProperties builds a
+            //   type:'sport' entry for any sport that has a cap configured — NOT
+            //   in _specials. The rotation gate below only knew about _specials,
+            //   so a SPORT's cooldown was never enforced at this write choke point:
+            //   observed live — a facility/sport set to "min 6 days between" landed
+            //   twice in 4 days because this validator skipped it entirely. Fall
+            //   back to the sport's props so the gate fires for sports too. (Special
+            //   access restrictions below still key off spByName — sports have none.)
+            const _limitCfg = spByName
+                || (activityName && window.activityProperties
+                    && (window.activityProperties[activityName]
+                        || window.activityProperties[String(activityName).toLowerCase().trim()]))
+                || null;
             // ★ DA Resources: field disabled for today → no placement allowed
             //   (FQ-REOPT, active-pairing, time-reloc, drop-refill, and the write
             //   step all flow through this validator — adding the check here
@@ -24237,7 +24255,7 @@
             // Out of scope here: rotationCohort (needs lifetime counts),
             // availableDays (caller already filters), same-day duplicate
             // protection (different bug class).
-            if (spByName && activityName && bunk != null) {
+            if (_limitCfg && activityName && bunk != null) {
                 try {
                     const _ru = window.SchedulerCoreUtils;
                     const _today = (typeof currentDate !== 'undefined' && currentDate)
@@ -24264,14 +24282,14 @@
                         return c;
                     }
                     // maxUsage gate (+ per-grade override)
-                    const _maxUsage = parseInt(spByName.maxUsage) || 0;
-                    const _maxPeriod = spByName.maxUsagePeriod || 'half';
+                    const _maxUsage = parseInt(_limitCfg.maxUsage) || 0;
+                    const _maxPeriod = _limitCfg.maxUsagePeriod || 'half';
                     const _periodStart = (_ru && _ru.getPeriodStartDate)
                         ? _ru.getPeriodStartDate(_maxPeriod, _today)
                         : null;
                     if (_maxUsage > 0) {
                         let _cap = _maxUsage;
-                        const _perGrade = parseInt((spByName.maxUsagePerGrade || {})[grade]) || 0;
+                        const _perGrade = parseInt((_limitCfg.maxUsagePerGrade || {})[grade]) || 0;
                         if (_perGrade > 0) _cap = _perGrade;
                         if (_crossDayCount(_periodStart) >= _cap) {
                             return 'rotation: maxUsage ' + _cap + '/' + _maxPeriod + ' exceeded';
@@ -24279,10 +24297,10 @@
                     }
                     // exactFrequency ceiling (also a floor, but floor is rewarded by
                     // rotation scoring elsewhere — here we only block the ceiling).
-                    const _exact = parseInt((spByName.exactFrequencyPerGrade || {})[grade])
-                        || parseInt(spByName.exactFrequency) || 0;
+                    const _exact = parseInt((_limitCfg.exactFrequencyPerGrade || {})[grade])
+                        || parseInt(_limitCfg.exactFrequency) || 0;
                     if (_exact > 0) {
-                        const _exPeriod = spByName.exactFrequencyPeriod || '1week';
+                        const _exPeriod = _limitCfg.exactFrequencyPeriod || '1week';
                         const _exPS = (_ru && _ru.getPeriodStartDate)
                             ? _ru.getPeriodStartDate(_exPeriod, _today)
                             : null;
@@ -24290,8 +24308,11 @@
                             return 'rotation: exactFrequency ' + _exact + '/' + _exPeriod + ' exceeded';
                         }
                     }
-                    // frequencyDays cooldown — minimum days between visits
-                    const _cd = parseInt(spByName.frequencyDays) || 0;
+                    // frequencyDays cooldown — minimum SCHEDULE-days between visits.
+                    // The gap counts only days the bunk is actually at camp (see
+                    // Utils.scheduledDaysBetween): an off-day for the grade (e.g. no
+                    // Sunday schedule) does not count toward "6 days between".
+                    const _cd = parseInt(_limitCfg.frequencyDays) || 0;
                     if (_cd > 0) {
                         const _keys = Object.keys(_all).sort();
                         for (let i = _keys.length - 1; i >= 0; i--) {
@@ -24302,7 +24323,9 @@
                             if (Array.isArray(sl) && sl.some(function (e) {
                                 return e && !e.continuation && (e._activity === activityName || e.field === activityName);
                             })) {
-                                const _dDiff = Math.floor((new Date(_today) - new Date(_keys[i])) / 86400000);
+                                const _dDiff = (_ru && _ru.scheduledDaysBetween)
+                                    ? _ru.scheduledDaysBetween(_bunkKey, _keys[i], _today, _all)
+                                    : Math.floor((new Date(_today) - new Date(_keys[i])) / 86400000);
                                 if (_dDiff < _cd) {
                                     return 'rotation: cooldown ' + _dDiff + 'd/' + _cd + 'd';
                                 }
@@ -26128,7 +26151,10 @@
                         const _cdSlots = _p49AllDaily[_cdKeys[_cdk]]?.scheduleAssignments?.[String(def.bunk)];
                         if (Array.isArray(_cdSlots) && _cdSlots.some(e =>
                             e && !e.continuation && (e._activity === def.name || e.field === def.name))) {
-                            const _cdDiff = Math.floor((new Date(_p49Today) - new Date(_cdKeys[_cdk])) / 86400000);
+                            // Gap in SCHEDULE-days (skip the grade's off-days), not calendar days.
+                            const _cdDiff = window.SchedulerCoreUtils?.scheduledDaysBetween
+                                ? window.SchedulerCoreUtils.scheduledDaysBetween(def.bunk, _cdKeys[_cdk], _p49Today, _p49AllDaily)
+                                : Math.floor((new Date(_p49Today) - new Date(_cdKeys[_cdk])) / 86400000);
                             if (_cdDiff < _p49Cd) {
                                 log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — cooldown ' + _cdDiff + 'd < ' + _p49Cd + 'd');
                                 _cdSkip = true;

@@ -2787,6 +2787,44 @@
     };
 
     /**
+     * Count how many of THIS bunk's real schedule-days fall in (fromKey, toKey].
+     *
+     * Used by the frequencyDays "minimum days between visits" cooldown gates so
+     * the gap is measured in DAYS THE GRADE/BUNK IS ACTUALLY AT CAMP — not raw
+     * calendar days. A day on which the bunk has no schedule (e.g. a grade that
+     * isn't in camp on Sundays) does NOT count toward the gap, matching the
+     * expectation that "6 days between" means 6 days of SCHEDULES, not 6 dates.
+     *
+     * `toKey` (today) is mid-generation and not yet in allDaily, so it is counted
+     * as one schedule-day: we are actively placing an activity for this bunk now,
+     * so it is present today by definition. The return value is directly
+     * comparable to frequencyDays — a gap of 1 == two consecutive schedule-days,
+     * which is exactly what the old calendar diff produced for back-to-back days.
+     *
+     * "Present" == the bunk has at least one real (non-transition, non-
+     * continuation) slot that day. A Free slot still counts (the grade is at camp,
+     * just idle that period); a missing/empty bunk array means the grade is not in
+     * camp that day and the day is skipped.
+     */
+    Utils.scheduledDaysBetween = function(bunkName, fromKey, toKey, allDaily) {
+        if (!fromKey || !toKey) return 0;
+        var all = allDaily || (window.loadAllDailyData ? window.loadAllDailyData() : {});
+        if (!all || typeof all !== 'object') return 1;
+        var bunkKey = String(bunkName);
+        var dateRe = /^\d{4}-\d{2}-\d{2}$/;
+        var between = 0;
+        Object.keys(all).forEach(function(dk) {
+            if (!dateRe.test(dk)) return;
+            if (dk <= fromKey || dk >= toKey) return; // strictly between prior visit and today
+            var slots = all[dk] && all[dk].scheduleAssignments && all[dk].scheduleAssignments[bunkKey];
+            if (Array.isArray(slots) && slots.some(function(e) {
+                return e && e._activity && !e.continuation && !e._isTransition;
+            })) between++;
+        });
+        return between + 1; // +1 for today (toKey): the bunk is present now
+    };
+
+    /**
      * Determine the end date of the current period.
      */
     Utils.getPeriodEndDate = function(period, refDate) {
