@@ -731,54 +731,6 @@
     };
 
     /**
-     * ★ LEAGUE-RESERVED SPORT — "this division plays this sport in a league,
-     * so never hand it out as a REGULAR activity". Standing rule (not per-date),
-     * configured per league via the "Reserve for League Play" toggle
-     * (league.reserveSportForLeague on regular leagues in leaguesByName and on
-     * specialty leagues in specialtyLeagues).
-     *
-     * Scope: GENERAL placement only. League game placement never consults this —
-     * regular-league fit checks pass actName "League Game" (canFieldHostLeagueGame),
-     * and both league schedulers build their own field pools — so the league that
-     * reserves the sport still plays it. Matching is case-insensitive on both the
-     * division name and the sport/activity name. Fail-open on any read error.
-     */
-    Utils.isSportReservedForLeague = function (divName, activityName) {
-        if (!divName || !activityName) return false;
-        const div = String(divName).toLowerCase().trim();
-        const act = String(activityName).toLowerCase().trim();
-        if (!div || !act) return false;
-        const hits = function (league, sports) {
-            if (!league || league.reserveSportForLeague !== true) return false;
-            if (league.enabled === false) return false;
-            const divs = Array.isArray(league.divisions) ? league.divisions : [];
-            if (!divs.some(d => String(d).toLowerCase().trim() === div)) return false;
-            return (sports || []).some(s => s && String(s).toLowerCase().trim() === act);
-        };
-        try {
-            let regs = window.leaguesByName || window.masterLeagues;
-            if (!regs || Object.keys(regs).length === 0) {
-                regs = (window.loadGlobalSettings?.() || {}).leaguesByName || {};
-            }
-            for (const k in regs) {
-                if (hits(regs[k], Array.isArray(regs[k]?.sports) ? regs[k].sports : [])) return true;
-            }
-        } catch (e) { /* fail open */ }
-        try {
-            let sls = window.specialtyLeagues;
-            if (!sls || Object.keys(sls).length === 0) {
-                sls = (window.loadGlobalSettings?.() || {}).specialtyLeagues || {};
-            }
-            for (const k in sls) {
-                const sl = sls[k];
-                const sports = Array.isArray(sl?.sports) ? sl.sports : (sl?.sport ? [sl.sport] : []);
-                if (hits(sl, sports)) return true;
-            }
-        } catch (e) { /* fail open */ }
-        return false;
-    };
-
-    /**
      * ★ AVOID-UNLESS-NEEDED (Rules tab → "Don't Give Unless Needed") — SOFT rule:
      * the user picks a grade and sport(s) the scheduler should try very hard NOT
      * to give that grade. Unlike the league-reserve rule this is NOT a hard block:
@@ -871,16 +823,6 @@
         //   manual + total-solver path. Allowed bunks pass; everyone else is blocked.
         if (Utils.isBunkRestrictedFromTarget(block.bunk, actName, fieldName, block.divName || block.division)) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - target reserved for other bunk(s) today (bunk-only restriction)`);
-            return false;
-        }
-
-        // ★ LEAGUE-RESERVED SPORT — this division plays actName in a league whose
-        //   "Reserve for League Play" toggle is on → never place it as a regular
-        //   activity. League placement is untouched: canFieldHostLeagueGame calls
-        //   this with actName "League Game", which can never match a sport name.
-        if (actName && !forceLeague
-            && Utils.isSportReservedForLeague(block.divName || block.division, actName)) {
-            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - "${actName}" is reserved for league play for division ${block.divName || block.division}`);
             return false;
         }
 

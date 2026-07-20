@@ -2911,13 +2911,6 @@
             //   (activity) at per-bunk granularity. Allowed bunks pass; others blocked.
             if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, activity, fieldName, grade)) return false;
 
-            // ★ LEAGUE-RESERVED SPORT — standing rule: this grade plays this sport in
-            //   a league with "Reserve for League Play" on → never place it as a
-            //   regular activity. League placement never routes through this gate
-            //   (scheduler_core_leagues builds its own field pool), so the league
-            //   itself still gets the sport.
-            if (activity && window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, activity)) return false;
-
             // Unavailable rules check — if any unavailable rule overlaps, block it
             if (ledger.unavailableRules && ledger.unavailableRules.length > 0) {
                 const unavail = ledger.unavailableRules.some(rule => {

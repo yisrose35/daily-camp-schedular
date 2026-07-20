@@ -201,13 +201,7 @@
         try { checkBunkOnlyAccess(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('🛡️ bunk-only check failed:', e); }
 
-        // =====================================================================
-        // 11b. ★★★ LEAGUE-RESERVED SPORTS (standing "Reserve for League Play") ★★★
-        // =====================================================================
-        try { checkLeagueReservedSports(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
-        catch (e) { console.warn('🛡️ league-reserved-sport check failed:', e); }
-
-        // 11c. Avoid-unless-needed sports (SOFT rule → warning, not error: the
+        // 11b. Avoid-unless-needed sports (SOFT rule → warning, not error: the
         //      scheduler may legitimately place these when the slot would
         //      otherwise be Free — surface it so the user can double-check).
         try { checkAvoidUnlessNeededSports(assignments, bunkDivMap, divisionTimes).forEach(w => warnings.push(w)); }
@@ -1397,40 +1391,7 @@
     }
 
     /**
-     * ★ CHECK 11b: LEAGUE-RESERVED SPORTS. A league with "Reserve for League
-     * Play" enabled keeps its sport(s) out of REGULAR play for its divisions —
-     * any non-league placement of a reserved sport is a violation. League
-     * entries are exempt (that's exactly where the sport is supposed to live).
-     * Skips silently when the helper is unavailable.
-     */
-    function checkLeagueReservedSports(assignments, bunkDivMap, divisionTimes) {
-        const errors = [];
-        const U = window.SchedulerCoreUtils;
-        if (!U || typeof U.isSportReservedForLeague !== 'function') return errors;
-        Object.entries(assignments).forEach(([bunk, slots]) => {
-            const divName = bunkDivMap[String(bunk)];
-            if (!divName || !Array.isArray(slots)) return;
-            const divSlots = divisionTimes[divName] || [];
-            slots.forEach((entry, idx) => {
-                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
-                const act = entry._activity || entry.sport || null;
-                const actName = typeof act === 'string' ? act : act?.name;
-                if (!actName) return;
-                let reserved = false;
-                try { reserved = U.isSportReservedForLeague(divName, actName) === true; } catch (e) { /* fail open */ }
-                if (!reserved) return;
-                const si = divSlots[idx];
-                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
-                errors.push(
-                    `[[League-only]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - reserved for league play (league setting), not allowed as a regular activity`
-                );
-            });
-        });
-        return errors;
-    }
-
-    /**
-     * ★ CHECK 11c: AVOID-UNLESS-NEEDED SPORTS (Rules tab → "Don't Give Unless
+     * ★ CHECK 11b: AVOID-UNLESS-NEEDED SPORTS (Rules tab → "Don't Give Unless
      * Needed"). SOFT rule — placement is legal when the alternative was a Free
      * slot, so this reports a WARNING (not an error) wherever a rule-listed
      * sport landed on the rule's grade as a regular activity. League entries

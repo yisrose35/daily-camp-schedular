@@ -1382,9 +1382,6 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                 if (!roomOpen(f.name, f.sharableWith)) continue;
                 for (let ai = 0; ai < f.activities.length; ai++) {
                     const A = f.activities[ai]; if (!A || done[_nmR(A)]) continue;
-                    // ★ League-reserved sport (standing rule) — the repair filler must not
-                    //   hand a division a sport its league reserves for league play.
-                    if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, A)) continue;
                     // ★ Avoid-unless-needed (soft rule): first pass skips avoided sports;
                     //   the second pass (includeAvoided) lets them in — better than Free.
                     if (!includeAvoided && window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(grade, A)) continue;
@@ -1399,7 +1396,6 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                 const sp = _specialsR[si]; if (!sp || !sp.name || done[_nmR(sp.name)]) continue;
                 const room = sp.location || sp.name;
                 if (!_accessOk(sp.accessRestrictions, grade)) continue;
-                if (window.SchedulerCoreUtils?.isSportReservedForLeague?.(grade, sp.name)) continue; // league-reserved name parity
                 if (!includeAvoided && window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(grade, sp.name)) continue; // avoid-unless-needed parity
                 if (!roomOpen(room, sp.sharableWith)) continue;
                 let dur = null;

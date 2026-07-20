@@ -440,9 +440,6 @@
             fields: Array.isArray(league.fields) ? league.fields.filter(f => typeof f === 'string') : [],
             teams: Array.isArray(league.teams) ? league.teams.filter(t => typeof t === 'string') : [],
             enabled: league.enabled !== false,
-            // ★ Reserve for League Play — see leagues.js: keeps this league's sport
-            //   out of regular play for its divisions (league games unaffected).
-            reserveSportForLeague: league.reserveSportForLeague === true,
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             // ★ Preserve playoff sub-object — see leagues.js for the same fix.
@@ -1037,29 +1034,6 @@
                 sportChips.appendChild(chip);
             });
             sportCard.appendChild(sportChips);
-
-            // ★ RESERVE FOR LEAGUE PLAY — when ON, this league's divisions never get
-            //   this sport as a regular activity; only league games use it.
-            const reserveWrap = document.createElement('div');
-            reserveWrap.style.cssText = 'margin-top:12px; padding-top:10px; border-top:1px solid #E5E7EB;';
-            const reserveRow = document.createElement('label');
-            reserveRow.style.cssText = 'display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:0.85rem;';
-            const reserveCb = document.createElement('input');
-            reserveCb.type = 'checkbox';
-            reserveCb.checked = league.reserveSportForLeague === true;
-            reserveCb.style.cssText = 'margin-top:2px;';
-            reserveCb.onchange = () => {
-                league.reserveSportForLeague = reserveCb.checked;
-                saveData();
-            };
-            const reserveTxt = document.createElement('span');
-            reserveTxt.innerHTML = '<strong>Reserve for league play</strong><br>' +
-                '<span style="color:#6B7280; font-size:0.78rem;">Divisions in this league won’t get this sport as a regular activity during the day — it only appears as league games.</span>';
-            reserveRow.appendChild(reserveCb);
-            reserveRow.appendChild(reserveTxt);
-            reserveWrap.appendChild(reserveRow);
-            sportCard.appendChild(reserveWrap);
-
             container.appendChild(sportCard);
 
             // CARD 3: FIELDS (Dependent on Sport)
