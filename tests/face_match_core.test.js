@@ -391,6 +391,32 @@ describe('pruneGallery', () => {
 });
 
 // ---------------------------------------------------------------------------
+// gallery diversity (glasses / hair / expression robustness)
+// ---------------------------------------------------------------------------
+describe('galleryDiversity', () => {
+    const D = 64;
+    it('flags a narrow gallery of near-identical photos', () => {
+        const base = Core.l2normalize(axis(D, 0));
+        const g = [base, near(base, 0.02), near(base, 0.03, 2)];
+        const r = Core.galleryDiversity(g, 'cosine');
+        assert.strictEqual(r.narrow, true);
+        assert.strictEqual(r.count, 3);
+    });
+    it('passes a varied gallery spanning different looks', () => {
+        // three genuinely different embeddings (glasses/no-glasses/expression)
+        const g = [Core.l2normalize(axis(D, 0)), Core.l2normalize(axis(D, 1)), Core.l2normalize(axis(D, 2))];
+        const r = Core.galleryDiversity(g, 'cosine');
+        assert.strictEqual(r.narrow, false);
+        assert.ok(r.spread > 0.18);
+    });
+    it('treats a single-photo gallery as narrow (nothing to span)', () => {
+        const r = Core.galleryDiversity([Core.l2normalize(axis(D, 0))], 'cosine');
+        assert.strictEqual(r.narrow, true);
+        assert.strictEqual(r.count, 1);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // torso histograms
 // ---------------------------------------------------------------------------
 describe('histogramIntersection', () => {

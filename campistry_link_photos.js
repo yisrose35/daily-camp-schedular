@@ -73,6 +73,7 @@
             learnMeta: { lastTuneN: 0, tunedAt: null },
             unknownClusters: [],// unresolved "who is this?" groups (capped at 12)
             staleCampers: [],   // campers whose enrollment photos predate this season
+            narrowGalleries: [],// campers with too little photo variety (brittle to appearance change)
             faceIndexVersion: null, // cloud fingerprint the cached index was built from
             stats: {
                 totalUploaded: 0,
@@ -154,6 +155,7 @@
                 _store.learnMeta = Object.assign({ lastTuneN: 0, tunedAt: null }, parsed.learnMeta || {});
                 _store.unknownClusters = Array.isArray(parsed.unknownClusters) ? parsed.unknownClusters : [];
                 _store.staleCampers = Array.isArray(parsed.staleCampers) ? parsed.staleCampers : [];
+                _store.narrowGalleries = Array.isArray(parsed.narrowGalleries) ? parsed.narrowGalleries : [];
                 _store.faceIndexVersion = parsed.faceIndexVersion || null;
                 _store.stats = Object.assign({
                     totalUploaded: 0, totalTagged: 0, totalSent: 0, totalPendingResolved: 0,
@@ -307,6 +309,7 @@
         _camperTemplates = [];
         _store.faceIndex = {};
         _store.staleCampers = [];
+        _store.narrowGalleries = [];
         var staleCutoff = Date.now() - (_store.settings.staleDays || 300) * 86400000;
 
         // young/strict campers: divisions the owner flagged (NIST FRVT pt.3 —
@@ -357,16 +360,23 @@
                     (byModel[model] = byModel[model] || []).push(d.descriptor);
                 });
                 var templates = {};
+                var bestModel = null;
                 Object.keys(byModel).forEach(function(model) {
                     // pruning: dedupe + outlier ejection (NIST: weak fusion raises FPIR)
                     var tpl = core.buildTemplate(byModel[model], { metric: core.MODEL_PROFILES[model].metric });
-                    if (tpl) templates[model] = tpl;
+                    if (tpl) { templates[model] = tpl; if (!bestModel || model !== 'faceapi-128') bestModel = model; }
                 });
                 if (Object.keys(templates).length) {
                     var entry = { name: name, templates: templates };
                     var div = roster[name] && roster[name].division;
                     if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
                     if (siblingSet[name]) { entry.strict = true; entry.sibling = true; }
+                    // gallery-variety check: a kid enrolled from near-identical
+                    // photos is brittle to glasses/hair/expression changes
+                    var prof = core.MODEL_PROFILES[bestModel];
+                    var div2 = core.galleryDiversity(byModel[bestModel], prof.metric);
+                    if (div2.narrow) _store.narrowGalleries.push(name);
+                    entry.narrow = div2.narrow;
                     _camperTemplates.push(entry);
                     _store.faceIndex[name] = { descriptors: descList, updatedAt: new Date().toISOString() };
                     indexed++;
@@ -1175,6 +1185,7 @@
             workerCount: (_workerPool && _workerPool.length) || 0,
             eval: evalR,                                       // measured precision at current dials
             staleCampers: (_store.staleCampers || []).slice(), // need fresh enrollment photos
+            narrowGalleries: (_store.narrowGalleries || []).slice(), // too little photo variety
             unknownClusters: (_store.unknownClusters || []).length,
             strictDivisions: (_store.settings.strictDivisions || []).slice(),
             siblingStrict: _camperTemplates.filter(function(c) { return c.sibling; }).length

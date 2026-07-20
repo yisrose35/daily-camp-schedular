@@ -352,27 +352,54 @@
         return c;
     }
 
-    function _embed(aligned) {
+    // Blob from a 112x112 canvas; flip=true mirrors horizontally (for TTA).
+    function _recBlob(aligned, flip) {
         var data = aligned.getContext('2d').getImageData(0, 0, 112, 112).data;
         var n = 112 * 112;
         var blob = new Float32Array(3 * n);
-        for (var i = 0; i < n; i++) {
-            blob[i]         = (data[i * 4]     - 127.5) / 127.5;
-            blob[n + i]     = (data[i * 4 + 1] - 127.5) / 127.5;
-            blob[2 * n + i] = (data[i * 4 + 2] - 127.5) / 127.5;
+        for (var y = 0; y < 112; y++) {
+            for (var x = 0; x < 112; x++) {
+                var src = (y * 112 + x) * 4;
+                var dx = flip ? (111 - x) : x;
+                var d = y * 112 + dx;
+                blob[d]         = (data[src]     - 127.5) / 127.5;
+                blob[n + d]     = (data[src + 1] - 127.5) / 127.5;
+                blob[2 * n + d] = (data[src + 2] - 127.5) / 127.5;
+            }
         }
+        return blob;
+    }
+
+    function _runRec(blob) {
         var feeds = {};
         feeds[_recSession.inputNames[0]] = new ort.Tensor('float32', blob, [1, 3, 112, 112]);
         return _recSession.run(feeds).then(function (results) {
-            var out = results[_recSession.outputNames[0]].data;
-            // L2-normalize so cosine distances are well-defined
-            var norm = 0, j;
-            for (j = 0; j < out.length; j++) norm += out[j] * out[j];
-            norm = Math.sqrt(norm) || 1;
-            var vec = new Array(out.length);
-            for (j = 0; j < out.length; j++) vec[j] = out[j] / norm;
-            return vec;
+            return results[_recSession.outputNames[0]].data;
         });
+    }
+
+    function _l2(arr) {
+        var norm = 0, j;
+        for (j = 0; j < arr.length; j++) norm += arr[j] * arr[j];
+        norm = Math.sqrt(norm) || 1;
+        var vec = new Array(arr.length);
+        for (j = 0; j < arr.length; j++) vec[j] = arr[j] / norm;
+        return vec;
+    }
+
+    // Flip test-time augmentation (InsightFace standard): embed the aligned
+    // face AND its mirror, sum, re-normalize. More stable embeddings under
+    // asymmetric expressions / off-angle poses. Only on WebGPU (2x recognition
+    // cost is free on GPU, too slow on WASM).
+    function _embed(aligned) {
+        var tta = (_ep === 'webgpu');
+        if (!tta) return _runRec(_recBlob(aligned, false)).then(_l2);
+        return Promise.all([_runRec(_recBlob(aligned, false)), _runRec(_recBlob(aligned, true))])
+            .then(function (r) {
+                var sum = new Array(r[0].length);
+                for (var i = 0; i < sum.length; i++) sum[i] = r[0][i] + r[1][i];
+                return _l2(sum);
+            });
     }
 
     // ─── CampistryFace engine contract ───────────────────────────────────────

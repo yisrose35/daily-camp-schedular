@@ -756,6 +756,7 @@
         </div>
         <div id="triageStats" style="font-size:.72rem;color:var(--text-muted);margin-top:10px;"></div>
         <div id="staleEnrollNote" style="display:none;font-size:.74rem;color:var(--amber-700,#b45309);margin-top:6px;"></div>
+        <div id="narrowGalleryNote" style="display:none;font-size:.74rem;color:var(--amber-700,#b45309);margin-top:6px;"></div>
     </div>
     <div class="lk-card">
         <div class="lk-card-head">
@@ -3578,6 +3579,19 @@ function refreshTriageUI() {
                 stale.slice(0, 5).join(', ') + (stale.length > 5 ? ' +' + (stale.length - 5) + ' more' : '');
         } else {
             staleNote.style.display = 'none';
+        }
+    }
+    // narrow galleries (too little photo variety → brittle to glasses/hair/expression)
+    var narrowNote = document.getElementById('narrowGalleryNote');
+    if (narrowNote) {
+        var narrow = s.narrowGalleries || [];
+        if (narrow.length) {
+            narrowNote.style.display = '';
+            narrowNote.textContent = '👓 ' + narrow.length + ' camper' + (narrow.length === 1 ? "'s" : "s'") +
+                ' reference photos all look alike — recognition may miss them with glasses on, a new haircut, or a different expression. Ask parents to add varied photos: ' +
+                narrow.slice(0, 5).join(', ') + (narrow.length > 5 ? ' +' + (narrow.length - 5) + ' more' : '');
+        } else {
+            narrowNote.style.display = 'none';
         }
     }
 }

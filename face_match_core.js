@@ -190,6 +190,27 @@
         return out.length >= 2 ? out : kept;
     }
 
+    // How varied a camper's reference gallery is = mean pairwise distance
+    // between its descriptors. A NARROW gallery (all photos look the same:
+    // one expression, one look, no glasses variety) is brittle to appearance
+    // change; a WIDE gallery spans the kid's real range and matches robustly.
+    //   Returns { count, spread, narrow } — spread in the model's distance
+    //   units; narrow=true when there's too little variety to trust across
+    //   glasses/hair/expression changes.
+    function galleryDiversity(descriptors, metric, opts) {
+        var o = Object.assign({ narrowBelow: (metric === 'cosine' ? 0.18 : 0.35), minCount: 2 }, opts || {});
+        var list = (descriptors || []).filter(function (d) { return d && d.length; });
+        if (list.length < o.minCount) return { count: list.length, spread: 0, narrow: true };
+        var sum = 0, pairs = 0;
+        for (var i = 0; i < list.length; i++) {
+            for (var j = i + 1; j < list.length; j++) {
+                sum += distanceFor(metric, list[i], list[j]); pairs++;
+            }
+        }
+        var spread = pairs ? sum / pairs : 0;
+        return { count: list.length, spread: Math.round(spread * 1000) / 1000, narrow: spread < o.narrowBelow };
+    }
+
     // Build a camper template from enrollment descriptors of ONE model:
     // { mean, all } — see matchDistance. Pass opts.metric to enable gallery
     // pruning (dedupe + outlier ejection); omit for the raw legacy behavior.
@@ -680,6 +701,7 @@
         distanceFor: distanceFor,
         buildTemplate: buildTemplate,
         pruneGallery: pruneGallery,
+        galleryDiversity: galleryDiversity,
         matchDistance: matchDistance,
         qualityTier: qualityTier,
         assignFaces: assignFaces,
