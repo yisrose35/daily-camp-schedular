@@ -1063,7 +1063,13 @@
             //   (null). Inert unless frequencyDays is configured (>0).
             var _freqDays = parseInt(specialRule.frequencyDays) || 0;
             if (_freqDays > 0) {
-                var _daysSince = getDaysSinceActivity(bunk, act);
+                // ★ Use the cooldown-specific, SCHEDULE-day-aware gap (epoch-floored;
+                //   a grade's off-day — e.g. no Sunday schedule — does NOT count
+                //   toward "6 days between") so the manual builder matches auto.
+                //   Falls back to the plain calendar variant if the helper is absent.
+                var _daysSince = (window.RotationEngine && window.RotationEngine.getDaysSinceActivityForCooldown)
+                    ? window.RotationEngine.getDaysSinceActivityForCooldown(bunk, act, 0)
+                    : getDaysSinceActivity(bunk, act);
                 if (typeof _daysSince === 'number' && _daysSince > 0 && _daysSince < _freqDays) return 999999;
             }
             // ★ availableDays weekday gate (manual-audit fix): a special restricted to

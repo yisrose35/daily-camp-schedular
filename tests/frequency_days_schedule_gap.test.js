@@ -138,4 +138,28 @@ describe('RotationEngine.getDaysSinceActivityForCooldown — uses the schedule-d
         assert.deepEqual(calls[0], ['B1', '2026-07-16', '2026-07-20'],
             'anchored on the prior occurrence date and today');
     });
+
+    it('uses the schedule-day gap even when NO rotation epoch is configured', () => {
+        // The manual builder is the common case here and many camps run without
+        // a rotation epoch. The schedule-day conversion must still apply — the
+        // epoch only floors which prior dates are visible, not the counting mode.
+        const win = boot(['rotation_engine.js']);
+        const calls = [];
+        win.SchedulerCoreUtils = {
+            getRotationEpoch: () => null, // NO epoch
+            scheduledDaysBetween: (bunk, from, to) => { calls.push([bunk, from, to]); return 2; },
+            getDaysSinceActivity: () => 4,
+        };
+        win.currentScheduleDate = '2026-07-20';
+        win.RotationEngine.getActivitiesDoneToday = () => new Set();
+        win.RotationEngine.getBunkHistory = () => ({
+            byActivity: {
+                swim: { dates: [{ dateKey: '2026-07-16', daysAgo: 4 }], daysSinceLast: 4 },
+            },
+        });
+
+        const gap = win.RotationEngine.getDaysSinceActivityForCooldown('B1', 'Swim');
+        assert.equal(gap, 2, 'schedule-day gap applies without an epoch (not the calendar 4)');
+        assert.deepEqual(calls[0], ['B1', '2026-07-16', '2026-07-20']);
+    });
 });

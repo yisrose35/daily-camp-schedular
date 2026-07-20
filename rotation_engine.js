@@ -620,8 +620,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * touching the shared history cache.)
      */
     RotationEngine.getDaysSinceActivityForCooldown = function(bunkName, activityName, beforeSlotIndex) {
+        // ★ The epoch (if any) only floors WHICH prior dates are visible — it does
+        //   NOT decide calendar-vs-schedule counting. The gap is always measured in
+        //   SCHEDULE-days (see below), so this runs whether or not an epoch is set.
         var epoch = _hrRotationEpoch();
-        if (!epoch) return RotationEngine.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
 
         var actLower = (activityName || '').toLowerCase().trim();
 
@@ -639,9 +641,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 var d = dates[i];
                 if (!d || typeof d.daysAgo !== 'number') continue;
                 if (minAll === null || d.daysAgo < minAll) minAll = d.daysAgo;
-                if (d.dateKey && String(d.dateKey) >= epoch && (best === null || d.daysAgo < best)) {
+                // Epoch floor applies only when an epoch is configured.
+                if ((!epoch || (d.dateKey && String(d.dateKey) >= epoch)) && (best === null || d.daysAgo < best)) {
                     best = d.daysAgo;
-                    bestKey = String(d.dateKey);
+                    bestKey = d.dateKey ? String(d.dateKey) : null;
                 }
             }
             // A daysSinceLast fresher than every scanned date came from the
@@ -654,9 +657,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 // ★ Cooldown gap is measured in SCHEDULE-days, not calendar days:
                 //   a day the grade isn't at camp (no schedule) must not count
                 //   toward "min N days between visits". Convert the most-recent
-                //   post-epoch occurrence's dateKey to a schedule-day gap. The
-                //   cloud-overlay dsl has no dateKey to anchor from, so it falls
-                //   through to its raw (calendar) value.
+                //   occurrence's dateKey to a schedule-day gap. The cloud-overlay
+                //   dsl has no dateKey to anchor from, so it falls through to its
+                //   raw (calendar) value.
                 if (bestKey && !_dslWins && window.SchedulerCoreUtils && window.SchedulerCoreUtils.scheduledDaysBetween) {
                     var _todayCD = window.currentScheduleDate
                         ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
@@ -668,6 +671,18 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             }
         }
 
+        // No schedule-scan anchor to convert. When there is NO epoch, defer to
+        // the plain recency source (RotationEngine.getDaysSinceActivity — which
+        // already blends history / utils / timestamp / count). There is no epoch
+        // to protect against here, and this preserves the original no-epoch
+        // behavior (the schedule-day conversion above still wins whenever the
+        // history scan finds a dateKey to anchor from). When an epoch IS set we
+        // keep the epoch-safe fallbacks below so a pre-epoch occurrence can't leak.
+        if (!epoch && typeof RotationEngine.getDaysSinceActivity === 'function') {
+            var _plainDays = RotationEngine.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            if (_plainDays !== null && _plainDays !== undefined) return _plainDays;
+        }
+
         // Utils fallback — HR-6 already epoch-floors its timestamp and its
         // count fallback reads epoch-scoped historicalCounts.
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDaysSinceActivity) {
@@ -675,11 +690,12 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (utilsDays !== null && utilsDays !== undefined) return utilsDays;
         }
 
-        // rotationHistory timestamp fallback — epoch-floored (HR-9 semantics).
+        // rotationHistory timestamp fallback — epoch-floored (HR-9 semantics)
+        // only when an epoch is set; otherwise any prior timestamp counts.
         var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
         var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
         var lastTimestamp = bunkHistory && (bunkHistory[activityName] || bunkHistory[actLower]);
-        if (lastTimestamp && lastTimestamp >= new Date(epoch + 'T00:00:00').getTime()) {
+        if (lastTimestamp && (!epoch || lastTimestamp >= new Date(epoch + 'T00:00:00').getTime())) {
             return Math.max(1, Math.floor((Date.now() - lastTimestamp) / (1000 * 60 * 60 * 24)));
         }
 
