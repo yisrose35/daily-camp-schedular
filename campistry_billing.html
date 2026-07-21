@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-product="billing">
+<head>
+    <meta charset="UTF-8" />
+    <title>Campistry Billing | Family Accounts</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <style>html:not(.css-ready) body{opacity:0}html.css-ready body{transition:opacity .15s ease}</style>
+    <link rel="stylesheet" href="campistry-unified.css">
+    <link rel="stylesheet" href="campistry_billing.css" onload="document.documentElement.classList.add('css-ready')">
+    <noscript><style>html body{opacity:1!important}</style></noscript>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="app-header">
+    <div class="header-left">
+        <a href="dashboard.html" style="text-decoration:none;font-weight:500;margin-right:16px">&larr; Dashboard</a>
+        <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
+        <div class="app-title"><span style="font-family:'Fraunces',serif;font-weight:700;font-size:1.15rem;color:var(--billing)">Campistry Billing</span></div>
+        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me">
+            <img src="Me_clean.png" alt="Me" class="app-logo-full" style="height:40px;max-height:42px;width:auto;position:relative;top:4px;">
+        </a>
+        <a href="campistry_register.html" class="header-app-switch" title="Registration"><span style="font-size:.8rem;font-weight:600;color:var(--slate-500)">Register</span></a>
+        <a href="campistry_snacks.html" class="header-app-switch" title="Campistry Snacks">
+            <img src="Snacks_clean.png" alt="Snacks" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+    </div>
+    <div class="header-right">
+        <span class="nav-user" id="navUserEmail">Office</span>
+    </div>
+</header>
+
+<!-- ═══ SIDEBAR ═══ -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+<aside id="sidebar" class="sidebar">
+    <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
+    <button class="sidebar-item" data-page="families"><span class="sidebar-dot"></span> Family Accounts</button>
+    <div class="sidebar-label">Money</div>
+    <button class="sidebar-item" data-page="payments"><span class="sidebar-dot"></span> Payments</button>
+    <button class="sidebar-item" data-page="plans"><span class="sidebar-dot"></span> Payment Plans</button>
+    <div class="sidebar-label">Setup</div>
+    <button class="sidebar-item" data-page="settings"><span class="sidebar-dot"></span> Settings</button>
+</aside>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div class="app-content">
+
+<!-- ── DASHBOARD ── -->
+<div id="page-dashboard" class="billing-page active">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+        <div><h1>Billing Overview</h1><p>Tuition billed, collected, and outstanding across your camp</p></div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon billed"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="stat-value" id="statBilled">—</div><div class="stat-label">Net Billed</div></div></div>
+        <div class="stat-card"><div class="stat-icon collected"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="statCollected">—</div><div class="stat-label">Collected</div></div></div>
+        <div class="stat-card"><div class="stat-icon outstanding"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg></div><div><div class="stat-value" id="statOutstanding">—</div><div class="stat-label">Outstanding</div></div></div>
+        <div class="stat-card"><div class="stat-icon overdue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><div><div class="stat-value" id="statOverdue">—</div><div class="stat-label">Overdue (plans)</div></div></div>
+    </div>
+
+    <div class="card"><div class="card-header"><h2>Overdue Installments</h2></div><div class="card-body" id="overdueBoard"><div class="empty-state">Loading…</div></div></div>
+    <div class="card"><div class="card-header"><h2>Revenue by Session</h2></div><div class="card-body" id="revBySession"><div class="empty-state">Loading…</div></div></div>
+    <div class="card"><div class="card-header"><h2>Recent Payments</h2></div><div class="card-body" id="recentPayments"><div class="empty-state">Loading…</div></div></div>
+</div>
+
+<!-- ── FAMILY ACCOUNTS ── -->
+<div id="page-families" class="billing-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+        <div><h1>Family Accounts</h1><p>Every family's ledger — click a row to view, charge, or take a payment</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-subtitle">Balances update live from registration and payments</div></div>
+        <div class="page-actions">
+            <div class="search-bar" style="width:260px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="famSearch" placeholder="Search family or camper..." oninput="CampistryBilling.setSearch(this.value)"></div>
+            <button class="btn btn-primary" onclick="CampistryBilling.openPayment('')">Record payment</button>
+        </div>
+    </div>
+    <div id="familiesBody"><div class="empty-state">Loading…</div></div>
+</div>
+
+<!-- ── PAYMENTS ── -->
+<div id="page-payments" class="billing-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
+        <div><h1>Payments</h1><p>Every payment received — cash, check, Zelle, card, ACH</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-subtitle">Manually recorded payments and (once enabled) online card/ACH</div></div>
+        <div class="page-actions"><button class="btn btn-primary" onclick="CampistryBilling.openPayment('')">Record payment</button></div>
+    </div>
+    <div id="paymentsBody"><div class="empty-state">Loading…</div></div>
+</div>
+
+<!-- ── PLANS ── -->
+<div id="page-plans" class="billing-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+        <div><h1>Payment Plans</h1><p>Installment schedules with a live due / overdue / paid view</p></div>
+    </div>
+    <div id="plansBody"><div class="empty-state">Loading…</div></div>
+</div>
+
+<!-- ── SETTINGS ── -->
+<div id="page-settings" class="billing-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+        <div><h1>Settings</h1><p>Payment methods, invoice text, and online payments</p></div>
+    </div>
+    <div id="settingsBody"><div class="empty-state">Loading…</div></div>
+</div>
+
+</div><!-- end app-content -->
+
+<div class="toast" id="toastEl"></div>
+
+<!-- ═══ SCRIPTS ═══ -->
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="campistry_cloud_bootstrap.js"></script>
+<script src="campistry_billing.js"></script>
+<script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
+<script>
+// Sidebar toggle + page routing (mirrors the other product pages)
+(function(){
+    var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+    function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open')}
+    function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy)}
+    h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open()});
+    bd.addEventListener('click',close);
+    sb.querySelectorAll('.sidebar-item').forEach(function(b){
+        b.addEventListener('click',function(){
+            var p=b.dataset.page;
+            sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active')});
+            b.classList.add('active');
+            document.querySelectorAll('.billing-page').forEach(function(x){x.classList.remove('active')});
+            var t=document.getElementById('page-'+p); if(t) t.classList.add('active');
+            document.querySelectorAll('.cs-bnav-item').forEach(function(x){x.classList.remove('active')});
+            var bn=document.querySelector('.cs-bnav-item[data-page="'+p+'"]');if(bn)bn.classList.add('active');
+            close();
+            if(window.CampistryBilling) CampistryBilling.show(p);
+        });
+    });
+})();
+</script>
+<script src="campistry_notes_quick.js"></script>
+
+<!-- ═══ BOTTOM NAV (mobile) ═══ -->
+<div class="cs-bnav" id="csBottomNav">
+  <button class="cs-bnav-item active" data-page="dashboard" onclick="document.querySelector('.sidebar-item[data-page=dashboard]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    Overview
+  </button>
+  <button class="cs-bnav-item" data-page="families" onclick="document.querySelector('.sidebar-item[data-page=families]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+    Families
+  </button>
+  <button class="cs-bnav-item" data-page="payments" onclick="document.querySelector('.sidebar-item[data-page=payments]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+    Payments
+  </button>
+  <button class="cs-bnav-item" data-page="plans" onclick="document.querySelector('.sidebar-item[data-page=plans]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+    Plans
+  </button>
+</div>
+<script>window.__CAMPISTRY_PRODUCT__='billing';</script>
+<script src="parent_lockout_guard.js"></script>
+<script src="product_access_guard.js"></script>
+</body>
+</html>

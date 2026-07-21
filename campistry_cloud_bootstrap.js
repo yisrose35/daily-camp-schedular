@@ -21,7 +21,7 @@
     // key back down, so a deposit made from any other browser/session (the
     // parent portal, a different admin device) would never appear here no
     // matter how many times hydration ran or how init() was re-triggered.
-    var FETCH_KEYS  = ['campStructure', 'app1', 'campistryMe', 'bunkMetaData', 'fields', 'campistrySnacks'];
+    var FETCH_KEYS  = ['campStructure', 'app1', 'campistryMe', 'bunkMetaData', 'fields', 'campistrySnacks', 'campistryBilling'];
 
     // Guard: only one successful cloud hydration per page load
     var _hydrated = false;

@@ -23,7 +23,7 @@
 
     var LABELS = {
         me: 'Campistry Me', flow: 'Flow', go: 'Go', health: 'Health',
-        snacks: 'Snacks', live: 'Live', link: 'Campistry Link'
+        snacks: 'Snacks', live: 'Live', link: 'Campistry Link', billing: 'Billing'
     };
 
     function ready(cb) {
