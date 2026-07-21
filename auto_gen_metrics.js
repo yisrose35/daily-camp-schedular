@@ -274,20 +274,50 @@
 
         worstBunks.sort(function (a, b) { return b.deadMinutes - a.deadMinutes; });
 
-        // Capacity advice — placeholders are unfilled generic tiles, which the auto
-        // engine leaves ONLY when concurrent demand for a subcategory exceeds the
-        // distinct activities/seats the camp actually has (the engine's own SEAT-AUDIT /
-        // WEEKLY-MUST shortfalls). `seatsShort` = peak simultaneous placeholder tiles of
-        // that subcat = roughly how many MORE concurrent seats (distinct activities or
-        // shared capacity) would be needed at the worst moment to fill them with real
-        // content. This is a CONFIG lever, not a solver one — no reshuffle invents
-        // variety that isn't configured.
-        var capacityAdvice = Object.keys(placeholderBySubcat).map(function (sc) {
+        // Open slots — tiles the engine DROPPED at emit under honest-open-time
+        // (scheduler_core_auto.js [GENERIC-HONEST]): unfillable, so no placeholder
+        // was manufactured. Their time already lands in uncoveredMinutes via the
+        // day windows — do NOT add it to placeholder totals (that would double-
+        // count) — but they carry the one thing the uncovered math can't know:
+        // WHICH subcategory the plan wanted there. Fold them into the capacity
+        // advice so the warning still names the exact seats that are short.
+        var openSlots = Array.isArray(opts.openSlots) ? opts.openSlots : [];
+        var openBySubcat = {};  // subcat -> { count, minutes }
+        var openIvals = {};     // subcat -> [[s,e], ...]
+        openSlots.forEach(function (o) {
+            if (!o || typeof o.startMin !== 'number' || typeof o.endMin !== 'number' || o.endMin <= o.startMin) return;
+            var key = o.subcat || '(uncategorized)';
+            if (!openBySubcat[key]) openBySubcat[key] = { count: 0, minutes: 0 };
+            openBySubcat[key].count += 1;
+            openBySubcat[key].minutes += (o.endMin - o.startMin);
+            (openIvals[key] = openIvals[key] || []).push([o.startMin, o.endMin]);
+        });
+        total.openSlots = 0;
+        total.openMinutes = 0;
+        Object.keys(openBySubcat).forEach(function (k) {
+            total.openSlots += openBySubcat[k].count;
+            total.openMinutes += openBySubcat[k].minutes;
+        });
+
+        // Capacity advice — an unfillable slot (a residual placeholder entry, or an
+        // emit-dropped open slot) exists ONLY when concurrent demand for a subcategory
+        // exceeds the distinct activities/seats the camp actually has (the engine's own
+        // SEAT-AUDIT / WEEKLY-MUST shortfalls). `seatsShort` = peak simultaneous
+        // unfillable slots of that subcat = roughly how many MORE concurrent seats
+        // (distinct activities or shared capacity) would be needed at the worst moment
+        // to fill them with real content. This is a CONFIG lever, not a solver one —
+        // no reshuffle invents variety that isn't configured.
+        var adviceKeys = {};
+        Object.keys(placeholderBySubcat).forEach(function (k) { adviceKeys[k] = 1; });
+        Object.keys(openBySubcat).forEach(function (k) { adviceKeys[k] = 1; });
+        var capacityAdvice = Object.keys(adviceKeys).map(function (sc) {
+            var ph = placeholderBySubcat[sc] || { count: 0, minutes: 0 };
+            var op = openBySubcat[sc] || { count: 0, minutes: 0 };
             return {
                 subcat: sc,
-                placeholderSlots: placeholderBySubcat[sc].count,
-                placeholderMinutes: placeholderBySubcat[sc].minutes,
-                seatsShort: peakConcurrency(placeholderIvals[sc])
+                placeholderSlots: ph.count + op.count,
+                placeholderMinutes: ph.minutes + op.minutes,
+                seatsShort: peakConcurrency((placeholderIvals[sc] || []).concat(openIvals[sc] || []))
             };
         }).sort(function (a, b) { return b.placeholderMinutes - a.placeholderMinutes; });
 
@@ -296,6 +326,7 @@
             fillRatePct: Math.round(total.fillRate * 1000) / 10,
             freeBySource: freeBySource,
             placeholderBySubcat: placeholderBySubcat,
+            openBySubcat: openBySubcat,
             capacityAdvice: capacityAdvice,
             byDivision: byDivision,
             worstBunks: worstBunks.slice(0, opts.worstLimit || 10)
@@ -358,7 +389,10 @@
             var result = computeAutoGenMetrics(
                 (typeof window !== 'undefined') ? window.scheduleAssignments : null,
                 divTimes,
-                { dayWindows: buildDayWindows(divTimes) }
+                { dayWindows: buildDayWindows(divTimes),
+                  // tiles the engine dropped as honest open time ([GENERIC-HONEST]) —
+                  // they still drive the capacity advice's per-subcat attribution
+                  openSlots: ((typeof window !== 'undefined') && window.__genOpenSlots) || [] }
             );
             if (typeof window !== 'undefined') {
                 window.__lastGenMetrics = result;
@@ -408,16 +442,17 @@
                         console.log('   • ' + b.bunk + winStr + ': ' + b.uncoveredMinutes + 'min empty @ ' + where);
                     });
                 }
-                // Capacity advice: placeholders are a CONFIG lever, not a solver one —
-                // the engine already ran absorb/reorder/seat-enforce and left these
-                // because concurrent demand outran the distinct activities configured.
-                // Tell the owner, per subcat, how many more concurrent seats would fill.
+                // Capacity advice: unfillable slots are a CONFIG lever, not a solver
+                // one — the engine already ran fill/surplus/absorb/reorder/seat-enforce
+                // and left these open because concurrent demand outran the distinct
+                // activities configured. Tell the owner, per subcat, how many more
+                // concurrent seats would fill them.
                 if (result.capacityAdvice && result.capacityAdvice.length) {
                     var advice = result.capacityAdvice
                         .filter(function (a) { return a.seatsShort > 0; })
                         .map(function (a) {
                             return '+' + a.seatsShort + ' seat(s) of "' + a.subcat + '" '
-                                 + '(' + a.placeholderSlots + ' dead tile(s)/' + a.placeholderMinutes + 'min)';
+                                 + '(' + a.placeholderSlots + ' unfillable slot(s)/' + a.placeholderMinutes + 'min)';
                         });
                     if (advice.length) {
                         console.log('%c[GenMetrics] to fill the dead space, add activities/sharing: '

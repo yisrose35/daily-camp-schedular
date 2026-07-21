@@ -106,6 +106,10 @@ function campConfig(opts) {
       autoStartStr: '9:00', autoEndStr: '15:00',
       smooth: true, smoothOffGrid: !!opts.smoothOffGrid, noSports: true,
       smoothPartialBell: !!opts.smoothPartialBell,
+      // SURPLUS test passthroughs (see the default return below)
+      specialsOverride: opts.specialsOverride || null,
+      subQuantities: opts.subQuantities || null,
+      subOps: opts.subOps || null,
     };
   }
   if (opts.swimReal) {
@@ -297,6 +301,11 @@ function campConfig(opts) {
     //   deliver in the day → the pre-layout reconciliation must clamp the aggregate
     //   floor and demote the surplus to opportunistic (asserted via its log line).
     oversub: !!opts.oversub,
+    // SURPLUS test passthroughs: a scenario-supplied special catalog (config-
+    //   shaped) and scenario-supplied subcategory demands on the special layer.
+    specialsOverride: opts.specialsOverride || null,
+    subQuantities: opts.subQuantities || null,
+    subOps: opts.subOps || null,
   };
 }
 
@@ -524,11 +533,14 @@ function buildLayers(cfg) {
         periodMin: 20, durationMin: 20, durationMax: 20,
         startMin: _lunchS, endMin: _lunchS + 20, qty: 1, op: '=',
       });
-      layers.push({                                                          // fill the rest from specials
+      const _smoothSpec = {                                                  // fill the rest from specials
         grade, type: 'special', name: 'Special',
         periodMin: 20, durationMin: 10,
         startMin: HM(9, 0), endMin: HM(15, 0), qty: 1, op: '>=',
-      });
+      };
+      // generic passthrough (SURPLUS test): scenario-supplied subcategory demands.
+      if (cfg.subQuantities) { _smoothSpec.subQuantities = cfg.subQuantities; _smoothSpec.subOps = cfg.subOps || {}; }
+      layers.push(_smoothSpec);
       continue;
     }
 
@@ -733,6 +745,8 @@ function buildLayers(cfg) {
       // oversub: every bunk demands the single cap-1 'shiur' seat (floor = 1) →
       //   14 floors against 1 seat, which the reconciliation pass must clamp.
       if (cfg.oversub) { _specLayer.subQuantities = { shiur: 1 }; _specLayer.subOps = { shiur: '=' }; }
+      // generic passthrough (SURPLUS test): scenario-supplied subcategory demands.
+      if (cfg.subQuantities) { _specLayer.subQuantities = cfg.subQuantities; _specLayer.subOps = cfg.subOps || {}; }
       layers.push(_specLayer);
     }
 
@@ -981,7 +995,11 @@ function buildSandbox(opts) {
   sportList.forEach(s => { sportMetaData[s] = { minPlayers: 1, maxPlayers: 99 }; });
 
   const activityProperties = {};
-  if (cfg.smooth) {
+  if (cfg.specialsOverride) {
+    // scenario-supplied catalog (already config-shaped): the engine resolves
+    // subcategory/sharing from activityProperties, so it must see the SAME objects.
+    cfg.specialsOverride.forEach(s => { activityProperties[s.name] = s; });
+  } else if (cfg.smooth) {
     SMOOTH_SPECIALS.forEach(s => { activityProperties[s.name] = smoothSpecialConfig(s); });
   } else {
     SPECIALS.forEach(s => { activityProperties[s.name] = specialConfig(s, specialDur, cfg.oversub); });
@@ -1040,7 +1058,10 @@ function buildSandbox(opts) {
   const globalSettings = {
     app1: {
       fields: fieldList.slice(),
-      specialActivities: cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub)),
+      // specialsOverride: a scenario-supplied catalog (already in config shape) —
+      //   used by the SURPLUS test to mix subcategories/sharing inside a smooth day.
+      specialActivities: cfg.specialsOverride ? cfg.specialsOverride
+        : cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub)),
       sportMetaData,
       disabledFields,
       divisions,
@@ -1849,10 +1870,16 @@ test('auto scheduler coalesces the off-grid remainder into one small sliver (fie
   const auto = Object.entries(results).filter(([b, r]) => r.grade === 'Auto');
   // (specialDur is asserted for ALL bunks inside runScenario — a stretched
   //   special hard-fails there. Here we add the anti-fragmentation bound.)
-  const COALESCED_MAX = 20; // one sub-floor remainder; fragmentation leaves many
+  // HONEST-OPEN contract: the unfillable remainder sliver is no longer dressed
+  //   up as a generic "Special: …" tile — it is dropped at emit and shows as
+  //   OPEN time. So the coalescence guard now reads the sliver as a gap:
+  //   at most ONE contiguous run, no bigger than the single sub-floor
+  //   remainder (25 min here). Fragmentation (the df31dd5 regression) leaves
+  //   MANY runs and hundreds of minutes — still hard-fails.
+  const COALESCED_MAX = 25; // the one sub-floor remainder sliver, now visible as open time
   const fragmented = auto
-    .filter(([b, r]) => r.gapMin > COALESCED_MAX)
-    .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+    .filter(([b, r]) => r.gapMin > COALESCED_MAX || (r.gaps || []).length > 1)
+    .map(([b, r]) => `${b}:${r.gapMin}min in ${(r.gaps || []).length} run(s) (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   assert.deepEqual(fragmented, [], 'off-grid day must coalesce to one small sliver per bunk — ' +
     'fragmentation here means field-less anchors are wrongly pinned again:\n  ' + fragmented.join('\n  '));
 });
@@ -1998,4 +2025,58 @@ test('auto scheduler reconciles over-subscribed demand against capacity (cap-1 s
         `cap-1 'VR' double-booked: ${a.bunk} ${fmt(a.s)}-${fmt(a.e)} overlaps ${b.bunk} ${fmt(b.s)}-${fmt(b.e)}`);
     }
   }
+});
+
+test('auto scheduler fills an unseatable subcat tile from cross-subcat SURPLUS (no placeholder, no forced sport)', async (t) => {
+  // THE SURPLUS CONTRACT ("no filler concept"): a subcat's planned quantity is a
+  //   FLOOR, and the camp's OTHER real specials — the surplus above each floor —
+  //   are what fills a tile whose own subcat has no seat left. Here 14 sportless
+  //   bunks each plan one 40-min 'food' tile but the camp has ONE cap-1 food
+  //   special (Baking) — most bunks can never seat it. The fill must draw a real
+  //   'theme' special instead: no generic "Special: …" placeholder may survive,
+  //   and no Sport may be manufactured (requireNoSports).
+  const XDIV = { type: 'cross_division', divisions: [],
+    capacity: 20, allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } };
+  const mk = (name, dur, subcat) => ({
+    name, location: name + ' Rm', type: 'Special', subcategory: subcat,
+    duration: dur, durationMin: dur,
+    sharableWith: XDIV, timeRules: [], availableDays: null,
+  });
+  const specialsOverride = [
+    // the thin floor: ONE distinct food special — but the layer demands food '=' 2,
+    // so every bunk's SECOND food tile can never fill from its own subcat (no
+    // same-day repeat). Seat-rich (cap 20) so capacity is NOT the limiter here.
+    mk('Baking', 40, 'food'),
+    // the surplus: six 40-min themes (surplus must match the tile length)…
+    mk('Drama', 40, 'theme'), mk('Art Shoppes', 40, 'theme'), mk('Accessorize', 40, 'theme'),
+    mk('Pioneering', 40, 'theme'), mk('Gymnastics', 40, 'theme'), mk('Woodworking', 40, 'theme'),
+    // …and the catalog's shorter themes for the sliver tiles (durations mirror
+    // SMOOTH_SPECIALS so the harness's stretched-duration guard stays valid)
+    mk('Neranitas', 20, 'theme'), mk('Arts & Crafts', 20, 'theme'), mk('Foam Pit', 20, 'theme'),
+    mk('Ice Cream', 20, 'theme'), mk('Shiur', 20, 'theme'),
+    mk('Slush', 10, 'theme'), mk('Popcorn', 10, 'theme'),
+  ];
+  const { results, sandbox } = await runScenario('SURPLUS CROSS-SUBCAT (food floor 2, one food special)', {
+    smooth: true, requireNoSports: true, skipGapCheck: true, specialsOverride,
+    subQuantities: { food: 2 }, subOps: { food: '=' },
+  });
+  // 1) the surplus pass actually fired (positive evidence, not just absence of placeholders)
+  assert.ok((sandbox.__logs || []).some(l => String(l).includes('[GENERIC-SURPLUS]')),
+    'the cross-subcat SURPLUS pass must fire when a subcat tile cannot fill from its own subcat');
+  // 2) no dressed-up placeholder survives to the emitted schedule
+  const generics = [];
+  for (const [bunk, slots] of Object.entries(sandbox.scheduleAssignments || {})) {
+    (slots || []).forEach(s => { if (s && s._generic === true) generics.push(`${bunk}: ${s._activity}`); });
+  }
+  assert.deepEqual(generics, [], 'no generic placeholder tile may survive surplus fill:\n  ' + generics.join('\n  '));
+  // 3) the day stays REAL for the asserted grade — the unfillable second food
+  //    tile is surplus-filled with a theme, not gapped. (Chair's shorter
+  //    configured day reads as scenario-frame gaps in every smooth test and is
+  //    not asserted there either.) Allow at most one tile-sized honest-open
+  //    remainder per bunk, nothing worse.
+  const badGaps = Object.entries(results)
+    .filter(([b, r]) => r.grade === 'Auto')
+    .filter(([b, r]) => r.gapMin > 40)
+    .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+  assert.deepEqual(badGaps, [], 'the unfillable food tile must surplus-fill with a real theme special, not go dead:\n  ' + badGaps.join('\n  '));
 });

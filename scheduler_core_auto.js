@@ -682,6 +682,11 @@
         log('AUTO SCHEDULER v' + VERSION + ' — WHAT→WHEN→WHERE Engine');
         log('═══════════════════════════════════════════════════════════');
 
+        // ★ Reset the honest-open side-channel every run: the GENERIC-HONEST emit
+        //   (GL path) repopulates it; a legacy-path run must not leave GenMetrics
+        //   reading a PRIOR run's dropped-tile list.
+        try { window.__genOpenSlots = []; } catch (_eOpenReset) {}
+
         // ★ Pull authoritative league history from the cloud before generating, so
         //   today's matchups + sports come from the true cross-session record. Best-
         //   effort + time-boxed (see SchedulerCoreLeagues.refreshHistoryFromCloud).
@@ -19357,6 +19362,7 @@
                                                   // equal-dur sport/special slot could fill it) vs stuck (free
                                                   // capacity only at wall-times → config / layout-spread only).
                                                   : (_glCapRecoverable(t, grade, pool, used, res.tiles) ? 'capacity-recoverable' : 'capacity-stuck');
+                                        t._missCause = cause;   // remembered so a later pass (surplus fill) can un-count it
                                         _glFill.causes[cause] = (_glFill.causes[cause] || 0) + 1;
                                         if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min [' + cause + ']');
                                     }
@@ -19399,6 +19405,89 @@
                                     }
                                 }
                             } catch (_glStagErr) { try { warn('[GENERIC-STAGGER] error — left as-is: ' + (_glStagErr && _glStagErr.message)); } catch (_e) {} }
+                            // ── SURPLUS FILL (cross-subcat; default ON — kill: window.__surplusFill=false):
+                            // A layer's qty is a FLOOR ("at least 2 of X"), not the day's variety budget.
+                            // When a tile's OWN subcat has nothing left (pool-exhausted / duration trap /
+                            // capacity), the camp's OTHER configured specials — the surplus above each
+                            // floor — are the legitimate fill, never a manufactured placeholder. Draw from
+                            // the bunk's FULL priorityList (rotation-best first, ALL subcats) through the
+                            // EXACT gates the main fill uses (same-day uniqueness, duration match, capFits)
+                            // plus the operator's explicit per-subcat daily CEILING (subcategoryCap: "at
+                            // most N of X" binds surplus too). Weekly-must protected subcats are skipped —
+                            // GENERIC-RELEASE-WEEKLY owns those (it is deadline-aware). Runs BEFORE absorb
+                            // so a real special always beats a Sport conversion; whatever still misses
+                            // becomes honest OPEN time at emit (no filler concept anywhere).
+                            try {
+                                if ((typeof window === 'undefined') || (window.__surplusFill !== false)) {
+                                    // protected weekly-must subcats (mirror the reorder-convert protect set)
+                                    var _spByName = {};
+                                    try { if (typeof todaysSpecials !== 'undefined' && todaysSpecials) todaysSpecials.forEach(function (s) { if (s && s.name) _spByName[s.name] = s; }); } catch (_e) {}
+                                    var _spProtect = {};
+                                    try {
+                                        Object.keys(_glNamesBySub || {}).forEach(function (sub) {
+                                            (_glNamesBySub[sub] || []).forEach(function (nm) {
+                                                var ap = _spByName[nm] || (window.activityProperties && window.activityProperties[nm]) || null;
+                                                if (ap && parseInt(ap.minFrequency, 10) > 0) _spProtect[sub] = true;
+                                            });
+                                        });
+                                    } catch (_e) {}
+                                    var _spFilled = 0;
+                                    _glOrder.forEach(function (bunk) {
+                                        var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
+                                        var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
+                                        var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        var pool = (sl && sl.specials && sl.specials.priorityList) || [];
+                                        if (!pool.length) return;
+                                        var open = res.tiles.filter(function (t) { return t && t.kind === 'special' && t.generic !== false && !t._concrete && !_spProtect[_glCanon(t.subcat)]; });
+                                        if (!open.length) return;
+                                        // same-day uniqueness: everything already on the bunk (filled or wall)
+                                        var used = {};
+                                        res.tiles.forEach(function (t) { if (t && t._concrete) used[String(t._concrete).toLowerCase()] = 1; else if (t && t.generic === false && t.name) used[String(t.name).toLowerCase()] = 1; });
+                                        // operator ceilings: explicit finite subcategoryCap = hard per-day cap.
+                                        // Count CONCRETE placements only (an unfilled tile that will drop to
+                                        // open time must not consume the ceiling).
+                                        var _caps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
+                                        var _capOf = {};
+                                        Object.keys(_caps).forEach(function (k) { var c = _caps[k]; if (c != null && c !== Infinity && isFinite(c)) _capOf[_glCanon(k)] = +c; });
+                                        var _subCount = {};
+                                        res.tiles.forEach(function (t) {
+                                            if (!t || t.kind !== 'special' || !t._concrete) return;
+                                            var sp0 = _spByName[t._concrete];
+                                            var k0 = _glCanon((sp0 && sp0.subcategory) || t.subcat);
+                                            _subCount[k0] = (_subCount[k0] || 0) + 1;
+                                        });
+                                        open.sort(function (a, b) { return a.startMin - b.startMin; });
+                                        open.forEach(function (t) {
+                                            var dur = t.durationMin, pick = null;
+                                            for (var i = 0; i < pool.length; i++) {
+                                                var c = pool[i];
+                                                if (!c || !c.name) continue;
+                                                if (used[String(c.name).toLowerCase()]) continue;              // no same-day repeat (strict)
+                                                var cSub = _glCanon(c.subcategory);
+                                                if (_capOf[cSub] != null && (_subCount[cSub] || 0) >= _capOf[cSub]) continue; // "at most N" ceiling binds surplus too
+                                                var durs = _glSpecialDurs(c.name);
+                                                var fits = durs.length ? (durs.indexOf(dur) >= 0) : true;      // no configured durs ⇒ flex ⇒ fits
+                                                if (!fits) continue;
+                                                if (!_glCapFits(c, grade, t.startMin, t.endMin)) continue;     // sharing/capacity — the hard gate
+                                                pick = c; break;                                               // priorityList order ⇒ rotation-best across ALL subcats
+                                            }
+                                            if (!pick) return;
+                                            t._concrete = pick.name;
+                                            t._fillLoc = pick.location || null;
+                                            t.subcat = pick.subcategory || t.subcat;                           // tile follows what was actually placed
+                                            t._origin = 'surplus-fill';
+                                            used[String(pick.name).toLowerCase()] = 1;
+                                            _subCount[_glCanon(pick.subcategory)] = (_subCount[_glCanon(pick.subcategory)] || 0) + 1;
+                                            _glRecordUse(pick, grade, t.startMin, t.endMin);
+                                            _spFilled++;
+                                            _glFill.filled++; _glFill.miss = Math.max(0, _glFill.miss - 1);
+                                            _glFill.surplus = (_glFill.surplus || 0) + 1;
+                                            if (t._missCause) { _glFill.causes[t._missCause] = Math.max(0, (_glFill.causes[t._missCause] || 0) - 1); t._missCause = null; }
+                                        });
+                                    });
+                                    if (_spFilled) log('[GENERIC-SURPLUS] ' + _spFilled + ' open tile(s) filled from the camp\'s own SURPLUS — the rotation-best real special from ANY subcategory (floors were already satisfied by the main fill; no placeholder, no forced sport)');
+                                }
+                            } catch (_glSpFillErr) { try { warn('[GENERIC-SURPLUS] error — tiles left open: ' + (_glSpFillErr && _glSpFillErr.message)); } catch (_e) {} }
                             // ── ABSORB: "if you can't fill a special, use a sport" ─────────────
                             // The still-OPEN stretches (empty specials + the layout's generic sport filler)
                             // are re-tiled into ≤40-min blocks; each block becomes a Sport WHERE THE CAMP'S
@@ -19623,7 +19712,10 @@
                                         var used = {};
                                         res.tiles.forEach(function (t) { if (t && t._concrete) used[String(t._concrete).toLowerCase()] = 1; else if (t && t.generic === false && t.name) used[String(t.name).toLowerCase()] = 1; });
                                         phs.forEach(function (t) {
-                                            if (!_rwReleasable(bunk, grade, _glCanon(t.subcat))) { _rwKept++; return; }   // now-or-never → keep the reservation
+                                            // now-or-never → keep the reservation. _weeklyKeep exempts it from the
+                                            // honest-open emit drop: a deadline-day weekly promise stays VISIBLE as
+                                            // its named tile (the one placeholder that carries real meaning).
+                                            if (!_rwReleasable(bunk, grade, _glCanon(t.subcat))) { t._weeklyKeep = true; _rwKept++; return; }
                                             // (1) CROSS-subcat real fill — any free special of the tile's length (same gates as the main fill)
                                             var dur = t.durationMin, pick = null;
                                             for (var i = 0; i < pool.length; i++) {
@@ -19873,11 +19965,31 @@
                         }
                     } catch (_splessErr) { try { warn('[GENERIC-SPORTLESS] error — ' + (_splessErr && _splessErr.message)); } catch (_e) {} }
 
+                    // ── HONEST OPEN TIME (default ON — kill: window.__honestOpenTime=false): a
+                    // SPECIAL tile that reaches emit with NO concrete activity is not dressed up as
+                    // anything — no "Special: Uncategorized" cell. Every real activity got its chance
+                    // (own-subcat fill → stagger → SURPLUS → absorb → reorder → release); what's left
+                    // is genuine over-capacity, so the grid shows OPEN time ("+ Add") and the
+                    // GenMetrics capacity advice names the exact seats that are short. Two exemptions:
+                    //   • a weekly-must reservation on its deadline day (_weeklyKeep, set by
+                    //     GENERIC-RELEASE-WEEKLY) keeps its named tile so the promise stays visible;
+                    //   • generic SPORT tiles are KEPT — they come from the camp's OWN sport layers
+                    //     (a real planned demand; "Sport" without a named field is still the camp's
+                    //     plan, e.g. field-less camps). Sportless grades can't hit this: the
+                    //     GENERIC-SPORTLESS pass above converts their residual sport tiles to
+                    //     specials, which then drop here — so no phantom "Sport" AND no fake special.
+                    var _glOpenSlots = [], _glOpenMin = 0;
+                    var _glHonestOpen = (typeof window === 'undefined') || (window.__honestOpenTime !== false);
                     _glOrder.forEach(function (bunk) {
                         var grade = _bunkToGrade[String(bunk)];
                         var res = _glOut.layoutByBunk[bunk];
                         if (!res) return;
                         res.tiles.forEach(function (t) {
+                            if (_glHonestOpen && t.kind === 'special' && t.generic !== false && !t._concrete && !t._weeklyKeep) {
+                                _glOpenMin += Math.max(0, t.endMin - t.startMin);
+                                _glOpenSlots.push({ bunk: bunk, division: grade, startMin: t.startMin, endMin: t.endMin, subcat: t.subcat || 'uncategorized', kind: t.kind });
+                                return;   // honest open time — nothing manufactured
+                            }
                             // a FILLED special tile carries a concrete activity (_concrete) → emit that as
                             // the event and mark it NON-generic so same-day-repeat validation applies to it
                             // (no two Basketballs); an unfilled tile keeps its generic "Special: <subcat>"
@@ -19886,6 +19998,13 @@
                             _genSkeleton.push({ division: grade, _bunk: bunk, startMin: t.startMin, endMin: t.endMin, startTime: minutesToTimeLabel(t.startMin), endTime: minutesToTimeLabel(t.endMin), type: t.kind, event: _ev, _generic: t._concrete ? false : !!t.generic, _subcat: t.subcat || null, _specialLocation: t._fillLoc || null });
                         });
                     });
+                    // expose the dropped tiles (fresh each run) so GenMetrics can attribute the open
+                    // time to a subcategory in its capacity advice — the WARNING the user chose over
+                    // repeat-fill. Empty array on a clean run so no stale prior-run data lingers.
+                    try { if (typeof window !== 'undefined') window.__genOpenSlots = _glOpenSlots; } catch (_e) {}
+                    if (_glOpenSlots.length) {
+                        log('[GENERIC-HONEST] ' + _glOpenSlots.length + ' unfillable tile(s) (' + _glOpenMin + ' min) left as OPEN time — every real activity was tried (own subcat → surplus → sport); the remainder is over-capacity. See the [GenMetrics] capacity advice for the exact seats to add.');
+                    }
 
                     window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(_genSkeleton, divisions);
                     allGrades.forEach(function (grade) {
@@ -19982,6 +20101,7 @@
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
+                                + (_glFill.surplus ? (' (' + _glFill.surplus + ' filled from cross-subcat SURPLUS)') : '')
                                 + (_anyAbsorb ? (' — open time → ' + (_glFill.absorbed || 0) + ' Sport block(s)'
                                        + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')
                                        + (_glFill.absorbSplit ? (' + ' + _glFill.absorbSplit + ' split into shorter specials (stuck 40-min → theme/food combos)') : '')

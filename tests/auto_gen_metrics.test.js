@@ -313,3 +313,97 @@ describe('computeAutoGenMetrics — aggregation', () => {
         assert.deepStrictEqual(m.freeBySource, {});
     });
 });
+
+// ---------------------------------------------------------------------------
+// Open slots — tiles the engine dropped at emit as honest open time
+// ([GENERIC-HONEST] in scheduler_core_auto.js, exposed as window.__genOpenSlots
+// and passed here as opts.openSlots). Their time is already counted as
+// uncovered via the day windows; they exist so the capacity advice can still
+// attribute the open time to the subcategory the plan wanted there.
+// ---------------------------------------------------------------------------
+describe('computeAutoGenMetrics — open slots (honest open time)', () => {
+    it('feeds capacityAdvice from open slots when no placeholder entries exist', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 580)] } } };
+        const sched = { b1: [act('Basketball')] };
+        const openSlots = [
+            { bunk: 'b1', division: 'A', startMin: 580, endMin: 620, subcat: 'food', kind: 'special' },
+            { bunk: 'b2', division: 'A', startMin: 580, endMin: 620, subcat: 'food', kind: 'special' }
+        ];
+        const m = computeAutoGenMetrics(sched, divisionTimes, { openSlots });
+        // advice: two overlapping food slots => 2 seats short
+        assert.strictEqual(m.capacityAdvice.length, 1);
+        assert.strictEqual(m.capacityAdvice[0].subcat, 'food');
+        assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 2);
+        assert.strictEqual(m.capacityAdvice[0].placeholderMinutes, 80);
+        assert.strictEqual(m.capacityAdvice[0].seatsShort, 2);
+        // NOT double-counted as placeholder dead space (that would inflate dead)
+        assert.strictEqual(m.total.placeholderSlots, 0);
+        assert.strictEqual(m.total.placeholderMinutes, 0);
+        assert.strictEqual(m.total.openSlots, 2);
+        assert.strictEqual(m.total.openMinutes, 80);
+        assert.strictEqual(m.openBySubcat.food.count, 2);
+    });
+
+    it('serialized open slots need only 1 seat', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 580)] } } };
+        const sched = { b1: [act('Basketball')] };
+        const openSlots = [
+            { startMin: 580, endMin: 620, subcat: 'theme', kind: 'special' },
+            { startMin: 620, endMin: 660, subcat: 'theme', kind: 'special' }
+        ];
+        const m = computeAutoGenMetrics(sched, divisionTimes, { openSlots });
+        assert.strictEqual(m.capacityAdvice[0].seatsShort, 1);
+        assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 2);
+    });
+
+    it('merges open slots WITH residual placeholder entries of the same subcat', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640)] } } };
+        const sched = { b1: [placeholder('shiur')] }; // e.g. a _weeklyKeep reservation
+        const openSlots = [{ startMin: 600, endMin: 640, subcat: 'shiur', kind: 'special' }];
+        const m = computeAutoGenMetrics(sched, divisionTimes, { openSlots });
+        assert.strictEqual(m.capacityAdvice.length, 1);
+        assert.strictEqual(m.capacityAdvice[0].subcat, 'shiur');
+        assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 2);   // 1 placeholder + 1 open
+        assert.strictEqual(m.capacityAdvice[0].seatsShort, 2);         // they overlap
+        // dead-space totals still count ONLY the real placeholder entry
+        assert.strictEqual(m.total.placeholderSlots, 1);
+        assert.strictEqual(m.total.placeholderMinutes, 40);
+    });
+
+    it('open-slot time shows as uncovered against the day window (honest empty)', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 580)] } } };
+        const sched = { b1: [act('Basketball')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes, {
+            dayWindows: { A: { startMin: 540, endMin: 660 } },
+            openSlots: [{ startMin: 580, endMin: 620, subcat: 'food', kind: 'special' }]
+        });
+        // covered 40 of the 120-min day => 80 uncovered (incl. the dropped tile's 40)
+        assert.strictEqual(m.total.uncoveredMinutes, 80);
+        assert.strictEqual(m.capacityAdvice[0].subcat, 'food');
+        assert.strictEqual(m.capacityAdvice[0].seatsShort, 1);
+    });
+
+    it('ignores malformed open slots and defaults missing subcat', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 580)] } } };
+        const sched = { b1: [act('Basketball')] };
+        const openSlots = [
+            null,
+            { startMin: 620, endMin: 600, subcat: 'food' },   // backwards
+            { startMin: 'x', endMin: 640, subcat: 'food' },   // non-numeric
+            { startMin: 600, endMin: 640 }                    // no subcat -> (uncategorized)
+        ];
+        const m = computeAutoGenMetrics(sched, divisionTimes, { openSlots });
+        assert.strictEqual(m.total.openSlots, 1);
+        assert.strictEqual(m.capacityAdvice[0].subcat, '(uncategorized)');
+    });
+
+    it('no openSlots option -> totals are zero and advice is unchanged', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640)] } } };
+        const sched = { b1: [placeholder('food')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.strictEqual(m.total.openSlots, 0);
+        assert.strictEqual(m.total.openMinutes, 0);
+        assert.strictEqual(m.capacityAdvice.length, 1);
+        assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 1);
+    });
+});
