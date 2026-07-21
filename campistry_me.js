@@ -513,7 +513,7 @@ function _familyBundlesHtml(optHighlight){
     var addToExisting=suggestions.addToExisting;
     var totalSuggestions=newFams.length+addToExisting.length;
 
-    var h='<div class="sec-hd"><div><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
+    var h='<div class="sec-hd"><div><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
 
     // Show suggestions banner
     if(newFams.length||addToExisting.length){
@@ -5172,6 +5172,28 @@ function exportFamilyReport(){
     });
     dlCsv('campistry_families_'+new Date().toISOString().split('T')[0]+'.csv',csv);
 }
+// Printable family roster (Save-as-PDF) — the print side of "print & export for
+// families" from the March update.
+function printFamilies(){
+    var campName='';
+    try{ campName=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName)||''; }catch(e){}
+    var rows=Object.values(families).sort(function(a,b){return(a.name||'').localeCompare(b.name||'')}).map(function(f){
+        var pp=(f.households||[])[0]?.parents?.[0]||{};
+        var kids=(f.camperIds||[]).map(function(n){return esc(n)}).join(', ');
+        return '<tr><td>'+esc(f.name||'')+'</td><td>'+kids+'</td><td>'+esc(pp.name||'')+'</td><td>'+esc(pp.phone||'')+'</td><td>'+esc(pp.email||'')+'</td><td class="right">'+fm(f.balance||0)+'</td></tr>';
+    }).join('');
+    var w=window.open('','_blank');
+    if(!w){ toast('Allow pop-ups to print'); return; }
+    var css='body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}h1{font-size:18pt;margin:0 0 12px}'
+        +'table{width:100%;border-collapse:collapse;font-size:10pt}th,td{border:1px solid #ccc;padding:5px 8px;text-align:left}'
+        +'th{background:#f3f3f3}.right{text-align:right}@media print{.noprint{display:none}}';
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Families'+(campName?' — '+esc(campName):'')+'</title><style>'+css+'</style></head><body>'
+        +'<h1>'+esc(campName||'Camp')+' — Families ('+Object.keys(families).length+')</h1>'
+        +'<table><thead><tr><th>Family</th><th>Campers</th><th>Primary Parent</th><th>Phone</th><th>Email</th><th class="right">Balance</th></tr></thead><tbody>'+rows+'</tbody></table>'
+        +'<div class="noprint" style="text-align:center;margin-top:18px"><button onclick="window.print()" style="padding:8px 24px;cursor:pointer">Print / Save as PDF</button></div>'
+        +'</body></html>');
+    w.document.close();
+}
 function exportEnrollmentReport(){
     var csv='Camper,Session,Status,Applied Date,Tuition,Discount,Paid,Balance,Payment Status,Forms Done\n';
     Object.values(enrollments).sort(function(a,b){return(a.camperName||'').localeCompare(b.camperName||'')}).forEach(function(e){
@@ -6332,7 +6354,7 @@ window.CampistryMe={
     addLinkDigitalForm:addLinkDigitalForm,addLinkPrintForm:addLinkPrintForm,addLinkDocument:addLinkDocument,
     editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
-    exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,
+    exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Settings
