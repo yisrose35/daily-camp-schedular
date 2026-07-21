@@ -4037,17 +4037,37 @@ function finStaffModal(i){
             +'<div><label class="fl">Salary ($)</label><input id="stSalary" class="fi" type="number" min="0" step="1" value="'+(s.salary||'')+'"></div>'
             +'<div><label class="fl">Bunk assignment</label><select id="stBunk" class="fi">'+bunkOpts+'</select></div>'
         +'</div>';
+    // Salary history (raises over time)
+    var sh=Array.isArray(s.salaryHistory)?s.salaryHistory:[];
+    if(sh.length){
+        body+='<div class="fsec" style="margin:14px 0 6px">Salary History</div><div style="border:1px solid var(--s200);border-radius:var(--r);padding:8px 12px">';
+        sh.slice().reverse().forEach(function(r){
+            var dt=r.date?new Date(r.date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+            var up=(r.to||0)>=(r.from||0);
+            body+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;padding:3px 0;border-bottom:1px solid var(--s100)"><span style="color:var(--s500)">'+esc(dt)+'</span>'
+                +'<span style="font-weight:600;color:var(--s700)"><span style="color:var(--s400)">'+fm(r.from||0)+'</span> → '+fm(r.to||0)+' <span style="color:'+(up?'var(--ok)':'var(--err)')+'">'+(up?'▲':'▼')+'</span></span></div>';
+        });
+        body+='</div>';
+    }
     showModal(editing?'Edit Staff':'Add Staff',body,function(){
         var name=(document.getElementById('stName').value||'').trim();
         if(!name){ toast('Name is required'); return; }
+        var newSalary=parseFloat(document.getElementById('stSalary').value)||0;
+        // Log salary changes over time (raises / cuts) with an effective date.
+        var salaryHistory=Array.isArray(s.salaryHistory)?s.salaryHistory.slice():[];
+        var prevSalary=editing?(s.salary||0):0;
+        if(newSalary!==prevSalary){
+            salaryHistory.push({date:new Date().toISOString(),from:prevSalary,to:newSalary});
+        }
         var rec={
             id:s.id||Date.now(),
             name:name,
             role:(document.getElementById('stRole').value||'Counselor').trim(),
             type:document.getElementById('stType').value||'seasonal',
-            salary:parseFloat(document.getElementById('stSalary').value)||0,
+            salary:newSalary,
             bunk:document.getElementById('stBunk').value||'',
-            photo:_staffPhotoBuf||''
+            photo:_staffPhotoBuf||'',
+            salaryHistory:salaryHistory
         };
         if(editing) finStaff[i]=Object.assign({},s,rec);
         else finStaff.push(rec);
