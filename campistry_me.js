@@ -10,6 +10,7 @@ var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
+var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
@@ -109,6 +110,7 @@ function loadData(){
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         formConfig=me.formConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
+        savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
         // Ensure promoCodes live inside enrollSettings
         if(me.promoCodes&&!enrollSettings.promoCodes)enrollSettings.promoCodes=me.promoCodes;
         // Analytics & Finance
@@ -183,6 +185,7 @@ function save(){
             enrollSettings:enrollSettings,
             formConfig:formConfig,
             printSheets:printSheets,
+            savedReports:savedReports,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         });
@@ -5124,8 +5127,34 @@ function deleteLinkItem(type,idx){
 // ═══════════════════════════════════════════════════════════════
 function renderReports(){
     var c=document.getElementById('page-reports');
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Generate and download camp reports</p></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Build any report you want, or grab a quick one below</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openReportBuilder()">+ Build Report</button></div></div>';
 
+    // ── Custom / saved reports ──────────────────────────────────────────────
+    h+='<div class="fsec" style="margin:4px 0 8px">My Reports</div>';
+    if(!savedReports.length){
+        h+='<div class="me-card" style="padding:18px;margin-bottom:18px"><div style="font-size:.82rem;color:var(--s400)">No saved reports yet. Click <strong>+ Build Report</strong> to choose a data source, pick your fields, add filters, group by any field, and save it — as a live report that refreshes each time, or a frozen snapshot.</div></div>';
+    }else{
+        h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:18px">';
+        savedReports.forEach(function(r){
+            var srcLabel=({campers:'Campers',families:'Families',enrollments:'Enrollments',staff:'Staff'})[r.source]||r.source;
+            var meta=srcLabel+' · '+(r.fields||[]).length+' fields'+((r.filters||[]).length?' · '+r.filters.length+' filter'+(r.filters.length>1?'s':''):'')+(r.groupBy?' · grouped':'');
+            var badgeCss='font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;';
+            var modeBadge=r.mode==='snapshot'?'<span style="'+badgeCss+'background:var(--s100);color:var(--s500)">Snapshot</span>':'<span style="'+badgeCss+'background:rgba(217,119,6,.1);color:var(--me)">Live</span>';
+            h+='<div class="me-card" style="padding:16px">'
+                +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px"><div style="font-size:.92rem;font-weight:700;color:var(--s800)">'+esc(r.name)+'</div>'+modeBadge+'</div>'
+                +'<div style="font-size:.73rem;color:var(--s400);margin-bottom:12px">'+esc(meta)+'</div>'
+                +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
+                    +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.runSavedReport(\''+esc(r.id)+'\')">Run</button>'
+                    +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportSavedReport(\''+esc(r.id)+'\')">CSV</button>'
+                    +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openReportBuilder(\''+esc(r.id)+'\')">Edit</button>'
+                    +'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteSavedReport(\''+esc(r.id)+'\')">Delete</button>'
+                +'</div></div>';
+        });
+        h+='</div>';
+    }
+
+    // ── Quick one-click reports ─────────────────────────────────────────────
+    h+='<div class="fsec" style="margin:4px 0 8px">Quick Reports</div>';
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">';
 
     // Roster report
@@ -5148,6 +5177,289 @@ function renderReports(){
 
     h+='</div>';
     c.innerHTML=h;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CUSTOM REPORT BUILDER — build any report from any source
+// ═══════════════════════════════════════════════════════════════
+
+// Field registry: how to turn each record type into flat report rows.
+function _reportSources(){
+    if(typeof loadCustomFields==='function'){ try{ loadCustomFields(); }catch(e){} }
+    var cf=(typeof customFields!=='undefined'&&customFields)?customFields:[];
+    var cfFields=cf.map(function(f){ return {key:'cf_'+f.id,label:f.label}; });
+    return {
+        campers:{ key:'campers', label:'Campers',
+            fields:[
+                {key:'name',label:'Name'},{key:'camperId',label:'Camper ID'},
+                {key:'division',label:'Division'},{key:'grade',label:'Grade'},{key:'bunk',label:'Bunk'},
+                {key:'schoolGrade',label:'School Grade'},{key:'teacher',label:'Teacher'},{key:'school',label:'School'},
+                {key:'age',label:'Age'},{key:'dob',label:'DOB'},{key:'gender',label:'Gender'},
+                {key:'allergies',label:'Allergies'},{key:'medications',label:'Medications'},{key:'dietary',label:'Dietary'},
+                {key:'emergencyName',label:'Emergency Contact'},{key:'emergencyPhone',label:'Emergency Phone'},
+                {key:'parent1Name',label:'Parent'},{key:'parent1Phone',label:'Parent Phone'},{key:'parent1Email',label:'Parent Email'},
+                {key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'}
+            ].concat(cfFields),
+            rows:function(){
+                return Object.keys(roster).map(function(n){
+                    var c=roster[n]||{};
+                    var row={name:n,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
+                        schoolGrade:c.schoolGrade||'',teacher:c.teacher||'',school:c.school||'',
+                        age:c.dob?age(c.dob):'',dob:c.dob||'',gender:c.gender||'',
+                        allergies:c.allergies||'',medications:c.medications||'',dietary:c.dietary||'',
+                        emergencyName:c.emergencyName||'',emergencyPhone:c.emergencyPhone||'',
+                        parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',parent1Email:c.parent1Email||'',
+                        city:c.city||'',state:c.state||'',zip:c.zip||''};
+                    cf.forEach(function(f){ row['cf_'+f.id]=c['cf_'+f.id]||''; });
+                    return row;
+                });
+            } },
+        families:{ key:'families', label:'Families',
+            fields:[{key:'name',label:'Family'},{key:'campers',label:'Campers'},{key:'camperCount',label:'# Campers'},
+                {key:'parent',label:'Primary Parent'},{key:'phone',label:'Phone'},{key:'email',label:'Email'},
+                {key:'address',label:'Address'},{key:'totalPaid',label:'Total Paid'},{key:'balance',label:'Balance'},{key:'status',label:'Status'}],
+            rows:function(){
+                return Object.keys(families).map(function(k){
+                    var f=families[k]||{}; var hh=(f.households||[])[0]||{}; var pp=(hh.parents||[])[0]||{};
+                    return {name:f.name||'',campers:(f.camperIds||[]).join('; '),camperCount:(f.camperIds||[]).length,
+                        parent:pp.name||'',phone:pp.phone||'',email:pp.email||'',address:hh.address||'',
+                        totalPaid:f.totalPaid||0,balance:f.balance||0,status:f.balance>0?'Outstanding':f.totalPaid>0?'Paid':'Pending'};
+                });
+            } },
+        enrollments:{ key:'enrollments', label:'Enrollments',
+            fields:[{key:'camperName',label:'Camper'},{key:'session',label:'Session/Term'},{key:'status',label:'Status'},
+                {key:'appliedDate',label:'Applied'},{key:'sessionTuition',label:'Tuition'},{key:'paymentStatus',label:'Payment'},
+                {key:'formsCompleted',label:'Forms Done'},{key:'formsRequired',label:'Forms Required'},
+                {key:'parentName',label:'Parent'},{key:'parentEmail',label:'Parent Email'}],
+            rows:function(){
+                return Object.keys(enrollments).map(function(k){
+                    var e=enrollments[k]||{};
+                    return {camperName:e.camperName||'',session:e.session||'',status:e.status||'',appliedDate:e.appliedDate||'',
+                        sessionTuition:e.sessionTuition||0,paymentStatus:e.paymentStatus||'',formsCompleted:e.formsCompleted||0,
+                        formsRequired:e.formsRequired||0,parentName:e.parentName||'',parentEmail:e.parentEmail||''};
+                });
+            } },
+        staff:{ key:'staff', label:'Staff',
+            fields:[{key:'name',label:'Name'},{key:'role',label:'Role'},{key:'type',label:'Type'},{key:'salary',label:'Salary'},{key:'bunk',label:'Bunk'}],
+            rows:function(){ return (finStaff||[]).map(function(s){ return {name:s.name||'',role:s.role||'',type:s.type||'',salary:s.salary||0,bunk:s.bunk||''}; }); } }
+    };
+}
+
+var _rbDraft=null; // in-progress report spec while the builder modal is open
+
+function openReportBuilder(existingId){
+    var existing=existingId?savedReports.filter(function(r){return r.id===existingId;})[0]:null;
+    var sources=_reportSources();
+    if(existing){
+        _rbDraft={id:existing.id,name:existing.name,source:existing.source,
+            fields:(existing.fields||[]).slice(),filters:(existing.filters||[]).map(function(f){return Object.assign({},f);}),
+            groupBy:existing.groupBy||'',mode:existing.mode||'live'};
+    }else{
+        var first=sources.campers;
+        _rbDraft={id:null,name:'',source:'campers',
+            fields:first.fields.slice(0,6).map(function(f){return f.key;}),
+            filters:[],groupBy:'',mode:'live'};
+    }
+    showModal(existing?'Edit Report':'Build Report','<div id="rbBody">'+_rbInner()+'</div>',saveCurrentReport);
+    // Relabel the modal Save button
+    var sv=document.getElementById('dynModalSave'); if(sv) sv.textContent='Save Report';
+}
+
+function _rbInner(){
+    var sources=_reportSources();
+    var src=sources[_rbDraft.source]||sources.campers;
+    var h='';
+    h+='<div class="fg"><label class="fl">Report name</label><input class="fi" id="rbName" value="'+esc(_rbDraft.name||'')+'" placeholder="e.g. Unpaid Seniors, Bunk B3 medical"></div>';
+    // Source
+    h+='<div class="fg"><label class="fl">Data source</label><select class="fi" id="rbSource" onchange="CampistryMe.rbSourceChange(this.value)">';
+    Object.keys(sources).forEach(function(k){ h+='<option value="'+k+'"'+(_rbDraft.source===k?' selected':'')+'>'+esc(sources[k].label)+'</option>'; });
+    h+='</select></div>';
+    // Fields
+    h+='<div class="fg"><label class="fl">Fields <span style="font-weight:400;color:var(--s400);font-size:.7rem">(columns, in order shown)</span></label>';
+    h+='<div style="display:flex;gap:6px 14px;flex-wrap:wrap;border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;max-height:150px;overflow:auto">';
+    src.fields.forEach(function(f){
+        var on=_rbDraft.fields.indexOf(f.key)>=0;
+        h+='<label style="display:flex;align-items:center;gap:5px;font-size:.8rem;color:var(--s700);white-space:nowrap"><input type="checkbox" class="rbField" value="'+esc(f.key)+'"'+(on?' checked':'')+' style="accent-color:var(--me)">'+esc(f.label)+'</label>';
+    });
+    h+='</div></div>';
+    // Filters
+    h+='<div class="fg"><label class="fl">Filters <span style="font-weight:400;color:var(--s400);font-size:.7rem">(all must match)</span></label><div id="rbFilters">';
+    (_rbDraft.filters||[]).forEach(function(f,i){ h+=_rbFilterRow(f,i); });
+    h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.rbAddFilter()">+ Add Filter</button></div>';
+    // Group by
+    h+='<div class="fg"><label class="fl">Group by</label><select class="fi" id="rbGroup"><option value="">— No grouping —</option>';
+    src.fields.forEach(function(f){ h+='<option value="'+esc(f.key)+'"'+(_rbDraft.groupBy===f.key?' selected':'')+'>'+esc(f.label)+'</option>'; });
+    h+='</select></div>';
+    // Mode
+    h+='<div class="fg"><label class="fl">Save as</label><div style="display:flex;gap:14px;flex-wrap:wrap">'
+        +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="live"'+(_rbDraft.mode!=='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Live</strong> — re-runs on fresh data each time</span></label>'
+        +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="snapshot"'+(_rbDraft.mode==='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Snapshot</strong> — freezes the records as they are now</span></label>'
+    +'</div></div>';
+    // Preview
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.rbPreview()">Preview</button><span id="rbPreviewCount" style="font-size:.78rem;color:var(--s400)"></span></div>';
+    h+='<div id="rbPreview" style="margin-top:10px"></div>';
+    return h;
+}
+
+function _rbFilterRow(f,i){
+    var sources=_reportSources(); var src=sources[_rbDraft.source]||sources.campers;
+    var RB=window.ReportBuilderCore;
+    f=f||{};
+    var fieldOpts=src.fields.map(function(x){return '<option value="'+esc(x.key)+'"'+(f.field===x.key?' selected':'')+'>'+esc(x.label)+'</option>';}).join('');
+    var opOpts=(RB?RB.OPERATORS:[]).map(function(o){return '<option value="'+o.op+'"'+(f.op===o.op?' selected':'')+'>'+esc(o.label)+'</option>';}).join('');
+    return '<div class="rbFilter" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">'
+        +'<select class="fi rbfField" style="flex:1;font-size:.8rem;padding:5px 6px">'+fieldOpts+'</select>'
+        +'<select class="fi rbfOp" style="flex:0 0 130px;font-size:.8rem;padding:5px 6px">'+opOpts+'</select>'
+        +'<input class="fi rbfVal" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(f.value||'')+'" placeholder="value">'
+        +'<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.rbFilter\').remove()">✕</button></div>';
+}
+
+function _rbSyncFromDom(){
+    if(!_rbDraft) return;
+    _rbDraft.name=(document.getElementById('rbName')||{}).value||'';
+    _rbDraft.fields=Array.prototype.map.call(document.querySelectorAll('.rbField:checked'),function(cb){return cb.value;});
+    _rbDraft.groupBy=(document.getElementById('rbGroup')||{}).value||'';
+    var mode=document.querySelector('input[name="rbMode"]:checked');
+    _rbDraft.mode=mode?mode.value:'live';
+    _rbDraft.filters=Array.prototype.map.call(document.querySelectorAll('.rbFilter'),function(el){
+        return {field:el.querySelector('.rbfField').value,op:el.querySelector('.rbfOp').value,value:el.querySelector('.rbfVal').value};
+    });
+}
+function rbSourceChange(v){
+    _rbSyncFromDom();
+    var sources=_reportSources();
+    _rbDraft.source=v;
+    // Reset fields to a sensible default and clear now-invalid filters/group.
+    _rbDraft.fields=(sources[v]||sources.campers).fields.slice(0,6).map(function(f){return f.key;});
+    _rbDraft.filters=[]; _rbDraft.groupBy='';
+    document.getElementById('rbBody').innerHTML=_rbInner();
+}
+function rbAddFilter(){
+    _rbSyncFromDom();
+    var wrap=document.getElementById('rbFilters');
+    var div=document.createElement('div');
+    div.innerHTML=_rbFilterRow({},_rbDraft.filters.length);
+    wrap.appendChild(div.firstChild);
+}
+function rbPreview(){
+    _rbSyncFromDom();
+    var RB=window.ReportBuilderCore; if(!RB){ toast('Report engine not loaded'); return; }
+    var res=_computeReport(_rbDraft);
+    var host=document.getElementById('rbPreview');
+    var cnt=document.getElementById('rbPreviewCount');
+    if(cnt) cnt.textContent=res.total+' row'+(res.total===1?'':'s')+(_rbDraft.groupBy?' · '+res.groups.length+' groups':'');
+    if(!_rbDraft.fields.length){ host.innerHTML='<div style="font-size:.78rem;color:var(--err)">Pick at least one field.</div>'; return; }
+    host.innerHTML=_reportTablesHtml(res,8);
+}
+
+function _computeReport(rep){
+    var RB=window.ReportBuilderCore;
+    var sources=_reportSources();
+    var src=sources[rep.source]||sources.campers;
+    var fields=(rep.fields||[]).map(function(k){ var d=src.fields.filter(function(x){return x.key===k;})[0]; return {key:k,label:d?d.label:k}; });
+    var rows;
+    if(rep.mode==='snapshot'&&Array.isArray(rep.snapshotRows)){
+        rows=rep.snapshotRows;
+    }else{
+        rows=RB.applyFilters(src.rows(),rep.filters);
+    }
+    var groups=RB.groupRows(rows,rep.groupBy);
+    return {fields:fields,groups:groups,total:rows.length,sourceLabel:src.label,rows:rows};
+}
+
+// Render grouped result tables. limit>0 truncates rows per group (preview).
+function _reportTablesHtml(res,limit){
+    if(!res.total) return '<div style="font-size:.82rem;color:var(--s400);padding:10px 0">No rows match.</div>';
+    var grouped=!(res.groups.length===1&&res.groups[0].key==='');
+    var h='';
+    res.groups.forEach(function(g){
+        if(grouped) h+='<div style="font-size:.8rem;font-weight:700;color:var(--s700);margin:10px 0 4px">'+esc(g.key)+' <span style="color:var(--s400);font-weight:500">('+g.count+')</span></div>';
+        h+='<div class="me-tw"><table class="me-t"><thead><tr>';
+        res.fields.forEach(function(f){ h+='<th>'+esc(f.label)+'</th>'; });
+        h+='</tr></thead><tbody>';
+        var rws=(limit&&limit>0)?g.rows.slice(0,limit):g.rows;
+        rws.forEach(function(r){
+            h+='<tr>'+res.fields.map(function(f){return '<td>'+esc(String(r[f.key]==null?'':r[f.key]))+'</td>';}).join('')+'</tr>';
+        });
+        if(limit&&g.rows.length>limit) h+='<tr><td colspan="'+res.fields.length+'" style="color:var(--s400);font-size:.75rem">…'+(g.rows.length-limit)+' more</td></tr>';
+        h+='</tbody></table></div>';
+    });
+    return h;
+}
+
+function saveCurrentReport(){
+    _rbSyncFromDom();
+    if(!_rbDraft.name.trim()){ toast('Give the report a name'); return; }
+    if(!_rbDraft.fields.length){ toast('Pick at least one field'); return; }
+    var rep={
+        id:_rbDraft.id||('rep_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+        name:_rbDraft.name.trim(), source:_rbDraft.source,
+        fields:_rbDraft.fields.slice(), filters:_rbDraft.filters.slice(),
+        groupBy:_rbDraft.groupBy, mode:_rbDraft.mode,
+        updatedAt:new Date().toISOString()
+    };
+    if(rep.mode==='snapshot'){
+        // Freeze the currently-matching records.
+        var RB=window.ReportBuilderCore;
+        var src=_reportSources()[rep.source];
+        rep.snapshotRows=RB.applyFilters(src.rows(),rep.filters);
+        rep.snapshotAt=new Date().toISOString();
+    }
+    var idx=savedReports.findIndex(function(r){return r.id===rep.id;});
+    if(idx>=0){ if(savedReports[idx].createdAt) rep.createdAt=savedReports[idx].createdAt; savedReports[idx]=rep; }
+    else { rep.createdAt=new Date().toISOString(); savedReports.unshift(rep); }
+    _rbDraft=null;
+    closeModal('dynModal');
+    save(); renderReports();
+    toast('Report saved');
+}
+
+function runSavedReport(id){
+    var rep=savedReports.filter(function(r){return r.id===id;})[0]; if(!rep) return;
+    var res=_computeReport(rep);
+    var body='<div style="font-size:.78rem;color:var(--s400);margin-bottom:8px">'+res.total+' row'+(res.total===1?'':'s')
+        +(rep.mode==='snapshot'?' · snapshot from '+esc((rep.snapshotAt||'').split('T')[0]):' · live')+'</div>'
+        +'<div style="display:flex;gap:6px;margin-bottom:10px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.printSavedReport(\''+esc(id)+'\')">🖨 Print / PDF</button>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportSavedReport(\''+esc(id)+'\')">↓ Export CSV</button></div>'
+        +'<div style="max-height:52vh;overflow:auto">'+_reportTablesHtml(res,0)+'</div>';
+    showModal(rep.name,body);
+}
+
+function exportSavedReport(id){
+    var rep=savedReports.filter(function(r){return r.id===id;})[0]; if(!rep) return;
+    var RB=window.ReportBuilderCore; var res=_computeReport(rep);
+    var csv=RB.toCSV(res.rows,res.fields,res.groups);
+    dlCsv('campistry_'+(rep.name.replace(/[^a-z0-9]+/gi,'_').toLowerCase())+'_'+new Date().toISOString().split('T')[0]+'.csv',csv);
+}
+
+function printSavedReport(id){
+    var rep=savedReports.filter(function(r){return r.id===id;})[0]; if(!rep) return;
+    var res=_computeReport(rep);
+    var campName=''; try{ campName=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName)||''; }catch(e){}
+    var grouped=!(res.groups.length===1&&res.groups[0].key==='');
+    var body='';
+    res.groups.forEach(function(g){
+        if(grouped) body+='<h2>'+esc(g.key)+' <span style="color:#888;font-weight:400">('+g.count+')</span></h2>';
+        body+='<table><thead><tr>'+res.fields.map(function(f){return '<th>'+esc(f.label)+'</th>';}).join('')+'</tr></thead><tbody>';
+        g.rows.forEach(function(r){ body+='<tr>'+res.fields.map(function(f){return '<td>'+esc(String(r[f.key]==null?'':r[f.key]))+'</td>';}).join('')+'</tr>'; });
+        body+='</tbody></table>';
+    });
+    var w=window.open('','_blank'); if(!w){ toast('Allow pop-ups to print'); return; }
+    var css='body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:24px}h1{font-size:18pt;margin:0 0 2px}h2{font-size:12pt;margin:16px 0 6px;color:#333}'
+        +'.sub{color:#666;font-size:10pt;margin-bottom:10px}table{width:100%;border-collapse:collapse;font-size:9.5pt;margin-bottom:12px}'
+        +'th,td{border:1px solid #ccc;padding:4px 7px;text-align:left}th{background:#f3f3f3}@media print{.noprint{display:none}}';
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(rep.name)+'</title><style>'+css+'</style></head><body>'
+        +'<h1>'+esc(rep.name)+'</h1><div class="sub">'+esc(campName||'')+(campName?' · ':'')+res.total+' rows'+(rep.mode==='snapshot'?' · snapshot':'')+'</div>'
+        +body+'<div class="noprint" style="text-align:center;margin-top:16px"><button onclick="window.print()" style="padding:8px 24px;cursor:pointer">Print / Save as PDF</button></div>'
+        +'</body></html>');
+    w.document.close();
+}
+
+function deleteSavedReport(id){
+    var rep=savedReports.filter(function(r){return r.id===id;})[0]; if(!rep) return;
+    if(!confirm('Delete report "'+rep.name+'"?')) return;
+    savedReports=savedReports.filter(function(r){return r.id!==id;});
+    save(); renderReports(); toast('Report deleted');
 }
 
 function dlCsv(name,csv){
@@ -6355,6 +6667,7 @@ window.CampistryMe={
     editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
+    openReportBuilder:openReportBuilder,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,rbPreview:rbPreview,saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,deleteSavedReport:deleteSavedReport,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Settings
