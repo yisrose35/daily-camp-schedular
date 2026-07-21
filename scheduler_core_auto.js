@@ -18601,7 +18601,20 @@
                             } else if (pinned.length) {
                                 var _glWMin = Math.min.apply(null, pinned.map(function (w) { return w.startMin; }));
                                 var _glWMax = Math.max.apply(null, pinned.map(function (w) { return w.endMin; }));
-                                _glPeriods = [{ startMin: _glWMin, endMin: _glWMax, name: 'Day', isBreak: false }];
+                                // Free-form (no bell periods): the single "Day" period must span the
+                                // CONFIGURED division day, not just the pinned-wall extent. Clamping to
+                                // min-wall→max-wall dropped legitimate time BEFORE the first wall — a grade
+                                // whose day starts 9:20 but whose first activity (Davening) is 10:20 left
+                                // 9:20-10:20 untiled and bare (the live "1st Grade empty morning"). Extend
+                                // to divisions[grade].startTime/endTime when they are really set (never the
+                                // 0/1440 fallback), so the morning tiles like the rest of the day without
+                                // inventing time beyond the configured day. This is the free-form analog of
+                                // the bell-grid day-coverage extension applied to period camps in STEP 1.
+                                var _glRealS = parseTimeToMinutes(gObj.startTime);
+                                var _glRealE = parseTimeToMinutes(gObj.endTime);
+                                var _glDayS = (_glRealS != null) ? Math.min(_glRealS, _glWMin) : _glWMin;
+                                var _glDayE = (_glRealE != null) ? Math.max(_glRealE, _glWMax) : _glWMax;
+                                _glPeriods = [{ startMin: _glDayS, endMin: _glDayE, name: 'Day', isBreak: false }];
                             } else {
                                 _glPeriods = [{ startMin: gStart, endMin: gEnd, name: 'Day', isBreak: false }];
                             }
