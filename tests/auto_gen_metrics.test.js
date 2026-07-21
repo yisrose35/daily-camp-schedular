@@ -6,7 +6,7 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
-const { computeAutoGenMetrics, isFreeEntry } = require('../auto_gen_metrics.js');
+const { computeAutoGenMetrics, isFreeEntry, isPlaceholderEntry } = require('../auto_gen_metrics.js');
 
 // ---------------------------------------------------------------------------
 // Helpers — build the two parallel-by-index structures the auto engine emits:
@@ -16,6 +16,10 @@ const { computeAutoGenMetrics, isFreeEntry } = require('../auto_gen_metrics.js')
 function slot(startMin, endMin) { return { startMin, endMin }; }
 function act(name, extra = {}) { return Object.assign({ _activity: name }, extra); }
 function free(source) { return { _activity: 'Free', field: 'Free', _source: source }; }
+// A generic-layout placeholder tile: rendered as a category name, _generic:true.
+function placeholder(subcat, extra = {}) {
+    return Object.assign({ _activity: 'Special', event: 'Special', _generic: true, _subcat: subcat }, extra);
+}
 
 // ---------------------------------------------------------------------------
 describe('isFreeEntry', () => {
@@ -30,6 +34,60 @@ describe('isFreeEntry', () => {
     });
     it('treats a real activity as not free', () => {
         assert.strictEqual(isFreeEntry({ _activity: 'Basketball' }), false);
+    });
+});
+
+describe('isPlaceholderEntry', () => {
+    it('flags an unfilled generic tile (_generic:true)', () => {
+        assert.strictEqual(isPlaceholderEntry({ _activity: 'Special', _generic: true }), true);
+    });
+    it('does not flag a filled tile (_generic:false) or a normal entry', () => {
+        assert.strictEqual(isPlaceholderEntry({ _activity: 'Cooking', _generic: false }), false);
+        assert.strictEqual(isPlaceholderEntry({ _activity: 'Cooking' }), false);
+        assert.strictEqual(isPlaceholderEntry(null), false);
+    });
+});
+
+describe('computeAutoGenMetrics — generic placeholders are NOT filled', () => {
+    it('counts a _generic tile as placeholder, excludes it from fill', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640), slot(640, 680)] } } };
+        const sched = { b1: [act('Basketball'), placeholder('uncategorized')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.strictEqual(m.total.filledMinutes, 40);
+        assert.strictEqual(m.total.placeholderMinutes, 40);
+        assert.strictEqual(m.total.placeholderSlots, 1);
+        assert.strictEqual(m.total.freeMinutes, 0);
+        assert.strictEqual(m.total.deadMinutes, 40);
+        // real fill is 40/80 = 50%, NOT 100% — this is the whole point.
+        assert.strictEqual(m.fillRatePct, 50);
+        assert.strictEqual(m.placeholderBySubcat.uncategorized.count, 1);
+        assert.strictEqual(m.placeholderBySubcat.uncategorized.minutes, 40);
+    });
+
+    it('a filled generic tile (_generic:false) counts as real fill', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640)] } } };
+        const sched = { b1: [act('Cooking', { _generic: false, _subcat: 'uncategorized' })] };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.strictEqual(m.total.filledMinutes, 40);
+        assert.strictEqual(m.total.placeholderMinutes, 0);
+        assert.strictEqual(m.fillRatePct, 100);
+    });
+
+    it('buckets placeholders by subcategory and ranks worst bunks', () => {
+        const divisionTimes = { A: { _perBunkSlots: {
+            b1: [slot(600, 640), slot(640, 680)],
+            b2: [slot(600, 640), slot(640, 680)]
+        } } };
+        const sched = {
+            b1: [placeholder('uncategorized'), placeholder('sports')],
+            b2: [act('Cooking'), act('Art')]
+        };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.strictEqual(m.total.placeholderMinutes, 80);
+        assert.strictEqual(m.placeholderBySubcat.uncategorized.minutes, 40);
+        assert.strictEqual(m.placeholderBySubcat.sports.minutes, 40);
+        assert.strictEqual(m.worstBunks[0].bunk, 'b1');
+        assert.strictEqual(m.worstBunks[0].placeholderMinutes, 80);
     });
 });
 

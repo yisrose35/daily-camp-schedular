@@ -3,24 +3,32 @@
 // ---------------------------------------------------------------------
 // PURPOSE
 //   Instrumentation (Tier 0) for the auto scheduler. After every auto
-//   generation it measures how much of each bunk's day is actually
-//   filled vs. left as dead space, and — crucially — WHY each Free slot
-//   survived, by bucketing on the `_source` tag the solver stamps on
-//   every Free it writes (e.g. 'null-bucket-fill-free', 'iron-gate-
-//   time-rule', 'sub-min-sweep', 'fn-floor-enforce-rem', ...).
+//   generation it measures how much of each bunk's day is REALLY filled
+//   with a concrete activity vs. left as dead space, and — crucially —
+//   WHY, so later packing/filler changes can be judged by honest numbers
+//   instead of by eyeballing a single lucky seed.
 //
-//   This is read-only: it computes from the final in-memory schedule
-//   (window.scheduleAssignments + window.divisionTimes[*]._perBunkSlots)
-//   and never mutates it. It exists so that later packing/filler changes
-//   can be judged by "Free-minutes dropped from X to Y" instead of by
-//   eyeballing a single lucky seed.
+//   THREE kinds of "not really scheduled" are measured separately:
 //
-// TWO KINDS OF DEAD SPACE ARE MEASURED
 //   1. Free cells        — a materialized slot whose entry is 'Free'
 //                          (or a null/empty entry). Bucketed by `_source`.
-//   2. Uncovered minutes — time inside a bunk's active span that no slot
+//   2. Generic placeholders — a GENERIC-LAYOUT tile that was tiled but
+//                          never filled with a concrete activity. These
+//                          carry `_generic:true` (a filled tile flips to
+//                          `_generic:false`, see scheduler_core_auto.js
+//                          ~:19898/:19908). They RENDER as a category
+//                          name (e.g. "special:uncategorized") so the day
+//                          LOOKS full while being empty of real content.
+//                          Bucketed by `_subcat`.
+//   3. Uncovered minutes — time inside a bunk's active span that no slot
 //                          covers at all (the makeBlock sub-floor reject
-//                          leaves a physical hole, not a Free cell).
+//                          leaves a physical hole, not a cell).
+//
+//   Only entries that are none of the above count as `filledMinutes`, so
+//   `fillRatePct` reflects CONCRETE fill, not mere materialization.
+//
+//   Read-only: computes from window.scheduleAssignments +
+//   window.divisionTimes[*]._perBunkSlots; never mutates them.
 //
 // OUTPUT
 //   window.__lastGenMetrics = <result object>   (also console table)
@@ -38,6 +46,14 @@
         var name = String(entry._activity || entry.event || entry.field || '')
             .toLowerCase().trim();
         return name === '' || name === 'free';
+    }
+
+    // A generic-layout placeholder: tiled but never filled with a concrete
+    // activity. `_generic:true` is the solver's own marker (a filled tile
+    // flips it to false). These render as a category name and fool a naive
+    // "is it Free?" check — they are NOT real scheduled content.
+    function isPlaceholderEntry(entry) {
+        return !!(entry && entry._generic === true);
     }
 
     // Continuation slots are the tail cells of a multi-slot block — their
@@ -71,20 +87,29 @@
             filledSlots: 0,
             continuationSlots: 0,
             freeSlots: 0,
+            placeholderSlots: 0,
             filledMinutes: 0,
             freeMinutes: 0,
+            placeholderMinutes: 0,
             uncoveredMinutes: 0,
             spanMinutes: 0
         };
-        var freeBySource = {};   // source -> { count, minutes }
-        var byDivision = {};     // div    -> { bunks, freeSlots, freeMinutes, uncoveredMinutes, filledMinutes, spanMinutes, fillRate }
-        var worstBunks = [];     // { division, bunk, deadMinutes, freeMinutes, uncoveredMinutes, fillRate }
+        var freeBySource = {};        // source -> { count, minutes }
+        var placeholderBySubcat = {}; // subcat -> { count, minutes }
+        var byDivision = {};          // div    -> {...}
+        var worstBunks = [];          // { division, bunk, deadMinutes, ... }
 
         function addFreeSource(src, minutes) {
             var key = src || '(unlabeled)';
             if (!freeBySource[key]) freeBySource[key] = { count: 0, minutes: 0 };
             freeBySource[key].count += 1;
             freeBySource[key].minutes += minutes;
+        }
+        function addPlaceholder(subcat, minutes) {
+            var key = subcat || '(uncategorized)';
+            if (!placeholderBySubcat[key]) placeholderBySubcat[key] = { count: 0, minutes: 0 };
+            placeholderBySubcat[key].count += 1;
+            placeholderBySubcat[key].minutes += minutes;
         }
 
         Object.keys(divTimes).forEach(function (divName) {
@@ -96,8 +121,9 @@
 
             total.divisions += 1;
             var dv = byDivision[divName] = {
-                bunks: 0, freeSlots: 0, freeMinutes: 0, uncoveredMinutes: 0,
-                filledMinutes: 0, spanMinutes: 0, fillRate: 0
+                bunks: 0, freeSlots: 0, freeMinutes: 0,
+                placeholderSlots: 0, placeholderMinutes: 0,
+                uncoveredMinutes: 0, filledMinutes: 0, spanMinutes: 0, fillRate: 0
             };
 
             bunkIds.forEach(function (bunk) {
@@ -108,7 +134,7 @@
                 total.bunks += 1;
                 dv.bunks += 1;
 
-                var bFilled = 0, bFree = 0, bCovered = 0;
+                var bFilled = 0, bFree = 0, bPlaceholder = 0, bCovered = 0;
                 var minStart = Infinity, maxEnd = -Infinity;
 
                 for (var i = 0; i < slots.length; i++) {
@@ -122,17 +148,26 @@
                     total.slots += 1;
 
                     var entry = entries[i];
-                    if (isContinuation(entry) && !isFreeEntry(entry)) {
-                        total.continuationSlots += 1;
-                        total.filledMinutes += dur;
-                        bFilled += dur;
-                    } else if (isFreeEntry(entry)) {
+                    if (isFreeEntry(entry)) {
                         total.freeSlots += 1;
                         total.freeMinutes += dur;
                         bFree += dur;
                         dv.freeSlots += 1;
                         dv.freeMinutes += dur;
                         addFreeSource(entry && entry._source, dur);
+                    } else if (isPlaceholderEntry(entry)) {
+                        // Tiled but never filled with a concrete activity —
+                        // looks full, is empty. NOT counted as filled.
+                        total.placeholderSlots += 1;
+                        total.placeholderMinutes += dur;
+                        bPlaceholder += dur;
+                        dv.placeholderSlots += 1;
+                        dv.placeholderMinutes += dur;
+                        addPlaceholder(entry && (entry._subcat || entry.type), dur);
+                    } else if (isContinuation(entry)) {
+                        total.continuationSlots += 1;
+                        total.filledMinutes += dur;
+                        bFilled += dur;
                     } else {
                         total.filledSlots += 1;
                         total.filledMinutes += dur;
@@ -149,11 +184,12 @@
                 dv.uncoveredMinutes += uncovered;
                 dv.spanMinutes += span;
 
-                var dead = bFree + uncovered;
+                var dead = bFree + bPlaceholder + uncovered;
                 if (dead > 0) {
                     worstBunks.push({
                         division: divName, bunk: bunk,
-                        deadMinutes: dead, freeMinutes: bFree, uncoveredMinutes: uncovered,
+                        deadMinutes: dead, freeMinutes: bFree,
+                        placeholderMinutes: bPlaceholder, uncoveredMinutes: uncovered,
                         fillRate: span > 0 ? (bFilled / span) : 1
                     });
                 }
@@ -162,7 +198,7 @@
             dv.fillRate = dv.spanMinutes > 0 ? (dv.filledMinutes / dv.spanMinutes) : 1;
         });
 
-        var deadTotal = total.freeMinutes + total.uncoveredMinutes;
+        var deadTotal = total.freeMinutes + total.placeholderMinutes + total.uncoveredMinutes;
         total.deadMinutes = deadTotal;
         total.fillRate = total.spanMinutes > 0
             ? (total.filledMinutes / total.spanMinutes) : 1;
@@ -173,6 +209,7 @@
             total: total,
             fillRatePct: Math.round(total.fillRate * 1000) / 10,
             freeBySource: freeBySource,
+            placeholderBySubcat: placeholderBySubcat,
             byDivision: byDivision,
             worstBunks: worstBunks.slice(0, opts.worstLimit || 10)
         };
@@ -193,22 +230,29 @@
             }
 
             var t = result.total;
-            var head = '[GenMetrics] fill ' + result.fillRatePct + '%  |  '
-                + 'free ' + t.freeMinutes + 'min/' + t.freeSlots + ' slots  |  '
+            var head = '[GenMetrics] real-fill ' + result.fillRatePct + '%  |  '
+                + 'free ' + t.freeMinutes + 'min/' + t.freeSlots + '  |  '
+                + 'placeholder ' + t.placeholderMinutes + 'min/' + t.placeholderSlots + '  |  '
                 + 'uncovered ' + t.uncoveredMinutes + 'min  |  '
                 + 'dead ' + t.deadMinutes + 'min across ' + t.bunks + ' bunks'
                 + (reason ? '  (' + reason + ')' : '');
             if (typeof console !== 'undefined') {
                 console.log('%c' + head, 'color:#0a7; font-weight:bold;');
+                if (t.placeholderSlots > 0 && console.table) {
+                    console.log('%c[GenMetrics] generic placeholder tiles (look full, not filled):',
+                        'color:#c60;');
+                    console.table(Object.keys(result.placeholderBySubcat).map(function (sc) {
+                        return { subcategory: sc,
+                                 slots: result.placeholderBySubcat[sc].count,
+                                 minutes: result.placeholderBySubcat[sc].minutes };
+                    }).sort(function (a, b) { return b.minutes - a.minutes; }));
+                }
                 if (t.freeSlots > 0 && console.table) {
-                    var rows = Object.keys(result.freeBySource).map(function (src) {
-                        return {
-                            reason: src,
-                            slots: result.freeBySource[src].count,
-                            minutes: result.freeBySource[src].minutes
-                        };
-                    }).sort(function (a, b) { return b.minutes - a.minutes; });
-                    console.table(rows);
+                    console.table(Object.keys(result.freeBySource).map(function (src) {
+                        return { reason: src,
+                                 slots: result.freeBySource[src].count,
+                                 minutes: result.freeBySource[src].minutes };
+                    }).sort(function (a, b) { return b.minutes - a.minutes; }));
                 }
             }
 
@@ -235,6 +279,10 @@
     }
 
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { computeAutoGenMetrics: computeAutoGenMetrics, isFreeEntry: isFreeEntry };
+        module.exports = {
+            computeAutoGenMetrics: computeAutoGenMetrics,
+            isFreeEntry: isFreeEntry,
+            isPlaceholderEntry: isPlaceholderEntry
+        };
     }
 })();
