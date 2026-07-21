@@ -3697,7 +3697,9 @@ function renderAnalytics(){
         if(!tuition)return;
         // Check if manual payment exists for this camper
         var manualPay=finPayments.filter(function(p){return p.family===e.camperName||p.family===(e.camperLast||'')+' Family'||p.enrollmentId===id});
-        var paidAmount=manualPay.reduce(function(s,p){return s+p.amount},0);
+        // Pending (e.g. ACH still settling) and failed online payments are shown
+        // in the log but do NOT count as collected until they succeed.
+        var paidAmount=manualPay.reduce(function(s,p){return s+((p.status==='pending'||p.status==='failed')?0:(p.amount||0))},0);
         var payStatus='pending';
         if(paidAmount>=tuition)payStatus='paid';
         else if(paidAmount>0)payStatus='partial';
@@ -3778,6 +3780,21 @@ function renderAnalytics(){
         h+=stat('Profit Margin',projected>0?Math.round(netIncome/projected*100)+'%':'—','Net / Revenue','#0EA5E9');
         h+='</div>';
 
+        // ═══ A/R AGING — outstanding balance bucketed by age of the invoice ═══
+        var aging=[{l:'Current (0–30 days)',v:0,c:'var(--ok)'},{l:'31–60 days',v:0,c:'var(--me)'},{l:'61–90 days',v:0,c:'#F97316'},{l:'90+ days',v:0,c:'var(--err)'}];
+        autoInvoices.forEach(function(inv){
+            if(inv.balance<=0)return;
+            var days=Math.floor((todayMs-new Date(inv.enrollDate||todayStr).getTime())/86400000);
+            if(days<=30)aging[0].v+=inv.balance; else if(days<=60)aging[1].v+=inv.balance; else if(days<=90)aging[2].v+=inv.balance; else aging[3].v+=inv.balance;
+        });
+        var agingTotal=aging.reduce(function(s,b){return s+b.v},0);
+        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
+        h+='<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--s100);margin-bottom:12px">';
+        aging.forEach(function(b){var pct=agingTotal>0?b.v/agingTotal*100:0;if(pct>0)h+='<div style="width:'+pct+'%;background:'+b.c+'" title="'+esc(b.l)+': '+fm(b.v)+'"></div>';});
+        h+='</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
+        aging.forEach(function(b){h+='<div style="text-align:center;padding:8px 6px;border:1px solid var(--s200);border-radius:var(--r);border-top:3px solid '+b.c+'"><div style="font-size:1.05rem;font-weight:800;color:var(--s800)">'+fm(b.v)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;margin-top:2px">'+esc(b.l)+'</div></div>';});
+        h+='</div></div>';
+
         // Enrollment funnel
         var eArr=Object.entries(enrollments);
         var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
@@ -3846,7 +3863,15 @@ function renderAnalytics(){
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
             finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
                 if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
+                var _isRef=(p.amount||0)<0;
+                var _st=p.status||'';
+                var _pend=(_st==='pending'||_st==='failed');
+                var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
+                var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
+                var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
+                var _canRefund=!_isRef&&!_pend&&(p.amount||0)>0;
+                var _acts=(_canRefund?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>':'')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg(p.method||'—',_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -4102,7 +4127,7 @@ function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();to
 function finAddPayment(){
     var family=prompt('Family name:');if(!family)return;
     var amount=prompt('Amount ($):','');if(!amount)return;
-    var method=prompt('Method (Credit Card, ACH, Zelle, Check, Payment Plan):','Credit Card');
+    var method=prompt('Method (Credit Card, ACH / Bank Transfer, PayPal, Venmo, Zelle, Cash App, Apple Pay, Google Pay, Check, Cash, Wire Transfer, Money Order, Other):','Credit Card');
     var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
     finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
     save();renderAnalytics();toast('Payment recorded');
@@ -4113,6 +4138,70 @@ function finRemovePayment(id){
     var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
     if(idx<0){toast('Payment not found','error');return}
     finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REFUNDS — record a refund (and optionally return money via Stripe)
+// A refund is stored as a NEGATIVE payment, so every total that sums
+// finPayments (both the Billing ledger and the Analytics invoices)
+// reflects it automatically. If the original payment carries a Stripe
+// PaymentIntent, the money can be returned to the card via stripe-refund.
+// ═══════════════════════════════════════════════════════════════
+function finRefund(id){
+    var p=finPayments.find(function(x){return String(x.id)===String(id)});
+    if(!p){toast('Payment not found','error');return}
+    if((p.amount||0)<=0){toast('That entry is already a refund','error');return}
+    var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)})
+        .reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+    var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
+    if(maxRefund<=0){toast('This payment is already fully refunded','error');return}
+    var canStripe=!!p.stripePaymentIntentId;
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">Refunding payment to <strong>'+esc(p.family||'')+'</strong><br>Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?'<br>Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Reason</label><select id="rfReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="rfAmount" class="me-input" value="'+maxRefund.toFixed(2)+'" step="0.01" min="0.01" max="'+maxRefund+'"></div>';
+    h+='</div>';
+    if(canStripe){
+        h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="rfStripe" checked> Return the money to the card through Stripe</label>';
+        h+='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>';
+    } else {
+        h+='<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
+    }
+    h+='</div>';
+    showModal('Refund Payment',h,async function(){
+        var amt=parseFloat(document.getElementById('rfAmount').value)||0;
+        if(amt<=0||amt>maxRefund+0.001){alert('Enter an amount up to '+fm(maxRefund));return}
+        var reasonSel=document.getElementById('rfReason').value;
+        var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
+        var stripeRefundId=null;
+        if(doStripe){
+            var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
+            toast('Processing Stripe refund…');
+            try{
+                var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:amt,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                stripeRefundId=res.refundId;
+            }catch(err){
+                console.error('[Me] Stripe refund error:',err);
+                toast('Stripe refund failed: '+err.message,'error');
+                return;
+            }
+        }
+        var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
+        finPayments.push({
+            id:'ref_'+Date.now(),
+            family:p.family,familyKey:p.familyKey||null,enrollmentId:p.enrollmentId||null,
+            amount:-amt,date:today(),method:'Refund',
+            reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
+            reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
+        });
+        var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
+        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
+        save();closeModal('dynModal');
+        try{renderAnalytics()}catch(e){}
+        try{renderBilling()}catch(e){}
+        toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
+    });
 }
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
@@ -4346,8 +4435,9 @@ function buildFamilyLedgers(){
         });
         if(!fk) return;
         if(!ledgers[fk]) return;
-        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
-        ledgers[fk].totalPayments+=Number(p.amount)||0;
+        var _notCollected=(p.status==='pending'||p.status==='failed');
+        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||'',status:p.status||''});
+        if(!_notCollected) ledgers[fk].totalPayments+=Number(p.amount)||0;
     });
 
     // 4. Compute balances and sort entries
@@ -4454,14 +4544,17 @@ function renderBilling(){
                     var isCharge=e.type==='charge';
                     var isPayment=e.type==='payment';
                     var isCredit=e.type==='credit';
+                    var isRefund=isPayment&&e.amount<0;
                     if(isCharge) runBal+=e.amount;
                     if(isPayment||isCredit) runBal-=e.amount;
+                    var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
+                    var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
                     h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isPayment?'ok':'warn')+'</td>';
+                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
                     h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
                     h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-                    h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+((isPayment||isCredit)?fm(e.amount):'')+'</td>';
-                    h+='<td></td></tr>';
+                    h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
+                    h+='<td style="text-align:right">'+refBtn+'</td></tr>';
                 });
                 h+='</tbody></table>';
             }
@@ -4486,10 +4579,16 @@ function renderBilling(){
                 h+='</div></div>';
             }
 
+            // Monthly plan / autopay
+            h+=_planCardHtml(l);
+
             // Quick actions
             var hasCard=families[l.famKey]?.cardOnFile;
             h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
             h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
+            var _fam=families[l.famKey];
+            if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
             if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
             if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
             else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
@@ -4529,7 +4628,7 @@ function openPaymentForFamily(famKey){
     h+='<div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div>';
     h+='</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>Check</option><option>Cash</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Zelle</option><option>Other</option></select></div>';
+    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Venmo</option><option>Zelle</option><option>Cash App</option><option>Apple Pay</option><option>Google Pay</option><option>Check</option><option>Cash</option><option>Wire Transfer</option><option>Money Order</option><option>Other</option></select></div>';
     h+='<div class="me-field"><label>Reference #</label><input type="text" id="payRef" class="me-input" placeholder="Check #, confirmation, etc."></div>';
     h+='</div>';
     h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
@@ -4892,6 +4991,128 @@ async function batchCharge(){
         toast('Batch complete: '+success+' charged, '+failed+' failed');
         renderBilling();
     });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ONLINE PAYMENT LINK — a hosted Stripe Checkout the parent pays on.
+// Offers every method the camp enabled in Stripe (card, ACH bank debit,
+// Cash App, PayPal, Link, …). The payment records itself into the ledger
+// via stripe-webhook — no manual entry. (Venmo/Zelle can't be processed
+// by Stripe; those stay manual-entry methods.)
+// ═══════════════════════════════════════════════════════════════
+async function sendPayLink(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var email='';(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Create a secure online payment link for <strong>'+esc(f.name)+'</strong>. Send it to the parent — they can pay by card, bank transfer (ACH), Cash App, PayPal or any other method you\'ve enabled in Stripe, and it records itself here automatically.</p>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(email?' · '+esc(email):' · <span style="color:var(--err)">no parent email on file</span>')+'</div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="plAmt" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label>What\'s this for?</label><input type="text" id="plDesc" class="me-input" value="Camp tuition — '+esc(f.name)+'"></div>';
+    h+='</div>';
+    showModal('Online Payment Link',h,async function(){
+        var amt=parseFloat(document.getElementById('plAmt').value)||0;
+        if(amt<0.50){alert('Enter an amount of at least $0.50');return}
+        var desc=document.getElementById('plDesc').value.trim();
+        var btn=document.getElementById('dynModalSave'); if(btn){btn.disabled=true;btn.textContent='Creating…';}
+        try{
+            var res=await callEdgeFunction('stripe-checkout',{campId:getCampId(),familyKey:famKey,familyName:f.name,email:email,amount:amt,description:desc});
+            if(!res.url) throw new Error('No link returned');
+            _showPayLinkResult(f,res.url);
+        }catch(err){
+            console.error('[Me] pay link error:',err);
+            toast('Could not create link: '+err.message,'error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        }
+    });
+}
+function _showPayLinkResult(f,url){
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Payment link for <strong>'+esc(f.name)+'</strong> is ready. Copy it into a text or email — it opens a secure Stripe checkout with every payment method you offer, and the payment lands in Billing automatically.</p>';
+    h+='<div class="me-field"><label>Payment link</label><input type="text" id="plUrl" class="me-input" readonly value="'+esc(url)+'" onclick="this.select()"></div>';
+    h+='<div style="display:flex;gap:8px;margin-top:6px">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyPayLink()">Copy link</button>';
+    h+='<a class="me-btn me-btn--sec me-btn--sm" href="'+esc(url)+'" target="_blank" rel="noopener">Open</a>';
+    h+='</div></div>';
+    showModal('Send this link to the parent',h);
+}
+function copyPayLink(){var el=document.getElementById('plUrl');if(!el)return;el.select();try{navigator.clipboard&&navigator.clipboard.writeText(el.value)}catch(e){try{document.execCommand('copy')}catch(_){}}toast('Link copied')}
+
+// ═══════════════════════════════════════════════════════════════
+// MONTHLY BILLING (AUTOPAY) — split a balance into monthly payments and
+// auto-charge the saved card on each due date. The schedule lives on the
+// family (f.plan); a scheduled edge function (charge-due-installments) runs
+// daily and charges whatever is due for families with autopay + a card on
+// file, recording each payment into the ledger.
+// ═══════════════════════════════════════════════════════════════
+function monthlyPlan(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var hasCard=!!f.cardOnFile;
+    var existing=f.plan&&f.plan.installments&&f.plan.installments.length;
+    var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a monthly plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">card on file ✓</span>':'')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label># Monthly payments</label><input type="number" id="mpMonths" class="me-input" value="3" min="1" max="24"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the card on file on each due date</label>';
+    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No card on file — save a card to enable auto-charge. You can still create the schedule; the parent can pay each month from their portal.</div>';
+    h+='</div>';
+    showModal(existing?'Edit Monthly Plan':'Set Up Monthly Plan',h,function(){
+        var total=parseFloat(document.getElementById('mpTotal').value)||0;
+        var months=parseInt(document.getElementById('mpMonths').value,10)||1;
+        if(total<0.5){alert('Enter a total of at least $0.50');return}
+        if(months<1)months=1; if(months>24)months=24;
+        var start=document.getElementById('mpStart').value||defStart;
+        var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
+        var each=Math.round(total/months*100)/100;
+        var insts=[]; var sd=new Date(start+'T12:00:00');
+        for(var i=0;i<months;i++){
+            var due=new Date(sd.getFullYear(),sd.getMonth()+i,sd.getDate());
+            var amt=(i===months-1)?Math.round((total-each*(months-1))*100)/100:each;
+            insts.push({n:i+1,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending',paymentId:null});
+        }
+        f.plan={installments:insts,autopay:!!auto,total:total,createdAt:new Date().toISOString()};
+        save();closeModal('dynModal');renderBilling();
+        toast('Monthly plan created — '+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
+    });
+}
+function toggleFamilyAutopay(famKey){
+    var f=families[famKey]; if(!f||!f.plan)return;
+    if(!f.cardOnFile&&!f.plan.autopay){toast('Save a card on file first','error');return}
+    f.plan.autopay=!f.plan.autopay; save();renderBilling();
+    toast('Autopay '+(f.plan.autopay?'ON':'off')+' for '+f.name);
+}
+function cancelMonthlyPlan(famKey){
+    var f=families[famKey]; if(!f||!f.plan)return;
+    if(!confirm('Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.'))return;
+    delete f.plan; save();renderBilling();toast('Monthly plan cancelled');
+}
+function _planCardHtml(l){
+    var f=families[l.famKey]; if(!f||!f.plan||!f.plan.installments||!f.plan.installments.length) return '';
+    var today=new Date().toISOString().split('T')[0];
+    var pend=f.plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
+    var next=pend[0];
+    var chips=f.plan.installments.map(function(i){
+        var overdue=i.status!=='paid'&&i.dueDate&&i.dueDate<today;
+        var bg=i.status==='paid'?'background:#ECFDF5;border-color:#A7F3D0;color:#0E7C4A':i.status==='failed'?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':overdue?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':'background:var(--s50);border-color:var(--s200);color:var(--s600)';
+        var lbl=i.status==='paid'?'✓ ':(i.status==='failed'?'⚠ ':(overdue?'⚠ ':''));
+        return '<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;margin:2px;border:1px solid;'+bg+'">'+lbl+fm(i.amount)+' · '+esc(i.dueDate||'TBD')+'</span>';
+    }).join('');
+    var autoBadge=f.plan.autopay?'<span style="color:var(--ok);font-weight:700">● Autopay ON</span>':'<span style="color:var(--s400);font-weight:700">○ Autopay off</span>';
+    return '<div style="padding:12px 16px;border-top:1px solid var(--s100);background:#FFFEFB">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.04em">📆 Monthly Plan</div><div style="font-size:.75rem">'+autoBadge+'</div></div>'+
+        '<div style="margin-bottom:6px">'+chips+'</div>'+
+        (next?'<div style="font-size:.73rem;color:var(--s500)">Next: <strong>'+fm(next.amount)+'</strong> due '+esc(next.dueDate)+(f.plan.autopay&&f.cardOnFile?' — auto-charges the card on file':(f.plan.autopay?' — autopay on, but no card on file':''))+'</div>':'<div style="font-size:.73rem;color:var(--ok);font-weight:600">All installments paid ✓</div>')+
+        '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\')">'+(f.plan.autopay?'Turn autopay off':'Turn autopay on')+'</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit plan</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\')">Cancel plan</button>'+
+        '</div></div>';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -6840,7 +7061,9 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
+    sendPayLink:sendPayLink,copyPayLink:copyPayLink,
+    monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
