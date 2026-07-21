@@ -177,7 +177,7 @@
                         subject: row.subject || '', body: row.body || '',
                         channels: row.channels || ['app'],
                         scope: f.scope || 'all', scopeValues: f.values || [],
-                        individualNames: f.individuals || [],
+                        individualNames: f.individuals || [], audience: f.audience || 'active',
                         scheduledFor: row.scheduled_for, status: 'scheduled',
                         createdAt: null, sentAt: null,
                         recipientCount: row.recipient_count || 0, _fromCloud: true
@@ -396,7 +396,7 @@
 
     function _filterFromScheduled(b) {
         if (!b || !b.scope) return null;
-        return { scope: b.scope, values: b.scopeValues || [], individuals: b.individualNames || [] };
+        return { scope: b.scope, values: b.scopeValues || [], individuals: b.individualNames || [], audience: b.audience || 'active' };
     }
 
     function _uuid() {
@@ -654,6 +654,36 @@
     };
 
     /**
+     * Best enrollment status per camper, for broadcast audience targeting.
+     * A camper can have several enrollment rows (multiple sessions); we keep the
+     * "most in" one so an accepted camper isn't excluded because an old row is
+     * still 'applied'. Priority: enrolled > accepted > waitlisted > applied >
+     * declined > withdrawn.  Returns { "Camper Name": "enrolled" | ... }.
+     */
+    data.getCamperStatusMap = function() {
+        var RANK = { enrolled: 6, accepted: 5, waitlisted: 4, applied: 3, declined: 2, withdrawn: 1 };
+        var enr = (data.getMe().enrollments) || {};
+        var best = {};
+        Object.keys(enr).forEach(function(k) {
+            var e = enr[k]; if (!e || !e.camperName) return;
+            var s = e.status || 'applied';
+            var cur = best[e.camperName];
+            if (!cur || (RANK[s] || 0) > (RANK[cur] || 0)) best[e.camperName] = s;
+        });
+        return best;
+    };
+
+    /** Distinct enrollment sessions/terms configured for the camp. */
+    data.getSessions = function() {
+        var enr = (data.getMe().enrollments) || {};
+        var set = {};
+        Object.keys(enr).forEach(function(k) {
+            var e = enr[k]; if (e && e.session) set[e.session] = 1;
+        });
+        return Object.keys(set).sort();
+    };
+
+    /**
      * SMART LOOKUP: Get bus stop info for a specific camper
      * Returns { busName, busColor, stopNum, stopAddress, estimatedTime, shiftLabel } or null
      */
@@ -856,6 +886,7 @@
             scope:           opts.scope || 'all',
             scopeValues:     opts.scopeValues || [],
             individualNames: opts.individualNames || [],
+            audience:        opts.audience || 'active',
             scheduledFor:    opts.scheduledFor,
             status:          'scheduled',
             createdAt:       new Date().toISOString(),

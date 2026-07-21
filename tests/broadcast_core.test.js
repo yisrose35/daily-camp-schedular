@@ -110,6 +110,48 @@ describe('applyMergeTags', () => {
     });
 });
 
+describe('classifyEnrollmentStatus', () => {
+    it('buckets each status', () => {
+        assert.equal(core.classifyEnrollmentStatus('enrolled'), 'approved');
+        assert.equal(core.classifyEnrollmentStatus('Accepted'), 'approved');
+        assert.equal(core.classifyEnrollmentStatus('applied'), 'pending');
+        assert.equal(core.classifyEnrollmentStatus('waitlisted'), 'pending');
+        assert.equal(core.classifyEnrollmentStatus('declined'), 'out');
+        assert.equal(core.classifyEnrollmentStatus('withdrawn'), 'out');
+        assert.equal(core.classifyEnrollmentStatus(''), 'unknown');
+        assert.equal(core.classifyEnrollmentStatus(undefined), 'unknown');
+    });
+});
+
+describe('matchesAudience', () => {
+    it('approved audience keeps only accepted/enrolled', () => {
+        assert.equal(core.matchesAudience('enrolled', 'approved'), true);
+        assert.equal(core.matchesAudience('accepted', 'approved'), true);
+        assert.equal(core.matchesAudience('applied', 'approved'), false);
+        assert.equal(core.matchesAudience('waitlisted', 'approved'), false);
+        assert.equal(core.matchesAudience('', 'approved'), false); // unknown excluded from strict approved
+        assert.equal(core.matchesAudience('withdrawn', 'approved'), false);
+    });
+
+    it('active audience keeps everyone except out', () => {
+        assert.equal(core.matchesAudience('applied', 'active'), true);
+        assert.equal(core.matchesAudience('enrolled', 'active'), true);
+        assert.equal(core.matchesAudience('', 'active'), true);   // unknown = active, never dropped
+        assert.equal(core.matchesAudience('declined', 'active'), false);
+        assert.equal(core.matchesAudience('withdrawn', 'active'), false);
+    });
+
+    it('all audience keeps everyone', () => {
+        assert.equal(core.matchesAudience('withdrawn', 'all'), true);
+        assert.equal(core.matchesAudience('declined', 'all'), true);
+    });
+
+    it('defaults to active for an unknown audience', () => {
+        assert.equal(core.matchesAudience('applied', 'whatever'), true);
+        assert.equal(core.matchesAudience('withdrawn', 'whatever'), false);
+    });
+});
+
 describe('summarizeRecipients', () => {
     it('describes each scope', () => {
         assert.equal(core.summarizeRecipients('all', [], 42), 'Everyone · 42 recipients');

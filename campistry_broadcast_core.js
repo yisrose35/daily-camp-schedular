@@ -121,11 +121,57 @@
         return who;
     }
 
+    /**
+     * Collapse a raw enrollment status into a broadcast audience bucket.
+     *   'approved' — accepted | enrolled (a family that's in)
+     *   'pending'  — applied | waitlisted (not yet accepted)
+     *   'out'      — declined | withdrawn
+     *   'unknown'  — no/unrecognized status (treated as active, never dropped)
+     * @param {string} status
+     * @returns {'approved'|'pending'|'out'|'unknown'}
+     */
+    function classifyEnrollmentStatus(status) {
+        switch (String(status || '').toLowerCase()) {
+            case 'accepted':
+            case 'enrolled':   return 'approved';
+            case 'applied':
+            case 'waitlisted': return 'pending';
+            case 'declined':
+            case 'withdrawn':  return 'out';
+            default:           return 'unknown';
+        }
+    }
+
+    /**
+     * Does a camper's enrollment status belong in the chosen broadcast audience?
+     *   audience 'approved' — only accepted/enrolled (the safe default: never
+     *                          message families that haven't been accepted yet)
+     *   audience 'active'   — everyone except declined/withdrawn (incl. pending)
+     *   audience 'all'      — everyone, including out (reunions, early-bird, etc.)
+     * Unknown status counts as active (conservative — a real camper with no
+     * enrollment record is never silently dropped), but is excluded from the
+     * strict 'approved' audience.
+     * @param {string} status    raw enrollment status
+     * @param {string} audience  'approved' | 'active' | 'all'
+     * @returns {boolean}
+     */
+    function matchesAudience(status, audience) {
+        var bucket = classifyEnrollmentStatus(status);
+        switch (audience) {
+            case 'all':      return true;
+            case 'active':   return bucket !== 'out';
+            case 'approved': return bucket === 'approved';
+            default:         return bucket !== 'out'; // default to active
+        }
+    }
+
     return {
         validateScheduleTime: validateScheduleTime,
         selectDue: selectDue,
         formatOutgoingSms: formatOutgoingSms,
         applyMergeTags: applyMergeTags,
-        summarizeRecipients: summarizeRecipients
+        summarizeRecipients: summarizeRecipients,
+        classifyEnrollmentStatus: classifyEnrollmentStatus,
+        matchesAudience: matchesAudience
     };
 });

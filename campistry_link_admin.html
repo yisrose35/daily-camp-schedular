@@ -528,6 +528,15 @@
                 </div>
             </div>
             <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:6px;"></div>
+            <div id="cAudienceRow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;">
+                <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);">Include</span>
+                <select class="lk-input" id="cAudience" style="max-width:230px;" onchange="this.dataset.userset='1';_updateScopeCount();updateComposePreview()">
+                    <option value="approved">Approved campers only</option>
+                    <option value="active">All active (incl. pending)</option>
+                    <option value="all">Everyone (incl. past/declined)</option>
+                </select>
+                <span style="font-size:.72rem;color:var(--text-muted);">so you don’t message families who haven’t been accepted yet</span>
+            </div>
             <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:8px;min-height:16px;"></div>
         </div>
 
@@ -1395,6 +1404,7 @@ function _staffReply(msgId, parentName, parentEmail, threadId){
 function openComposeDrawer(presetName) {
     document.getElementById('composeDrawer').classList.add('open');
     document.getElementById('composeBackdrop').classList.add('open');
+    _initComposeAudience();
     onScopeChange();
     _populateComposeAttach();
     _renderSavedTemplates();
@@ -2165,11 +2175,40 @@ function msgParent(name) {
 }
 
 // Build the target list from current compose state
+// Broadcast audience: does a camper pass the chosen Approved/Active/Everyone gate?
+function _currentAudience() {
+    return (document.getElementById('cAudience') || {}).value || 'active';
+}
+// Default the audience selector: "Approved only" (Campflow's safe default) when
+// the camp actually tracks enrollment status, otherwise "All active" — since
+// with no enrollment data, "Approved only" would match nobody.
+function _initComposeAudience() {
+    var sel = document.getElementById('cAudience'); if (!sel) return;
+    var cl = CL();
+    var statusMap = (cl && cl.data.getCamperStatusMap) ? cl.data.getCamperStatusMap() : {};
+    var hasEnrollment = Object.keys(statusMap).length > 0;
+    var row = document.getElementById('cAudienceRow');
+    if (!sel.dataset.userset) sel.value = hasEnrollment ? 'approved' : 'active';
+    // Hide the whole control when there's no enrollment system to filter by.
+    if (row) row.style.display = hasEnrollment ? 'flex' : 'none';
+}
+function _passesAudience(name, audience, statusMap) {
+    var core = window.CampistryBroadcastCore;
+    var status = statusMap ? statusMap[name] : undefined;
+    if (core && core.matchesAudience) return core.matchesAudience(status, audience);
+    var s = (status || '').toLowerCase();
+    if (audience === 'all') return true;
+    if (audience === 'approved') return s === 'accepted' || s === 'enrolled';
+    return s !== 'withdrawn' && s !== 'declined';
+}
+
 function _getComposeTargets() {
     var cl = CL(); if (!cl) return [];
     var scope = (document.getElementById('cScope') || {}).value || 'all';
     var values = _getSelectedScopeVals();
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
+    var audience = _currentAudience();
+    var statusMap = cl.data.getCamperStatusMap ? cl.data.getCamperStatusMap() : {};
 
     if (scope === 'individual') {
         var chips = document.querySelectorAll('#cIndivChips [data-name]');
@@ -2201,7 +2240,7 @@ function _getComposeTargets() {
     Object.entries(map).forEach(function(entry) {
         var name = entry[0], c = entry[1];
         if (!c.parentName) return;
-        if (inactive[name]) return; // withdrawn/declined — no message
+        if (!_passesAudience(name, audience, statusMap)) return; // Approved/Active/Everyone gate
         var match = (scope === 'all') ||
             (scope === 'division' && values.indexOf(c.division) >= 0) ||
             (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
@@ -2383,9 +2422,11 @@ function sendCompose() {
 // DOM-independent recipient resolver — the compose drawer's scope selectors are
 // gone by the time a scheduled broadcast fires, so resolution must work from a
 // stored {scope, values, individualNames} snapshot instead of the live DOM.
-function _resolveTargetsFor(scope, values, individualNames) {
+function _resolveTargetsFor(scope, values, individualNames, audience) {
     var cl = CL(); if (!cl) return [];
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
+    var statusMap = cl.data.getCamperStatusMap ? cl.data.getCamperStatusMap() : {};
+    audience = audience || 'active';
     values = values || [];
     if (scope === 'individual') {
         var dir = cl.data.getParentDirectory();
@@ -2409,7 +2450,7 @@ function _resolveTargetsFor(scope, values, individualNames) {
     var targets = [];
     Object.entries(map).forEach(function(entry) {
         var name = entry[0], c = entry[1];
-        if (!c.parentName || inactive[name]) return;
+        if (!c.parentName || !_passesAudience(name, audience, statusMap)) return;
         var match = (scope === 'all') ||
             (scope === 'division' && values.indexOf(c.division) >= 0) ||
             (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
@@ -2435,14 +2476,14 @@ function _getComposeScopeSnapshot() {
             individualNames.push(chip.dataset.name);
         });
     }
-    return { scope: scope, values: values, individualNames: individualNames };
+    return { scope: scope, values: values, individualNames: individualNames, audience: _currentAudience() };
 }
 
 // Deliverer the data layer calls when a scheduled broadcast comes due while the
 // admin tab is open. Resolves live recipients and sends one message each.
 function _deliverScheduledBroadcast(rec) {
     var cl = CL(); if (!cl) return 0;
-    var targets = _resolveTargetsFor(rec.scope, rec.scopeValues, rec.individualNames);
+    var targets = _resolveTargetsFor(rec.scope, rec.scopeValues, rec.individualNames, rec.audience);
     if (!targets.length) return 0;
     var busMap = _buildBusRouteMap();
     var isGroup = targets.length > 1;
@@ -2502,8 +2543,8 @@ function scheduleCompose() {
     var when = new Date(atRaw); // datetime-local is in the admin's local time
     if (isNaN(when)) { toast('That date and time is not valid'); return; }
     var snap = _getComposeScopeSnapshot();
-    var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames);
-    if (!targets.length) { toast('Select a recipient or group'); return; }
+    var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames, snap.audience);
+    if (!targets.length) { toast('No recipients match — try widening “Include”'); return; }
 
     // Snapshot resolved recipients so the server edge function can send even
     // with the tab closed and camp state unavailable to it.
@@ -2519,6 +2560,7 @@ function scheduleCompose() {
     var res = cl.msg.scheduleBroadcast({
         subject: subj, body: body, channels: compChannels,
         scope: snap.scope, scopeValues: snap.values, individualNames: snap.individualNames,
+        audience: snap.audience,
         scheduledFor: when.toISOString(),
         recipientCount: targets.length, recipients: recipients
     });
