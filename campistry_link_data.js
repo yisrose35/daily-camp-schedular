@@ -177,7 +177,7 @@
                         subject: row.subject || '', body: row.body || '',
                         channels: row.channels || ['app'],
                         scope: f.scope || 'all', scopeValues: f.values || [],
-                        individualNames: f.individuals || [], audience: f.audience || 'active',
+                        individualNames: f.individuals || [], audience: f.audience || 'active', session: f.session || '',
                         scheduledFor: row.scheduled_for, status: 'scheduled',
                         createdAt: null, sentAt: null,
                         recipientCount: row.recipient_count || 0, _fromCloud: true
@@ -396,7 +396,7 @@
 
     function _filterFromScheduled(b) {
         if (!b || !b.scope) return null;
-        return { scope: b.scope, values: b.scopeValues || [], individuals: b.individualNames || [], audience: b.audience || 'active' };
+        return { scope: b.scope, values: b.scopeValues || [], individuals: b.individualNames || [], audience: b.audience || 'active', session: b.session || '' };
     }
 
     function _uuid() {
@@ -683,6 +683,18 @@
         return Object.keys(set).sort();
     };
 
+    /** camperName -> [session, ...] from enrollment rows (for term targeting). */
+    data.getCamperSessionsMap = function() {
+        var enr = (data.getMe().enrollments) || {};
+        var map = {};
+        Object.keys(enr).forEach(function(k) {
+            var e = enr[k]; if (!e || !e.camperName || !e.session) return;
+            (map[e.camperName] = map[e.camperName] || []);
+            if (map[e.camperName].indexOf(e.session) < 0) map[e.camperName].push(e.session);
+        });
+        return map;
+    };
+
     /**
      * SMART LOOKUP: Get bus stop info for a specific camper
      * Returns { busName, busColor, stopNum, stopAddress, estimatedTime, shiftLabel } or null
@@ -887,6 +899,7 @@
             scopeValues:     opts.scopeValues || [],
             individualNames: opts.individualNames || [],
             audience:        opts.audience || 'active',
+            session:         opts.session || '',
             scheduledFor:    opts.scheduledFor,
             status:          'scheduled',
             createdAt:       new Date().toISOString(),

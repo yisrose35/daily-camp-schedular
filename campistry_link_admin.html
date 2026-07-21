@@ -537,6 +537,12 @@
                 </select>
                 <span style="font-size:.72rem;color:var(--text-muted);">so you don’t message families who haven’t been accepted yet</span>
             </div>
+            <div id="cSessionRow" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);">Term</span>
+                <select class="lk-input" id="cSession" style="max-width:230px;" onchange="_updateScopeCount();updateComposePreview()">
+                    <option value="">All terms</option>
+                </select>
+            </div>
             <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:8px;min-height:16px;"></div>
         </div>
 
@@ -2179,18 +2185,34 @@ function msgParent(name) {
 function _currentAudience() {
     return (document.getElementById('cAudience') || {}).value || 'active';
 }
+function _currentSession() {
+    return (document.getElementById('cSession') || {}).value || '';
+}
 // Default the audience selector: "Approved only" (Campflow's safe default) when
 // the camp actually tracks enrollment status, otherwise "All active" — since
-// with no enrollment data, "Approved only" would match nobody.
+// with no enrollment data, "Approved only" would match nobody. Also populate the
+// term/session filter, shown only when the camp runs multiple sessions.
 function _initComposeAudience() {
-    var sel = document.getElementById('cAudience'); if (!sel) return;
     var cl = CL();
     var statusMap = (cl && cl.data.getCamperStatusMap) ? cl.data.getCamperStatusMap() : {};
     var hasEnrollment = Object.keys(statusMap).length > 0;
+    var sel = document.getElementById('cAudience');
     var row = document.getElementById('cAudienceRow');
-    if (!sel.dataset.userset) sel.value = hasEnrollment ? 'approved' : 'active';
-    // Hide the whole control when there's no enrollment system to filter by.
-    if (row) row.style.display = hasEnrollment ? 'flex' : 'none';
+    if (sel) {
+        if (!sel.dataset.userset) sel.value = hasEnrollment ? 'approved' : 'active';
+        if (row) row.style.display = hasEnrollment ? 'flex' : 'none';
+    }
+    // Term / session filter
+    var sessions = (cl && cl.data.getSessions) ? cl.data.getSessions() : [];
+    var sessRow = document.getElementById('cSessionRow');
+    var sessSel = document.getElementById('cSession');
+    if (sessSel) {
+        var keep = sessSel.value;
+        sessSel.innerHTML = '<option value="">All terms</option>' +
+            sessions.map(function(s) { return '<option value="' + esc(s) + '">' + esc(s) + '</option>'; }).join('');
+        if (keep) sessSel.value = keep;
+        if (sessRow) sessRow.style.display = sessions.length > 1 ? 'flex' : 'none';
+    }
 }
 function _passesAudience(name, audience, statusMap) {
     var core = window.CampistryBroadcastCore;
@@ -2201,6 +2223,12 @@ function _passesAudience(name, audience, statusMap) {
     if (audience === 'approved') return s === 'accepted' || s === 'enrolled';
     return s !== 'withdrawn' && s !== 'declined';
 }
+// Term/session gate — empty session means "all terms" (everyone passes).
+function _passesSession(name, session, sessionsMap) {
+    if (!session) return true;
+    var s = sessionsMap ? sessionsMap[name] : null;
+    return Array.isArray(s) && s.indexOf(session) >= 0;
+}
 
 function _getComposeTargets() {
     var cl = CL(); if (!cl) return [];
@@ -2209,6 +2237,8 @@ function _getComposeTargets() {
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
     var audience = _currentAudience();
     var statusMap = cl.data.getCamperStatusMap ? cl.data.getCamperStatusMap() : {};
+    var session = _currentSession();
+    var sessionsMap = (session && cl.data.getCamperSessionsMap) ? cl.data.getCamperSessionsMap() : {};
 
     if (scope === 'individual') {
         var chips = document.querySelectorAll('#cIndivChips [data-name]');
@@ -2241,6 +2271,7 @@ function _getComposeTargets() {
         var name = entry[0], c = entry[1];
         if (!c.parentName) return;
         if (!_passesAudience(name, audience, statusMap)) return; // Approved/Active/Everyone gate
+        if (!_passesSession(name, session, sessionsMap)) return; // term/session gate
         var match = (scope === 'all') ||
             (scope === 'division' && values.indexOf(c.division) >= 0) ||
             (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
@@ -2422,10 +2453,11 @@ function sendCompose() {
 // DOM-independent recipient resolver — the compose drawer's scope selectors are
 // gone by the time a scheduled broadcast fires, so resolution must work from a
 // stored {scope, values, individualNames} snapshot instead of the live DOM.
-function _resolveTargetsFor(scope, values, individualNames, audience) {
+function _resolveTargetsFor(scope, values, individualNames, audience, session) {
     var cl = CL(); if (!cl) return [];
     var inactive = cl.data.getInactiveCamperNames ? cl.data.getInactiveCamperNames() : {};
     var statusMap = cl.data.getCamperStatusMap ? cl.data.getCamperStatusMap() : {};
+    var sessionsMap = (session && cl.data.getCamperSessionsMap) ? cl.data.getCamperSessionsMap() : {};
     audience = audience || 'active';
     values = values || [];
     if (scope === 'individual') {
@@ -2451,6 +2483,7 @@ function _resolveTargetsFor(scope, values, individualNames, audience) {
     Object.entries(map).forEach(function(entry) {
         var name = entry[0], c = entry[1];
         if (!c.parentName || !_passesAudience(name, audience, statusMap)) return;
+        if (!_passesSession(name, session, sessionsMap)) return;
         var match = (scope === 'all') ||
             (scope === 'division' && values.indexOf(c.division) >= 0) ||
             (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
@@ -2476,14 +2509,14 @@ function _getComposeScopeSnapshot() {
             individualNames.push(chip.dataset.name);
         });
     }
-    return { scope: scope, values: values, individualNames: individualNames, audience: _currentAudience() };
+    return { scope: scope, values: values, individualNames: individualNames, audience: _currentAudience(), session: _currentSession() };
 }
 
 // Deliverer the data layer calls when a scheduled broadcast comes due while the
 // admin tab is open. Resolves live recipients and sends one message each.
 function _deliverScheduledBroadcast(rec) {
     var cl = CL(); if (!cl) return 0;
-    var targets = _resolveTargetsFor(rec.scope, rec.scopeValues, rec.individualNames, rec.audience);
+    var targets = _resolveTargetsFor(rec.scope, rec.scopeValues, rec.individualNames, rec.audience, rec.session);
     if (!targets.length) return 0;
     var busMap = _buildBusRouteMap();
     var isGroup = targets.length > 1;
@@ -2543,7 +2576,7 @@ function scheduleCompose() {
     var when = new Date(atRaw); // datetime-local is in the admin's local time
     if (isNaN(when)) { toast('That date and time is not valid'); return; }
     var snap = _getComposeScopeSnapshot();
-    var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames, snap.audience);
+    var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames, snap.audience, snap.session);
     if (!targets.length) { toast('No recipients match — try widening “Include”'); return; }
 
     // Snapshot resolved recipients so the server edge function can send even
@@ -2560,7 +2593,7 @@ function scheduleCompose() {
     var res = cl.msg.scheduleBroadcast({
         subject: subj, body: body, channels: compChannels,
         scope: snap.scope, scopeValues: snap.values, individualNames: snap.individualNames,
-        audience: snap.audience,
+        audience: snap.audience, session: snap.session,
         scheduledFor: when.toISOString(),
         recipientCount: targets.length, recipients: recipients
     });
@@ -3178,6 +3211,7 @@ function renderAdminLists() {
                     '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">For: ' + esc(scopeLabel) + ' &nbsp;·&nbsp; ' + n + ' item' + (n !== 1 ? 's' : '') + (l.description ? ' &nbsp;·&nbsp; ' + esc(l.description) : '') + '</div>' +
                 '</div>' +
                 '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+                    '<button class="btn btn-primary btn-sm" onclick="broadcastToList(\'' + esc(l.id) + '\')" title="Send a broadcast to the families this list is for">Broadcast</button>' +
                     '<button class="btn btn-secondary btn-sm" onclick="openListEditor(\'' + esc(l.id) + '\')">Edit</button>' +
                     '<button class="btn btn-ghost btn-sm" onclick="deleteAdminList(\'' + esc(l.id) + '\')" style="color:var(--red-500);">Delete</button>' +
                 '</div>' +
@@ -3185,6 +3219,32 @@ function renderAdminLists() {
             (preview ? '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:10px;">' + preview + '</div>' : '') +
         '</div>';
     }).join('');
+}
+
+// Send a broadcast to the families a list is for — opens compose pre-targeted
+// to the list's scope (Everyone / a division / grade / bunk).
+function broadcastToList(listId) {
+    var l = _loadLinkListsStore().find(function(x) { return x.id === listId; });
+    if (!l) { toast('List not found'); return; }
+    nav('messages');
+    switchMsgTab('outbox');
+    openComposeDrawer();
+    var scope = l.scope || 'all';
+    var cScope = document.getElementById('cScope');
+    if (!cScope) return;
+    if (scope === 'all') {
+        cScope.value = 'all';
+        onScopeChange();
+    } else {
+        cScope.value = scope;
+        onScopeChange();
+        // Select the chip that matches this list's scope value.
+        document.querySelectorAll('#cScopeVal .scope-chip').forEach(function(c) {
+            if (c.dataset.val === l.scopeValue) c.classList.add('selected');
+        });
+        onScopeValChange();
+    }
+    toast('Broadcasting to “' + l.name + '” — write your message, pick channels, and send');
 }
 
 function onListScopeChange() {
@@ -3673,12 +3733,15 @@ function _renderParentFamilies(){
                    : '<span class="badge badge-warn">Invited</span>';
         var kids = (f.children || []).map(function(c){ return c.name.split(' ')[0]; }).join(', ');
         var linkBtn = inv ? '<button class="btn btn-ghost btn-sm" style="font-size:.68rem;padding:2px 8px;" onclick="var b=this;navigator.clipboard.writeText(_pgPortalUrl(\'' + inv.token + '\')).then(function(){b.textContent=\'✓\';setTimeout(function(){b.textContent=\'Copy link\'},1500)})">Copy link</button>' : '';
+        var msgBtn = (f.parentEmail || (f.children || []).length)
+            ? '<button class="btn btn-ghost btn-sm" style="font-size:.68rem;padding:2px 8px;" data-pn="' + esc(f.parentName || '') + '" onclick="msgParent(this.dataset.pn)" title="Send a quick message to this family">Message</button>'
+            : '';
         return '<tr style="border-top:1px solid var(--border-light);">'
             + '<td style="padding:6px 8px;"><div style="font-weight:600;">' + esc(f.parentName || '—') + '</div><div style="color:var(--text-muted);font-size:.72rem;">' + esc(f.parentEmail) + '</div></td>'
             + '<td style="padding:6px 8px;">' + esc(kids || '—') + '</td>'
             + '<td style="padding:6px 8px;">' + status + '</td>'
             + '<td style="padding:6px 8px;font-family:monospace;">' + esc(inv && inv.access_code ? inv.access_code : '—') + '</td>'
-            + '<td style="padding:6px 8px;text-align:right;">' + linkBtn + '</td>'
+            + '<td style="padding:6px 8px;text-align:right;white-space:nowrap;">' + msgBtn + ' ' + linkBtn + '</td>'
             + '</tr>';
     });
     body.innerHTML = rows.join('');
