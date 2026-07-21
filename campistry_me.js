@@ -2308,13 +2308,21 @@ function renderEnrollment(){
         if(!filtered.length){
             h+='<div class="me-empty" style="padding:26px 20px"><p>No '+esc(sectionLabel.toLowerCase())+' campers.</p></div>';
         }else{
-        h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:100px"></th></tr></thead><tbody>';
+        h+='<div id="regBulkBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--me-bg,#eef2ff);border:1px solid var(--s200);border-radius:8px;margin-bottom:8px">'
+            +'<span id="regBulkCount" style="font-weight:700;font-size:.8rem;color:var(--s700)"></span>'
+            +'<span style="flex:1"></span>'
+            +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.bulkEnrollStatus(\'accepted\')">Accept</button>'
+            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.bulkEnrollStatus(\'waitlisted\')">Waitlist</button>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.bulkEnrollStatus(\'declined\')">Decline</button>'
+            +'</div>';
+        h+='<div class="me-tw"><table class="me-t"><thead><tr><th style="width:26px"><input type="checkbox" title="Select all" onclick="CampistryMe.toggleAllEnroll(this)"></th><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:100px"></th></tr></thead><tbody>';
         filtered.sort(function(a,b){return(b[1].appliedDate||'').localeCompare(a[1].appliedDate||'')}).forEach(function([id,e]){
             var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
             var formsDone=e.formsCompleted||0,formsTotal=e.formsRequired||0;
             var formsColor=formsTotal===0?'var(--s400)':formsDone>=formsTotal?'var(--ok)':'var(--me)';
             var payColor=e.paymentStatus==='paid'?'var(--ok)':e.paymentStatus==='partial'?'var(--me)':'var(--s400)';
             h+='<tr class="click" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">';
+            h+='<td onclick="event.stopPropagation()"><input type="checkbox" class="reg-check" data-id="'+esc(id)+'" onclick="CampistryMe._updateRegBulkBar()"></td>';
             h+='<td style="font-size:.75rem;color:var(--s400)">'+esc(e.appliedDate||'—')+'</td>';
             h+='<td class="bold" style="color:var(--me)">'+esc(e.camperName||'—')+'</td>';
             h+='<td>'+esc(e.parentName||'—')+'</td>';
@@ -2879,7 +2887,8 @@ function addApplication(){
     });
 }
 
-function updateEnrollStatus(id,status){
+function updateEnrollStatus(id,status,opts){
+    opts=opts||{};
     if(!enrollments[id])return;
     var prev=enrollments[id].status;
     enrollments[id].status=status;
@@ -2891,12 +2900,36 @@ function updateEnrollStatus(id,status){
         var session=enrollments[id].session;
         if(session) autoPromoteWaitlist(session);
     }
-    save();renderEnrollment();toast('Status updated to '+status);
+    // Bulk callers pass silent:true and do one save/render/toast for the whole batch.
+    if(!opts.silent){ save();renderEnrollment();toast('Status updated to '+status); }
 
-    // On first acceptance, generate a parent portal invite link
-    if(status==='accepted'&&prev!=='accepted'&&prev!=='enrolled'){
+    // On first acceptance, generate a parent portal invite link (skipped in bulk
+    // to avoid a burst of invite generation; the office can invite from the row).
+    if(!opts.silent && status==='accepted'&&prev!=='accepted'&&prev!=='enrolled'){
         generateParentInvite(id);
     }
+}
+
+// Bulk approve / waitlist / decline the checked applications in one pass.
+function _checkedEnrollIds(){
+    return Array.prototype.map.call(document.querySelectorAll('.reg-check:checked'), function(cb){ return cb.dataset.id; });
+}
+function toggleAllEnroll(cb){
+    document.querySelectorAll('.reg-check').forEach(function(x){ x.checked=cb.checked; });
+    _updateRegBulkBar();
+}
+function _updateRegBulkBar(){
+    var n=document.querySelectorAll('.reg-check:checked').length;
+    var bar=document.getElementById('regBulkBar'); if(bar) bar.style.display=n?'flex':'none';
+    var lbl=document.getElementById('regBulkCount'); if(lbl) lbl.textContent=n+' selected';
+}
+function bulkEnrollStatus(status){
+    var ids=_checkedEnrollIds();
+    if(!ids.length){ toast('Select at least one application'); return; }
+    var verb=status==='accepted'?'Accepted':status==='declined'?'Declined':status==='waitlisted'?'Waitlisted':(status+'d');
+    if(status==='declined' && !confirm('Decline '+ids.length+' application'+(ids.length>1?'s':'')+'?')) return;
+    ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true}); });
+    save(); renderEnrollment(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
 }
 
 // ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
@@ -6090,7 +6123,7 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
