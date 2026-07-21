@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Payment — Campistry</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'DM Sans',system-ui,sans-serif;background:#F8FAFC;color:#1E293B;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+        .card{background:#fff;border:1px solid #E2E8F0;border-radius:18px;box-shadow:0 12px 40px rgba(15,23,42,.08);max-width:440px;width:100%;padding:40px 32px;text-align:center}
+        .icon{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 18px}
+        .icon.ok{background:#ECFDF5;color:#0E7C4A}
+        .icon.no{background:#FEF2F2;color:#DC2626}
+        h1{font-family:'Fraunces',serif;font-size:1.6rem;margin-bottom:8px}
+        p{color:#64748B;font-size:.95rem;line-height:1.6}
+        .note{margin-top:20px;font-size:.8rem;color:#94A3B8}
+    </style>
+</head>
+<body>
+    <div class="card" id="card"></div>
+    <script>
+        var status=new URLSearchParams(location.search).get('status');
+        var ok=status!=='cancelled';
+        document.getElementById('card').innerHTML= ok
+          ? '<div class="icon ok"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>'+
+            '<h1>Thank you!</h1><p>Your payment was received. A receipt is on its way, and it will appear on your camp account shortly. Bank (ACH) payments can take a few business days to fully clear.</p>'+
+            '<div class="note">You can close this window.</div>'
+          : '<div class="icon no"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>'+
+            '<h1>Payment cancelled</h1><p>No payment was made. If you meant to pay, you can reopen the payment link your camp sent you and try again.</p>'+
+            '<div class="note">You can close this window.</div>';
+    </script>
+</body>
+</html>

@@ -3456,7 +3456,9 @@ function renderAnalytics(){
         if(!tuition)return;
         // Check if manual payment exists for this camper
         var manualPay=finPayments.filter(function(p){return p.family===e.camperName||p.family===(e.camperLast||'')+' Family'||p.enrollmentId===id});
-        var paidAmount=manualPay.reduce(function(s,p){return s+p.amount},0);
+        // Pending (e.g. ACH still settling) and failed online payments are shown
+        // in the log but do NOT count as collected until they succeed.
+        var paidAmount=manualPay.reduce(function(s,p){return s+((p.status==='pending'||p.status==='failed')?0:(p.amount||0))},0);
         var payStatus='pending';
         if(paidAmount>=tuition)payStatus='paid';
         else if(paidAmount>0)payStatus='partial';
@@ -3621,9 +3623,14 @@ function renderAnalytics(){
             finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
                 if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
                 var _isRef=(p.amount||0)<0;
+                var _st=p.status||'';
+                var _pend=(_st==='pending'||_st==='failed');
                 var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
-                var _acts=(_isRef?'':'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+(_isRef?'var(--err)':'var(--ok)')+'">'+_amtTxt+'</td><td>'+bdg(p.method||'—',_isRef?'err':'ok')+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
+                var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
+                var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
+                var _canRefund=!_isRef&&!_pend&&(p.amount||0)>0;
+                var _acts=(_canRefund?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>':'')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg(p.method||'—',_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -3764,7 +3771,7 @@ function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();to
 function finAddPayment(){
     var family=prompt('Family name:');if(!family)return;
     var amount=prompt('Amount ($):','');if(!amount)return;
-    var method=prompt('Method (Credit Card, ACH, Zelle, Check, Payment Plan):','Credit Card');
+    var method=prompt('Method (Credit Card, ACH / Bank Transfer, PayPal, Venmo, Zelle, Cash App, Apple Pay, Google Pay, Check, Cash, Wire Transfer, Money Order, Other):','Credit Card');
     var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
     finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
     save();renderAnalytics();toast('Payment recorded');
@@ -4072,8 +4079,9 @@ function buildFamilyLedgers(){
         });
         if(!fk) return;
         if(!ledgers[fk]) return;
-        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
-        ledgers[fk].totalPayments+=Number(p.amount)||0;
+        var _notCollected=(p.status==='pending'||p.status==='failed');
+        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||'',status:p.status||''});
+        if(!_notCollected) ledgers[fk].totalPayments+=Number(p.amount)||0;
     });
 
     // 4. Compute balances and sort entries
@@ -4219,6 +4227,7 @@ function renderBilling(){
             var hasCard=families[l.famKey]?.cardOnFile;
             h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
             h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
             if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
             if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
             else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
@@ -4258,7 +4267,7 @@ function openPaymentForFamily(famKey){
     h+='<div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div>';
     h+='</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>Check</option><option>Cash</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Zelle</option><option>Other</option></select></div>';
+    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Venmo</option><option>Zelle</option><option>Cash App</option><option>Apple Pay</option><option>Google Pay</option><option>Check</option><option>Cash</option><option>Wire Transfer</option><option>Money Order</option><option>Other</option></select></div>';
     h+='<div class="me-field"><label>Reference #</label><input type="text" id="payRef" class="me-input" placeholder="Check #, confirmation, etc."></div>';
     h+='</div>';
     h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
@@ -4622,6 +4631,51 @@ async function batchCharge(){
         renderBilling();
     });
 }
+
+// ═══════════════════════════════════════════════════════════════
+// ONLINE PAYMENT LINK — a hosted Stripe Checkout the parent pays on.
+// Offers every method the camp enabled in Stripe (card, ACH bank debit,
+// Cash App, PayPal, Link, …). The payment records itself into the ledger
+// via stripe-webhook — no manual entry. (Venmo/Zelle can't be processed
+// by Stripe; those stay manual-entry methods.)
+// ═══════════════════════════════════════════════════════════════
+async function sendPayLink(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var email='';(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Create a secure online payment link for <strong>'+esc(f.name)+'</strong>. Send it to the parent — they can pay by card, bank transfer (ACH), Cash App, PayPal or any other method you\'ve enabled in Stripe, and it records itself here automatically.</p>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(email?' · '+esc(email):' · <span style="color:var(--err)">no parent email on file</span>')+'</div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="plAmt" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label>What\'s this for?</label><input type="text" id="plDesc" class="me-input" value="Camp tuition — '+esc(f.name)+'"></div>';
+    h+='</div>';
+    showModal('Online Payment Link',h,async function(){
+        var amt=parseFloat(document.getElementById('plAmt').value)||0;
+        if(amt<0.50){alert('Enter an amount of at least $0.50');return}
+        var desc=document.getElementById('plDesc').value.trim();
+        var btn=document.getElementById('dynModalSave'); if(btn){btn.disabled=true;btn.textContent='Creating…';}
+        try{
+            var res=await callEdgeFunction('stripe-checkout',{campId:getCampId(),familyKey:famKey,familyName:f.name,email:email,amount:amt,description:desc});
+            if(!res.url) throw new Error('No link returned');
+            _showPayLinkResult(f,res.url);
+        }catch(err){
+            console.error('[Me] pay link error:',err);
+            toast('Could not create link: '+err.message,'error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        }
+    });
+}
+function _showPayLinkResult(f,url){
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Payment link for <strong>'+esc(f.name)+'</strong> is ready. Copy it into a text or email — it opens a secure Stripe checkout with every payment method you offer, and the payment lands in Billing automatically.</p>';
+    h+='<div class="me-field"><label>Payment link</label><input type="text" id="plUrl" class="me-input" readonly value="'+esc(url)+'" onclick="this.select()"></div>';
+    h+='<div style="display:flex;gap:8px;margin-top:6px">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyPayLink()">Copy link</button>';
+    h+='<a class="me-btn me-btn--sec me-btn--sm" href="'+esc(url)+'" target="_blank" rel="noopener">Open</a>';
+    h+='</div></div>';
+    showModal('Send this link to the parent',h);
+}
+function copyPayLink(){var el=document.getElementById('plUrl');if(!el)return;el.select();try{navigator.clipboard&&navigator.clipboard.writeText(el.value)}catch(e){try{document.execCommand('copy')}catch(_){}}toast('Link copied')}
 
 // ═══════════════════════════════════════════════════════════════
 // BROADCASTS — Full messaging system
@@ -6181,6 +6235,7 @@ window.CampistryMe={
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
+    sendPayLink:sendPayLink,copyPayLink:copyPayLink,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
