@@ -3537,6 +3537,21 @@ function renderAnalytics(){
         h+=stat('Profit Margin',projected>0?Math.round(netIncome/projected*100)+'%':'—','Net / Revenue','#0EA5E9');
         h+='</div>';
 
+        // ═══ A/R AGING — outstanding balance bucketed by age of the invoice ═══
+        var aging=[{l:'Current (0–30 days)',v:0,c:'var(--ok)'},{l:'31–60 days',v:0,c:'var(--me)'},{l:'61–90 days',v:0,c:'#F97316'},{l:'90+ days',v:0,c:'var(--err)'}];
+        autoInvoices.forEach(function(inv){
+            if(inv.balance<=0)return;
+            var days=Math.floor((todayMs-new Date(inv.enrollDate||todayStr).getTime())/86400000);
+            if(days<=30)aging[0].v+=inv.balance; else if(days<=60)aging[1].v+=inv.balance; else if(days<=90)aging[2].v+=inv.balance; else aging[3].v+=inv.balance;
+        });
+        var agingTotal=aging.reduce(function(s,b){return s+b.v},0);
+        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
+        h+='<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--s100);margin-bottom:12px">';
+        aging.forEach(function(b){var pct=agingTotal>0?b.v/agingTotal*100:0;if(pct>0)h+='<div style="width:'+pct+'%;background:'+b.c+'" title="'+esc(b.l)+': '+fm(b.v)+'"></div>';});
+        h+='</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
+        aging.forEach(function(b){h+='<div style="text-align:center;padding:8px 6px;border:1px solid var(--s200);border-radius:var(--r);border-top:3px solid '+b.c+'"><div style="font-size:1.05rem;font-weight:800;color:var(--s800)">'+fm(b.v)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;margin-top:2px">'+esc(b.l)+'</div></div>';});
+        h+='</div></div>';
+
         // Enrollment funnel
         var eArr=Object.entries(enrollments);
         var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
@@ -3605,7 +3620,10 @@ function renderAnalytics(){
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
             finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
                 if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
+                var _isRef=(p.amount||0)<0;
+                var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
+                var _acts=(_isRef?'':'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+(_isRef?'var(--err)':'var(--ok)')+'">'+_amtTxt+'</td><td>'+bdg(p.method||'—',_isRef?'err':'ok')+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -3757,6 +3775,70 @@ function finRemovePayment(id){
     var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
     if(idx<0){toast('Payment not found','error');return}
     finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REFUNDS — record a refund (and optionally return money via Stripe)
+// A refund is stored as a NEGATIVE payment, so every total that sums
+// finPayments (both the Billing ledger and the Analytics invoices)
+// reflects it automatically. If the original payment carries a Stripe
+// PaymentIntent, the money can be returned to the card via stripe-refund.
+// ═══════════════════════════════════════════════════════════════
+function finRefund(id){
+    var p=finPayments.find(function(x){return String(x.id)===String(id)});
+    if(!p){toast('Payment not found','error');return}
+    if((p.amount||0)<=0){toast('That entry is already a refund','error');return}
+    var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)})
+        .reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+    var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
+    if(maxRefund<=0){toast('This payment is already fully refunded','error');return}
+    var canStripe=!!p.stripePaymentIntentId;
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">Refunding payment to <strong>'+esc(p.family||'')+'</strong><br>Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?'<br>Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Reason</label><select id="rfReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="rfAmount" class="me-input" value="'+maxRefund.toFixed(2)+'" step="0.01" min="0.01" max="'+maxRefund+'"></div>';
+    h+='</div>';
+    if(canStripe){
+        h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="rfStripe" checked> Return the money to the card through Stripe</label>';
+        h+='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>';
+    } else {
+        h+='<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
+    }
+    h+='</div>';
+    showModal('Refund Payment',h,async function(){
+        var amt=parseFloat(document.getElementById('rfAmount').value)||0;
+        if(amt<=0||amt>maxRefund+0.001){alert('Enter an amount up to '+fm(maxRefund));return}
+        var reasonSel=document.getElementById('rfReason').value;
+        var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
+        var stripeRefundId=null;
+        if(doStripe){
+            var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
+            toast('Processing Stripe refund…');
+            try{
+                var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:amt,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                stripeRefundId=res.refundId;
+            }catch(err){
+                console.error('[Me] Stripe refund error:',err);
+                toast('Stripe refund failed: '+err.message,'error');
+                return;
+            }
+        }
+        var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
+        finPayments.push({
+            id:'ref_'+Date.now(),
+            family:p.family,familyKey:p.familyKey||null,enrollmentId:p.enrollmentId||null,
+            amount:-amt,date:today(),method:'Refund',
+            reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
+            reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
+        });
+        var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
+        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
+        save();closeModal('dynModal');
+        try{renderAnalytics()}catch(e){}
+        try{renderBilling()}catch(e){}
+        toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
+    });
 }
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
@@ -4098,14 +4180,17 @@ function renderBilling(){
                     var isCharge=e.type==='charge';
                     var isPayment=e.type==='payment';
                     var isCredit=e.type==='credit';
+                    var isRefund=isPayment&&e.amount<0;
                     if(isCharge) runBal+=e.amount;
                     if(isPayment||isCredit) runBal-=e.amount;
+                    var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
+                    var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
                     h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isPayment?'ok':'warn')+'</td>';
+                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
                     h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
                     h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-                    h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+((isPayment||isCredit)?fm(e.amount):'')+'</td>';
-                    h+='<td></td></tr>';
+                    h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
+                    h+='<td style="text-align:right">'+refBtn+'</td></tr>';
                 });
                 h+='</tbody></table>';
             }
@@ -6095,7 +6180,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
