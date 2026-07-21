@@ -13,6 +13,8 @@ var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
+var staffApplications={};   // Staff hiring: applicant id → application record
+var staffFilter='all';      // Staffing pipeline filter
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
@@ -107,6 +109,7 @@ function loadData(){
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkStaff=me.bunkStaff||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
+        staffApplications=me.staffApplications||{};
         formConfig=me.formConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         // Ensure promoCodes live inside enrollSettings
@@ -179,6 +182,7 @@ function save(){
             bunkStaff:bunkStaff,
             nextCamperId:nextCamperId,
             enrollments:enrollments,
+            staffApplications:staffApplications,
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
@@ -338,7 +342,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -2227,6 +2231,171 @@ function openBunkCountModal(bunkName){
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// STAFFING — hiring pipeline / applicant tracking (mirrors Registration).
+// Staff apply at campistry_staff_apply.html → campistryMe.staffApplications;
+// the office moves them through Applied → Screening → Interview → Reference →
+// Offered → Hired, requests references, and runs an onboarding checklist.
+// ═══════════════════════════════════════════════════════════════
+var STAFF_POSITIONS=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
+var STAFF_STAGES=[
+    {key:'all',label:'All',color:'var(--s700)'},
+    {key:'applied',label:'Applied',color:'var(--s500)'},
+    {key:'screening',label:'Screening',color:'#3B82F6'},
+    {key:'interview',label:'Interview',color:'#8B5CF6'},
+    {key:'reference',label:'Reference',color:'var(--me)'},
+    {key:'offered',label:'Offered',color:'#0EA5E9'},
+    {key:'hired',label:'Hired',color:'var(--ok)'},
+    {key:'declined',label:'Declined',color:'var(--err)'}
+];
+var STAFF_ONBOARD=[['contract','Signed offer / contract'],['i9','I-9 verified'],['w4','W-4 / tax forms'],['bgcheck','Background check cleared'],['orientation','Orientation complete']];
+function _staffStatusType(s){return s==='hired'?'ok':s==='declined'?'err':s==='offered'?'info':s==='reference'?'warn':'gray';}
+function _staffLabel(s){var x=STAFF_STAGES.find(function(g){return g.key===s;});return x?x.label:(s||'Applied');}
+
+function renderStaffing(){
+    var c=document.getElementById('page-staffing');
+    var arr=Object.entries(staffApplications);
+    var total=arr.length;
+    var by={}; STAFF_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
+    arr.forEach(function([,a]){var st=a.status||'applied'; by[st]=(by[st]||0)+1;});
+    var hired=by.hired||0;
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Staffing &amp; Hiring</h2><p class="sec-desc">'+total+' applicant'+(total!==1?'s':'')+' · '+hired+' hired</p></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button></div></div>';
+
+    // Application link banner
+    h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+    h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">STAFF APPLICATION LINK</div>';
+    h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyStaffLink()">Copy Link</button>';
+    h+='<a href="campistry_staff_apply.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a></div>';
+
+    // Pipeline cards
+    h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    STAFF_STAGES.forEach(function(s){
+        var count=s.key==='all'?total:(by[s.key]||0);
+        var active=staffFilter===s.key;
+        h+='<div class="click" onclick="CampistryMe.setStaffFilter(\''+s.key+'\')" style="flex:1;min-width:82px;background:'+(active?'var(--s50)':'#fff')+';border-radius:var(--r);padding:10px 12px;border:2px solid '+(active?s.color:'var(--s200)')+';text-align:center;cursor:pointer">';
+        h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+count+'</div>';
+        h+='<div style="font-size:.62rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+s.label+'</div></div>';
+    });
+    h+='</div>';
+
+    // Applicant list
+    var list=arr.map(function([id,a]){a._id=id;return a;});
+    if(staffFilter!=='all') list=list.filter(function(a){return (a.status||'applied')===staffFilter;});
+    list.sort(function(a,b){return(b.appliedTime||'').localeCompare(a.appliedTime||'');});
+
+    if(!total){
+        h+='<div class="me-empty"><h3>No applicants yet</h3><p>Share your staff application link and applications will appear here.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button></div>';
+    } else if(!list.length){
+        h+='<div class="me-empty"><h3>No applicants in this stage</h3></div>';
+    } else {
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position(s)</th><th>Applied</th><th>References</th><th>Status</th><th></th></tr></thead><tbody>';
+        list.forEach(function(a){
+            var refs=(a.references||[]); var refDone=refs.filter(function(r){return r.status==='received';}).length;
+            var refTxt=refs.length?refDone+'/'+refs.length:'—';
+            h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(a._id)+'\')">';
+            h+='<td class="bold">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</td>';
+            h+='<td style="font-size:.8rem">'+esc((a.positions||[]).join(', ')||'—')+'</td>';
+            h+='<td style="font-size:.78rem;color:var(--s500)">'+esc(a.appliedDate||'')+'</td>';
+            h+='<td style="font-size:.8rem;color:'+(refs.length&&refDone===refs.length?'var(--ok)':'var(--s500)')+'">'+refTxt+'</td>';
+            h+='<td>'+bdg(_staffLabel(a.status||'applied'),_staffStatusType(a.status||'applied'))+'</td>';
+            h+='<td style="text-align:right;color:var(--s300)">›</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+    c.innerHTML=h;
+}
+
+function setStaffFilter(f){staffFilter=f;renderStaffing();}
+
+function viewStaffApp(id){
+    var a=staffApplications[id]; if(!a)return;
+    var st=a.status||'applied';
+    var opts=STAFF_STAGES.filter(function(g){return g.key!=='all';}).map(function(g){return '<option value="'+g.key+'"'+(st===g.key?' selected':'')+'>'+g.label+'</option>';}).join('');
+    var h='<div style="max-height:70vh;overflow:auto">';
+    // Header
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">';
+    h+='<div><div style="font-size:1.05rem;font-weight:800">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</div><div style="font-size:.8rem;color:var(--s500)">'+esc((a.positions||[]).join(', ')||'—')+'</div></div>';
+    h+='<select class="me-input" style="width:auto" onchange="CampistryMe.setStaffStatus(\''+je(id)+'\',this.value)">'+opts+'</select>';
+    h+='</div>';
+    // Contact
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem;margin-bottom:12px">';
+    if(a.email)h+='<div><span style="color:var(--s400)">Email</span><br><a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a></div>';
+    if(a.phone)h+='<div><span style="color:var(--s400)">Phone</span><br><a href="tel:'+esc(a.phone)+'" style="color:var(--me)">'+esc(a.phone)+'</a></div>';
+    if(a.dob)h+='<div><span style="color:var(--s400)">DOB</span><br>'+esc(a.dob)+'</div>';
+    if(a.availStart||a.availEnd)h+='<div><span style="color:var(--s400)">Availability</span><br>'+esc((a.availStart||'?')+' – '+(a.availEnd||'?'))+'</div>';
+    if(a.street)h+='<div style="grid-column:1/-1"><span style="color:var(--s400)">Address</span><br>'+esc([a.street,a.city,a.state,a.zip].filter(Boolean).join(', '))+'</div>';
+    h+='</div>';
+    // Certifications
+    if((a.certifications||[]).length)h+='<div style="margin-bottom:10px"><span style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase">Certifications</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">'+a.certifications.map(function(c){return '<span style="font-size:.72rem;padding:2px 8px;border-radius:999px;background:var(--s100);color:var(--s600)">'+esc(c)+'</span>';}).join('')+'</div></div>';
+    // Experience / education
+    if(a.education)h+='<div style="margin-bottom:8px;font-size:.82rem"><span style="color:var(--s400)">Education:</span> '+esc(a.education)+'</div>';
+    if(a.experience)h+='<div style="margin-bottom:12px;font-size:.82rem"><span style="color:var(--s400)">Experience</span><div style="margin-top:2px;white-space:pre-wrap;color:var(--s700)">'+esc(a.experience)+'</div></div>';
+    if(a.resume&&a.resume.data)h+='<div style="margin-bottom:12px"><a href="'+esc(a.resume.data)+'" download="'+esc(a.resume.name||'resume')+'" class="me-btn me-btn--sec me-btn--sm">📎 '+esc(a.resume.name||'Resume')+'</a></div>';
+    // References
+    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">References</div>';
+    if((a.references||[]).length){
+        a.references.forEach(function(r,ri){
+            var rst=r.status||'pending';
+            var rc=rst==='received'?'ok':rst==='requested'?'warn':'gray';
+            h+='<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.82rem">';
+            h+='<div style="flex:1"><strong>'+esc(r.name||'—')+'</strong>'+(r.relationship?' <span style="color:var(--s400)">('+esc(r.relationship)+')</span>':'')+'<br><span style="color:var(--s500);font-size:.76rem">'+esc([r.email,r.phone].filter(Boolean).join(' · '))+'</span></div>';
+            h+=bdg(rst,rc);
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.cycleRef(\''+je(id)+'\','+ri+')">'+(rst==='received'?'Reset':rst==='requested'?'Mark received':'Request')+'</button>';
+            h+='</div>';
+        });
+    } else h+='<div style="font-size:.8rem;color:var(--s400)">No references provided.</div>';
+    h+='</div>';
+    // Onboarding (once offered/hired)
+    if(st==='offered'||st==='hired'){
+        var ob=a.onboarding||{};
+        h+='<div style="margin-bottom:12px;background:var(--s50);border-radius:var(--r);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">Onboarding checklist</div>';
+        STAFF_ONBOARD.forEach(function(row){
+            h+='<label style="display:flex;align-items:center;gap:8px;font-size:.83rem;padding:3px 0;cursor:pointer"><input type="checkbox" '+(ob[row[0]]?'checked':'')+' onchange="CampistryMe.toggleOnboard(\''+je(id)+'\',\''+row[0]+'\')"> '+esc(row[1])+'</label>';
+        });
+        h+='</div>';
+    }
+    // Admin notes
+    h+='<div class="me-field"><label>Internal notes</label><textarea class="me-input" id="staffNote" rows="2" placeholder="Interview notes, impressions…">'+esc(a.adminNotes||'')+'</textarea></div>';
+    h+='<div style="display:flex;gap:6px;margin-top:8px">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.saveStaffNotes(\''+je(id)+'\')">Save notes</button>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);margin-left:auto" onclick="CampistryMe.deleteStaffApp(\''+je(id)+'\')">Delete applicant</button>';
+    h+='</div></div>';
+    showModal(esc(a.name||'Applicant'),h);
+}
+function setStaffStatus(id,status){var a=staffApplications[id];if(!a)return;a.status=status;save();renderStaffing();viewStaffApp(id);toast('Moved to '+_staffLabel(status));}
+function saveStaffNotes(id){var a=staffApplications[id];if(!a)return;var el=document.getElementById('staffNote');if(el)a.adminNotes=el.value;save();toast('Notes saved');}
+function toggleOnboard(id,key){var a=staffApplications[id];if(!a)return;if(!a.onboarding)a.onboarding={};a.onboarding[key]=!a.onboarding[key];save();}
+function cycleRef(id,ri){var a=staffApplications[id];if(!a||!a.references||!a.references[ri])return;var r=a.references[ri];r.status=r.status==='received'?'pending':r.status==='requested'?'received':'requested';save();viewStaffApp(id);}
+function deleteStaffApp(id){var a=staffApplications[id];if(!a)return;if(!confirm('Delete this applicant? This cannot be undone.'))return;delete staffApplications[id];save();closeModal('dynModal');renderStaffing();toast('Applicant deleted');}
+function addStaffApp(){
+    var h='<div class="me-modal-form">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>First name</label><input class="me-input" id="saF"></div><div class="me-field"><label>Last name</label><input class="me-input" id="saL"></div>';
+    h+='</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Email</label><input class="me-input" id="saE"></div><div class="me-field"><label>Phone</label><input class="me-input" id="saP"></div>';
+    h+='</div><div class="me-field"><label>Position</label><select class="me-input" id="saPos">'+STAFF_POSITIONS.map(function(p){return '<option>'+esc(p)+'</option>';}).join('')+'</select></div></div>';
+    showModal('Add Applicant',h,function(){
+        var first=document.getElementById('saF').value.trim(),last=document.getElementById('saL').value.trim();
+        if(!first&&!last){alert('Enter a name');return;}
+        var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+        staffApplications[id]={first:first,last:last,name:(first+' '+last).trim(),email:document.getElementById('saE').value.trim(),phone:document.getElementById('saP').value.trim(),positions:[document.getElementById('saPos').value],references:[],status:'applied',appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}};
+        save();closeModal('dynModal');renderStaffing();toast('Applicant added');
+    });
+}
+function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
+function exportStaffCSV(){
+    var rows=[['Name','Email','Phone','Positions','Status','Applied','References received','Notes']];
+    Object.values(staffApplications).forEach(function(a){
+        var refs=(a.references||[]); var rd=refs.filter(function(r){return r.status==='received';}).length;
+        rows.push([a.name||((a.first||'')+' '+(a.last||'')),a.email||'',a.phone||'',(a.positions||[]).join('; '),_staffLabel(a.status||'applied'),a.appliedDate||'',rd+'/'+refs.length,(a.adminNotes||'').replace(/\n/g,' ')]);
+    });
+    var csv='﻿'+rows.map(function(r){return r.map(function(x){return '"'+String(x==null?'':x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+    dlFile(csv,'staff-applicants.csv','text/csv');
+}
+
 function renderEnrollment(){
     var c=document.getElementById('page-enrollment');
     var eArr=Object.entries(enrollments);
@@ -6319,6 +6488,9 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
+    setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,
+    toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
+    copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
