@@ -27403,6 +27403,30 @@
                 //   only during this gen), so a lower stamp == done longer ago == preferred.
                 const _rhB = (function () { try { const _h = window.loadRotationHistory && window.loadRotationHistory(); return (_h && _h.bunks) || {}; } catch (e) { return {}; } })();
                 const _rotTs = function (b, a) { try { const _m = _rhB[b]; const _t = _m && _m[a]; return (_t == null) ? 0 : _t; } catch (e) { return 0; } };
+                // ★ L1 unified fallback: build an entry that fills leftover cell [s,e]
+                //   for (bunk,grade) with the best available SPECIAL — prefer one not
+                //   yet done today, else least-recently-done. Returns a ready-to-write
+                //   entry or null if none is available/fits/legal. Used both for
+                //   sportless grades AND as a TYPE-AGNOSTIC fallback for sport grades
+                //   when no field-sport can legally fill the cell, so "no sport
+                //   available here" no longer means "leave the slot Free".
+                const _pickSpecialFill = function (bunk, grade, s, e, done, srcTag) {
+                    const _gap = e - s;
+                    let bNew = null, bNewTs = Infinity, bRep = null, bRepTs = Infinity;
+                    for (let _si = 0; _si < todaysSpecials.length; _si++) {
+                        const _sp = todaysSpecials[_si];
+                        if (!isSpecialAvailableForBunk(_sp.name, grade, bunk, globalSettings)) continue;
+                        const _spd = getSpecialDuration(_sp.name, activityProperties, globalSettings) || _sp.defaultDuration || _sp.duration || _sp.durationMin || 0;
+                        if (_spd <= 0 || _spd > _gap) continue;
+                        if (instructorConflictAt(_sp.name, s, e, bunk)) continue;
+                        const _spts = _rotTs(bunk, _sp.name);
+                        if (!done[_nm(_sp.name)]) { if (_spts < bNewTs) { bNew = _sp; bNewTs = _spts; } }
+                        else { if (_spts < bRepTs) { bRep = _sp; bRepTs = _spts; } }
+                    }
+                    const _pick = bNew || bRep;
+                    if (!_pick) return null;
+                    return { field: _pick.location || null, sport: null, _activity: _pick.name, type: 'special', _autoSpecial: true, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: srcTag + (bNew ? '' : '-repeat'), continuation: false };
+                };
                 let _filled = 0, _leftFree = 0;
                 Object.keys(_sa).forEach(function (bunk) {
                     const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
@@ -27420,24 +27444,9 @@
                         //   instead — least-recently-done available special that fits,
                         //   preferring one not already done today — or leave Free.
                         if (!gradeHasSportLayer(grade)) {
-                            const _gap = e - s;
-                            let _bestNewSp = null, _bestNewSpTs = Infinity, _bestRepSp = null, _bestRepSpTs = Infinity;
-                            for (let _si = 0; _si < todaysSpecials.length; _si++) {
-                                const _sp = todaysSpecials[_si];
-                                if (!isSpecialAvailableForBunk(_sp.name, grade, bunk, globalSettings)) continue;
-                                const _spd = getSpecialDuration(_sp.name, activityProperties, globalSettings) || _sp.defaultDuration || _sp.duration || _sp.durationMin || 0;
-                                if (_spd <= 0 || _spd > _gap) continue;
-                                if (instructorConflictAt(_sp.name, s, e, bunk)) continue;
-                                const _spts = _rotTs(bunk, _sp.name);
-                                if (!done[_nm(_sp.name)]) { if (_spts < _bestNewSpTs) { _bestNewSp = _sp; _bestNewSpTs = _spts; } }
-                                else { if (_spts < _bestRepSpTs) { _bestRepSp = _sp; _bestRepSpTs = _spts; } }
-                            }
-                            const _spPick = _bestNewSp || _bestRepSp;
-                            if (_spPick) {
-                                slots[idx] = { field: _spPick.location || null, sport: null, _activity: _spPick.name, type: 'special', _autoSpecial: true, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'guarantee-full-fill-special' + (_bestNewSp ? '' : '-repeat'), continuation: false };
-                                done[_nm(_spPick.name)] = true;
-                                _filled++;
-                            } else _leftFree++;
+                            const _spEntry = _pickSpecialFill(bunk, grade, s, e, done, 'guarantee-full-fill-special');
+                            if (_spEntry) { slots[idx] = _spEntry; done[_nm(_spEntry._activity)] = true; _filled++; }
+                            else _leftFree++;
                             return;
                         }
                         let bestNew = null, bestNewTs = Infinity, bestRepeat = null, bestRepeatTs = Infinity;
@@ -27459,7 +27468,17 @@
                             slots[idx] = { field: pick.field, sport: pick.act, _activity: pick.act, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'guarantee-full-fill' + (bestNew ? '' : '-repeat'), continuation: false };
                             done[_nm(pick.act)] = true;
                             _filled++;
-                        } else _leftFree++;
+                        } else {
+                            // ★ L1 type-agnostic fallback: no field-sport could legally fill
+                            //   this cell. Rather than leave it Free, reach for the best
+                            //   available special (respecting access / instructor / not-done-
+                            //   today). Sports are no longer the privileged filler — they are
+                            //   just one activity type, and a leftover cell is filled by
+                            //   whatever legal activity is available, of any type.
+                            const _spEntry = _pickSpecialFill(bunk, grade, s, e, done, 'guarantee-full-fill-sportgrade-special');
+                            if (_spEntry) { slots[idx] = _spEntry; done[_nm(_spEntry._activity)] = true; _filled++; }
+                            else _leftFree++;
+                        }
                     });
                 });
                 if (_filled || _leftFree) log('[STEP 4.97b] Guarantee-full-day: filled ' + _filled + ' slot(s), left ' + _leftFree + ' Free (no valid option)');
