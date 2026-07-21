@@ -458,3 +458,41 @@ test('stress: 40 bunks × 8 tiles — terminates, invariants hold (no stack/cap/
         }
     });
 });
+
+// ── canAbsorb / canConvert: the caller's subcat-strict repurpose policy ──
+// A SUBCATEGORY is a semantic commitment: a subcat-tagged tile is its subcat or
+// NOTHING. The engine passes a predicate so these passes never repurpose such a
+// tile — it stays in place (the caller's honest-open endgame drops it to open time).
+
+test('absorb + canAbsorb: a rejected subcat tile is untouched and breaks the run; accepted tiles still convert', () => {
+    var tiles = [
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 0, e: 20 }),   // accepted → sport
+        abTile({ k: 'special', sub: 'food',    d: 20, s: 20, e: 40 }),  // REJECTED → stays as-is
+        abTile({ k: 'special', sub: 'Regular', d: 20, s: 40, e: 60 }),  // accepted → sport
+    ];
+    var bunks = [{ tiles: tiles }];
+    var r = GLStagger.absorbUnfilledToSport({ bunks: bunks, maxMergeMin: 40,
+        canAbsorb: function (t) { return t.subcat !== 'food'; } });
+    var occ = tiles.slice().sort((a, b) => a.startMin - b.startMin)
+        .map(t => t.kind + ':' + (t.subcat || '') + ':' + t.startMin + '-' + t.endMin);
+    // the food tile is untouched AND the two Regulars did NOT merge across it
+    assert.deepStrictEqual(occ, ['sport::0-20', 'special:food:20-40', 'sport::40-60']);
+    var food = tiles.find(t => t.subcat === 'food');
+    assert.strictEqual(food.generic, true);
+    assert.ok(!food._concrete);          // still an unfilled special — the caller drops it to genuine free
+    assert.strictEqual(r.toSport, 2);
+});
+
+test('reorder + canConvert: a rejected dead subcat tile is never rescued (its fill would cross subcats)', () => {
+    const W = { kind: 'special', generic: true, subcat: 'food', durationMin: 40, startMin: 0, endMin: 40, _ref: { window: [0, 200] } };
+    const B = { kind: 'sport', generic: true, durationMin: 40, startMin: 50, endMin: 90, _ref: { window: [0, 200] } };
+    const bunks = [{ grade: 'G', tiles: [W, B], pool: [{ name: 'X', subcategory: 'theme' }] }];
+    const ctx = makeCtx(bunks, { durs: { X: [40] } });
+    ctx.gate = sportSpacingGate; ctx.sportLabel = 'Sport';
+    ctx.canConvert = function (t) { return t.subcat !== 'food'; };       // subcat-strict caller
+    const r = GLStagger.reorderDeadWindows(ctx);
+    assert.strictEqual(r.reordered, 0);
+    assert.strictEqual(r.attempts, 0);                                   // never even attempted
+    assert.ok(!W._concrete); assert.strictEqual(W.startMin, 0);          // untouched → honest-open drop
+    assert.strictEqual(B.startMin, 50);                                  // sport not relocated
+});

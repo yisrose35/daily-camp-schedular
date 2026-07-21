@@ -296,6 +296,13 @@
         // the reorder the user asked for; if it comes back ~0 the dead tiles are wall-bound.
         var probeReorder = !!(ctx && ctx.probeReorder);
         var probeFeasible = 0, probeWallStuck = 0, probeDetail = [];
+        // canAbsorb(tile) -> bool (optional): the caller's repurpose policy for which OPEN
+        // tiles may be merged/re-tiled at all. A rejected tile (e.g. subcat-strict: a
+        // subcategory-tagged tile is its subcat or NOTHING) is passed through untouched —
+        // it breaks the open run like a wall and is left for the caller's endgame
+        // (honest-open drop). Omitted → every open tile participates (legacy behavior).
+        var canAbsorb = (ctx && typeof ctx.canAbsorb === 'function') ? ctx.canAbsorb : null;
+        var mayAbsorb = function (t) { return _isOpen(t) && (!canAbsorb || canAbsorb(t)); };
         var toSport = 0, toSpecial = 0, blockedBySpacing = 0, toFilledSpecial = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
             var bunk = bunks[bi] || {};
@@ -311,10 +318,10 @@
             for (var f = 0; f < sorted.length; f++) { if (!_isOpen(sorted[f])) { tmpl.push(_toBlk(sorted[f])); tmplMeta.push(false); } }
             var k = 0;
             while (k < sorted.length) {
-                if (!_isOpen(sorted[k])) { out.push(sorted[k]); k++; continue; }
+                if (!mayAbsorb(sorted[k])) { out.push(sorted[k]); k++; continue; }
                 // maximal contiguous open run
                 var runStart = sorted[k].startMin, runEnd = sorted[k].endMin, j = k + 1;
-                while (j < sorted.length && _isOpen(sorted[j]) && sorted[j].startMin === runEnd) { runEnd = sorted[j].endMin; j++; }
+                while (j < sorted.length && mayAbsorb(sorted[j]) && sorted[j].startMin === runEnd) { runEnd = sorted[j].endMin; j++; }
                 // re-tile [runStart,runEnd] into ≤maxMerge blocks: Sport where the spacing gate
                 // allows; else a REAL special that still has a free seat (STEP 3 — aware of what
                 // fill already took); else a generic placeholder (genuine last resort).
@@ -440,6 +447,10 @@
         var label = (ctx && ctx.sportLabel) || 'Sport';
         var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
         var canFill = !!(ctx && typeof ctx.capFits === 'function' && typeof ctx.recordUse === 'function');
+        // canConvert(tile) -> bool (optional): caller policy for which dead tiles may be
+        // rescued at all. The rescue re-fills the tile from ANY subcat (pickAnyFillable),
+        // so a subcat-strict caller passes only 'uncategorized' tiles. Omitted → all.
+        var canConvert = (ctx && typeof ctx.canConvert === 'function') ? ctx.canConvert : null;
         if (!gate || !canFill) return { reordered: 0, attempts: 0, bunks: bunks.length };
         var reordered = 0, attempts = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
@@ -458,7 +469,7 @@
                 for (var u = 0; u < tiles.length; u++) { var ut = tiles[u]; if (ut && ut.kind === 'special' && ut._concrete) used[String(ut._concrete).toLowerCase()] = 1; }
                 // dead windows = generic, unfilled special placeholders (recomputed each pass)
                 var dead = [];
-                for (var di = 0; di < tiles.length; di++) { var dt = tiles[di]; if (dt && dt.kind === 'special' && dt.generic === true && !dt._concrete) dead.push(dt); }
+                for (var di = 0; di < tiles.length; di++) { var dt = tiles[di]; if (dt && dt.kind === 'special' && dt.generic === true && !dt._concrete && (!canConvert || canConvert(dt))) dead.push(dt); }
                 if (!dead.length) break;
                 for (var mi = 0; mi < dead.length; mi++) {
                     var W = dead[mi];

@@ -174,3 +174,23 @@ test('enforce: never moves a FILLED special, and leaves an honest residual when 
     assert.ok(r.left >= 1, 'the unfilled excess could not be placed (sport full) → reported, not silently dropped');
     assert.ok(r.violations.length >= 1, 'residual over-cap surfaced for the audit');
 });
+
+test('enforce + canRelabel: a rejected over-cap tile is left in place (genuine over-capacity), never relabeled', () => {
+    // Same shape as the "excess → sport" case, but the caller (subcat-strict)
+    // rejects repurposing 'food'-tagged tiles: the excess stays a food special
+    // and is counted `left` — the caller's honest-open endgame turns it into
+    // genuine free time instead of a Sport or another subcat's label.
+    const bunks = [0, 1, 2].map(() => gbunk('G', [{ k: 'special', sub: 'Food', s: 0, e: 40 }]));
+    const r = GLBandPlan.enforce({
+        bunks, seats: { 'special:food': 2, sport: 10 },
+        seatsByGrade: { G: { 'special:food': 2 } }, canon,
+        canRelabel: (t) => canon(t.subcat) !== 'food',
+    });
+    assert.strictEqual(r.toSport, 0, 'nothing pulled down to Sport');
+    assert.strictEqual(r.toOtherSpecial, 0, 'nothing relabeled to another subcat');
+    // with no relabel allowed, every tile of the over-cap band stays over-cap →
+    // all 3 count as left (same accounting as the sportless no-move case above)
+    assert.strictEqual(r.left, 3, 'all over-cap food tiles left in place (honest residual)');
+    assert.ok(bunks.every(b => b.tiles.every(t => t.kind === 'special' && canon(t.subcat) === 'food')),
+        'no tile changed identity');
+});

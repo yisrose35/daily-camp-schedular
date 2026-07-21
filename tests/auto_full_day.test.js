@@ -2027,14 +2027,14 @@ test('auto scheduler reconciles over-subscribed demand against capacity (cap-1 s
   }
 });
 
-test('auto scheduler fills an unseatable subcat tile from cross-subcat SURPLUS (no placeholder, no forced sport)', async (t) => {
-  // THE SURPLUS CONTRACT ("no filler concept"): a subcat's planned quantity is a
-  //   FLOOR, and the camp's OTHER real specials — the surplus above each floor —
-  //   are what fills a tile whose own subcat has no seat left. Here 14 sportless
-  //   bunks each plan one 40-min 'food' tile but the camp has ONE cap-1 food
-  //   special (Baking) — most bunks can never seat it. The fill must draw a real
-  //   'theme' special instead: no generic "Special: …" placeholder may survive,
-  //   and no Sport may be manufactured (requireNoSports).
+test('auto scheduler leaves a GENUINE OPEN slot when a subcategory pool is exhausted (subcat-strict: no cross-subcat fill, no placeholder, no sport)', async (t) => {
+  // SUBCAT-STRICT CONTRACT: a subcategory is a semantic commitment. If the user
+  //   put in 4 activities but 5 slots need filling, slot 5 is a GENUINE FREE —
+  //   never another subcategory's activity, never a manufactured placeholder,
+  //   never a Sport. Here every bunk demands food '=' 2 but the camp has ONE
+  //   food special (Baking, seat-rich so capacity is not the limiter): the
+  //   second food tile can never fill from its own subcat (no same-day repeat)
+  //   and must surface as OPEN time attributed to 'food' in the capacity advice.
   const XDIV = { type: 'cross_division', divisions: [],
     capacity: 20, allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } };
   const mk = (name, dur, subcat) => ({
@@ -2043,40 +2043,44 @@ test('auto scheduler fills an unseatable subcat tile from cross-subcat SURPLUS (
     sharableWith: XDIV, timeRules: [], availableDays: null,
   });
   const specialsOverride = [
-    // the thin floor: ONE distinct food special — but the layer demands food '=' 2,
-    // so every bunk's SECOND food tile can never fill from its own subcat (no
-    // same-day repeat). Seat-rich (cap 20) so capacity is NOT the limiter here.
     mk('Baking', 40, 'food'),
-    // the surplus: six 40-min themes (surplus must match the tile length)…
+    // plenty of REAL free 'theme' specials at the same 40-min length — the strict
+    // contract is that these must NOT be pulled into the dead food slot.
     mk('Drama', 40, 'theme'), mk('Art Shoppes', 40, 'theme'), mk('Accessorize', 40, 'theme'),
     mk('Pioneering', 40, 'theme'), mk('Gymnastics', 40, 'theme'), mk('Woodworking', 40, 'theme'),
-    // …and the catalog's shorter themes for the sliver tiles (durations mirror
-    // SMOOTH_SPECIALS so the harness's stretched-duration guard stays valid)
+    // (durations mirror SMOOTH_SPECIALS so the harness's stretched-duration guard stays valid)
     mk('Neranitas', 20, 'theme'), mk('Arts & Crafts', 20, 'theme'), mk('Foam Pit', 20, 'theme'),
     mk('Ice Cream', 20, 'theme'), mk('Shiur', 20, 'theme'),
     mk('Slush', 10, 'theme'), mk('Popcorn', 10, 'theme'),
   ];
-  const { results, sandbox } = await runScenario('SURPLUS CROSS-SUBCAT (food floor 2, one food special)', {
+  const { results, sandbox } = await runScenario('SUBCAT-STRICT (food floor 2, one food special → slot 2 is genuine free)', {
     smooth: true, requireNoSports: true, skipGapCheck: true, specialsOverride,
     subQuantities: { food: 2 }, subOps: { food: '=' },
   });
-  // 1) the surplus pass actually fired (positive evidence, not just absence of placeholders)
-  assert.ok((sandbox.__logs || []).some(l => String(l).includes('[GENERIC-SURPLUS]')),
-    'the cross-subcat SURPLUS pass must fire when a subcat tile cannot fill from its own subcat');
-  // 2) no dressed-up placeholder survives to the emitted schedule
+  // 1) no dressed-up placeholder survives to the emitted schedule
   const generics = [];
   for (const [bunk, slots] of Object.entries(sandbox.scheduleAssignments || {})) {
     (slots || []).forEach(s => { if (s && s._generic === true) generics.push(`${bunk}: ${s._activity}`); });
   }
-  assert.deepEqual(generics, [], 'no generic placeholder tile may survive surplus fill:\n  ' + generics.join('\n  '));
-  // 3) the day stays REAL for the asserted grade — the unfillable second food
-  //    tile is surplus-filled with a theme, not gapped. (Chair's shorter
-  //    configured day reads as scenario-frame gaps in every smooth test and is
-  //    not asserted there either.) Allow at most one tile-sized honest-open
-  //    remainder per bunk, nothing worse.
+  assert.deepEqual(generics, [], 'no generic placeholder tile may survive (honest open, not dressed up):\n  ' + generics.join('\n  '));
+  // 2) the dropped tiles are exposed for the capacity advice, attributed to FOOD —
+  //    one 40-min open slot per bunk (14 bunks), all tagged with the demanded subcat.
+  const open = sandbox.__genOpenSlots || [];
+  const openFood = open.filter(o => o && o.subcat === 'food' && (o.endMin - o.startMin) === 40);
+  assert.equal(openFood.length, 14,
+    `every bunk's unfillable 2nd food tile must surface as a 40-min open slot tagged 'food' — got ${openFood.length}/14 (all open: ${JSON.stringify(open)})`);
+  assert.equal(open.length, openFood.length,
+    'no OTHER open slots expected in this scenario: ' + JSON.stringify(open.filter(o => !(o && o.subcat === 'food'))));
+  // 3) the open time is REAL free time on the grid: each Auto bunk shows exactly
+  //    the one 40-min gap (the food slot), in a single run — and NOT theme-filled.
+  //    (Chair's shorter configured day reads as scenario-frame gaps in every
+  //    smooth test and is not asserted there either.)
   const badGaps = Object.entries(results)
     .filter(([b, r]) => r.grade === 'Auto')
-    .filter(([b, r]) => r.gapMin > 40)
-    .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
-  assert.deepEqual(badGaps, [], 'the unfillable food tile must surplus-fill with a real theme special, not go dead:\n  ' + badGaps.join('\n  '));
+    .filter(([b, r]) => r.gapMin !== 40 || (r.gaps || []).length !== 1)
+    .map(([b, r]) => `${b}:${r.gapMin}min in ${(r.gaps || []).length} run(s) (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+  assert.deepEqual(badGaps, [], 'each Auto bunk must show exactly ONE 40-min genuine-free run (the exhausted food slot):\n  ' + badGaps.join('\n  '));
+  // 4) the engine says so, honestly, in one line
+  assert.ok((sandbox.__logs || []).some(l => String(l).includes('[GENERIC-HONEST]')),
+    'the honest-open endgame must report the dropped tiles');
 });

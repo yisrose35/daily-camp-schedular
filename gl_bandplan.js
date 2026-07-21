@@ -140,6 +140,10 @@
         // must never get a "Sport" tile, so an over-cap special in such a grade is relabeled
         // to another special subcat (or left) — never pulled down to Sport.
         var sportless = (ctx && ctx.sportlessGrades) || null;
+        // canRelabel(tile) -> bool (optional): the caller's repurpose policy. A tile it
+        // rejects (e.g. subcat-strict: a subcategory-tagged tile is that subcat or NOTHING)
+        // is left in place and counted `left` — genuine over-capacity, not relabeled.
+        var canRelabel = (ctx && typeof ctx.canRelabel === 'function') ? ctx.canRelabel : null;
         var byDur = !!(ctx && ctx.byDuration);
         var ents = [];
         bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon, byDur); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
@@ -153,6 +157,7 @@
             if (t.kind !== 'special' || t.generic === false || t._concrete) continue;  // only UNFILLED generic specials
             var cur = conc(en.cat, t.startMin, t.endMin, en.grade);
             if (!(cur.camp > cap(en.cat) || cur.grade > gcap(en.cat, en.grade))) continue;
+            if (canRelabel && !canRelabel(t)) { left++; continue; }   // caller policy: this tile may not be repurposed
             var target = null;
             // (1) sport — preferred (the user's "use the sports"), if under its seats + spacing-legal.
             //     SKIPPED for a sportless grade (no sport layer) — it never gets a Sport tile.
