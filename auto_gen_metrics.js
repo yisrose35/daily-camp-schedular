@@ -140,6 +140,24 @@
             return peak;
         }
 
+        // The uncovered gaps inside [start,end] not covered by any interval in
+        // `ivals` — i.e. WHERE a bunk's empty "+ Add" time actually is. Returns
+        // [{startMin,endMin}, ...]. Merges the covered intervals first so touching
+        // slots ([600,640),[640,680)) leave no phantom gap between them.
+        function gapsIn(start, end, ivals) {
+            if (!(end > start)) return [];
+            var iv = (ivals || []).slice().sort(function (a, b) { return a[0] - b[0]; });
+            var gaps = [], cursor = start;
+            for (var i = 0; i < iv.length; i++) {
+                var s = iv[i][0], e = iv[i][1];
+                if (s > cursor) { gaps.push({ startMin: cursor, endMin: Math.min(s, end) }); }
+                if (e > cursor) cursor = e;
+                if (cursor >= end) break;
+            }
+            if (cursor < end) gaps.push({ startMin: cursor, endMin: end });
+            return gaps.filter(function (g) { return g.endMin > g.startMin; });
+        }
+
         Object.keys(divTimes).forEach(function (divName) {
             var divInfo = divTimes[divName];
             if (!divInfo || !divInfo._perBunkSlots) return; // auto per-bunk grids only
@@ -155,7 +173,12 @@
             var dv = byDivision[divName] = {
                 bunks: 0, freeSlots: 0, freeMinutes: 0,
                 placeholderSlots: 0, placeholderMinutes: 0,
-                uncoveredMinutes: 0, filledMinutes: 0, spanMinutes: 0, fillRate: 0
+                uncoveredMinutes: 0, filledMinutes: 0, spanMinutes: 0, fillRate: 0,
+                // The window this division's fill was measured against, so a
+                // surprising gap can be checked against the configured day start.
+                dayWindow: (winStart != null && winEnd != null)
+                    ? { startMin: winStart, endMin: winEnd, source: 'divisions.startTime/endTime' }
+                    : { startMin: null, endMin: null, source: 'bunk-slot-extent (no divisions[div] window)' }
             };
 
             bunkIds.forEach(function (bunk) {
@@ -168,6 +191,7 @@
 
                 var bFilled = 0, bFree = 0, bPlaceholder = 0, bCovered = 0;
                 var minStart = Infinity, maxEnd = -Infinity;
+                var covIvals = [];   // covered [start,end) intervals, for locating the empty gaps
 
                 for (var i = 0; i < slots.length; i++) {
                     var slot = slots[i];
@@ -176,6 +200,7 @@
 
                     if (slot.startMin < minStart) minStart = slot.startMin;
                     if (slot.endMin > maxEnd) maxEnd = slot.endMin;
+                    covIvals.push([slot.startMin, slot.endMin]);
                     bCovered += dur;
                     total.slots += 1;
 
@@ -224,10 +249,16 @@
 
                 var dead = bFree + bPlaceholder + uncovered;
                 if (dead > 0) {
+                    // WHERE the empty time is — the uncovered gaps against the day
+                    // window (this is what surfaces "Leebi empty 9:20-10:20").
+                    var emptyIntervals = (uncovered > 0)
+                        ? gapsIn(spanStart, spanEnd, covIvals)
+                        : [];
                     worstBunks.push({
                         division: divName, bunk: bunk,
                         deadMinutes: dead, freeMinutes: bFree,
                         placeholderMinutes: bPlaceholder, uncoveredMinutes: uncovered,
+                        emptyIntervals: emptyIntervals,
                         fillRate: span > 0 ? (bFilled / span) : 1
                     });
                 }
@@ -309,6 +340,18 @@
         return out;
     }
 
+    // Minutes-since-midnight → "9:20 AM" for readable console output.
+    function fmtTime(min) {
+        if (typeof min !== 'number') return String(min);
+        var scu = (typeof window !== 'undefined') && window.SchedulerCoreUtils
+            && window.SchedulerCoreUtils.minutesToTimeLabel;
+        if (scu) { try { return scu(min); } catch (e) {} }
+        var h = Math.floor(min / 60), m = min % 60;
+        var ap = h >= 12 ? 'PM' : 'AM';
+        var h12 = h % 12; if (h12 === 0) h12 = 12;
+        return h12 + ':' + (m < 10 ? '0' + m : m) + ' ' + ap;
+    }
+
     function reportMetrics(reason) {
         try {
             var divTimes = (typeof window !== 'undefined') ? window.divisionTimes : null;
@@ -345,6 +388,25 @@
                                  slots: result.freeBySource[src].count,
                                  minutes: result.freeBySource[src].minutes };
                     }).sort(function (a, b) { return b.minutes - a.minutes; }));
+                }
+                // WHERE the empty "+ Add" time is — the surprising kind (a bunk
+                // sitting empty before its first activity). Shows the worst few so
+                // "why did 1st Grade get dead time?" is answered at a glance.
+                var emptyBunks = (result.worstBunks || []).filter(function (b) {
+                    return b.uncoveredMinutes > 0 && b.emptyIntervals && b.emptyIntervals.length;
+                });
+                if (emptyBunks.length) {
+                    console.log('%c[GenMetrics] empty (uncovered) time — no tile at all, measured vs each division\'s day window:',
+                        'color:#a30;');
+                    emptyBunks.slice(0, 8).forEach(function (b) {
+                        var win = result.byDivision[b.division] && result.byDivision[b.division].dayWindow;
+                        var winStr = (win && win.startMin != null)
+                            ? (' [' + b.division + ' day ' + fmtTime(win.startMin) + '–' + fmtTime(win.endMin) + ']') : '';
+                        var where = b.emptyIntervals.map(function (g) {
+                            return fmtTime(g.startMin) + '–' + fmtTime(g.endMin);
+                        }).join(', ');
+                        console.log('   • ' + b.bunk + winStr + ': ' + b.uncoveredMinutes + 'min empty @ ' + where);
+                    });
                 }
                 // Capacity advice: placeholders are a CONFIG lever, not a solver one —
                 // the engine already ran absorb/reorder/seat-enforce and left these

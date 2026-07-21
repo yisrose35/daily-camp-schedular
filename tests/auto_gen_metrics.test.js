@@ -233,6 +233,30 @@ describe('computeAutoGenMetrics — empty "+ Add" cells vs the day window', () =
         assert.strictEqual(m.total.uncoveredMinutes, 0);
         assert.strictEqual(m.fillRatePct, 100);
     });
+
+    it('reports WHERE the empty time is (the 1st-Grade morning-gap case)', () => {
+        // 1st Grade day starts 9:20 (560); first activity is Davening 10:20 (620).
+        // The 9:20–10:20 lead must be reported as an empty interval, not just a count.
+        const divisionTimes = { '1st Grade': { _perBunkSlots: { Leebi5: [slot(620, 660)] } } };
+        const sched = { Leebi5: [act('Davening')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes, {
+            dayWindows: { '1st Grade': { startMin: 560, endMin: 660 } }
+        });
+        const wb = m.worstBunks[0];
+        assert.strictEqual(wb.bunk, 'Leebi5');
+        assert.strictEqual(wb.uncoveredMinutes, 60);
+        assert.deepStrictEqual(wb.emptyIntervals, [{ startMin: 560, endMin: 620 }]);
+        // and the division reports the window it measured against
+        assert.strictEqual(m.byDivision['1st Grade'].dayWindow.startMin, 560);
+        assert.strictEqual(m.byDivision['1st Grade'].dayWindow.endMin, 660);
+    });
+
+    it('locates an internal hole as its own empty interval', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640), slot(660, 700)] } } };
+        const sched = { b1: [act('Swim'), act('Art')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes); // no window → bunk extent
+        assert.deepStrictEqual(m.worstBunks[0].emptyIntervals, [{ startMin: 640, endMin: 660 }]);
+    });
 });
 
 describe('computeAutoGenMetrics — continuation slots count as filled', () => {
