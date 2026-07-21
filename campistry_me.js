@@ -3660,9 +3660,16 @@ function renderAnalytics(){
             h+='</div>';
         }
         h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddStaff()">+ Add Staff</button></div>';
-        h+='<div class="me-card"><div class="me-card-head"><h3>Staff Directory</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Role</th><th>Type</th><th>Salary</th><th></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-card-head"><h3>Staff Directory</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th></th><th>Name</th><th>Role</th><th>Bunk</th><th>Type</th><th>Salary</th><th></th></tr></thead><tbody>';
         finStaff.forEach(function(s,i){
-            h+='<tr><td class="bold">'+esc(s.name)+'</td><td>'+esc(s.role)+'</td><td>'+bdg(s.type||'seasonal',s.type==='annual'?'ok':'gray')+'</td><td style="font-weight:700">'+fm(s.salary)+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveStaff('+i+')">✕</button></td></tr>';
+            h+='<tr class="click" onclick="CampistryMe.finEditStaff('+i+')">'
+                +'<td style="width:44px">'+_staffAvatar(s,34)+'</td>'
+                +'<td class="bold">'+esc(s.name)+'</td>'
+                +'<td>'+esc(s.role)+'</td>'
+                +'<td>'+(s.bunk?esc(s.bunk):'<span style="color:var(--s300)">—</span>')+'</td>'
+                +'<td>'+bdg(s.type||'seasonal',s.type==='annual'?'ok':'gray')+'</td>'
+                +'<td style="font-weight:700">'+fm(s.salary)+'</td>'
+                +'<td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveStaff('+i+')">✕</button></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -3758,13 +3765,101 @@ function renderAnalytics(){
 
 // Finance actions
 function finSetTab(t){_finTab=t;renderAnalytics()}
-function finAddStaff(){
-    var name=prompt('Staff name:');if(!name)return;
-    var role=prompt('Role ('+FIN_ROLES.join(', ')+'):','Counselor');
-    var salary=prompt('Salary ($):','');if(!salary)return;
-    var type=prompt('Type (seasonal or annual):','seasonal');
-    finStaff.push({id:Date.now(),name:name.trim(),role:(role||'Counselor').trim(),salary:parseFloat(salary)||0,type:(type||'seasonal').trim()});
-    save();renderAnalytics();toast('Staff added');
+// All bunk names across the camp structure (for staff bunk assignment).
+function _allBunkNames(){
+    var out={};
+    Object.values(structure||{}).forEach(function(div){
+        Object.values((div&&div.grades)||{}).forEach(function(gr){
+            (gr.bunks||[]).forEach(function(b){ out[b]=1; });
+        });
+    });
+    return Object.keys(out).sort();
+}
+// Downscale an uploaded image to a small square-ish data URL so staff photos
+// don't bloat saved state.
+function _downscaleImage(file,maxDim,cb){
+    var reader=new FileReader();
+    reader.onload=function(ev){
+        var img=new Image();
+        img.onload=function(){
+            var w=img.width,h=img.height,scale=Math.min(1,maxDim/Math.max(w,h));
+            var cw=Math.round(w*scale),ch=Math.round(h*scale);
+            var cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
+            cv.getContext('2d').drawImage(img,0,0,cw,ch);
+            try{ cb(cv.toDataURL('image/jpeg',0.82)); }catch(e){ cb(ev.target.result); }
+        };
+        img.onerror=function(){ toast('Could not read that image'); };
+        img.src=ev.target.result;
+    };
+    reader.onerror=function(){ toast('Could not read that file'); };
+    reader.readAsDataURL(file);
+}
+var _staffPhotoBuf=null; // holds the pending photo data URL while the modal is open
+function _staffAvatar(s,size){
+    size=size||34;
+    var initials=(s.name||'?').split(' ').map(function(p){return p[0]||'';}).slice(0,2).join('').toUpperCase();
+    if(s.photo){
+        return '<img src="'+esc(s.photo)+'" alt="" style="width:'+size+'px;height:'+size+'px;border-radius:50%;object-fit:cover;border:1px solid var(--s200)">';
+    }
+    return '<div style="width:'+size+'px;height:'+size+'px;border-radius:50%;background:var(--s100);display:flex;align-items:center;justify-content:center;font-size:'+Math.round(size*0.36)+'px;font-weight:700;color:var(--s500)">'+esc(initials)+'</div>';
+}
+
+function finAddStaff(){ finStaffModal(); }
+function finEditStaff(i){ finStaffModal(i); }
+
+function finStaffModal(i){
+    var editing=(typeof i==='number');
+    var s=editing?(finStaff[i]||{}):{};
+    _staffPhotoBuf=s.photo||null;
+    var roleOpts=(typeof FIN_ROLES!=='undefined'?FIN_ROLES:['Counselor','Head Counselor','Specialist','Admin'])
+        .map(function(r){return '<option value="'+esc(r)+'">';}).join('');
+    var bunkOpts=['<option value="">— No bunk —</option>'].concat(_allBunkNames().map(function(b){
+        return '<option value="'+esc(b)+'"'+(s.bunk===b?' selected':'')+'>'+esc(b)+'</option>';
+    })).join('');
+    var body=''
+        +'<div style="display:flex;gap:14px;align-items:center;margin-bottom:14px">'
+            +'<div id="staffPhotoPrev">'+_staffAvatar(s,64)+'</div>'
+            +'<div><label class="me-btn me-btn--sec me-btn--sm" style="cursor:pointer">Upload photo<input type="file" accept="image/*" style="display:none" onchange="CampistryMe._staffPhotoPick(this)"></label>'
+            +(s.photo?' <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe._staffPhotoClear()">Remove</button>':'')+'</div>'
+        +'</div>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+            +'<div style="grid-column:1/3"><label class="fl">Name</label><input id="stName" class="fi" value="'+esc(s.name||'')+'" placeholder="Full name"></div>'
+            +'<div><label class="fl">Role</label><input id="stRole" class="fi" list="stRoleOpts" value="'+esc(s.role||'Counselor')+'"><datalist id="stRoleOpts">'+roleOpts+'</datalist></div>'
+            +'<div><label class="fl">Type</label><select id="stType" class="fi"><option value="seasonal"'+(s.type!=='annual'?' selected':'')+'>Seasonal</option><option value="annual"'+(s.type==='annual'?' selected':'')+'>Annual</option></select></div>'
+            +'<div><label class="fl">Salary ($)</label><input id="stSalary" class="fi" type="number" min="0" step="1" value="'+(s.salary||'')+'"></div>'
+            +'<div><label class="fl">Bunk assignment</label><select id="stBunk" class="fi">'+bunkOpts+'</select></div>'
+        +'</div>';
+    showModal(editing?'Edit Staff':'Add Staff',body,function(){
+        var name=(document.getElementById('stName').value||'').trim();
+        if(!name){ toast('Name is required'); return; }
+        var rec={
+            id:s.id||Date.now(),
+            name:name,
+            role:(document.getElementById('stRole').value||'Counselor').trim(),
+            type:document.getElementById('stType').value||'seasonal',
+            salary:parseFloat(document.getElementById('stSalary').value)||0,
+            bunk:document.getElementById('stBunk').value||'',
+            photo:_staffPhotoBuf||''
+        };
+        if(editing) finStaff[i]=Object.assign({},s,rec);
+        else finStaff.push(rec);
+        _staffPhotoBuf=null;
+        closeModal('dynModal');
+        save();renderAnalytics();toast(editing?'Staff updated':'Staff added');
+    });
+}
+function _staffPhotoPick(input){
+    var f=input.files&&input.files[0]; if(!f) return;
+    _downscaleImage(f,256,function(url){
+        _staffPhotoBuf=url;
+        var prev=document.getElementById('staffPhotoPrev');
+        if(prev) prev.innerHTML=_staffAvatar({photo:url},64);
+    });
+}
+function _staffPhotoClear(){
+    _staffPhotoBuf=null;
+    var prev=document.getElementById('staffPhotoPrev');
+    if(prev) prev.innerHTML=_staffAvatar({},64);
 }
 function finRemoveStaff(i){finStaff.splice(i,1);save();renderAnalytics();toast('Removed')}
 function finAddExpense(){
@@ -6126,7 +6221,7 @@ window.CampistryMe={
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
-    finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,
+    finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
