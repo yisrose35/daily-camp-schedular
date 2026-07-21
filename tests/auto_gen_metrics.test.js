@@ -91,6 +91,44 @@ describe('computeAutoGenMetrics — generic placeholders are NOT filled', () => 
     });
 });
 
+describe('computeAutoGenMetrics — capacity advice (seats short)', () => {
+    it('reports peak simultaneous placeholder demand per subcat as seatsShort', () => {
+        // Two bunks, both with an uncategorized placeholder overlapping 10:00-10:40
+        // → at the peak, 2 tiles want uncategorized at once → 2 seats short.
+        const divisionTimes = { A: { _perBunkSlots: {
+            b1: [slot(600, 640)],
+            b2: [slot(600, 640)]
+        } } };
+        const sched = {
+            b1: [placeholder('uncategorized')],
+            b2: [placeholder('uncategorized')]
+        };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.strictEqual(m.capacityAdvice.length, 1);
+        assert.strictEqual(m.capacityAdvice[0].subcat, 'uncategorized');
+        assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 2);
+        assert.strictEqual(m.capacityAdvice[0].seatsShort, 2);
+    });
+
+    it('non-overlapping placeholders of the same subcat need only 1 seat', () => {
+        const divisionTimes = { A: { _perBunkSlots: {
+            b1: [slot(600, 640), slot(640, 680)]
+        } } };
+        const sched = { b1: [placeholder('workshops'), placeholder('workshops')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.strictEqual(m.capacityAdvice[0].subcat, 'workshops');
+        assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 2);
+        assert.strictEqual(m.capacityAdvice[0].seatsShort, 1); // serialized, not concurrent
+    });
+
+    it('ranks subcats by dead minutes and is empty when nothing is placeholder', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640)] } } };
+        const sched = { b1: [act('Cooking')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes);
+        assert.deepStrictEqual(m.capacityAdvice, []);
+    });
+});
+
 describe('computeAutoGenMetrics — filled vs free minutes', () => {
     it('counts a fully-filled bunk as 100% fill, zero dead', () => {
         const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640), slot(640, 685)] } } };

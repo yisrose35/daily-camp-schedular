@@ -103,6 +103,7 @@
         };
         var freeBySource = {};        // source -> { count, minutes }
         var placeholderBySubcat = {}; // subcat -> { count, minutes }
+        var placeholderIvals = {};    // subcat -> [[startMin,endMin], ...] (for peak-concurrency advice)
         var byDivision = {};          // div    -> {...}
         var worstBunks = [];          // { division, bunk, deadMinutes, ... }
 
@@ -112,11 +113,31 @@
             freeBySource[key].count += 1;
             freeBySource[key].minutes += minutes;
         }
-        function addPlaceholder(subcat, minutes) {
+        function addPlaceholder(subcat, minutes, startMin, endMin) {
             var key = subcat || '(uncategorized)';
             if (!placeholderBySubcat[key]) placeholderBySubcat[key] = { count: 0, minutes: 0 };
             placeholderBySubcat[key].count += 1;
             placeholderBySubcat[key].minutes += minutes;
+            if (typeof startMin === 'number' && typeof endMin === 'number' && endMin > startMin) {
+                (placeholderIvals[key] = placeholderIvals[key] || []).push([startMin, endMin]);
+            }
+        }
+
+        // Peak simultaneous count of a set of [s,e) intervals — the most that ever
+        // overlap at one instant. For placeholder tiles of a subcat, this is roughly
+        // how many MORE concurrent seats (distinct activities or shared capacity) the
+        // camp would need at its worst moment to fill them with real content.
+        function peakConcurrency(ivals) {
+            if (!ivals || !ivals.length) return 0;
+            var pts = [];
+            for (var i = 0; i < ivals.length; i++) {
+                pts.push([ivals[i][0], 1]);
+                pts.push([ivals[i][1], -1]);
+            }
+            pts.sort(function (a, b) { return (a[0] - b[0]) || (a[1] - b[1]); }); // ends before starts at a tie
+            var cur = 0, peak = 0;
+            for (var j = 0; j < pts.length; j++) { cur += pts[j][1]; if (cur > peak) peak = cur; }
+            return peak;
         }
 
         Object.keys(divTimes).forEach(function (divName) {
@@ -174,7 +195,7 @@
                         bPlaceholder += dur;
                         dv.placeholderSlots += 1;
                         dv.placeholderMinutes += dur;
-                        addPlaceholder(entry && (entry._subcat || entry.type), dur);
+                        addPlaceholder(entry && (entry._subcat || entry.type), dur, slot.startMin, slot.endMin);
                     } else if (isContinuation(entry)) {
                         total.continuationSlots += 1;
                         total.filledMinutes += dur;
@@ -222,11 +243,29 @@
 
         worstBunks.sort(function (a, b) { return b.deadMinutes - a.deadMinutes; });
 
+        // Capacity advice — placeholders are unfilled generic tiles, which the auto
+        // engine leaves ONLY when concurrent demand for a subcategory exceeds the
+        // distinct activities/seats the camp actually has (the engine's own SEAT-AUDIT /
+        // WEEKLY-MUST shortfalls). `seatsShort` = peak simultaneous placeholder tiles of
+        // that subcat = roughly how many MORE concurrent seats (distinct activities or
+        // shared capacity) would be needed at the worst moment to fill them with real
+        // content. This is a CONFIG lever, not a solver one — no reshuffle invents
+        // variety that isn't configured.
+        var capacityAdvice = Object.keys(placeholderBySubcat).map(function (sc) {
+            return {
+                subcat: sc,
+                placeholderSlots: placeholderBySubcat[sc].count,
+                placeholderMinutes: placeholderBySubcat[sc].minutes,
+                seatsShort: peakConcurrency(placeholderIvals[sc])
+            };
+        }).sort(function (a, b) { return b.placeholderMinutes - a.placeholderMinutes; });
+
         return {
             total: total,
             fillRatePct: Math.round(total.fillRate * 1000) / 10,
             freeBySource: freeBySource,
             placeholderBySubcat: placeholderBySubcat,
+            capacityAdvice: capacityAdvice,
             byDivision: byDivision,
             worstBunks: worstBunks.slice(0, opts.worstLimit || 10)
         };
@@ -306,6 +345,24 @@
                                  slots: result.freeBySource[src].count,
                                  minutes: result.freeBySource[src].minutes };
                     }).sort(function (a, b) { return b.minutes - a.minutes; }));
+                }
+                // Capacity advice: placeholders are a CONFIG lever, not a solver one —
+                // the engine already ran absorb/reorder/seat-enforce and left these
+                // because concurrent demand outran the distinct activities configured.
+                // Tell the owner, per subcat, how many more concurrent seats would fill.
+                if (result.capacityAdvice && result.capacityAdvice.length) {
+                    var advice = result.capacityAdvice
+                        .filter(function (a) { return a.seatsShort > 0; })
+                        .map(function (a) {
+                            return '+' + a.seatsShort + ' seat(s) of "' + a.subcat + '" '
+                                 + '(' + a.placeholderSlots + ' dead tile(s)/' + a.placeholderMinutes + 'min)';
+                        });
+                    if (advice.length) {
+                        console.log('%c[GenMetrics] to fill the dead space, add activities/sharing: '
+                            + advice.join(' · ')
+                            + '  — no reshuffle can fill these; they need more distinct activities or capacity.',
+                            'color:#a30; font-weight:bold;');
+                    }
                 }
             }
 
