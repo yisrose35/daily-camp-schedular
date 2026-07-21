@@ -273,11 +273,7 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
     <div><h1>Payments</h1><p>Your tuition and payment history</p></div>
 </div>
-    <div class="lk-card" style="text-align:center;padding:28px;">
-        <div style="background:var(--slate-50);border:1px dashed var(--slate-300);border-radius:var(--radius-md);padding:14px;font-size:.8rem;color:var(--slate-400);line-height:1.6;">
-            Online payments coming soon. To make a payment, contact your camp office directly.
-        </div>
-    </div>
+    <div id="payBalanceCards"></div>
     <div class="lk-card"><div class="lk-card-head"><h2>Payment History</h2></div>
         <table class="lk-table"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody id="payTable"></tbody></table>
     </div>
@@ -753,6 +749,77 @@ function childAccent(idOrIndex){
 // map the Android hardware back button to "go to the previous page" instead of
 // exiting the app. No-op cost for plain web use.
 var _navHistory=['home'];
+// ── Online payments (self-service) ───────────────────────────────────────────
+// A parent pays their own balance online. get_my_balance (migration 046) returns
+// ONLY this family's numbers; the actual charge is a hosted Stripe Checkout
+// (stripe-checkout) that offers every method the camp enabled, and it records
+// itself in the office ledger via stripe-webhook.
+var _balByCamp={};
+function _lkSupa(){ return window.__CAMPISTRY_SUPABASE__||{}; }
+function _lkMoney(n){ n=Number(n)||0; var neg=n<0; n=Math.abs(n); return (neg?'-$':'$')+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+async function _lkCheckout(body){
+    var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
+    var resp=await fetch(s.url+'/functions/v1/stripe-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
+    var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout'); return data;
+}
+function loadPayments(){
+    var host=document.getElementById('payBalanceCards'); var pt=document.getElementById('payTable'); if(!host) return;
+    var camps={}; (children||[]).forEach(function(c){ if(c.campId) camps[c.campId]=c.campName||''; });
+    var ids=Object.keys(camps);
+    if(!ids.length && parent && parent.campId){ camps[parent.campId]=''; ids=[parent.campId]; }
+    if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); return; }
+    host.innerHTML='<div class="lk-card" style="padding:18px;text-align:center;color:var(--text-muted);">Loading your balance…</div>';
+    var cards={}, allHistory=[], done=0;
+    ids.forEach(function(cid){
+        var call=window._pRpc?window._pRpc('get_my_balance',{},cid):(window._parentDB&&window._parentDB.rpc('get_my_balance',{p_camp_id:cid}));
+        Promise.resolve(call).then(function(res){
+            var d=(res&&res.data)?res.data:null;
+            if(d&&d.success){ _balByCamp[cid]=d; cards[cid]=_payCardHtml(cid,camps[cid],d); (d.payments||[]).forEach(function(p){allHistory.push(p);}); }
+        }).catch(function(){}).then(function(){
+            done++; if(done===ids.length){
+                var html=ids.map(function(id){return cards[id]||'';}).join('');
+                host.innerHTML=html||'<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>';
+                _renderPayHistory(pt,allHistory);
+            }
+        });
+    });
+}
+function _payCardHtml(cid,campName,d){
+    var bal=Number(d.balance)||0; var owed=bal>0.005;
+    var head=(campName?'<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">'+String(campName).replace(/[<>&]/g,'')+'</div>':'');
+    var payBtn=owed?'<button class="btn btn-primary" style="width:100%;margin-top:14px;" onclick="payNow(\''+cid+'\')">Pay '+_lkMoney(bal)+' now</button>':'';
+    return '<div class="lk-card" style="padding:20px;margin-bottom:12px;">'+head+
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">'+
+        '<div><div style="font-size:.75rem;color:var(--text-muted);">Balance due</div><div style="font-size:1.9rem;font-weight:800;color:'+(owed?'#DC2626':'#0E7C4A')+';font-variant-numeric:tabular-nums;">'+_lkMoney(bal)+'</div></div>'+
+        '<div style="text-align:right;font-size:.75rem;color:var(--text-muted);line-height:1.7;">Billed '+_lkMoney(d.billed)+'<br>Paid '+_lkMoney(d.paid)+'</div>'+
+        '</div>'+payBtn+
+        (owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>')+
+        '</div>';
+}
+function _renderPayHistory(pt,history){
+    if(!pt) return;
+    history.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
+    if(!history.length){ pt.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px;">No payment records yet</td></tr>'; return; }
+    pt.innerHTML=history.map(function(p){
+        var st=p.status||'paid'; var cls=st==='pending'?'badge-warn':st==='failed'?'badge-error':st==='refunded'?'badge-neutral':'badge-ok';
+        var amt=Number(p.amt)||0; var amtTxt=(amt<0?'-$':'$')+Math.abs(amt).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+        return '<tr><td>'+String(p.date||'').replace(/[<>&]/g,'')+'</td><td>'+String(p.desc||'').replace(/[<>&]/g,'')+'</td><td style="font-weight:700;">'+amtTxt+'</td><td><span class="badge '+cls+'">'+st+'</span></td></tr>';
+    }).join('');
+}
+async function payNow(cid){
+    var d=_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
+    var bal=Number(d.balance)||0; if(bal<=0){toast('Nothing to pay');return;}
+    var input=prompt('How much would you like to pay?', bal.toFixed(2));
+    if(input==null) return;
+    var amt=parseFloat(input)||0; if(amt<0.5){toast('Enter at least $0.50');return;}
+    var email=(parent&&parent.email)||'';
+    try{
+        toast('Opening secure checkout…');
+        var res=await _lkCheckout({campId:cid,familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:'')});
+        if(res&&res.url){ window.location.href=res.url; } else { throw new Error('No checkout link'); }
+    }catch(err){ console.error('[Parent] checkout error:',err); toast('Could not start payment: '+(err&&err.message||'error')); }
+}
+
 function nav(p){
     document.querySelectorAll('.lk-page').forEach(function(e){e.classList.remove('active')});
     document.querySelectorAll('.lk-nav-item,.lk-bnav-item').forEach(function(e){e.classList.remove('active')});
@@ -763,6 +830,7 @@ function nav(p){
     if(p==='tips')renderTipsPage();
     if(p==='lists')renderCampLists();
     if(p==='mail')renderCamperMail();
+    if(p==='payments')loadPayments();
     if(_navHistory[_navHistory.length-1]!==p)_navHistory.push(p);
     window.scrollTo(0,0);
 }
