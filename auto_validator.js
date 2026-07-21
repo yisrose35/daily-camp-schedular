@@ -309,6 +309,21 @@
                     if (a.flags._staggerReserved && b.flags._staggerReserved &&
                         a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
 
+                    // ★ Connected (glow) joint-session exemption. A layer with a
+                    //   connectionId is a whole-camp/connected session: the planner's
+                    //   Phase-1.45 CONNECTED sync (or a Phase-0 pin of the same connected
+                    //   layer) intentionally places EVERY participating grade in the shared
+                    //   room at ONE identical time (e.g. "Morning Breakout (Exclusive)",
+                    //   "Main Activity (Exclusive)" in Leebi Exclusive Auditorium). That is
+                    //   designed co-occupancy, not a cap-1 over-book — flagging it produced
+                    //   the 272 phantom cross-division conflicts that buried every real
+                    //   finding. Signature the planner guarantees for these: the SAME custom
+                    //   activity at the EXACT same [start,end] on two different grades. Gated
+                    //   tightly (same activity AND identical window) so a different-activity
+                    //   clash, or a partial-overlap misplacement, on the same field still reports.
+                    if (a.flags._customAct && a.flags._customAct === b.flags._customAct &&
+                        a.startMin === b.startMin && a.endMin === b.endMin) continue;
+
                     // ★ Per-activity sharing for same-activity custom pairs (like
                     //   specials). When two grades use the SAME custom activity
                     //   (e.g. Morning Activity), the activity's own sharing rule
