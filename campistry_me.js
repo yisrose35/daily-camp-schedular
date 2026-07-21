@@ -770,8 +770,21 @@ function viewCamper(n){
     if(d.allergies)b+=cvR('Allergies',d.allergies,true);
     if(d.medications)b+=cvR('Medications',d.medications,true);
     if(d.dietary)b+=cvR('Dietary',d.dietary);
-    if(!d.allergies&&!d.medications&&!d.dietary)b+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
+    if(d.medicalNotes)b+=cvR('Medical Notes',esc(d.medicalNotes));
+    if(!d.allergies&&!d.medications&&!d.dietary&&!d.medicalNotes)b+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
+    if(d.physician)b+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
+    if(d.insuranceProvider)b+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
     b+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
+
+    // More Details
+    if(d.camperType||d.swimLevel||d.shirtSize||d.bunkmateRequest||d.separateFrom){
+        b+='<div class="cv-sec">More Details</div>';
+        if(d.camperType)b+=cvR('Camper Type',esc(d.camperType));
+        if(d.swimLevel)b+=cvR('Swim Level',esc(d.swimLevel));
+        if(d.shirtSize)b+=cvR('Shirt Size',esc(d.shirtSize));
+        if(d.bunkmateRequest)b+=cvR('Bunkmate Request',esc(d.bunkmateRequest));
+        if(d.separateFrom)b+=cvR('Do Not Bunk With','<span class="cv-warn">'+esc(d.separateFrom)+'</span>');
+    }
 
     // Documents
     b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Documents <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button></div>';
@@ -793,6 +806,10 @@ function viewCamper(n){
     // Notes & Timeline
     b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Notes & Timeline <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button></div>';
     b+=renderCamperTimeline(n);
+
+    // Change History (audit trail of edits)
+    b+='<div class="cv-sec">History</div>';
+    b+=renderCamperHistory(n);
 
     // Quick Actions
     b+='<div class="cv-sec">Quick Actions</div>';
@@ -861,6 +878,14 @@ function editCamper(n){
     h+='<div class="fsec">Medical (quick glance)</div>';
     h+='<div class="fr">'+ff('Allergies','ceAlg',d.allergies||'')+ff('Medications','ceMed',d.medications||'')+'</div>';
     h+=ff('Dietary Restrictions','ceDiet',d.dietary||'');
+    h+=ff('Medical Notes','ceMedNotes',d.medicalNotes||'');
+    h+='<div class="fr">'+ff('Physician','cePhys',d.physician||'')+ff('Physician Phone','cePhysPh',d.physicianPhone||'')+'</div>';
+    h+='<div class="fr">'+ff('Insurance Provider','ceInsProv',d.insuranceProvider||'')+ff('Policy #','ceInsPol',d.insurancePolicy||'')+'</div>';
+
+    h+='<div class="fsec">More Details</div>';
+    h+='<div class="fr">'+ff('Camper Type','ceType',d.camperType||'','select',['','New','Returning'])+ff('Swim Level','ceSwim',d.swimLevel||'','select',['','Non-swimmer','Beginner','Intermediate','Advanced'])+'</div>';
+    h+='<div class="fr">'+ff('Shirt Size','ceShirt',d.shirtSize||'','select',['','YS','YM','YL','AS','AM','AL','AXL','AXXL'])+ff('Bunkmate Request','ceBunkmate',d.bunkmateRequest||'')+'</div>';
+    h+=ff('Do Not Bunk With','ceSeparate',d.separateFrom||'');
 
     var ceBodyEl=document.getElementById('ceBody');
     if(ceBodyEl)ceBodyEl.innerHTML=h;
@@ -882,6 +907,10 @@ function saveCamper(){
     // Reject instead of clobbering an existing record.
     if(editingCamper&&editingCamper!==full&&roster[full]){toast('A camper named "'+full+'" already exists','error');return}
     var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
+    // Snapshot the old record BEFORE any delete so we can (a) preserve fields this
+    // form doesn't manage (notes, documents, custom fields, scholarships, history)
+    // and (b) diff it for the change log.
+    var _oldRec=editingCamper?Object.assign({},roster[editingCamper]||{}):{};
     // Capture the parent email BEFORE we overwrite it, so an email change can be
     // migrated onto the existing invite in place (fix b) rather than orphaning it.
     var _oldParentEmail=(editingCamper&&roster[editingCamper]&&roster[editingCamper].parent1Email)?String(roster[editingCamper].parent1Email).trim():'';
@@ -894,25 +923,42 @@ function saveCamper(){
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
     if(!existingId){existingId=nextCamperId;nextCamperId++}
-    roster[full]={
+    function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
+    var _core={
         camperId:existingId,
-        altFirstName:(document.getElementById('ceAltFirst').value||'').trim(),
-        altLastName:(document.getElementById('ceAltLast').value||'').trim(),
-        dob:document.getElementById('ceDob').value||'',gender:document.getElementById('ceGender').value||'',
-        school:document.getElementById('ceSchool').value||'',schoolGrade:document.getElementById('ceSchoolGr').value||'',
-        teacher:document.getElementById('ceTeacher').value||'',
-        division:document.getElementById('ceDiv').value||'',grade:document.getElementById('ceCGrade').value||'',
-        bunk:document.getElementById('ceBunk').value||'',
-        teams:teams,team:Object.values(teams)[0]||document.getElementById('ceTeamLegacy')?.value||'',
-        street:document.getElementById('ceStreet').value||'',city:document.getElementById('ceCity').value||'',
-        state:document.getElementById('ceState').value||'',zip:document.getElementById('ceZip').value||'',
-        parent1Name:document.getElementById('ceP1').value||'',parent1Phone:document.getElementById('ceP1Ph').value||'',
-        parent1Email:document.getElementById('ceP1Em').value||'',
-        emergencyName:document.getElementById('ceEmN').value||'',emergencyPhone:document.getElementById('ceEmPh').value||'',
-        emergencyRel:document.getElementById('ceEmR').value||'',
-        allergies:document.getElementById('ceAlg').value||'',medications:document.getElementById('ceMed').value||'',
-        dietary:document.getElementById('ceDiet').value||''
+        altFirstName:_v('ceAltFirst').trim(),
+        altLastName:_v('ceAltLast').trim(),
+        dob:_v('ceDob'),gender:_v('ceGender'),
+        school:_v('ceSchool'),schoolGrade:_v('ceSchoolGr'),
+        teacher:_v('ceTeacher'),
+        division:_v('ceDiv'),grade:_v('ceCGrade'),
+        bunk:_v('ceBunk'),
+        teams:teams,team:Object.values(teams)[0]||_v('ceTeamLegacy'),
+        street:_v('ceStreet'),city:_v('ceCity'),
+        state:_v('ceState'),zip:_v('ceZip'),
+        parent1Name:_v('ceP1'),parent1Phone:_v('ceP1Ph'),
+        parent1Email:_v('ceP1Em'),
+        emergencyName:_v('ceEmN'),emergencyPhone:_v('ceEmPh'),
+        emergencyRel:_v('ceEmR'),
+        allergies:_v('ceAlg'),medications:_v('ceMed'),
+        dietary:_v('ceDiet'),medicalNotes:_v('ceMedNotes'),
+        physician:_v('cePhys'),physicianPhone:_v('cePhysPh'),
+        insuranceProvider:_v('ceInsProv'),insurancePolicy:_v('ceInsPol'),
+        camperType:_v('ceType'),swimLevel:_v('ceSwim'),shirtSize:_v('ceShirt'),
+        bunkmateRequest:_v('ceBunkmate'),separateFrom:_v('ceSeparate')
     };
+    // Merge onto the old record so notes, documents, custom fields, scholarships,
+    // and history are preserved through an edit (they aren't on this form).
+    roster[full]=Object.assign({},_oldRec,_core);
+    // Change log: diff the tracked fields old→new and append a history entry.
+    var _changes=_diffCamperFields(_oldRec,_core);
+    roster[full].history=Array.isArray(_oldRec.history)?_oldRec.history.slice():[];
+    if(!editingCamper){
+        roster[full].history.push({ts:new Date().toISOString(),type:'created',changes:[]});
+    }else if(_changes.length){
+        roster[full].history.push({ts:new Date().toISOString(),type:'edit',changes:_changes});
+    }
+    if(roster[full].history.length>200) roster[full].history=roster[full].history.slice(-200);
     // Sync address to Campistry Go format
     syncAddressToGo(full,roster[full]);
     // Every camper belongs to a family. Join an EXISTING family only when the
@@ -5195,7 +5241,10 @@ function _reportSources(){
                 {key:'division',label:'Division'},{key:'grade',label:'Grade'},{key:'bunk',label:'Bunk'},
                 {key:'schoolGrade',label:'School Grade'},{key:'teacher',label:'Teacher'},{key:'school',label:'School'},
                 {key:'age',label:'Age'},{key:'dob',label:'DOB'},{key:'gender',label:'Gender'},
-                {key:'allergies',label:'Allergies'},{key:'medications',label:'Medications'},{key:'dietary',label:'Dietary'},
+                {key:'allergies',label:'Allergies'},{key:'medications',label:'Medications'},{key:'dietary',label:'Dietary'},{key:'medicalNotes',label:'Medical Notes'},
+                {key:'physician',label:'Physician'},{key:'insuranceProvider',label:'Insurance'},
+                {key:'camperType',label:'Camper Type'},{key:'swimLevel',label:'Swim Level'},{key:'shirtSize',label:'Shirt Size'},
+                {key:'bunkmateRequest',label:'Bunkmate Request'},{key:'separateFrom',label:'Do Not Bunk With'},
                 {key:'emergencyName',label:'Emergency Contact'},{key:'emergencyPhone',label:'Emergency Phone'},
                 {key:'parent1Name',label:'Parent'},{key:'parent1Phone',label:'Parent Phone'},{key:'parent1Email',label:'Parent Email'},
                 {key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'}
@@ -5206,7 +5255,10 @@ function _reportSources(){
                     var row={name:n,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
                         schoolGrade:c.schoolGrade||'',teacher:c.teacher||'',school:c.school||'',
                         age:c.dob?age(c.dob):'',dob:c.dob||'',gender:c.gender||'',
-                        allergies:c.allergies||'',medications:c.medications||'',dietary:c.dietary||'',
+                        allergies:c.allergies||'',medications:c.medications||'',dietary:c.dietary||'',medicalNotes:c.medicalNotes||'',
+                        physician:c.physician||'',insuranceProvider:c.insuranceProvider||'',
+                        camperType:c.camperType||'',swimLevel:c.swimLevel||'',shirtSize:c.shirtSize||'',
+                        bunkmateRequest:c.bunkmateRequest||'',separateFrom:c.separateFrom||'',
                         emergencyName:c.emergencyName||'',emergencyPhone:c.emergencyPhone||'',
                         parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',parent1Email:c.parent1Email||'',
                         city:c.city||'',state:c.state||'',zip:c.zip||''};
@@ -5749,6 +5801,58 @@ function renderCamperTimeline(camperName){
     if(!notes.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No notes yet</div>';
     var colors={General:'var(--s500)','Parent Communication':'var(--me)',Behavior:'var(--warn)',Medical:'var(--purple)','Bunk Change':'var(--ok)',Incident:'var(--err)',Financial:'#2563EB'};
     return notes.slice().reverse().map(function(n){var c=colors[n.type]||'var(--s500)';var dt=n.date?new Date(n.date).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';return'<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)"><div style="width:3px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1"><div style="display:flex;justify-content:space-between"><span style="font-size:.7rem;font-weight:600;color:'+c+'">'+esc(n.type)+'</span><span style="font-size:.65rem;color:var(--s400)">'+esc(dt)+'</span></div><div style="font-size:.8rem;color:var(--s700)">'+esc(n.body)+'</div></div></div>'}).join('');
+}
+
+// Camper fields tracked in the change history, with display labels.
+var _CAMPER_FIELD_LABELS={
+    altFirstName:'Alt First',altLastName:'Alt Last',dob:'DOB',gender:'Gender',school:'School',schoolGrade:'School Grade',teacher:'Teacher',
+    division:'Division',grade:'Grade',bunk:'Bunk',team:'Team',
+    street:'Street',city:'City',state:'State',zip:'ZIP',
+    parent1Name:'Parent',parent1Phone:'Parent Phone',parent1Email:'Parent Email',
+    emergencyName:'Emergency Contact',emergencyPhone:'Emergency Phone',emergencyRel:'Emergency Relation',
+    allergies:'Allergies',medications:'Medications',dietary:'Dietary',medicalNotes:'Medical Notes',
+    physician:'Physician',physicianPhone:'Physician Phone',insuranceProvider:'Insurance',insurancePolicy:'Policy #',
+    camperType:'Camper Type',swimLevel:'Swim Level',shirtSize:'Shirt Size',bunkmateRequest:'Bunkmate Request',separateFrom:'Do Not Bunk With'
+};
+function _diffCamperFields(oldR,newR){
+    var out=[];
+    Object.keys(_CAMPER_FIELD_LABELS).forEach(function(k){
+        var a=oldR[k]==null?'':String(oldR[k]);
+        var b=newR[k]==null?'':String(newR[k]);
+        if(a!==b) out.push({field:k,label:_CAMPER_FIELD_LABELS[k],from:a,to:b});
+    });
+    return out;
+}
+function renderCamperHistory(camperName){
+    var d=roster[camperName];if(!d)return'';
+    var hist=Array.isArray(d.history)?d.history:[];
+    // Fold in enrollment status changes so the profile shows the full story.
+    var enrollEvents=[];
+    Object.keys(enrollments).forEach(function(id){
+        var e=enrollments[id]; if(!e||e.camperName!==camperName)return;
+        (e.statusHistory||[]).forEach(function(sh){
+            enrollEvents.push({ts:sh.date,type:'status',label:(e.session?e.session+': ':'')+(sh.from?sh.from+' → ':'')+sh.to,by:sh.by});
+        });
+    });
+    var rows=[];
+    hist.forEach(function(h){ rows.push(h); });
+    enrollEvents.forEach(function(e){ rows.push(e); });
+    if(!rows.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No history yet</div>';
+    rows.sort(function(a,b){return String(b.ts||'').localeCompare(String(a.ts||''));});
+    return rows.slice(0,60).map(function(h){
+        var dt=h.ts?new Date(h.ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}):'';
+        var head,detail='';
+        if(h.type==='created'){ head='Camper created'; }
+        else if(h.type==='status'){ head='Enrollment '+esc(h.label)+(h.by?' <span style="color:var(--s400)">('+esc(h.by)+')</span>':''); }
+        else { // edit
+            head=(h.changes||[]).length+' field'+((h.changes||[]).length===1?'':'s')+' changed';
+            detail=(h.changes||[]).map(function(c){
+                var from=c.from?esc(c.from):'—', to=c.to?esc(c.to):'—';
+                return '<div style="font-size:.72rem;color:var(--s500)">'+esc(c.label)+': <span style="text-decoration:line-through;color:var(--s400)">'+from+'</span> → <strong>'+to+'</strong></div>';
+            }).join('');
+        }
+        return '<div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)"><div style="width:3px;border-radius:2px;background:var(--s300);flex-shrink:0"></div><div style="flex:1"><div style="display:flex;justify-content:space-between"><span style="font-size:.76rem;font-weight:600;color:var(--s700)">'+head+'</span><span style="font-size:.65rem;color:var(--s400)">'+esc(dt)+'</span></div>'+detail+'</div></div>';
+    }).join('');
 }
 
 // ═══════════════════════════════════════════════════════════════
