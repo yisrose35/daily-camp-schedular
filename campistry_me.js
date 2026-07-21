@@ -4223,11 +4223,16 @@ function renderBilling(){
                 h+='</div></div>';
             }
 
+            // Monthly plan / autopay
+            h+=_planCardHtml(l);
+
             // Quick actions
             var hasCard=families[l.famKey]?.cardOnFile;
             h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
             h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
             h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
+            var _fam=families[l.famKey];
+            if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
             if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
             if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
             else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
@@ -4676,6 +4681,83 @@ function _showPayLinkResult(f,url){
     showModal('Send this link to the parent',h);
 }
 function copyPayLink(){var el=document.getElementById('plUrl');if(!el)return;el.select();try{navigator.clipboard&&navigator.clipboard.writeText(el.value)}catch(e){try{document.execCommand('copy')}catch(_){}}toast('Link copied')}
+
+// ═══════════════════════════════════════════════════════════════
+// MONTHLY BILLING (AUTOPAY) — split a balance into monthly payments and
+// auto-charge the saved card on each due date. The schedule lives on the
+// family (f.plan); a scheduled edge function (charge-due-installments) runs
+// daily and charges whatever is due for families with autopay + a card on
+// file, recording each payment into the ledger.
+// ═══════════════════════════════════════════════════════════════
+function monthlyPlan(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var hasCard=!!f.cardOnFile;
+    var existing=f.plan&&f.plan.installments&&f.plan.installments.length;
+    var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a monthly plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">card on file ✓</span>':'')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label># Monthly payments</label><input type="number" id="mpMonths" class="me-input" value="3" min="1" max="24"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the card on file on each due date</label>';
+    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No card on file — save a card to enable auto-charge. You can still create the schedule; the parent can pay each month from their portal.</div>';
+    h+='</div>';
+    showModal(existing?'Edit Monthly Plan':'Set Up Monthly Plan',h,function(){
+        var total=parseFloat(document.getElementById('mpTotal').value)||0;
+        var months=parseInt(document.getElementById('mpMonths').value,10)||1;
+        if(total<0.5){alert('Enter a total of at least $0.50');return}
+        if(months<1)months=1; if(months>24)months=24;
+        var start=document.getElementById('mpStart').value||defStart;
+        var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
+        var each=Math.round(total/months*100)/100;
+        var insts=[]; var sd=new Date(start+'T12:00:00');
+        for(var i=0;i<months;i++){
+            var due=new Date(sd.getFullYear(),sd.getMonth()+i,sd.getDate());
+            var amt=(i===months-1)?Math.round((total-each*(months-1))*100)/100:each;
+            insts.push({n:i+1,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending',paymentId:null});
+        }
+        f.plan={installments:insts,autopay:!!auto,total:total,createdAt:new Date().toISOString()};
+        save();closeModal('dynModal');renderBilling();
+        toast('Monthly plan created — '+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
+    });
+}
+function toggleFamilyAutopay(famKey){
+    var f=families[famKey]; if(!f||!f.plan)return;
+    if(!f.cardOnFile&&!f.plan.autopay){toast('Save a card on file first','error');return}
+    f.plan.autopay=!f.plan.autopay; save();renderBilling();
+    toast('Autopay '+(f.plan.autopay?'ON':'off')+' for '+f.name);
+}
+function cancelMonthlyPlan(famKey){
+    var f=families[famKey]; if(!f||!f.plan)return;
+    if(!confirm('Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.'))return;
+    delete f.plan; save();renderBilling();toast('Monthly plan cancelled');
+}
+function _planCardHtml(l){
+    var f=families[l.famKey]; if(!f||!f.plan||!f.plan.installments||!f.plan.installments.length) return '';
+    var today=new Date().toISOString().split('T')[0];
+    var pend=f.plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
+    var next=pend[0];
+    var chips=f.plan.installments.map(function(i){
+        var overdue=i.status!=='paid'&&i.dueDate&&i.dueDate<today;
+        var bg=i.status==='paid'?'background:#ECFDF5;border-color:#A7F3D0;color:#0E7C4A':i.status==='failed'?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':overdue?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':'background:var(--s50);border-color:var(--s200);color:var(--s600)';
+        var lbl=i.status==='paid'?'✓ ':(i.status==='failed'?'⚠ ':(overdue?'⚠ ':''));
+        return '<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;margin:2px;border:1px solid;'+bg+'">'+lbl+fm(i.amount)+' · '+esc(i.dueDate||'TBD')+'</span>';
+    }).join('');
+    var autoBadge=f.plan.autopay?'<span style="color:var(--ok);font-weight:700">● Autopay ON</span>':'<span style="color:var(--s400);font-weight:700">○ Autopay off</span>';
+    return '<div style="padding:12px 16px;border-top:1px solid var(--s100);background:#FFFEFB">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.04em">📆 Monthly Plan</div><div style="font-size:.75rem">'+autoBadge+'</div></div>'+
+        '<div style="margin-bottom:6px">'+chips+'</div>'+
+        (next?'<div style="font-size:.73rem;color:var(--s500)">Next: <strong>'+fm(next.amount)+'</strong> due '+esc(next.dueDate)+(f.plan.autopay&&f.cardOnFile?' — auto-charges the card on file':(f.plan.autopay?' — autopay on, but no card on file':''))+'</div>':'<div style="font-size:.73rem;color:var(--ok);font-weight:600">All installments paid ✓</div>')+
+        '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\')">'+(f.plan.autopay?'Turn autopay off':'Turn autopay on')+'</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit plan</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\')">Cancel plan</button>'+
+        '</div></div>';
+}
 
 // ═══════════════════════════════════════════════════════════════
 // BROADCASTS — Full messaging system
@@ -6236,6 +6318,7 @@ window.CampistryMe={
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
+    monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
