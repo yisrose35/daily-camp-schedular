@@ -2236,7 +2236,7 @@ function renderEnrollment(){
     var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
-    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.auditParentEmails()" title="See which parent email each child\'s messages route to — flags emails shared across families">✉ Check Parent Emails</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.syncAllParentPortals()" title="Rebuild every parent portal from current families — use this if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.auditParentEmails()" title="See which parent email each child\'s messages route to — flags emails shared across families">✉ Check Parent Emails</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.syncAllParentPortals()" title="Rebuild every parent portal from current families — use this if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.previewBlankForm()" title="Preview / print the blank registration form as a PDF">📄 Preview Blank Form</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
 
     // Registration link banner
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
@@ -2416,6 +2416,15 @@ function openFormConfig(){
         h+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
     });
 
+    // Required documents — each with a max number of files parents may upload.
+    h+='<div class="fsec" style="margin:16px 0 6px">Required Documents</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Documents parents upload during registration. Set how many files each one accepts (e.g. front and back of an insurance card = 2).</p>';
+    h+='<div id="fcDocList">';
+    var docs=(fc.documents&&fc.documents.length)?fc.documents:[{name:'Immunization records',maxFiles:1},{name:'Health form',maxFiles:1},{name:'Insurance card',maxFiles:2}];
+    docs.forEach(function(d){ h+=_renderDocRow(d); });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
+
     h+='<div class="fsec" style="margin:16px 0 6px">Custom Questions</div>';
     h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Add your own questions. These appear in a "Additional Information" section on the form.</p>';
     h+='<div id="fcQList">';
@@ -2469,6 +2478,20 @@ function addCustomQ(){
     list.appendChild(div.firstChild);
 }
 
+function _renderDocRow(d){
+    d=d||{};
+    return '<div class="fcDoc" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">'
+        +'<input class="fi fcDocName" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(d.name||'')+'" placeholder="Document name">'
+        +'<label style="font-size:.72rem;color:var(--s500);white-space:nowrap">Max files <input class="fi fcDocMax" type="number" min="1" max="20" style="width:56px;font-size:.8rem;padding:5px 6px;display:inline-block" value="'+(d.maxFiles||1)+'"></label>'
+        +'<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.fcDoc\').remove()">✕</button></div>';
+}
+function addDocRow(){
+    var list=document.getElementById('fcDocList');
+    var div=document.createElement('div');
+    div.innerHTML=_renderDocRow({name:'',maxFiles:1});
+    list.appendChild(div.firstChild);
+}
+
 function addPromoRow(){
     var list=document.getElementById('fcPromoList');
     var div=document.createElement('div');
@@ -2504,9 +2527,19 @@ function saveFormConfig(){
         promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
     }
 
+    // Read required documents (name + max files each)
+    var documents=[];
+    document.querySelectorAll('.fcDoc').forEach(function(el){
+        var name=(el.querySelector('.fcDocName')?.value||'').trim();
+        if(!name)return;
+        var maxFiles=parseInt(el.querySelector('.fcDocMax')?.value,10)||1;
+        documents.push({name:name,maxFiles:Math.max(1,Math.min(20,maxFiles))});
+    });
+
     formConfig={
         sections:sections,
         customQuestions:customQuestions,
+        documents:documents,
         welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
         instructions:(document.getElementById('fcInstructions')?.value||'').trim()
     };
@@ -2817,6 +2850,63 @@ function copyRegLink(){
     }else{
         prompt('Copy this link and share with parents:',url);
     }
+}
+
+// Render the configured registration form as a printable blank — parents' PDF.
+// Opens a print window (Save as PDF) so the office can hand out a paper copy or
+// preview exactly what the online form asks for.
+function previewBlankForm(){
+    var fc=getFormConfig();
+    var campName='';
+    try{ campName=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName)||''; }catch(e){}
+    // Blank field row: a label above a printed underline / box.
+    function field(label,tall){
+        return '<div class="fld"><div class="lbl">'+esc(label)+'</div><div class="'+(tall?'box':'line')+'"></div></div>';
+    }
+    function row(){ return '<div class="row">'+Array.prototype.slice.call(arguments).join('')+'</div>'; }
+    var SEC={
+        camper:function(){ return row(field('Camper first name'),field('Last name'))+row(field('Date of birth'),field('Gender'))+row(field('School'),field('Grade'))+field('Teacher'); },
+        parent:function(){ return row(field('Parent / guardian name'),field('Relationship'))+row(field('Phone'),field('Email'))+field('Second parent / guardian'); },
+        address:function(){ return field('Street address')+row(field('City'),field('State'),field('ZIP')); },
+        emergency:function(){ return row(field('Emergency contact name'),field('Relationship'))+field('Phone'); },
+        medical:function(){ return field('Allergies',true)+field('Medications',true)+field('Dietary restrictions / notes',true); },
+        preferences:function(){ return row(field('Bunkmate request'),field('T-shirt size'))+field('Separate from (name)')+field('How did you hear about us?'); },
+        documents:function(){
+            var docs=(fc.documents&&fc.documents.length)?fc.documents:[{name:'Immunization records',maxFiles:1},{name:'Health form',maxFiles:1},{name:'Insurance card',maxFiles:2}];
+            return docs.map(function(d){ return '<div class="doc">☐ '+esc(d.name)+' <span class="hint">(up to '+(d.maxFiles||1)+' file'+((d.maxFiles||1)>1?'s':'')+')</span></div>'; }).join('');
+        },
+        payment:function(){ return field('Preferred payment method')+field('Promo / discount code'); },
+        signature:function(){ return '<div class="agree">☐ I have read and agree to the camp policies and waivers.</div>'+row(field('Parent signature'),field('Date')); },
+        siblings:function(){ return '<div class="hint">Additional campers may be added on the online form.</div>'; }
+    };
+    var body='';
+    FC_SECTIONS.forEach(function(s){
+        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
+        if(!enabled||!SEC[s.key])return;
+        body+='<h2>'+esc(s.label)+'</h2>'+SEC[s.key]();
+    });
+    if((fc.customQuestions||[]).length){
+        body+='<h2>Additional Information</h2>';
+        fc.customQuestions.forEach(function(q){ body+=field(q.label,q.type==='textarea'); });
+    }
+    var w=window.open('','_blank');
+    if(!w){ toast('Allow pop-ups to preview the form'); return; }
+    var css='body{font-family:Arial,Helvetica,sans-serif;color:#222;max-width:720px;margin:24px auto;padding:0 24px}'
+        +'h1{font-size:20pt;margin:0 0 2px}h2{font-size:12pt;border-bottom:2px solid #333;padding-bottom:3px;margin:20px 0 10px}'
+        +'.sub{color:#666;font-size:10pt;margin-bottom:4px}.intro{font-size:10pt;color:#444;margin:8px 0 4px;white-space:pre-wrap}'
+        +'.row{display:flex;gap:14px}.row>.fld{flex:1}.fld{margin:8px 0}.lbl{font-size:9pt;color:#555;margin-bottom:3px}'
+        +'.line{border-bottom:1px solid #999;height:20px}.box{border:1px solid #999;height:52px;border-radius:3px}'
+        +'.doc,.agree{font-size:10pt;margin:6px 0}.hint{color:#888;font-size:8.5pt}'
+        +'@media print{.noprint{display:none}}';
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Registration Form'+(campName?' — '+esc(campName):'')+'</title><style>'+css+'</style></head><body>'
+        +'<h1>'+esc(campName||'Camp')+' — Registration Form</h1>'
+        +(fc.welcomeMessage?'<div class="sub">'+esc(fc.welcomeMessage)+'</div>':'')
+        +(fc.instructions?'<div class="intro">'+esc(fc.instructions)+'</div>':'')
+        +body
+        +'<div style="margin-top:26px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>'
+        +'<div class="noprint" style="text-align:center;margin-top:18px"><button onclick="window.print()" style="padding:8px 24px;cursor:pointer">Print / Save as PDF</button></div>'
+        +'</body></html>');
+    w.document.close();
 }
 
 function deleteSession(idx){
@@ -6217,7 +6307,7 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
-    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
+    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,previewBlankForm:previewBlankForm,addDocRow:addDocRow,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
