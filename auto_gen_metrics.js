@@ -79,6 +79,13 @@
         opts = opts || {};
         var sched = scheduleAssignments || {};
         var divTimes = divisionTimes || {};
+        // Per-division configured day window { divName: { startMin, endMin } }.
+        // When present, a bunk's span is measured against this window (the same
+        // [dayStart,dayEnd] auto_schedule_grid.js uses to draw "+ Add" cells) so
+        // leading/trailing empty time is counted as uncovered — not just the
+        // physical holes between materialized slots. When absent for a division,
+        // we fall back to the bunk's own slot extent (backward-compatible).
+        var dayWindows = opts.dayWindows || {};
 
         var total = {
             divisions: 0,
@@ -120,6 +127,10 @@
             if (!bunkIds.length) return;
 
             total.divisions += 1;
+            // Configured day window for this division (may be undefined).
+            var win = dayWindows[divName];
+            var winStart = (win && typeof win.startMin === 'number') ? win.startMin : null;
+            var winEnd   = (win && typeof win.endMin === 'number') ? win.endMin : null;
             var dv = byDivision[divName] = {
                 bunks: 0, freeSlots: 0, freeMinutes: 0,
                 placeholderSlots: 0, placeholderMinutes: 0,
@@ -175,7 +186,13 @@
                     }
                 }
 
-                var span = (maxEnd > minStart) ? (maxEnd - minStart) : 0;
+                // Reference span = the division's configured day window when we
+                // have it, extended to cover any slot that runs outside it (so a
+                // block ending after dayEnd never yields negative uncovered). No
+                // window configured → fall back to the bunk's own slot extent.
+                var spanStart = (winStart != null) ? Math.min(winStart, minStart) : minStart;
+                var spanEnd   = (winEnd   != null) ? Math.max(winEnd,   maxEnd)   : maxEnd;
+                var span = (spanEnd > spanStart) ? (spanEnd - spanStart) : 0;
                 var uncovered = Math.max(0, span - bCovered);
 
                 total.spanMinutes += span;
@@ -218,12 +235,48 @@
     // ------------------------------------------------------------------
     // Browser wiring: compute + report on every completed auto generation.
     // ------------------------------------------------------------------
+    // Parse a time value (number of minutes, or a "H:MM"/"H:MM AM/PM" string)
+    // the same way auto_schedule_grid.js does, so the metric's day window
+    // matches the window the grid draws "+ Add" cells against.
+    function parseTimeToMin(v) {
+        if (typeof v === 'number') return v;
+        if (typeof window !== 'undefined') {
+            var scu = window.SchedulerCoreUtils && window.SchedulerCoreUtils.parseTimeToMinutes;
+            if (scu) { var a = scu(v); if (typeof a === 'number' && !isNaN(a)) return a; }
+            var abe = window.AutoBuildEngine && window.AutoBuildEngine.parseTime;
+            if (abe) { var b = abe(v); if (typeof b === 'number' && !isNaN(b)) return b; }
+        }
+        return null;
+    }
+
+    // Build { divName: { startMin, endMin } } from the same source the grid
+    // uses: window.divisions[divName] first, then the divisionTimes entry,
+    // then the 540/960 (9:00 AM – 4:00 PM) defaults.
+    function buildDayWindows(divTimes) {
+        var out = {};
+        if (!divTimes) return out;
+        var divisions = (typeof window !== 'undefined' && window.divisions) ? window.divisions : {};
+        Object.keys(divTimes).forEach(function (divName) {
+            var divInfo = divTimes[divName];
+            if (!divInfo || !divInfo._perBunkSlots) return;
+            var cfg = divisions[divName] || divInfo || {};
+            var start = parseTimeToMin(cfg.startTime);
+            var end   = parseTimeToMin(cfg.endTime);
+            out[divName] = {
+                startMin: (start != null) ? start : 540,
+                endMin:   (end   != null) ? end   : 960
+            };
+        });
+        return out;
+    }
+
     function reportMetrics(reason) {
         try {
+            var divTimes = (typeof window !== 'undefined') ? window.divisionTimes : null;
             var result = computeAutoGenMetrics(
                 (typeof window !== 'undefined') ? window.scheduleAssignments : null,
-                (typeof window !== 'undefined') ? window.divisionTimes : null,
-                {}
+                divTimes,
+                { dayWindows: buildDayWindows(divTimes) }
             );
             if (typeof window !== 'undefined') {
                 window.__lastGenMetrics = result;
@@ -233,7 +286,7 @@
             var head = '[GenMetrics] real-fill ' + result.fillRatePct + '%  |  '
                 + 'free ' + t.freeMinutes + 'min/' + t.freeSlots + '  |  '
                 + 'placeholder ' + t.placeholderMinutes + 'min/' + t.placeholderSlots + '  |  '
-                + 'uncovered ' + t.uncoveredMinutes + 'min  |  '
+                + 'empty ' + t.uncoveredMinutes + 'min  |  '
                 + 'dead ' + t.deadMinutes + 'min across ' + t.bunks + ' bunks'
                 + (reason ? '  (' + reason + ')' : '');
             if (typeof console !== 'undefined') {

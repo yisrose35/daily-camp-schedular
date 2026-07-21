@@ -148,6 +148,55 @@ describe('computeAutoGenMetrics — uncovered (physical) gaps', () => {
     });
 });
 
+describe('computeAutoGenMetrics — empty "+ Add" cells vs the day window', () => {
+    it('counts leading empty time (before the first slot) as uncovered', () => {
+        // Division day runs 9:20–11:20 (560–680). Bunk only has a slot at
+        // 10:20–11:00 filled — the 60 min before it (the "+ Add" cells the
+        // grid draws) must count as uncovered, not vanish.
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(620, 660)] } } };
+        const sched = { b1: [act('Davening')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes, {
+            dayWindows: { A: { startMin: 560, endMin: 680 } }
+        });
+        assert.strictEqual(m.total.filledMinutes, 40);
+        // window 560–680 = 120 min; filled 40 → 80 uncovered (60 lead + 20 trail)
+        assert.strictEqual(m.total.uncoveredMinutes, 80);
+        assert.strictEqual(m.total.deadMinutes, 80);
+        assert.strictEqual(m.fillRatePct, Math.round((40 / 120) * 1000) / 10);
+    });
+
+    it('counts trailing empty time (after the last slot) as uncovered', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 600)] } } };
+        const sched = { b1: [act('Swim')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes, {
+            dayWindows: { A: { startMin: 540, endMin: 660 } }
+        });
+        assert.strictEqual(m.total.filledMinutes, 60);
+        assert.strictEqual(m.total.uncoveredMinutes, 60); // 600–660 empty tail
+    });
+
+    it('never yields negative uncovered when a slot runs past the day window', () => {
+        // Slot 540–700 but the window says the day ends at 660 — the extra
+        // filled time extends the span, it does not subtract from it.
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 700)] } } };
+        const sched = { b1: [act('Trip')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes, {
+            dayWindows: { A: { startMin: 540, endMin: 660 } }
+        });
+        assert.strictEqual(m.total.filledMinutes, 160);
+        assert.strictEqual(m.total.uncoveredMinutes, 0);
+        assert.strictEqual(m.fillRatePct, 100);
+    });
+
+    it('with no dayWindow, span stays the bunk extent (backward compatible)', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(620, 660)] } } };
+        const sched = { b1: [act('Davening')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes); // no opts
+        assert.strictEqual(m.total.uncoveredMinutes, 0);
+        assert.strictEqual(m.fillRatePct, 100);
+    });
+});
+
 describe('computeAutoGenMetrics — continuation slots count as filled', () => {
     it('a multi-slot block (activity + continuation) is all filled time', () => {
         const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640), slot(640, 680)] } } };
