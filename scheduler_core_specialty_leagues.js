@@ -1205,9 +1205,15 @@
     // slotDebt is cumulative, so it IS rolled back here (FN-55) using the
     // per-game slotOrder now stored on each gameLog entry.
 
-    function rollbackDayRecords(leagueId, date, history) {
-        const entries = history.gameLog?.[leagueId]?.[date];
-        if (!entries || !entries.length) return 0;
+    function rollbackDayRecords(leagueId, date, history, preservedLabels) {
+        const all = history.gameLog?.[leagueId]?.[date];
+        if (!all || !all.length) return 0;
+        // ★ Mid-day cut: keep the games whose label survived the cut, roll back
+        //   only the rest (mirrors the regular engine's preservedLabels path).
+        const keep = (preservedLabels && preservedLabels.size)
+            ? all.filter(function (e) { return e && e.g && preservedLabels.has(e.g); })
+            : [];
+        const entries = (keep.length) ? all.filter(function (e) { return keep.indexOf(e) < 0; }) : all;
         entries.forEach(function (e) {
             if (e.field) {
                 [e.tA, e.tB].forEach(function (team) {
@@ -1244,8 +1250,10 @@
             }
         });
         const n = entries.length;
-        delete history.gameLog[leagueId][date];
-        console.log(`[SpecialtyLeagues] ↩️ Rolled back ${n} logged game record(s) for league ${leagueId} on ${date}`);
+        if (keep.length) history.gameLog[leagueId][date] = keep;
+        else delete history.gameLog[leagueId][date];
+        console.log(`[SpecialtyLeagues] ↩️ Rolled back ${n} logged game record(s) for league ${leagueId} on ${date}` +
+            (keep.length ? ` (kept ${keep.length} preserved record(s))` : ''));
         return n;
     }
 
@@ -2141,6 +2149,51 @@ if (_playoffRoundNum) {
             console.log('[SpecialtyLeagues] ↩️ Reset day records for', dateKey, 'across divisions [' + divisionNames.join(', ') + ']');
         } catch (e) {
             console.error('[SpecialtyLeagues] resetDayRecords error:', e);
+        }
+    };
+
+    // ★ Mid-day weather cut — partial rollback of the games the cut REMOVED
+    //   (mirror of the regular engine's Leagues.rollbackCutGames). Survivors are
+    //   keyed by league NAME in leagueAssignments; specialty history is keyed by
+    //   league ID, so resolve via config. A league absent from the surviving map
+    //   lost ALL its games that day (full rollback). divisionNames null/[] → all.
+    SpecialtyLeagues.rollbackCutGames = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        try {
+            if (!dateKey) return;
+            const cfg = loadSpecialtyLeagues();
+            const history = loadSpecialtyHistory();
+            const divSet = (Array.isArray(divisionNames) && divisionNames.length) ? new Set(divisionNames) : null;
+            const surv = survivingLabelsByLeagueName || {};
+            let changed = false;
+            Object.values(cfg || {}).forEach(function (l) {
+                if (!l || !l.id) return;
+                if (divSet && !(l.divisions || []).some(function (d) { return divSet.has(d); })) return;
+                const dayRecs = history.gameLog?.[l.id]?.[dateKey];
+                if (!dayRecs || !dayRecs.length) return;
+                const rawSurv = surv[l.name];
+                const preserved = (rawSurv instanceof Set) ? (rawSurv.size ? rawSurv : null)
+                                : (Array.isArray(rawSurv) && rawSurv.length) ? new Set(rawSurv) : null;
+                const removed = rollbackDayRecords(l.id, dateKey, history, preserved);
+                if (removed <= 0) return;
+                changed = true;
+                const keptRecs = history.gameLog?.[l.id]?.[dateKey] || [];
+                const keptGames = new Set(keptRecs.map(function (r) { return r && r.g; }).filter(Boolean)).size;
+                if (keptGames > 0) {
+                    if (!history.gamesPerDate[l.id]) history.gamesPerDate[l.id] = {};
+                    history.gamesPerDate[l.id][dateKey] = keptGames;
+                } else if (history.gamesPerDate?.[l.id]?.[dateKey] !== undefined) {
+                    delete history.gamesPerDate[l.id][dateKey];
+                }
+                if (keptGames === 0) {
+                    try { window.SpecialtyLeaguesAPI?.removeAutoGamesForDate?.(dateKey, [l.id]); } catch (e) {}
+                }
+            });
+            if (!changed) return;
+            saveSpecialtyHistory(history);
+            updateFutureSchedules(dateKey, history);
+            console.log('[SpecialtyLeagues] 🌧️ Mid-day cut: rolled back removed games for', dateKey);
+        } catch (e) {
+            console.error('[SpecialtyLeagues] rollbackCutGames error:', e);
         }
     };
 

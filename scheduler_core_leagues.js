@@ -5153,6 +5153,87 @@ window._debugLeagueTimeData = timeData;
         }
     };
 
+    // =========================================================================
+    // ★ MID-DAY WEATHER CUT — partial rollback of the games the cut REMOVED
+    // =========================================================================
+    // When mid-day rain (or sun's-out) cuts the day, the afternoon league games
+    // are erased from the schedule (leagueAssignments) — "rain means it never
+    // happened." But the rotation/variety records live in the separate persistent
+    // gameLog, so without this the removed games keep counting (repeat-opponent
+    // avoidance, sport variety, game numbering, the Leagues results page).
+    //
+    // Unlike resetDayRecords (whole day + tombstone), this is a PARTIAL rollback
+    // driven by the game labels that SURVIVED the cut — the exact preservedLabels
+    // mechanism per-tile regen already uses (rollbackDayRecords + gamesPerDate
+    // recompute). survivingLabelsByLeagueName: { leagueName: Set<gameLabel> } from
+    // the POST-split leagueAssignments; a league absent from it lost ALL its games
+    // that day (full rollback). Pass divisionNames = null/[] to process every
+    // league (matches the schedule split, which drops matchups across divisions).
+    // Idempotent: a league whose surviving set already equals its logged set has
+    // nothing rolled back and is skipped.
+    Leagues.rollbackCutGames = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        try {
+            if (!dateKey) return;
+            const history = loadLeagueHistory();
+            const divSet = (Array.isArray(divisionNames) && divisionNames.length) ? new Set(divisionNames) : null;
+            const settings = window.loadGlobalSettings?.() || {};
+            const leaguesCfg = settings.app1?.leagues || settings.leaguesByName || {};
+            const allLeagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
+            const surv = survivingLabelsByLeagueName || {};
+            let changed = false;
+            allLeagues.forEach(function (league) {
+                if (!league || !league.name) return;
+                if (divSet && !(league.divisions || []).some(function (d) { return divSet.has(d); })) return;
+                const dayRecs = history.gameLog?.[league.name]?.[dateKey];
+                if (!dayRecs || !dayRecs.length) return;
+                const rawSurv = surv[league.name];
+                const preserved = (rawSurv instanceof Set) ? (rawSurv.size ? rawSurv : null)
+                                : (Array.isArray(rawSurv) && rawSurv.length) ? new Set(rawSurv) : null;
+                const removed = rollbackDayRecords(league.name, dateKey, history, preserved);
+                if (removed <= 0) return; // nothing the cut dropped for this league
+                changed = true;
+                // Recompute the day's game count from what survived.
+                const keptRecs = history.gameLog?.[league.name]?.[dateKey] || [];
+                const keptGames = new Set(keptRecs.map(function (r) { return r && r.g; }).filter(Boolean)).size;
+                if (keptGames > 0) {
+                    if (!history.gamesPerDate[league.name]) history.gamesPerDate[league.name] = {};
+                    history.gamesPerDate[league.name][dateKey] = keptGames;
+                } else {
+                    if (history.gamesPerDate?.[league.name]?.[dateKey] !== undefined) delete history.gamesPerDate[league.name][dateKey];
+                    // Whole league day gone → its away-trip / chinuch charges go too.
+                    rollbackOcTrips(history, league.name, dateKey);
+                    if (history.chinuchByDate?.[league.name]) delete history.chinuchByDate[league.name][dateKey];
+                }
+                // Keep the Leagues results page in sync with the surviving games.
+                try {
+                    if (window.LeaguesAPI) {
+                        if (keptGames === 0) {
+                            window.LeaguesAPI.removeAutoGamesForDate?.(dateKey, [league.name]);
+                        } else if (typeof window.LeaguesAPI.syncGamesFromGeneration === 'function') {
+                            const byLabel = {};
+                            keptRecs.forEach(function (e) {
+                                const lbl = e.g || 'Game';
+                                (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null });
+                            });
+                            const entries = Object.keys(byLabel).map(function (lbl) {
+                                const m = String(lbl).match(/Game\s*(\d+)/i);
+                                return { gameLabel: lbl, gameNumber: m ? parseInt(m[1], 10) : null, matches: byLabel[lbl] };
+                            });
+                            window.LeaguesAPI.syncGamesFromGeneration(league.name, dateKey, entries);
+                        }
+                    }
+                } catch (e) { console.warn('[RegularLeagues] rollbackCutGames results-sync skipped:', e); }
+            });
+            if (!changed) return;
+            saveLeagueHistory(history);
+            // Game numbers on later dates shift down when a day loses games.
+            updateFutureSchedules(dateKey, history);
+            console.log('[RegularLeagues] 🌧️ Mid-day cut: rolled back removed league games for', dateKey);
+        } catch (e) {
+            console.error('[RegularLeagues] rollbackCutGames error:', e);
+        }
+    };
+
     Leagues.cleanupDateFromHistory = function(dateKey) {
         try {
             const history = loadLeagueHistory();

@@ -1530,6 +1530,13 @@ function activateMidDayRainyMode(customStartTime = null) {
   try { window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true); } catch (_eRC) { /* non-fatal */ }
   try { window.RotationCloud?.save?.(_splitDateKey, sa); } catch (_eRCl) { /* non-fatal */ }
 
+  // League game COUNT rollback — the schedule/matchup split above removed the
+  // rained-out afternoon games, but league rotation/variety records live in a
+  // SEPARATE persistent gameLog that the split never touches. Subtract exactly
+  // the removed games (keep the ones that survived) so "rain = it never
+  // happened" holds for league counts, standings and the play report too.
+  try { _rainyRollbackLeagueCountsAt(_splitDateKey); } catch (_eLgCnt) { console.warn('[RainyDay] league count rollback failed:', _eLgCnt); }
+
   // Disable outdoor fields
   const existingDisabled = overrides.disabledFields || [];
   const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
@@ -1610,6 +1617,11 @@ function activateSunsOutAt(clearMin) {
   } catch (_eSave) { console.warn('[RainyDay] sun-cut save failed:', _eSave); }
   try { window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true); } catch (_eRC) { /* non-fatal */ }
   try { window.RotationCloud?.save?.(_clearDateKey, sa); } catch (_eRCl) { /* non-fatal */ }
+
+  // League game COUNT rollback — mirror the rain-cut path: the split dropped the
+  // post-clear games from leagueAssignments; subtract their persistent records
+  // so the removed games stop counting toward variety / standings / game count.
+  try { _rainyRollbackLeagueCountsAt(_clearDateKey); } catch (_eLgCnt) { console.warn('[RainyDay] league count rollback failed:', _eLgCnt); }
 
   // Re-enable outdoor fields (restore the pre-rain disabled set).
   const preRainyDisabled = dailyData.preRainyDayDisabledFields || [];
@@ -1952,6 +1964,43 @@ function _rainySplitLeagueAssignmentsAt(tMin) {
   window.leagueAssignments = r.map;
   if (r.dropped) console.log(`[RainyDay] ✂️ dropped ${r.dropped} post-cut league game(s) from leagueAssignments`);
   return r.dropped;
+}
+
+// Pure — mirrored verbatim in tests/rainy_league_count_sim.js; keep in sync.
+// From the POST-split leagueAssignments, collect the game LABELS that survived
+// the cut, split by engine. Every stored league block carries leagueName +
+// gameLabel; specialty blocks additionally carry isSpecialtyLeague:true (regular
+// blocks don't). The league engines' rollbackCutGames() subtract exactly the
+// games NOT in these sets, so the persistent gameLog / matchup+sport variety /
+// game count follow "rain means it never happened" for leagues too.
+// Returns { regular: { leagueName: Set<label> }, specialty: { leagueName: Set<label> } }.
+function _rainySurvivingLeagueLabels(leagueAssignments) {
+  const regular = {}, specialty = {};
+  Object.keys(leagueAssignments || {}).forEach(function (key) {
+    const map = leagueAssignments[key];
+    if (!map || typeof map !== 'object') return;
+    Object.keys(map).forEach(function (k) {
+      const e = map[k];
+      if (!e || !e.leagueName || !e.gameLabel) return;
+      const bucket = e.isSpecialtyLeague ? specialty : regular;
+      (bucket[e.leagueName] = bucket[e.leagueName] || new Set()).add(e.gameLabel);
+    });
+  });
+  return { regular: regular, specialty: specialty };
+}
+
+// Roll the league game COUNT back to match the matchup split: the split already
+// dropped the rained-out games from leagueAssignments; this subtracts their
+// persistent records (matchupHistory / teamSports / gameLog / gamesPerDate +
+// Leagues results page) so nothing that "never happened" keeps counting.
+// divisionNames = null → all leagues (mirrors the split, which is not scoped).
+function _rainyRollbackLeagueCountsAt(dateKey) {
+  if (!dateKey) return;
+  const surv = _rainySurvivingLeagueLabels(window.leagueAssignments || {});
+  try { window.SchedulerCoreLeagues?.rollbackCutGames?.(null, dateKey, surv.regular); }
+  catch (e) { console.warn('[RainyDay] regular league count rollback failed:', e); }
+  try { window.SchedulerCoreSpecialtyLeagues?.rollbackCutGames?.(null, dateKey, surv.specialty); }
+  catch (e) { console.warn('[RainyDay] specialty league count rollback failed:', e); }
 }
 
 // Restore PRE-CUT league games after a cut-scoped generate. The pre-gen wipe
