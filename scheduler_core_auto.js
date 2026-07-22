@@ -19655,7 +19655,7 @@
                             try {
                                 if (window.__seatGate !== false && window.GLBandPlan && typeof window.GLBandPlan.enforce === 'function') {
                                     var _enfBunks = [];
-                                    _glOrder.forEach(function (bunk) { var r = _glOut.layoutByBunk[bunk]; if (r && r.tiles) _enfBunks.push({ grade: (_glPerBunk[bunk] && _glPerBunk[bunk].grade), tiles: r.tiles }); });
+                                    _glOrder.forEach(function (bunk) { var r = _glOut.layoutByBunk[bunk]; if (r && r.tiles) _enfBunks.push({ grade: (_glPerBunk[bunk] && _glPerBunk[bunk].grade), tiles: r.tiles, name: bunk }); });
                                     // sportless grades (no sport layer) → enforce must never pull an over-cap special down to Sport
                                     var _enfSportless = {};
                                     try { if ((typeof window === 'undefined') || (window.__sportlessNoSport !== false)) { allGrades.forEach(function (g) { if (typeof gradeHasSportLayer === 'function' && !gradeHasSportLayer(g)) _enfSportless[String(g)] = 1; }); } } catch (_e) {}
@@ -19667,6 +19667,26 @@
                                         if (_enf.violations && _enf.violations.length) {
                                             _enf.violations.slice(0, 8).forEach(function (v) {
                                                 log('[SEAT AUDIT]   ⚠ STILL OVER ' + v.cat + (v.grade ? (' (' + v.grade + ')') : ' (camp-wide)') + ': ' + v.peak + ' > ' + v.cap + ' seats @ ' + _fmtA(v.at[0]) + '-' + _fmtA(v.at[1]) + ' — genuine over-capacity (raise this activity\'s sharing/capacity or add one)');
+                                                // NAME THE OCCUPANTS: which tiles (bunk + origin pass) hold this
+                                                // category at the over-cap window. A persistent over-cap means some
+                                                // pass laid a tile past the seat ledger — the origin tag convicts it.
+                                                try {
+                                                    var _vAt = String(v.cat).indexOf('@');
+                                                    var _vBase = (_vAt > 0) ? String(v.cat).slice(0, _vAt) : String(v.cat);
+                                                    var _vDur = (_vAt > 0) ? (parseInt(String(v.cat).slice(_vAt + 1), 10) || null) : null;
+                                                    var _occ = [];
+                                                    _enfBunks.forEach(function (b) {
+                                                        (b.tiles || []).forEach(function (t) {
+                                                            if (!t || t.pinned || !(t.startMin < v.at[1] && t.endMin > v.at[0])) return;
+                                                            var _tc = (t.kind === 'sport') ? 'sport' : (t.kind === 'special' ? ('special:' + _glCanon(t.subcat)) : null);
+                                                            if (!_tc || _tc !== _vBase) return;
+                                                            if (_vDur != null && (t.endMin - t.startMin) !== _vDur) return;
+                                                            _occ.push((b.name || b.grade || '?') + ' ' + _fmtA(t.startMin) + '-' + _fmtA(t.endMin)
+                                                                + ' [' + (t._origin || 'layout') + (t.generic === false ? '/filled:' + (t.name || '?') : '/generic') + ']');
+                                                        });
+                                                    });
+                                                    if (_occ.length) log('[SEAT AUDIT]     ↳ occupants: ' + _occ.slice(0, 12).join(' · ') + (_occ.length > 12 ? ' · …' + (_occ.length - 12) + ' more' : ''));
+                                                } catch (_eOcc) {}
                                             });
                                         } else {
                                             log('[SEAT AUDIT]   ✓ every category within its seats (camp-wide AND per-grade) in the final schedule');
