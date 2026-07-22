@@ -149,7 +149,24 @@
         bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon, byDur); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
         function cap(cat) { return (seats[cat] != null && isFinite(seats[cat])) ? seats[cat] : Infinity; }
         function gcap(cat, grade) { var gm = byGrade[grade]; if (!gm) return Infinity; var v = gm[cat]; if (v != null && isFinite(v)) return v; return (cat.indexOf('special:') === 0) ? 0 : Infinity; }
-        function conc(cat, s, e, grade) { var c = 0, g = 0; for (var i = 0; i < ents.length; i++) { var en = ents[i]; if (en.cat !== cat) continue; if (en.t.startMin < e && en.t.endMin > s) { c++; if (grade != null && en.grade === grade) g++; } } return { camp: c, grade: g }; }
+        // PEAK simultaneous tiles of `cat` inside [s,e) — NOT "how many touch the span".
+        // The old touch-count inflated: a 10:50-11:20 tile and an 11:40-12:00 tile both
+        // "touched" an 11:10-11:50 reference yet never coexist. Live that manufactured
+        // phantom over-caps (sport "29>28", shiur "4>3" with ZERO validator conflicts)
+        // and enforce relabeled HEALTHY tiles into unfillable placeholders. Same
+        // half-open sweep as measure(): touching at a boundary is NOT overlap.
+        function conc(cat, s, e, grade) {
+            var iv = [], ivG = [];
+            for (var i = 0; i < ents.length; i++) {
+                var en = ents[i]; if (en.cat !== cat) continue;
+                var a = en.t.startMin > s ? en.t.startMin : s;
+                var b = en.t.endMin < e ? en.t.endMin : e;
+                if (b <= a) continue;
+                iv.push([a, b]);
+                if (grade != null && en.grade === grade) ivG.push([a, b]);
+            }
+            return { camp: peakOverlap(iv).peak, grade: peakOverlap(ivG).peak };
+        }
         function toBlk(t) { return { type: t.kind, event: t.name || null, startMin: t.startMin, endMin: t.endMin }; }
         var toSport = 0, toOtherSpecial = 0, left = 0;
         for (var i = 0; i < ents.length; i++) {

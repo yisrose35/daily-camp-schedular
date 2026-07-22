@@ -194,3 +194,40 @@ test('enforce + canRelabel: a rejected over-cap tile is left in place (genuine o
     assert.ok(bunks.every(b => b.tiles.every(t => t.kind === 'special' && canon(t.subcat) === 'food')),
         'no tile changed identity');
 });
+
+test('enforce: PHANTOM over-cap — tiles touching at a boundary are NOT concurrent (live shiur 4>3 / sport 29>28)', () => {
+    // The live Neranina shape: 4 shiur@20 tiles across 4 grades — 10:50-11:10,
+    // 11:00-11:20, 11:10-11:30, 11:10-11:30. TRUE peak is 3 (the 10:50 tile ENDS
+    // exactly when two others START), and the validator found zero conflicts. The
+    // old touch-count conc() reported 4>3 against the 11:00-11:20 reference and
+    // relabeled a healthy tile into an unfillable placeholder. Peak-based conc
+    // must find NO violation and touch NOTHING.
+    const mk = (g, s, e) => ({ grade: g, tiles: [{ kind: 'special', subcat: 'Shiur', generic: true, startMin: s, endMin: e, durationMin: e - s }] });
+    const bunks = [mk('A', 650, 670), mk('B', 660, 680), mk('C', 670, 690), mk('D', 670, 690)];
+    const r = GLBandPlan.enforce({
+        bunks,
+        seats: { 'special:shiur@20': 3 },
+        seatsByGrade: { A: { 'special:shiur@20': 1 }, B: { 'special:shiur@20': 1 }, C: { 'special:shiur@20': 1 }, D: { 'special:shiur@20': 1 } },
+        canon, byDuration: true
+    });
+    assert.strictEqual(r.toSport, 0, 'no tile pulled to sport');
+    assert.strictEqual(r.toOtherSpecial, 0, 'no tile relabeled');
+    assert.strictEqual(r.left, 0, 'nothing counted as stuck');
+    assert.deepStrictEqual(r.violations, [], 'no phantom violation reported');
+    assert.ok(bunks.every(b => b.tiles.every(t => canon(t.subcat) === 'shiur')), 'all tiles keep their identity');
+});
+
+test('enforce: a REAL 4-at-once over-cap is still caught and relabeled/reported', () => {
+    // Same 4 tiles but genuinely simultaneous — peak 4 > 3 seats. The cap must
+    // still bite (relabel one away or report it), proving the fix loosened only
+    // the phantom case, not the real one.
+    const mk = (g) => ({ grade: g, tiles: [{ kind: 'special', subcat: 'Shiur', generic: true, startMin: 660, endMin: 680, durationMin: 20 }] });
+    const bunks = [mk('A'), mk('B'), mk('C'), mk('D')];
+    const r = GLBandPlan.enforce({
+        bunks,
+        seats: { 'special:shiur@20': 3, sport: 28 },
+        seatsByGrade: { A: { 'special:shiur@20': 1 }, B: { 'special:shiur@20': 1 }, C: { 'special:shiur@20': 1 }, D: { 'special:shiur@20': 1 } },
+        canon, byDuration: true
+    });
+    assert.ok(r.toSport + r.toOtherSpecial + r.left >= 1, 'a real over-cap is acted on: ' + JSON.stringify(r));
+});
