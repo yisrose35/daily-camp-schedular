@@ -5565,10 +5565,20 @@
                 const props = activityProperties[s.name] || s;
                 const maxUsage = parseInt(props.maxUsage) || 0;
                 const maxUsagePeriod = props.maxUsagePeriod || 'half';
-                if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) return;
+                // These two ceilings were the only SILENT drops in the thinning chain
+                // (cohort/exact/multiPart all log) — live, a subcat's whole pool vanished
+                // with the fill reporting 'no-activity-in-subcat' and no line explaining
+                // WHICH gate removed the activity. Log them like the others.
+                if (maxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= maxUsage) {
+                    log('[max] skip ' + s.name + ' for ' + bunk + ' (count=' + getPeriodCount(bunk, s.name, maxUsagePeriod) + ' >= max=' + maxUsage + ' per ' + maxUsagePeriod + ')');
+                    return;
+                }
                 // Per-grade cap overrides the global cap for this grade
                 const gradeMaxUsage = parseInt((props.maxUsagePerGrade || {})[grade]) || 0;
-                if (gradeMaxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= gradeMaxUsage) return;
+                if (gradeMaxUsage > 0 && getPeriodCount(bunk, s.name, maxUsagePeriod) >= gradeMaxUsage) {
+                    log('[max] skip ' + s.name + ' for ' + bunk + ' (count=' + getPeriodCount(bunk, s.name, maxUsagePeriod) + ' >= grade max=' + gradeMaxUsage + ' per ' + maxUsagePeriod + ')');
+                    return;
+                }
                 // ★ WEEKLY-MUST guard: is THIS bunk still under its per-week minFrequency for this
                 //   special THIS week? A per-week minimum is a hard generator promise, so the COHORT
                 //   thinning below (which uses cross-week LIFETIME counts) must NOT evict it — doing so
