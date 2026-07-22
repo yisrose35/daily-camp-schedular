@@ -836,12 +836,20 @@
                 if (t.endMin === s) {                                        // extend its END forward over the gap
                     if (win && win[1] < e) continue;
                     if (!_gatePass([{ kind: t.kind, subcat: t.subcat, name: t.name, _ref: t._ref, startMin: t.startMin, endMin: e }], others)) continue;
-                    t.endMin = e; t.durationMin = t.endMin - t.startMin; return true;
+                    t.endMin = e; t.durationMin = t.endMin - t.startMin;
+                    // SEAT LEDGER: record the EXTENSION [s,e) too — the grow was gate-checked
+                    // but never committed, so the next bunk's gate under-counted this span and
+                    // over-placed (live: sport 29 > 28 seats → SEAT-ENFORCE relabeled the
+                    // overflow into unfillable tiles). Mirrors the absorb-pass commit fix.
+                    if (resourceCommit && t.kind === 'sport' && t._ref) { try { resourceCommit(t.kind, _ctxGrade, _ctxBunk, s, e, t._ref); } catch (_eG1) {} }
+                    return true;
                 }
                 if (t.startMin === e) {                                      // extend its START back over the gap
                     if (win && win[0] > s) continue;
                     if (!_gatePass([{ kind: t.kind, subcat: t.subcat, name: t.name, _ref: t._ref, startMin: s, endMin: t.endMin }], others)) continue;
-                    t.startMin = s; t.durationMin = t.endMin - t.startMin; return true;
+                    t.startMin = s; t.durationMin = t.endMin - t.startMin;
+                    if (resourceCommit && t.kind === 'sport' && t._ref) { try { resourceCommit(t.kind, _ctxGrade, _ctxBunk, s, e, t._ref); } catch (_eG2) {} }
+                    return true;
                 }
             }
             return false;
@@ -980,10 +988,21 @@
                     for (var gi2 = 0; gi2 < gw2.length && !progress; gi2++) {
                         var gs = gw2[gi2].start, ge = gw2[gi2].end, gLen = ge - gs;
                         if (gLen < minSeg) continue;
+                        // Mover candidates: specials/activities FIRST (keeps the day's special
+                        // variety in place), then SPORT tiles — moving a sport can be the ONLY
+                        // legal chain when it is itself the spacing blocker (relocating it into
+                        // the gap removes the very conflict that gated the gap; the probe's live
+                        // "swap-chain-possible(Sport→gap)" verdict).
+                        var _movers = [];
                         for (var ti3 = 0; ti3 < tiles.length; ti3++) {
-                            var mt = tiles[ti3];
-                            if (!mt || !mt.generic || mt.pinned || mt.kind === 'swim' || mt.kind === 'sport') continue;
-                            if (mt._ref && mt._ref.share) continue;
+                            var _mc = tiles[ti3];
+                            if (!_mc || !_mc.generic || _mc.pinned || _mc.kind === 'swim') continue;
+                            if (_mc._ref && _mc._ref.share) continue;
+                            _movers.push(_mc);
+                        }
+                        _movers.sort(function (a, b) { return (a.kind === 'sport' ? 1 : 0) - (b.kind === 'sport' ? 1 : 0); });
+                        for (var mi3 = 0; mi3 < _movers.length; mi3++) {
+                            var mt = _movers[mi3];
                             if (mt.durationMin > gLen || sDurs.indexOf(mt.durationMin) < 0) continue;
                             if (sWin && (sWin[0] > mt.startMin || sWin[1] < mt.endMin)) continue; // sport can't live in the old slot
                             var mw = mt._ref && mt._ref.window;

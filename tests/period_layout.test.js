@@ -1047,3 +1047,42 @@ describe('PeriodLayout — swap-chain repair moves an own tile into a stuck gap'
         assert.strictEqual(res.stats.residualMin, 80, 'honest gap untouched');
     });
 });
+
+    it('SPORT mover: relocating the blocking sport itself into the gap (backfill its slot) when no special can move', () => {
+        // The live "swap-chain-possible(Sport→gap, sport→its slot)" verdict: the only
+        // legal chain moves a SPORT. Asymmetric spacing stand-in: a sport in the LATE
+        // window is legal only when NO sport sits in the mid window (think "the mid
+        // sport is the spacing blocker"); the mid window itself always welcomes a
+        // sport. The special is window-locked to P1, so no special can move — the old
+        // executor (specials-only movers) left the gap dead.
+        const midSpan = (b) => b.startMin === 40 && b.endMin === 60;
+        const lateSpan = (b) => b.startMin === 70 && b.endMin === 90;
+        const asymGate = (block, template) => {
+            if (block.type !== 'sport') return true;
+            if (midSpan(block)) return true;                       // mid window always welcomes a sport
+            if (lateSpan(block)) {
+                for (const t of template) if (t.type === 'sport' && midSpan(t)) return false;
+                return true;
+            }
+            return true;
+        };
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 20, 'P1'), P(40, 60, 'P2'), P(70, 90, 'P3')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'reg', durations: [20], window: [0, 25], qty: 1, cap: 1, score: 1 },
+                { kind: 'sport', dMin: 20, dMax: 20, window: [0, 945], score: 1 }
+            ],
+            gate: asymGate, packer: PeriodPacker
+        });
+        // main pass: special→P1, sport→P2; P3 gated (sport at P2 present) → gap.
+        // swap-chain must move the P2 sport into P3 (now legal: no mid sport in the
+        // no-mover template) and back-fill P2 with a fresh sport (always legal).
+        assert.ok((res.stats.swapChainRepaired || 0) >= 1,
+            'sport-mover chain must fire (repaired=' + res.stats.swapChainRepaired + ')');
+        assert.strictEqual(res.stats.residualMin, 0, 'the day closes wall-to-wall');
+        const late = res.tiles.filter(t => t.generic && t.startMin >= 70 && t.endMin <= 90);
+        assert.ok(late.some(t => t.kind === 'sport'), 'the late window now holds the relocated sport');
+        const mid = res.tiles.filter(t => t.generic && t.startMin >= 40 && t.endMin <= 60);
+        assert.ok(mid.some(t => t.kind === 'sport'), 'the mid window is back-filled with a sport');
+    });
