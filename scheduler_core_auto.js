@@ -20120,12 +20120,23 @@
                     // window is visible instead of inferred. Capped so a pathological run can't flood.
                     try {
                         var _glOpen = [], _glOpenMin = 0, _glGcTiles = 0, _glGcGrew = 0;
+                        // Probe classification totals: does a DIFFERENT ARRANGEMENT fill it,
+                        // or only a config change? (see period_layout _probeGap)
+                        var _glProbeMin = { placement: 0, crossBunk: 0, config: 0, other: 0 };
                         _glOrder.forEach(function (bunk) {
                             var res = _glOut.layoutByBunk[bunk]; if (!res) return;
                             _glGcTiles += (res.stats && res.stats.gapCloseTilesPlaced) || 0;
                             _glGcGrew += (res.stats && res.stats.gapCloseGrew) || 0;
                             (res.gaps || []).forEach(function (g) {
-                                if (g.len >= 5) { _glOpenMin += g.len; _glOpen.push(bunk + ' ' + minutesToTimeLabel(g.startMin) + '-' + minutesToTimeLabel(g.endMin) + ' (' + g.len + 'min): ' + (g.reason || 'unfillable')); }
+                                if (g.len >= 5) {
+                                    _glOpenMin += g.len;
+                                    var p = g.probe || '';
+                                    if (p.indexOf('swap-chain') >= 0 || p.indexOf('spacing-gated') >= 0 || p.indexOf('fillable-now') >= 0) _glProbeMin.placement += g.len;
+                                    else if (p.indexOf('seat-busy') >= 0) _glProbeMin.crossBunk += g.len;
+                                    else if (p.indexOf('caps-exhausted') >= 0 || p.indexOf('no-activity-this-short') >= 0) _glProbeMin.config += g.len;
+                                    else _glProbeMin.other += g.len;
+                                    _glOpen.push(bunk + ' ' + minutesToTimeLabel(g.startMin) + '-' + minutesToTimeLabel(g.endMin) + ' (' + g.len + 'min): ' + (g.reason || 'unfillable') + (g.probe ? ' → ' + g.probe : ''));
+                                }
                             });
                         });
                         log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)');
@@ -20133,6 +20144,10 @@
                             log('[GENERIC-LAYOUT] ⚠ ' + _glOpen.length + ' gap(s) STILL open (' + _glOpenMin + ' min) — no layer item fits without breaking a rule/cap:');
                             _glOpen.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });
                             if (_glOpen.length > 25) log('[GENERIC-LAYOUT]     …and ' + (_glOpen.length - 25) + ' more');
+                            log('[GENERIC-LAYOUT]   ↳ by fix: ' + _glProbeMin.placement + 'min placement-recoverable (deeper reorder could fill) · '
+                                + _glProbeMin.crossBunk + 'min cross-bunk-contended (another bunk holds the seat/field then) · '
+                                + _glProbeMin.config + 'min config-stuck (all short-enough activities used today — moving tiles only relocates the hole)'
+                                + (_glProbeMin.other ? ' · ' + _glProbeMin.other + 'min unclassified' : ''));
                         } else {
                             log('[GENERIC-LAYOUT] ✓ no gaps left — every bunk filled wall-to-wall from the layers');
                         }

@@ -944,3 +944,59 @@ describe('PeriodLayout — Soloists day closes under the real sport-spacing rule
         }
     });
 });
+
+// ── GAP PROBE: each surviving gap says whether PLACEMENT or CONFIG can fill it ──
+describe('PeriodLayout — gap probe classifies why a gap survived', () => {
+    it('caps-exhausted: gap where every short-enough activity is used → placement-immune', () => {
+        // 160-min window, one 40-min subcat with only 2 distinct activities, no sport.
+        // GAP-CLOSE lays 2 tiles, 80 min survive — and the probe must say the hole is
+        // config-stuck (moving tiles would only relocate it, day quotas don't change).
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 160, 'P')], pinned: [],
+            floating: [{ kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 2, score: 1 }],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 80);
+        const g = (res.gaps || []).find(x => x.len === 80);
+        assert.ok(g, 'the 80-min gap is reported');
+        assert.ok(String(g.probe || '').includes('caps-exhausted'),
+            'probe must classify it caps-exhausted/placement-immune, got: ' + g.probe);
+    });
+
+    it('no-activity-this-short: a gap shorter than every configured duration', () => {
+        // 50-min window, only a 40-min special (cap 1) → 40 lays, 10-min gap survives
+        // and nothing configured is that short.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 50, 'P')], pinned: [],
+            floating: [{ kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 1, score: 1 }],
+            packer: PeriodPacker
+        });
+        const g = (res.gaps || []).find(x => x.len === 10);
+        assert.ok(g, 'the 10-min gap is reported');
+        assert.ok(String(g.probe || '').includes('no-activity-this-short'),
+            'probe must say nothing configured is short enough, got: ' + g.probe);
+    });
+
+    it('spacing-gated: a sport has quota + duration but the spacing rule blocks it here', () => {
+        // Sport rejected EVERYWHERE by the gate (extreme spacing), one 40-min special
+        // cap 1 → the special lays in one window, the other window's gap has a sport
+        // that FITS but is spacing-gated → probe must call it placement-territory.
+        const noSportEver = (block) => block.type !== 'sport';
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 40, 'P1'), P(50, 90, 'P2')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'sport', dMin: 40, dMax: 40, window: [0, 945], score: 1 }
+            ],
+            gate: noSportEver, packer: PeriodPacker
+        });
+        const g = (res.gaps || []).find(x => x.len === 40);
+        assert.ok(g, 'one 40-min window survives (special spent, sport gated): '
+            + JSON.stringify((res.gaps || []).map(x => x.len)));
+        assert.ok(String(g.probe || '').includes('spacing-gated'),
+            'probe must classify the sport as spacing-gated, got: ' + g.probe);
+    });
+});

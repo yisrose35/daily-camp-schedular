@@ -956,6 +956,89 @@
         stats.gapCloseTilesPlaced = _gcTiles;
         stats.gapCloseGrew = _gcGrew;
 
+        // ── GAP PROBE: classify WHY each surviving gap is open ──────────────────────
+        // "all-packings-gated" collapses very different situations, and they answer
+        // "could a different arrangement fill this?" differently:
+        //   • caps-exhausted@N — every activity short enough is already used today.
+        //     Day quotas don't change when tiles move, so relocation can only MOVE
+        //     this hole, never fill it: placement-immune, needs another activity.
+        //   • no-activity-this-short — nothing configured is short enough for the gap.
+        //   • spacing-gated — a candidate fits and has quota but the content/spacing
+        //     rule blocks it HERE (e.g. sport next to sport). A deeper reorder
+        //     (move the neighbor) could fill it — search depth, not config.
+        //   • seat-busy — a candidate fits but every seat/field at this time is held
+        //     by OTHER bunks. Only a cross-bunk reshuffle or more capacity fills it.
+        //   • swap-chain-possible — one of this bunk's own placed tiles could legally
+        //     sit in the gap AND a sport could legally take its old slot: a relocation
+        //     the bounded repair passes missed. Placement-recoverable.
+        // Read-only: probes never mutate tiles/quotas/reservations.
+        function _probeGap(gs, ge) {
+            try {
+                var len = ge - gs;
+                var fitsAny = false, cappedNames = [], parts = {};
+                var tileBlocks = tiles.map(_toBlock);
+                for (var pi = 0; pi < floating.length; pi++) {
+                    var d = floating[pi];
+                    if (d.share) continue;
+                    var durs = _demandDurs(d).filter(function (x) { return _num(x) != null && x >= minSeg && x <= len; });
+                    if (!durs.length) continue;
+                    var win = d.window;
+                    if (win && (win[0] > gs || win[1] < gs + Math.min.apply(null, durs))) continue;
+                    fitsAny = true;
+                    var key = _demandKey(d);
+                    var unlimited = (d.kind === 'sport' || d.kind === 'activity');
+                    if (!unlimited && !(capRem[key] > 0)) { cappedNames.push(_label(d)); continue; }
+                    var dur = Math.max.apply(null, durs);
+                    var seg = { type: d.kind, event: _label(d), startMin: gs, endMin: gs + dur };
+                    if (d.kind === 'special') { seg._assignedSpecial = _label(d); seg._specialLocation = _label(d); }
+                    var okC = true;
+                    if (gate) { try { okC = gate(seg, tileBlocks); } catch (eP1) { okC = true; } }
+                    if (!okC) { parts['spacing-gated(' + d.kind + ')'] = 1; continue; }
+                    var okR = true;
+                    if (resourceGate) { try { okR = resourceGate(d.kind, _ctxGrade, _ctxBunk, gs, gs + dur, d); } catch (eP2) { okR = true; } }
+                    if (!okR) { parts['seat-busy(cross-bunk)'] = 1; continue; }
+                    parts['fillable-now(' + _label(d) + ')'] = 1; // gates pass — a fill pass missed it
+                }
+                if (!fitsAny) return 'no-activity-this-short(' + len + 'min)';
+                // Own-tile swap-chain: could a placed movable tile sit here, with a
+                // sport legally taking its old slot? (The relocation that fills, not moves.)
+                var sportD = null;
+                for (var sdi = 0; sdi < floating.length; sdi++) { if (floating[sdi].kind === 'sport') { sportD = floating[sdi]; break; } }
+                if (sportD) {
+                    var sDurs = _demandDurs(sportD);
+                    for (var ti2 = 0; ti2 < tiles.length; ti2++) {
+                        var mt = tiles[ti2];
+                        if (!mt || !mt.generic || mt.pinned || mt.kind === 'swim' || (mt._ref && mt._ref.share)) continue;
+                        if (mt.durationMin > len || sDurs.indexOf(mt.durationMin) < 0) continue;
+                        var mw = mt._ref && mt._ref.window;
+                        if (mw && (mw[0] > gs || mw[1] < gs + mt.durationMin)) continue;
+                        var otherBlocks = [];
+                        for (var ob = 0; ob < tiles.length; ob++) { if (tiles[ob] !== mt) otherBlocks.push(_toBlock(tiles[ob])); }
+                        var mb = { type: mt.kind, event: mt.name, startMin: gs, endMin: gs + mt.durationMin };
+                        if (mt.kind === 'special') { mb._assignedSpecial = mt.name; mb._specialLocation = mt.name; }
+                        var mOk = true;
+                        if (gate) { try { mOk = gate(mb, otherBlocks); } catch (eP3) { mOk = true; } }
+                        if (mOk && resourceGate && (mt.kind === 'special' || mt.kind === 'sport')) {
+                            try { mOk = resourceGate(mt.kind, _ctxGrade, _ctxBunk, gs, gs + mt.durationMin, mt._ref); } catch (eP4) {}
+                        }
+                        if (!mOk) continue;
+                        var sb = { type: 'sport', event: _label(sportD), startMin: mt.startMin, endMin: mt.endMin };
+                        var sOk = true;
+                        if (gate) { try { sOk = gate(sb, otherBlocks.concat([mb])); } catch (eP5) { sOk = true; } }
+                        if (sOk && resourceGate) { try { sOk = resourceGate('sport', _ctxGrade, _ctxBunk, mt.startMin, mt.endMin, sportD); } catch (eP6) {} }
+                        if (sOk) { parts['swap-chain-possible(' + mt.name + '→gap, sport→its slot)'] = 1; break; }
+                    }
+                }
+                var keys = Object.keys(parts);
+                if (!keys.length) {
+                    return cappedNames.length
+                        ? 'caps-exhausted@' + len + 'min (' + cappedNames.slice(0, 4).join('/') + (cappedNames.length > 4 ? '/…' : '') + ' already used today — placement-immune)'
+                        : 'unclassified';
+                }
+                return keys.join(' + ') + (cappedNames.length ? ' | others capped' : '');
+            } catch (eProbe) { return null; }
+        }
+
         // Recompute final coverage from the committed tiles (post GAP-CLOSE): mark each
         // window tiled iff no free time remains, sum the true residual, and expose the
         // remaining gaps for the caller's "scan the schedule for gaps" diagnostic.
@@ -968,7 +1051,7 @@
                 for (var fri = 0; fri < _free.length; fri++) {
                     var _g = _free[fri];
                     _freeMin += (_g.end - _g.start);
-                    gaps.push({ startMin: _g.start, endMin: _g.end, len: _g.end - _g.start, period: (_pp.period && _pp.period.name) || null, reason: _rec.reason || 'unfillable' });
+                    gaps.push({ startMin: _g.start, endMin: _g.end, len: _g.end - _g.start, period: (_pp.period && _pp.period.name) || null, reason: _rec.reason || 'unfillable', probe: _probeGap(_g.start, _g.end) });
                 }
                 if (_freeMin === 0) { _rec.tiled = true; _rec.residualMin = 0; _fTiled++; } else { _rec.residualMin = _freeMin; }
                 _fResid += _freeMin;
