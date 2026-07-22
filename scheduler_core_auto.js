@@ -20041,7 +20041,7 @@
                             });
                             log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field'
                                 + (_glSportRescued ? (' · ' + _glSportRescued + ' field-less tile(s) RESCUED with a real special (fill-if-possible)') : '')
-                                + (_glSportMiss ? (' · ' + _glSportMiss + ' had no field AND no free special → honest OPEN time at emit') : '')
+                                + (_glSportMiss ? (' · ' + _glSportMiss + ' had no field AND no free special → kept as generic "Sport" (the sport-layer demand stands; add field capacity at that hour to concretize them)') : '')
                                 + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)');
                         } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
                     }
