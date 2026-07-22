@@ -750,6 +750,7 @@
     ctx.game = null;
 
     // (5) Persist + re-render.
+    var dateKey = window._scheduleAssignmentsDate || window.currentScheduleDate;
     try {
       if (typeof window.saveCurrentDailyData === 'function') {
         window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments);
@@ -757,6 +758,22 @@
       }
       if (typeof window.bypassSaveAllBunks === 'function' && touchedBunks.length) {
         Promise.resolve(window.bypassSaveAllBunks(touchedBunks)).catch(function (e) { console.warn('[PEFC] cloud save:', e); });
+      }
+      // ★ A DELETION must actually STICK in the cloud. bypassSaveAllBunks updates
+      //   leagueAssignments in the daily_schedules record PER BUNK, but our
+      //   leagueAssignments is DIVISION-keyed — so that overlay is a no-op and the
+      //   removed matchup could survive in the cloud record and resurrect on reload
+      //   (the grid reads leagueAssignments). Write the whole pruned schedule via
+      //   the same trusted path fallbackBypassSave uses: scheduleAssignments is
+      //   filtered to my bunks (multi-scheduler safe), leagueAssignments saved
+      //   wholesale — so the game is gone from Supabase, not just locally.
+      if (window.ScheduleDB && typeof window.ScheduleDB.saveSchedule === 'function' && dateKey) {
+        Promise.resolve(window.ScheduleDB.saveSchedule(dateKey, {
+          scheduleAssignments: window.scheduleAssignments,
+          leagueAssignments: window.leagueAssignments || {},
+          divisionTimes: (window.DivisionTimesSystem && typeof window.DivisionTimesSystem.serialize === 'function')
+            ? window.DivisionTimesSystem.serialize(window.divisionTimes) : window.divisionTimes
+        }, { immediate: true, forceSync: true })).catch(function (e) { console.warn('[PEFC] league cloud save:', e); });
       }
     } catch (e) { console.warn('[PEFC] persist:', e); }
     if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }

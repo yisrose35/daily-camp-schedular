@@ -504,6 +504,44 @@ test('markDidNotPlay — specialty: removes the game + splices its gameLog entry
   assert.strictEqual(log[0].tA, 'Green');
 });
 
+test('markDidNotPlay — writes the pruned leagueAssignments to the cloud (game gone from Supabase)', () => {
+  const cloudSaves = [];
+  const bunkSaves = [];
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] }],
+  };
+  global.window.leagueAssignments = {
+    Majors: { 1: { leagueName: 'Majors League', _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] } },
+  };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window._scheduleAssignmentsDate = '2026-07-01';
+  delete global.window.SchedulerCoreLeagues;
+  global.window.saveCurrentDailyData = () => {};
+  global.window.bypassSaveAllBunks = (b) => { bunkSaves.push(b); return Promise.resolve(); };
+  // The cloud write we care about: whole-object save that carries division-keyed leagueAssignments.
+  global.window.ScheduleDB = { saveSchedule: (dk, data, opts) => { cloudSaves.push({ dk, data, opts }); return Promise.resolve({ success: true }); } };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx);
+
+  assert.strictEqual(res.ok, true);
+  // The cloud save fired for the edited date with the whole leagueAssignments...
+  assert.strictEqual(cloudSaves.length, 1);
+  assert.strictEqual(cloudSaves[0].dk, '2026-07-01');
+  // ...and that leagueAssignments no longer contains the removed game.
+  assert.deepStrictEqual(cloudSaves[0].data.leagueAssignments.Majors[1]._allMatchups, ['Bears vs Wolves @ Field C (Soccer)']);
+  // The removed game is truly gone (not merely blanked).
+  assert.ok(!cloudSaves[0].data.leagueAssignments.Majors[1]._allMatchups.some(m => /Lions vs Tigers/.test(m)));
+  // Per-bunk surgical save still fired for multi-scheduler correctness.
+  assert.deepStrictEqual(bunkSaves, [['BunkA']]);
+  delete global.window.ScheduleDB;
+  delete global.window._scheduleAssignmentsDate;
+});
+
 test('markDidNotPlay — no matching game leaves stores untouched and reports not-found', () => {
   global.window.scheduleAssignments = { BunkA: [null, { _h2h: true, _allMatchups: ['Bears vs Wolves @ Field C (Soccer)'] }] };
   global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Bears vs Wolves @ Field C (Soccer)'] } } };
