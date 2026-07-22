@@ -139,6 +139,11 @@
         // cross-bunk over-placement leak). With no resourceRelease wired, relocations that
         // would move a seat-bearing tile are SKIPPED (conservative: never leak).
         var resourceRelease = (typeof ctx.resourceRelease === 'function') ? ctx.resourceRelease : null;
+        // pressure(kind, sMin, eMin) -> 0..1 (optional): the caller's live congestion
+        // reading for a window (e.g. committed sport seats / field ceiling). The packer
+        // uses it to stop STACKING a kind into an hour that is already nearly full —
+        // the "place everything at the same time, then have nowhere to go" failure.
+        var pressure = (typeof ctx.pressure === 'function') ? ctx.pressure : null;
         var _ctxGrade = ctx.grade, _ctxBunk = ctx.bunk;
         // Move a single already-placed seat-bearing tile `T` to [ns,ne] (same duration),
         // keeping the cross-bunk reservation ledger exact: release old, gate new, commit new.
@@ -211,7 +216,17 @@
             if (seg.kind === 'special') return 1000;
             return 100000; // structural required layer (swim, …) — effectively must-place
         }
-        function _mkScoreFn(remView) {
+        function _mkScoreFn(remView, wStart, wEnd) {
+            // CONGESTION-AWARE SPORT REWARD: read the caller's live pressure for THIS
+            // window once. Below 50% of the ceiling the tuned sport(0.003)>special(0.002)
+            // even-day balance is byte-identical; above it the sport size reward decays
+            // linearly to 0.001·dur² (below the over-floor special's 0.002·dur²) so the
+            // packer puts a SPECIAL here and the sport lands in an emptier window.
+            // Floors are untouched (floorBonus 1000/100000 dwarfs this), and sport still
+            // beats the 'activity' placeholder even at full pressure.
+            var _spPres = 0;
+            if (pressure && wStart != null) { try { _spPres = +pressure('sport', wStart, wEnd) || 0; } catch (_ePr) { _spPres = 0; } }
+            var _spPen = Math.max(0, Math.min(1, (_spPres - 0.5) * 2));
             return function (packing) {
                 var total = 0;
                 // Count the floor bonus ONLY up to what each key still OWES, per packing.
@@ -249,7 +264,7 @@
                     // (Was: sport PENALTY + special-only size reward, which made the layout
                     // over-produce specials — uncat peaked at 32 across 38 bunks vs supply 17.)
                     if (s.kind === 'activity') total -= 0.01 * s.durationMin;
-                    else if (s.kind === 'sport') total += 0.003 * s.durationMin * s.durationMin;
+                    else if (s.kind === 'sport') total += (0.003 - 0.002 * _spPen) * s.durationMin * s.durationMin;
                     else {
                         total += 0.002 * s.durationMin * s.durationMin;
                         // AIM-FOR-MAX: a SCARCE under-target must-have (shiur) carries a bounded
@@ -375,7 +390,7 @@
                 }
             }
             if (!cands.length) { if (outMeta) outMeta.reason = 'no-candidates'; return null; }
-            var scoreFn = _mkScoreFn(remView);
+            var scoreFn = _mkScoreFn(remView, wStart, wEnd);
             var packings = [];
             try { packings = packer.pack({ periodLengthMin: len, candidates: cands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; }
             catch (e) { if (outMeta) outMeta.reason = 'pack-error:' + (e && e.message); return null; }
@@ -1179,7 +1194,7 @@
             if (!b) continue;
             var res = planBunkLayout({
                 bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
-                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit, resourceRelease: o.resourceRelease
+                floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit, resourceRelease: o.resourceRelease, pressure: o.pressure
             });
             layoutByBunk[bunk] = res;
             totals.bunks++;

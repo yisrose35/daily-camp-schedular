@@ -1086,3 +1086,35 @@ describe('PeriodLayout — swap-chain repair moves an own tile into a stuck gap'
         const mid = res.tiles.filter(t => t.generic && t.startMin >= 40 && t.endMin <= 60);
         assert.ok(mid.some(t => t.kind === 'sport'), 'the mid window is back-filled with a sport');
     });
+
+// ── CONGESTION-AWARE PLACER: pressure steers sports out of packed hours ──
+describe('PeriodLayout — window pressure flips the over-floor filler from sport to special', () => {
+    const FLOATING = [
+        // floor 1 special (cap 2 distinct) + unlimited sport filler; window 0-80
+        { kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 2, score: 1 },
+        { kind: 'sport', dMin: 40, dMax: 40, window: [0, 945], score: 1 }
+    ];
+    it('no pressure → floor special + SPORT filler (the tuned even-day default, unchanged)', () => {
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 80, 'P')], pinned: [],
+            floating: JSON.parse(JSON.stringify(FLOATING)),
+            packer: PeriodPacker
+        });
+        const kinds = res.tiles.filter(t => t.generic).map(t => t.kind).sort();
+        assert.deepStrictEqual(kinds, ['special', 'sport'],
+            'over-floor slot fills with a sport when the hour is empty: ' + JSON.stringify(kinds));
+    });
+    it('full sport pressure → the over-floor slot takes the SECOND SPECIAL instead (sport goes elsewhere)', () => {
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 80, 'P')], pinned: [],
+            floating: JSON.parse(JSON.stringify(FLOATING)),
+            pressure: (kind) => (kind === 'sport' ? 1 : 0),   // this hour is at the field ceiling
+            packer: PeriodPacker
+        });
+        const kinds = res.tiles.filter(t => t.generic).map(t => t.kind).sort();
+        assert.deepStrictEqual(kinds, ['special', 'special'],
+            'a window at the field ceiling must NOT take another sport: ' + JSON.stringify(kinds));
+    });
+});

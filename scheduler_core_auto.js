@@ -19060,6 +19060,34 @@
                             }
                         } catch (_e) {}
                     };
+                    // ── CONGESTION-AWARE PLACER (window.__spreadPressure, default ON) ──────────
+                    // Live sport seat pressure for a window, read from the SAME ledger the
+                    // commits above write. The layout's packer uses it to stop STACKING sports
+                    // into an hour already near the field ceiling — the "place everything at the
+                    // same time, then have nowhere to go" failure (live: 20+ sports piled into
+                    // 11:00-1:00; the aggregate 28-seat gate was happy but per-sport FIELDS ran
+                    // out at concretize time → field-less "Sport" cells). Returns peak committed
+                    // concurrency / seats (0..1); 0 for non-sport kinds (specials are already
+                    // HARD-gated by their seat categories). Half-open sweep: touching ≠ overlap.
+                    var _glPressure = function (kind, sMin, eMin) {
+                        try {
+                            if (String(kind || '') !== 'sport') return 0;
+                            if (typeof window !== 'undefined' && window.__spreadPressure === false) return 0;
+                            var cap = _glSeats['sport'];
+                            if (!(cap > 0) || cap === Infinity) return 0;
+                            var rs = _glCatResv['sport'] || [];
+                            var pts = [];
+                            for (var i = 0; i < rs.length; i++) {
+                                var a = rs[i].s > sMin ? rs[i].s : sMin;
+                                var b = rs[i].e < eMin ? rs[i].e : eMin;
+                                if (b > a) { pts.push([a, 1], [b, -1]); }
+                            }
+                            pts.sort(function (x, y) { return (x[0] - y[0]) || (x[1] - y[1]); });
+                            var cur = 0, peak = 0;
+                            for (var j = 0; j < pts.length; j++) { cur += pts[j][1]; if (cur > peak) peak = cur; }
+                            return peak / cap;
+                        } catch (_ePr) { return 0; }
+                    };
 
                     // ── DEMAND ↔ CAPACITY RECONCILIATION (window.__demandReconcile, default ON) ──
                     // The per-bunk demand loop above pushes a FLOOR (qty) for every special subcat
@@ -19153,7 +19181,7 @@
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, pressure: _glPressure, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
 
                     // 2.5) FILL — assign a CONCRETE special activity to each generic special tile.
                     // STEP 1 (specials, per-bunk): for each generic "Special: <subcat>" tile, pick the
