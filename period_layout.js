@@ -925,6 +925,15 @@
                 var _ns = Math.min(_sp.startMin, _act.startMin), _ne = Math.max(_sp.endMin, _act.endMin);
                 var _sw = _sp._ref && _sp._ref.window;
                 if (_sw && (_sw[0] > _ns || _sw[1] < _ne)) continue;                         // would leave its window
+                // ★ DURATION-TRAP GUARD: the grown span must be a length this subcat can
+                //   actually FILL. "A slightly longer special slot is fine" is FALSE when
+                //   the subcat's activities run fixed durations — a 20-min-only sports
+                //   tile grown to 30/50 min is BORN DEAD: the fill's duration gate can
+                //   never assign it (live: sports@30/@50/@110 tiles, cause
+                //   no-activity-at-Nmin). _ref.durations is the fillable-lengths list the
+                //   caps derivation computed; no list → legacy flex behavior.
+                var _spDurs = (_sp._ref && Array.isArray(_sp._ref.durations)) ? _sp._ref.durations : null;
+                if (_spDurs && _spDurs.length && _spDurs.indexOf(_ne - _ns) < 0) continue;   // unfillable length → don't manufacture a dead tile
                 var _oth = []; for (var _oi = 0; _oi < tiles.length; _oi++) if (tiles[_oi] !== _sp && tiles[_oi] !== _act) _oth.push(tiles[_oi]);
                 if (!_gatePass([{ kind: 'special', subcat: _sp.subcat, name: _sp.name, _ref: _sp._ref, startMin: _ns, endMin: _ne }], _oth)) continue;
                 if (!_bestSp || _sp.durationMin > _bestSp.durationMin) _bestSp = _sp;           // grow the largest neighbor

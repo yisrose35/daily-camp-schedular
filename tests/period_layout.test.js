@@ -743,12 +743,14 @@ describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles
         assert.strictEqual(activity.length, 0, 'the abstract "activity" placeholder is NOT used when real specials can fill');
     });
 
-    it('absorbs an "activity" sliver into an adjacent special (expand-the-special), leaving zero placeholders', () => {
-        // 30-min window, specials only 20-min (cap 2) → the exact tiler can only do
-        // [special20 + activity10] (no 30-min special exists). The absorb pass grows the
-        // touching special over the 10-min "activity" sliver and drops it, so the window
-        // is ONE 30-min "Special: Uncategorized" (fill assigns a real activity that simply
-        // runs the extra minutes) — the live "5th grade still got activity" case.
+    it('declines to grow a special to a length its subcat cannot FILL (duration-trap guard)', () => {
+        // 30-min window, specials only 20-min → the exact tiler does [special20 +
+        // activity10]. The OLD absorb grew the special to 30 on the premise that
+        // "fill assigns a real activity that simply runs the extra minutes" — but the
+        // fill's DURATION GATE refuses (no 30-min activity exists), so the grown tile
+        // was BORN DEAD (live: sports@30/@50/@110, cause no-activity-at-Nmin). Now the
+        // grow only happens to a fillable length; here none exists, so the 20-min
+        // special stays fillable and the 10-min remainder stays honest.
         const res = Layout.planBunkLayout({
             bunk: 'B1', grade: 'G',
             periods: [P(0, 30, 'P')], pinned: [],
@@ -758,11 +760,34 @@ describe('PeriodLayout — GAP-CLOSE (fill the day from the layers, fewest tiles
             ],
             packer: PeriodPacker
         });
+        const specials = tilesOf(res).filter(t => t.kind === 'special');
+        assert.strictEqual(specials.length, 1, 'the 20-min special stays');
+        assert.strictEqual(specials[0].endMin - specials[0].startMin, 20, 'NOT grown to an unfillable 30');
+        // the 10-min remainder survives as the honest leftover (the engine's absorb/
+        // honest-open endgame turns it into open time — never a born-dead special).
+        const activity = tilesOf(res).filter(t => t.kind === 'activity');
+        assert.strictEqual(activity.length, 1, 'the 10-min sliver remains (honest remainder)');
+        assert.strictEqual(activity[0].endMin - activity[0].startMin, 10);
+    });
+
+    it('DOES grow a special over an activity sliver when the grown length is fillable', () => {
+        // Same geometry, but the subcat also runs 30-min → growing 20→30 produces a
+        // tile the fill CAN assign. The expand-the-special absorb stays alive for
+        // exactly the case it was built for.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 30, 'P')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'regular', durations: [20, 30], window: [0, 945], qty: 1, cap: 2, score: 1 },
+                { kind: 'activity', dMin: 10, dMax: 30, window: [0, 945], score: 0 }
+            ],
+            packer: PeriodPacker
+        });
         assert.strictEqual(res.stats.residualMin, 0, 'window fills wall-to-wall');
         assert.strictEqual(tilesOf(res).filter(t => t.kind === 'activity').length, 0, 'no "activity" placeholder remains');
         const specials = tilesOf(res).filter(t => t.kind === 'special');
         assert.strictEqual(specials.length, 1, 'a single special covers the whole window');
-        assert.strictEqual(specials[0].endMin - specials[0].startMin, 30, 'the special was expanded to swallow the 10-min sliver');
+        assert.strictEqual(specials[0].endMin - specials[0].startMin, 30, 'grown to the FILLABLE 30');
     });
 
     it('never exceeds a subcat cap (distinct availability) — honest gap rather than a phantom repeat', () => {

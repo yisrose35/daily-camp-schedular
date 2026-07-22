@@ -5543,6 +5543,10 @@
             });
 
             const specialPriorityList = [];
+            // cohort-deferred candidates (fill-if-possible last resort; see the
+            // rotationCohort block below) — attached to the shopping list so the
+            // GENERIC-FILL can use them ONLY when a tile would otherwise go OPEN.
+            const cohortDeferredList = [];
             todaysSpecials.forEach(s => {
                 if (!isSpecialAvailableForBunk(s.name, grade, bunk, globalSettings)) return;
                 // ★ Day 14: Skip fullGrade specials from individual-bunk shopping.
@@ -5597,8 +5601,17 @@
                 } catch (_wmErr) { _wmOwes = false; }
                 // Rotation cohort: every bunk in the cohort must visit this
                 // special the same number of times before any bunk visits it
-                // again. Skip this special for `bunk` if its lifetime count
-                // already exceeds the cohort minimum.
+                // again. A bunk whose lifetime count already exceeds the cohort
+                // minimum is DEFERRED for this special — kept OUT of the primary
+                // rotation pool (the have-nots still go first) but available as a
+                // FILL-IF-POSSIBLE last resort: when a tile would otherwise go
+                // OPEN, a deferred activity (same subcat, unused today, seat
+                // free) fills it rather than leaving dead time. Ordered by how
+                // far ahead the bunk is, so the least-ahead borrows first and
+                // fairness degrades minimally. (Previously a hard skip: 53/72
+                // workshop options vanished for the day and tiles went dead
+                // while seats sat free.)
+                let _cohortDefer = false, _cohortOverBy = 0;
                 const rc = props.rotationCohort || s.rotationCohort;
                 if (rc && rc.enabled && Array.isArray(rc.grades) && rc.grades.length > 0) {
                     const cohortBunks = [];
@@ -5617,9 +5630,9 @@
                             if (c < minCount) minCount = c;
                         }
                         if (myCount > minCount && !_wmOwes) {
-                            log('[cohort] skip ' + s.name + ' for ' + bunk +
-                                ' (count=' + myCount + ' > cohort min=' + minCount + ')');
-                            return;
+                            _cohortDefer = true; _cohortOverBy = myCount - minCount;
+                            log('[cohort] defer ' + s.name + ' for ' + bunk +
+                                ' (count=' + myCount + ' > cohort min=' + minCount + ') — last-resort only (fills before OPEN time)');
                         }
                     }
                 }
@@ -5742,7 +5755,7 @@
                     }
                 }
 
-                specialPriorityList.push({
+                const _candRec = {
                     name: s.name, type: 'special', rotationScore: score,
                     _belowFloor: _belowFloor, // ★ FN-30: urgent-tier flag (floor deficit)
                     duration: specificDuration,
@@ -5761,8 +5774,20 @@
                     // ★ Subcategory tag (e.g. "Food", "Theme"). Empty = "Regular".
                     //   Used to filter against per-layer subcategory restrictions.
                     subcategory: (typeof s.subcategory === 'string' ? s.subcategory.trim() : '')
-                });
+                };
+                if (_cohortDefer) {
+                    // fill-if-possible last resort: NOT in rotation's primary pool; the
+                    // GENERIC-FILL tries these only when a tile would otherwise go OPEN.
+                    _candRec._cohortDeferred = true;
+                    _candRec._cohortOverBy = _cohortOverBy;
+                    cohortDeferredList.push(_candRec);
+                } else {
+                    specialPriorityList.push(_candRec);
+                }
             });
+            // least-ahead first, then rotation order — the bunk that borrowed least
+            // from the cohort borrows again first, so fairness degrades minimally.
+            cohortDeferredList.sort((a, b) => (a._cohortOverBy - b._cohortOverBy) || (a.rotationScore - b.rotationScore));
            // ★ FN-30: "urgent" tier = scarce OR below a floor (exact/min). Below-floor
            //   specials join scarce at the front so floors are near-mandatory; within the
            //   tier, the escalating floor-deficit score (strong negative) sorts the most
@@ -5840,7 +5865,7 @@
             return {
                 bunk, grade, bunkSize, freeWindows, totalFree: freeWindows.reduce((s, w) => s + w.duration, 0),
                 sports: { required: sportCount, cap: sportCap, priorityList: sportPriorityList, layer: sportLayer, constraints: sportConstraints },
-                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryFloor: specialSubcategoryFloor, subcategoryEnforced: _hasSubcategoryTags },
+                specials: { required: specialCount, cap: specialCap, priorityList: specialPriorityList, cohortDeferred: cohortDeferredList, layer: specialLayer, constraints: specialConstraints, subcategoryCap: specialSubcategoryCap, subcategoryFloor: specialSubcategoryFloor, subcategoryEnforced: _hasSubcategoryTags },
                 snack: snackOptions, elective: electiveInfo, genericNeeds, adjacentBunk
             };
         }
@@ -19336,6 +19361,10 @@
                                 var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
                                 var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
                                 var pool = (sl && sl.specials && sl.specials.priorityList) || [];   // rotation-sorted, constraint-filtered
+                                // cohort-DEFERRED candidates (fill-if-possible last resort): same subcat
+                                // rules, unused today, seat-gated — tried ONLY when the primary pool
+                                // leaves a tile that would otherwise go OPEN. Ordered least-ahead first.
+                                var _deferredPool = (sl && sl.specials && sl.specials.cohortDeferred) || [];
                                 // seed "used" with any concrete (already-named) special on this bunk's tiles
                                 var used = {};
                                 res.tiles.forEach(function (t) { if (t && !t.generic && t.name) used[String(t.name).toLowerCase()] = 1; });
@@ -19376,6 +19405,29 @@
                                         // capacity / sharing per the special's own config — a HARD rule, kept strict.
                                         if (!_glCapFits(c, grade, t.startMin, t.endMin)) { _glFill.capSkips++; continue; }
                                         pick = c; break;
+                                    }
+                                    // ★ FILL-IF-POSSIBLE (cohort last resort; default ON — kill:
+                                    //   window.__cohortRelax=false): the primary rotation pool has nothing
+                                    //   for this tile, so it would go OPEN. Before that, try the bunk's
+                                    //   cohort-DEFERRED activities — same subcat, duration match, unused
+                                    //   today, seat free. The have-nots kept absolute priority (they ARE
+                                    //   the primary pool everywhere); a deferred pick only happens when
+                                    //   the alternative is dead time, and the least-ahead bunk borrows
+                                    //   first so the cohort ordering degrades minimally.
+                                    if (!pick && _deferredPool.length && ((typeof window === 'undefined') || (window.__cohortRelax !== false))) {
+                                        for (var _di = 0; _di < _deferredPool.length; _di++) {
+                                            var _dc = _deferredPool[_di];
+                                            if (!_dc || !_dc.name) continue;
+                                            if (_glCanon(_dc.subcategory) !== sub) continue;
+                                            var _dDurs = _glSpecialDurs(_dc.name);
+                                            if (_dDurs.length && _dDurs.indexOf(dur) < 0) continue;
+                                            if (used[String(_dc.name).toLowerCase()]) continue;      // no same-day repeat (strict)
+                                            if (!_glCapFits(_dc, grade, t.startMin, t.endMin)) continue;
+                                            pick = _dc;
+                                            t._origin = 'cohort-relaxed';
+                                            _glFill.cohortRelaxed = (_glFill.cohortRelaxed || 0) + 1;
+                                            break;
+                                        }
                                     }
                                     if (pick) {
                                         t._concrete = pick.name;
@@ -20082,6 +20134,7 @@
                             var _anyAbsorb = (_glFill.absorbed || _glFill.absorbFilled || _glFill.absorbSplit || _glFill.absorbRepeat || _glFill.absorbBlocked) ? true : false;
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
+                                + (_glFill.cohortRelaxed ? (' (' + _glFill.cohortRelaxed + ' cohort-relaxed last-resort fill(s) — would otherwise be OPEN)') : '')
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
                                 + (_anyAbsorb ? (' — open time → ' + (_glFill.absorbed || 0) + ' Sport block(s)'
                                        + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')

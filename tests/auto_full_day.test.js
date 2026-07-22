@@ -110,6 +110,7 @@ function campConfig(opts) {
       specialsOverride: opts.specialsOverride || null,
       subQuantities: opts.subQuantities || null,
       subOps: opts.subOps || null,
+      priorDays: opts.priorDays || null,
     };
   }
   if (opts.swimReal) {
@@ -306,6 +307,7 @@ function campConfig(opts) {
     specialsOverride: opts.specialsOverride || null,
     subQuantities: opts.subQuantities || null,
     subOps: opts.subOps || null,
+    priorDays: opts.priorDays || null,
   };
 }
 
@@ -1157,12 +1159,15 @@ function buildSandbox(opts) {
   sandbox.loadRotationHistory = () => ({ bunks: {}, leagues: {} });
   sandbox.saveRotationHistory = () => {};
   sandbox.loadCurrentDailyData = () => ({});
-  sandbox.loadAllDailyData = () => ({});
+  // priorDays (COHORT test): seed earlier days' saved schedules so lifetime
+  // cohort counts (getLifetimeSpecialCount scans allDailyData) are non-zero.
+  sandbox.loadAllDailyData = () => (cfg.priorDays || {});
   sandbox.getDivisions = () => divisions;
   sandbox.getAllGlobalSports = () => sportList.slice().sort();
   sandbox.getSportMetaData = () => sportMetaData;
   sandbox.getBunkMetaData = () => bunkMetaData;
-  sandbox.getGlobalSpecialActivities = () => cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub));
+  sandbox.getGlobalSpecialActivities = () => cfg.specialsOverride ? cfg.specialsOverride
+    : cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub));
   sandbox.getAllSpecialActivities = () => cfg.smooth ? SMOOTH_SPECIALS.map(smoothSpecialConfig) : SPECIALS.map(s => specialConfig(s, specialDur, cfg.oversub));
   sandbox.getFacilities = () => [];
 
@@ -2083,4 +2088,64 @@ test('auto scheduler leaves a GENUINE OPEN slot when a subcategory pool is exhau
   // 4) the engine says so, honestly, in one line
   assert.ok((sandbox.__logs || []).some(l => String(l).includes('[GENERIC-HONEST]')),
     'the honest-open endgame must report the dropped tiles');
+});
+
+test('auto scheduler fills a tile with a cohort-DEFERRED activity rather than leaving it open (fill-if-possible)', async (t) => {
+  // FILL-IF-POSSIBLE: the rotation-cohort gate ("nobody twice until every
+  //   cohort bunk has been once") used to HARD-SKIP an activity for every bunk
+  //   ahead of the cohort minimum — pools emptied for the whole day and tiles
+  //   went OPEN while seats sat free (live: 53/72 workshop options blocked).
+  //   Now those activities are DEFERRED, not dropped: the have-nots keep
+  //   absolute priority via the primary pool, and a deferred activity fills a
+  //   tile ONLY when the alternative is dead time.
+  const XDIV = { type: 'cross_division', divisions: [],
+    capacity: 20, allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } };
+  const mk = (name, dur, subcat, extra) => Object.assign({
+    name, location: name + ' Rm', type: 'Special', subcategory: subcat,
+    duration: dur, durationMin: dur,
+    sharableWith: XDIV, timeRules: [], availableDays: null,
+  }, extra || {});
+  const specialsOverride = [
+    // the cohort-gated workshop: every bunk except Chair 6 did it on a prior
+    // day → cohort min 0 → 17 of 18 bunks are DEFERRED for it today.
+    mk('Craftastic', 40, 'workshops', { rotationCohort: { enabled: true, grades: ['Auto', 'Chair'] } }),
+    // the rest of the day's pool (no cohort)
+    mk('Drama', 40, 'theme'), mk('Art Shoppes', 40, 'theme'), mk('Accessorize', 40, 'theme'),
+    mk('Pioneering', 40, 'theme'), mk('Gymnastics', 40, 'theme'), mk('Woodworking', 40, 'theme'),
+    mk('Neranitas', 20, 'theme'), mk('Arts & Crafts', 20, 'theme'), mk('Foam Pit', 20, 'theme'),
+    mk('Ice Cream', 20, 'theme'), mk('Shiur', 20, 'theme'),
+    mk('Slush', 10, 'theme'), mk('Popcorn', 10, 'theme'),
+  ];
+  // prior day: everyone but Chair 6 already had Craftastic
+  const priorAssignments = {};
+  [...AUTO_BUNKS, ...CHAIR_BUNKS].forEach(b => {
+    if (b === 'Chair 6') return;
+    priorAssignments[b] = [{ _activity: 'Craftastic', field: 'Craftastic Rm', continuation: false }];
+  });
+  const priorDays = { '2026-07-14': { scheduleAssignments: priorAssignments } };
+  const { results, sandbox } = await runScenario('COHORT DEFER (17/18 bunks ahead; deferred fills before OPEN)', {
+    smooth: true, requireNoSports: true, skipGapCheck: true, specialsOverride, priorDays,
+  });
+  const logs = (sandbox.__logs || []).map(String);
+  // 1) the gate DEFERS instead of hard-skipping
+  assert.ok(logs.some(l => l.includes('[cohort] defer Craftastic')),
+    'cohort gate must DEFER (not skip) an ahead-of-minimum bunk');
+  // 2) the last-resort fill actually fired
+  assert.ok(logs.some(l => l.includes('cohort-relaxed last-resort fill')),
+    'a tile that would otherwise be OPEN must fill with the deferred activity');
+  // 3) most bunks end the day WITH Craftastic (deferred for 17, primary for Chair 6),
+  //    each at most once (no same-day repeat is untouched)
+  let withCraft = 0;
+  for (const [bunk, slots] of Object.entries(sandbox.scheduleAssignments || {})) {
+    const n = (slots || []).filter(s => s && !s.continuation && s._activity === 'Craftastic').length;
+    assert.ok(n <= 1, bunk + ' must not repeat Craftastic same-day (got ' + n + ')');
+    if (n === 1) withCraft++;
+  }
+  assert.ok(withCraft >= 12, 'deferred fills should land broadly (got ' + withCraft + '/18 bunks)');
+  // 4) still no placeholder tiles anywhere
+  const generics = [];
+  for (const [bunk, slots] of Object.entries(sandbox.scheduleAssignments || {})) {
+    (slots || []).forEach(s => { if (s && s._generic === true) generics.push(bunk); });
+  }
+  assert.deepEqual(generics, [], 'no generic placeholder may survive');
 });
