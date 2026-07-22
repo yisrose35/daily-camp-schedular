@@ -2149,3 +2149,62 @@ test('auto scheduler fills a tile with a cohort-DEFERRED activity rather than le
   }
   assert.deepEqual(generics, [], 'no generic placeholder may survive');
 });
+
+test('maxUsage "per week" counts THIS week only — last week\'s visits must not starve the pool (legacy \'week\' alias)', async (t) => {
+  // REGRESSION (live, Camp Neranina): config stores maxUsagePeriod:'week' (legacy
+  //   string). The engine-local getPeriodStartDate had cases only for '1week'..'4weeks',
+  //   so 'week' fell to default → HALF start → getPeriodCount counted the entire half.
+  //   Result: "[max] skip Shiur (count=3..5 >= max=3 per week)" on day 2 of a week where
+  //   the bunk had done 0 shiurs — while the weekly floor's counter (which normalizes
+  //   the alias) said wk 0/1. 22 shiur tiles/day went OPEN with seats free.
+  //   Here: the ONLY 'shiur' special is capped 3× per week; every bunk did it 3× LAST
+  //   week (Wed-Fri, before this week's Monday 2026-07-13). This week's count is 0, so
+  //   today (Wed 2026-07-15) every bunk must still get it — no [max] skip, no open slot.
+  const XDIV = { type: 'cross_division', divisions: [],
+    capacity: 20, allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } };
+  const mk = (name, dur, subcat, extra) => Object.assign({
+    name, location: name + ' Rm', type: 'Special', subcategory: subcat,
+    duration: dur, durationMin: dur,
+    sharableWith: XDIV, timeRules: [], availableDays: null,
+  }, extra || {});
+  const specialsOverride = [
+    mk('Shiur', 20, 'shiur', { maxUsage: 3, maxUsagePeriod: 'week' }),
+    // rest of the day's pool (durations mirror SMOOTH_SPECIALS)
+    mk('Drama', 40, 'theme'), mk('Art Shoppes', 40, 'theme'), mk('Accessorize', 40, 'theme'),
+    mk('Pioneering', 40, 'theme'), mk('Gymnastics', 40, 'theme'), mk('Woodworking', 40, 'theme'),
+    mk('Neranitas', 20, 'theme'), mk('Arts & Crafts', 20, 'theme'), mk('Foam Pit', 20, 'theme'),
+    mk('Ice Cream', 20, 'theme'), mk('Baking', 40, 'theme'),
+    mk('Slush', 10, 'theme'), mk('Popcorn', 10, 'theme'),
+  ];
+  // 3 shiur days LAST week for every bunk (all before Monday 2026-07-13)
+  const priorDays = {};
+  ['2026-07-08', '2026-07-09', '2026-07-10'].forEach(dk => {
+    const assigns = {};
+    [...AUTO_BUNKS, ...CHAIR_BUNKS].forEach(b => {
+      assigns[b] = [{ _activity: 'Shiur', field: 'Shiur Rm', continuation: false }];
+    });
+    priorDays[dk] = { scheduleAssignments: assigns };
+  });
+  const { results, sandbox } = await runScenario('WEEK-ALIAS (3× last week; this week 0 → today must fill)', {
+    smooth: true, requireNoSports: true, skipGapCheck: true, specialsOverride, priorDays,
+    subQuantities: { shiur: 1 }, subOps: { shiur: '=' },
+  });
+  const logs = (sandbox.__logs || []).map(String);
+  // 1) the weekly ceiling must NOT fire — this week's count is 0
+  const maxSkips = logs.filter(l => l.includes('[max] skip Shiur'));
+  assert.deepEqual(maxSkips, [],
+    'maxUsage "per week" must count THIS week only (last week\'s 3 visits are out of window):\n  ' + maxSkips.join('\n  '));
+  // 2) no shiur tile goes OPEN — the pool was never starved
+  const openShiur = (sandbox.__genOpenSlots || []).filter(o => o && o.subcat === 'shiur');
+  assert.deepEqual(openShiur, [],
+    'no shiur tile may go OPEN when the special is in-window: ' + JSON.stringify(openShiur));
+  // 3) every bunk gets its demanded shiur today, exactly once
+  const missing = [], repeated = [];
+  for (const [bunk, slots] of Object.entries(sandbox.scheduleAssignments || {})) {
+    const n = (slots || []).filter(s => s && !s.continuation && s._activity === 'Shiur').length;
+    if (n === 0) missing.push(bunk);
+    if (n > 1) repeated.push(bunk + ':' + n);
+  }
+  assert.deepEqual(missing, [], 'every bunk must get Shiur today (this week count=0 < max=3): ' + missing.join(', '));
+  assert.deepEqual(repeated, [], 'no same-day repeat: ' + repeated.join(', '));
+});

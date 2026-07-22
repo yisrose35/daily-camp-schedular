@@ -1368,6 +1368,13 @@
         }
 
         function getPeriodStartDate(period) {
+            // Legacy alias: config stores 'week' for per-week caps (maxUsagePeriod /
+            // exactFrequencyPeriod). Without this, 'week' missed every nWeeks case AND
+            // the switch below, falling to default → HALF start — so a "3× per week"
+            // ceiling counted the whole half (counts of 3-5 on day 2 of a week) and
+            // silently starved the pool while the floor counter (which normalizes the
+            // alias) correctly said 0/1. Mirrors Utils.getPeriodStartDate's alias.
+            if (period === 'week') period = '1week';
             const campDateStart = _getCampDatePeriodStart(period);
             let _psResult;
             if (campDateStart) _psResult = campDateStart;
